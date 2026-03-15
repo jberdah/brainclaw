@@ -40,6 +40,7 @@ export class AgentTrustError extends Error {
 export interface RegisterAgentIdentityInput {
   agentName: string;
   kind?: AgentKind;
+  trustLevel?: AgentTrustLevel;
   capabilities?: string[];
   replaceCapabilities?: boolean;
   generateFingerprint?: boolean;
@@ -213,6 +214,9 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     if (input.kind && existing.kind !== input.kind) {
       updated = { ...updated, kind: input.kind };
     }
+    if (input.trustLevel && existing.trust_level !== input.trustLevel) {
+      updated = { ...updated, trust_level: input.trustLevel };
+    }
     if (input.replaceCapabilities) {
       updated = { ...updated, capabilities: normalizedCapabilities };
     } else if (normalizedCapabilities.length > 0) {
@@ -234,7 +238,7 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     agent_name: input.agentName.trim(),
     created_at: nowISO(),
     kind: input.kind ?? 'unknown',
-    trust_level: 'contributor',
+    trust_level: input.trustLevel ?? 'contributor',
     capabilities: normalizedCapabilities,
   };
   if (input.generateFingerprint) {
