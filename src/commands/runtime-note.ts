@@ -8,6 +8,7 @@ import { nowISO } from '../core/ids.js';
 import type { OperationalIdentity } from '../core/identity.js';
 import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
+import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import type { CandidateType, MemoryVisibility, RuntimeNote } from '../core/schema.js';
 
 export interface RuntimeNoteOptions {
@@ -41,6 +42,10 @@ export interface RuntimeNoteCommandResult {
 }
 
 export function runRuntimeNote(text: string, options: RuntimeNoteOptions): RuntimeNoteCommandResult {
+  validateCliInput(text, options.tag);
+  if (options.ttl) {
+    validateCliTtl(options.ttl);
+  }
   try {
     return createRuntimeNote(text, options, true);
   } catch (error: unknown) {

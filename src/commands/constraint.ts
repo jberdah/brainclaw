@@ -4,6 +4,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { generateId, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { validateCliInput } from '../core/input-validation.js';
 import type { Constraint } from '../core/schema.js';
 
 export interface ConstraintOptions {
@@ -17,6 +18,8 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
+
+  validateCliInput(text, options.tag);
 
   const config = loadConfig();
   const warnings = scanText(text, config);

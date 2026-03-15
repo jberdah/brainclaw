@@ -5,6 +5,7 @@ import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState } from '../core/state.js';
 import { scanText } from '../core/security.js';
+import { validateCliInput } from '../core/input-validation.js';
 import type { InstructionLayer } from '../core/schema.js';
 
 export interface InstructionOptions {
@@ -21,6 +22,8 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
+
+  validateCliInput(text, options.tag);
 
   const layer = options.layer ?? 'global';
   const scope = resolveScope(layer, options);

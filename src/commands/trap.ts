@@ -6,6 +6,7 @@ import { nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { generateTrapId, saveOperationalTrap } from '../core/traps.js';
+import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import type { Trap, Severity, MemoryVisibility } from '../core/schema.js';
 
 export interface TrapOptions {
@@ -22,6 +23,11 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
   if (!memoryExists()) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  validateCliInput(text, options.tag);
+  if (options.ttl) {
+    validateCliTtl(options.ttl);
   }
 
   const config = loadConfig();

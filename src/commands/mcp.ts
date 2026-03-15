@@ -25,6 +25,7 @@ import { appendAuditEntry } from '../core/audit.js';
 import { nowISO } from '../core/ids.js';
 import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
+import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import type { CandidateType, MemoryVisibility } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -1054,11 +1055,17 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
+      const text = String(args.text ?? '');
+      const tags = (args.tags as string[] | undefined) ?? [];
+      const inputValidation = validateMcpInput(text, tags);
+      if (!inputValidation.ok) {
+        return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
+      }
       const identity = resolved.identity!;
-      const result = createRuntimeNote(String(args.text ?? ''), {
+      const result = createRuntimeNote(text, {
         agent: identity.agent_name,
         agentId: identity.agent_id,
-        tag: (args.tags as string[] | undefined) ?? [],
+        tag: tags,
         visibility: (args.visibility as MemoryVisibility | undefined) ?? 'shared',
         ttl: args.ttl as string | undefined,
         autoReflect: args.autoReflect as boolean | undefined,
@@ -1085,6 +1092,12 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
+      const candidateText = String(args.text ?? '');
+      const candidateTags = (args.tags as string[] | undefined) ?? [];
+      const candidateValidation = validateMcpInput(candidateText, candidateTags);
+      if (!candidateValidation.ok) {
+        return { response: createToolErrorResponse('validation_error', candidateValidation.errors[0]?.message ?? 'Invalid input', candidateValidation.errors) };
+      }
       const resolvedIdentity = resolved.identity!;
       const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
         agentId: resolvedIdentity.agent_id,
@@ -1096,14 +1109,14 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       const candidate = {
         id: candId,
         type,
-        text: String(args.text ?? ''),
+        text: candidateText,
         created_at: nowISO(),
         author: identity.agent,
         author_id: identity.agent_id,
         project_id: identity.project_id,
         host_id: identity.host_id,
         session_id: identity.session_id,
-        tags: (args.tags as string[] | undefined) ?? [],
+        tags: candidateTags,
         status: 'pending' as const,
         severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
         star_count: 0,
@@ -1189,6 +1202,16 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
+      const claimScope = String(args.scope ?? '').trim();
+      const claimDescription = String(args.description ?? '').trim();
+      const scopeCheck = validateMcpField(claimScope, 'scope');
+      if (!scopeCheck.ok) {
+        return { response: createToolErrorResponse('validation_error', scopeCheck.message) };
+      }
+      const descCheck = validateMcpField(claimDescription, 'description');
+      if (!descCheck.ok) {
+        return { response: createToolErrorResponse('validation_error', descCheck.message) };
+      }
       const resolvedIdentity = resolved.identity!;
       const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
         agentId: resolvedIdentity.agent_id,
@@ -1202,8 +1225,8 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         project_id: identity.project_id,
         host_id: identity.host_id,
         session_id: identity.session_id,
-        scope: String(args.scope ?? ''),
-        description: String(args.description ?? ''),
+        scope: claimScope,
+        description: claimDescription,
         created_at: nowISO(),
         status: 'active',
         plan_id: args.planId as string | undefined,
