@@ -19,10 +19,14 @@ export interface ContextCommandOptions {
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
+  bootstrap?: boolean;
+  refreshBootstrap?: boolean;
+  cwd?: string;
 }
 
 export function runContext(options: ContextCommandOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = options.cwd ?? process.cwd();
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -38,6 +42,9 @@ export function runContext(options: ContextCommandOptions = {}): void {
     maxItems: options.maxItems,
     maxChars: options.maxChars,
     digest: options.digest,
+    bootstrap: options.bootstrap,
+    refreshBootstrap: options.refreshBootstrap,
+    cwd,
   });
 
   if (options.json) {
@@ -49,10 +56,10 @@ export function runContext(options: ContextCommandOptions = {}): void {
     console.log(renderContextMarkdown(result, options.explain));
   }
 
-  writeLastContextMarker(result, options);
+  writeLastContextMarker(result, options, cwd);
 }
 
-function writeLastContextMarker(result: ReturnType<typeof buildContext>, options: ContextCommandOptions): void {
+function writeLastContextMarker(result: ReturnType<typeof buildContext>, options: ContextCommandOptions, cwd?: string): void {
   try {
     writeContextMarker({
       read_at: nowISO(),
@@ -61,7 +68,7 @@ function writeLastContextMarker(result: ReturnType<typeof buildContext>, options
       target: options.for,
       project: result.project,
       all_hosts: options.allHosts ?? false,
-    });
+    }, cwd);
   } catch (err) {
     logger.debug('Failed to write context marker:', err);
   }

@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
+import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
 import { getVisibleMemoryVersion } from './freshness.js';
 import { resolveCurrentHostId } from './host.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
@@ -21,6 +22,8 @@ export interface ContextOptions {
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
+  bootstrap?: boolean;
+  refreshBootstrap?: boolean;
   cwd?: string;
 }
 
@@ -57,6 +60,9 @@ export interface ContextResult {
   project?: string;
   agent?: string;
   digest?: string;
+  memory_density: 'low' | 'medium' | 'high';
+  bootstrap_available: boolean;
+  derived_signals?: DerivedContextSignal[];
   scoped_activity?: ScopedActivitySummary;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
@@ -296,6 +302,30 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     runtimeNotes,
     pendingCandidates: listCandidates('pending', options.cwd),
   });
+  const memoryDensity = classifyMemoryDensity(selected.length);
+  const bootstrapEnabled = options.bootstrap !== false;
+  let bootstrapAvailable = hasReusableBootstrapProfile(target, options.cwd);
+  let derivedSignals: DerivedContextSignal[] | undefined;
+
+  if (bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
+    const bootstrap = runBootstrapProfile({
+      target,
+      refresh: options.refreshBootstrap,
+      cwd: options.cwd,
+    });
+    bootstrapAvailable = bootstrap.profile.seed_count > 0;
+    if (memoryDensity === 'low') {
+      const signals = selectDerivedSignals(target, 5, options.cwd);
+      if (signals.length > 0) {
+        derivedSignals = signals;
+      }
+    }
+  } else if (bootstrapEnabled && bootstrapAvailable && memoryDensity === 'low') {
+    const signals = selectDerivedSignals(target, 5, options.cwd);
+    if (signals.length > 0) {
+      derivedSignals = signals;
+    }
+  }
 
   const result: ContextResult = {
     context_schema: '1.0',
@@ -311,6 +341,9 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     target,
     project,
     agent,
+    memory_density: memoryDensity,
+    bootstrap_available: bootstrapAvailable,
+    derived_signals: derivedSignals,
     scoped_activity: scopedActivity,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
@@ -337,6 +370,8 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   lines.push(`Project mode: ${result.project_mode} (${result.project_strategy})`);
   lines.push(`Current host: ${result.current_host}`);
   lines.push(`Memory version: ${result.memory_version}`);
+  lines.push(`Memory density: ${result.memory_density}`);
+  lines.push(`Bootstrap available: ${result.bootstrap_available ? 'yes' : 'no'}`);
   if (result.all_hosts) {
     lines.push('Runtime host filter: all-hosts');
   } else if (result.host_filter) {
@@ -392,15 +427,31 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   lines.push('');
 
   if (result.selected.length === 0) {
-    lines.push('- No relevant memory found.');
+    lines.push('- No relevant canonical memory found.');
+    if (result.derived_signals && result.derived_signals.length > 0) {
+      lines.push('');
+      lines.push('Derived signals:');
+      for (const signal of result.derived_signals) {
+        lines.push(`- [${signal.seed_kind}/${signal.confidence}] ${signal.text} <${signal.source_kind}:${signal.source_ref}>`);
+      }
+    }
     return lines.join('\n');
   }
 
+  lines.push('Canonical memory:');
   for (const item of result.selected) {
     const tags = item.tags.length ? ` [${item.tags.join(', ')}]` : '';
     const extra = item.extra ? ` (${item.extra})` : '';
     const why = explain && item.reasons.length ? ` {why: ${item.reasons.join(', ')}}` : '';
     lines.push(`- [${item.id}] <${item.section}> ${item.text}${extra}${tags}${why}`);
+  }
+
+  if (result.derived_signals && result.derived_signals.length > 0) {
+    lines.push('');
+    lines.push('Derived signals:');
+    for (const signal of result.derived_signals) {
+      lines.push(`- [${signal.seed_kind}/${signal.confidence}] ${signal.text} <${signal.source_kind}:${signal.source_ref}>`);
+    }
   }
 
   return lines.join('\n');
@@ -431,6 +482,8 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     lines.push(`ps=${result.project_strategy}`);
     lines.push(`ch=${result.current_host}`);
     lines.push(`mv=${result.memory_version}`);
+    lines.push(`md=${result.memory_density}`);
+    lines.push(`ba=${result.bootstrap_available ? 'y' : 'n'}`);
     if (result.all_hosts) {
       lines.push('hf=all-hosts');
     } else if (result.host_filter) {
@@ -470,6 +523,8 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     lines.push(`project_strategy: ${result.project_strategy}`);
     lines.push(`current_host: ${result.current_host}`);
     lines.push(`memory_version: ${result.memory_version}`);
+    lines.push(`memory_density: ${result.memory_density}`);
+    lines.push(`bootstrap_available: ${result.bootstrap_available}`);
     if (result.all_hosts) {
       lines.push('host_filter: all-hosts');
     } else if (result.host_filter) {
@@ -531,6 +586,18 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
         const extra = item.extra ? ` extra="${item.extra}"` : '';
         const why = item.reasons.length ? ` why=[${item.reasons.join(', ')}]` : '';
         lines.push(`  - id=${item.id} type=${item.section}${tags}${extra}${why} text="${item.text}"`);
+      }
+    }
+  }
+  if (result.derived_signals && result.derived_signals.length > 0) {
+    lines.push(compact ? 'ds:' : 'derived_signals:');
+    for (const signal of result.derived_signals) {
+      if (compact) {
+        const paths = signal.related_paths?.length ? ` rp=[${signal.related_paths.join(',')}]` : '';
+        lines.push(`  - id=${signal.id} sk=${signal.seed_kind} cf=${signal.confidence} src=${signal.source_kind}:${signal.source_ref}${paths} tx="${signal.text}"`);
+      } else {
+        const paths = signal.related_paths?.length ? ` related_paths=[${signal.related_paths.join(',')}]` : '';
+        lines.push(`  - id=${signal.id} seed_kind=${signal.seed_kind} confidence=${signal.confidence} source=${signal.source_kind}:${signal.source_ref}${paths} text="${signal.text}"`);
       }
     }
   }
@@ -614,8 +681,18 @@ export function buildContextDigest(result: ContextResult): string {
   } else if (result.selected.some((item) => item.section === 'runtime')) {
     lines.push(`Runtime signal: ${result.selected.find((item) => item.section === 'runtime')?.text}`);
   }
+  if (result.memory_density === 'low' && result.derived_signals && result.derived_signals.length > 0) {
+    const signal = result.derived_signals[0];
+    lines.push(`Derived ${signal.seed_kind}: ${signal.text}`);
+  }
 
   return lines.slice(0, 5).join('\n');
+}
+
+function classifyMemoryDensity(selectedCount: number): 'low' | 'medium' | 'high' {
+  if (selectedCount < 3) return 'low';
+  if (selectedCount <= 6) return 'medium';
+  return 'high';
 }
 
 function tokenise(input: string): string[] {

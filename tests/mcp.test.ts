@@ -327,6 +327,54 @@ describe('MCP server', () => {
     }
   });
 
+  it('supports brownfield bootstrap and sparse-memory context fallback over MCP', async () => {
+    fs.writeFileSync(path.join(dir, 'README.md'), '# Brownfield Auth\n\n## Test\n\n- npm test\n', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Guide\n\n- Read AGENTS.md before edits\n', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+      scripts: { test: 'npm test' },
+    }, null, 2), 'utf-8');
+
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+      const bootstrap = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 24,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_bootstrap',
+          arguments: {
+            target: 'src/auth/routes.ts',
+          },
+        },
+      });
+
+      assert.equal(bootstrap.result.isError, false);
+      assert.ok(bootstrap.result.structuredContent.seed_count > 0);
+      assert.ok(Array.isArray(bootstrap.result.structuredContent.seeds));
+
+      const context = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 25,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_get_context',
+          arguments: {
+            path: 'src/auth/routes.ts',
+            format: 'json',
+          },
+        },
+      });
+
+      assert.equal(context.result.structuredContent.memory_density, 'low');
+      assert.equal(context.result.structuredContent.bootstrap_available, true);
+      assert.ok(Array.isArray(context.result.structuredContent.derived_signals));
+      assert.ok(context.result.structuredContent.derived_signals.length > 0);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('renders explain mode for markdown context responses', async () => {
     run(['decision', 'Auth gateway routes OAuth', '--tag', 'auth'], dir);
     run(['instruction', 'Check auth gateway conventions first'], dir);

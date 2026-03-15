@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstruction } from '../../src/core/instructions.js';
 import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildContext, buildContextDigest, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
@@ -483,5 +485,44 @@ describe('core/context', () => {
 
     const rebuiltDigest = buildContextDigest(result);
     assert.equal(rebuiltDigest, result.digest);
+  });
+
+  it('auto-bootstraps derived signals when canonical memory is sparse', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Brownfield Auth\n\n## Build\n\n- npm run build\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Read AGENTS.md before edits\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
+      scripts: { build: 'npm run build', test: 'npm test' },
+    }, null, 2), 'utf-8');
+
+    const result = buildContext({
+      target: 'src/auth/routes.ts',
+      digest: true,
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.memory_density, 'low');
+    assert.equal(result.bootstrap_available, true);
+    assert.ok((result.derived_signals?.length ?? 0) > 0);
+    assert.ok(result.derived_signals?.some((signal) => signal.seed_kind === 'agent_rule'));
+    assert.match(result.digest ?? '', /Derived (agent_rule|command|convention):/);
+
+    const markdown = renderContextMarkdown(result, false);
+    assert.match(markdown, /Derived signals:/);
+    assert.match(markdown, /No relevant canonical memory found\./);
+  });
+
+  it('can disable bootstrap fallback when memory is sparse', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Brownfield Auth\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Read AGENTS.md before edits\n', 'utf-8');
+
+    const result = buildContext({
+      target: 'src/auth/routes.ts',
+      bootstrap: false,
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.memory_density, 'low');
+    assert.equal(result.bootstrap_available, false);
+    assert.equal(result.derived_signals, undefined);
   });
 });
