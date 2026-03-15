@@ -1,5 +1,7 @@
 # brainclaw
 
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+
 **Shared project memory for humans and coding agents.**
 
 A lightweight, local-first CLI that gives your team and your coding agents a shared, structured view of your project's active constraints, recent decisions, known traps, and open handoffs — versioned in Git, readable in plain text, usable with any agent.
