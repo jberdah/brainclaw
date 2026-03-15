@@ -610,9 +610,10 @@ program
   .option('--agent <agent>', 'Agent name')
   .option('--summary <text>', 'Session summary text')
   .option('--auto-reflect', 'Auto-reflect session notes as pending candidates')
+  .option('--auto-release', 'Auto-release any active claims at session end')
   .option('--json', 'Output as JSON')
   .action((options) => {
-    runSessionEnd({ ...options, autoReflect: options.autoReflect });
+    runSessionEnd({ ...options, autoReflect: options.autoReflect, autoRelease: options.autoRelease });
   });
 
 // --- whoami ---

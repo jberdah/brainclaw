@@ -1,7 +1,9 @@
 import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContextDiff } from '../core/context-diff.js';
+import { listClaims, releaseClaim } from '../core/claims.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
+import { loadState } from '../core/state.js';
 import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
@@ -14,6 +16,7 @@ export interface SessionEndOptions {
   agent?: string;
   agentId?: string;
   autoReflect?: boolean;
+  autoRelease?: boolean;
   json?: boolean;
   cwd?: string;
 }
@@ -25,6 +28,13 @@ export interface SessionEndResult {
   candidates_created: number;
   context_diff?: string;
   summary: string;
+  open_work_warning?: OpenWorkWarning;
+}
+
+export interface OpenWorkWarning {
+  active_claims: { id: string; scope: string; description: string }[];
+  in_progress_plans: { id: string; text: string }[];
+  auto_released: boolean;
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
@@ -33,6 +43,23 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
+    }
+
+    if (result.open_work_warning) {
+      const w = result.open_work_warning;
+      console.log('⚠ Open work detected at session end:');
+      for (const c of w.active_claims) {
+        console.log(`  claim [${c.id}] ${c.description}`);
+        console.log(`    scope: ${c.scope}`);
+      }
+      for (const p of w.in_progress_plans) {
+        console.log(`  plan  [${p.id}] ${p.text}`);
+      }
+      if (w.auto_released) {
+        console.log('  → Claims auto-released and plans left for manual update.');
+      } else {
+        console.log('  → Run `brainclaw release-claim <id>` and `brainclaw update-plan <id> --status done` to clean up.');
+      }
     }
 
     console.log(`✔ Session ended: ${result.session_id} (${result.agent})`);
@@ -67,6 +94,31 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
   const sessionId = options.session ?? actor.session_id;
   if (!sessionId) {
     throw new Error('no session ID provided. Use --session <id> or set BRAINCLAW_SESSION_ID.');
+  }
+
+  // Hygiene check: find open work belonging to this agent
+  const allClaims = listClaims(options.cwd);
+  const activeClaims = allClaims.filter(
+    (c) => c.status === 'active' && (registered.agent_id ? c.agent_id === registered.agent_id : c.agent === registered.agent_name)
+  );
+  const state = loadState(options.cwd);
+  const claimPlanIds = new Set(activeClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
+  const inProgressPlans = state.plan_items.filter(
+    (p) => p.status === 'in_progress' && (p.assignee === registered.agent_name || claimPlanIds.has(p.id))
+  );
+
+  let openWorkWarning: OpenWorkWarning | undefined;
+  if (activeClaims.length > 0 || inProgressPlans.length > 0) {
+    if (options.autoRelease) {
+      for (const c of activeClaims) {
+        releaseClaim(c.id, options.cwd);
+      }
+    }
+    openWorkWarning = {
+      active_claims: activeClaims.map(({ id, scope, description }) => ({ id, scope, description })),
+      in_progress_plans: inProgressPlans.map(({ id, text }) => ({ id, text })),
+      auto_released: options.autoRelease ?? false,
+    };
   }
 
   // Get session notes for summary
@@ -136,6 +188,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     candidates_created: candidatesCreated,
     context_diff: contextDiff,
     summary: summaryText,
+    open_work_warning: openWorkWarning,
   };
   return result;
 }
