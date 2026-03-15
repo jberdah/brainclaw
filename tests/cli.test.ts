@@ -350,6 +350,29 @@ describe('brainclaw CLI', () => {
     });
   });
 
+  describe('bootstrap', () => {
+    it('derives brownfield seeds as JSON and reuses the profile on subsequent runs', () => {
+      run(['init', '-y'], dir);
+      fs.writeFileSync(path.join(dir, 'README.md'), '# Brownfield Auth\n\n## Test\n\n- npm test\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Guide\n\n- Read AGENTS.md before edits\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+        scripts: { test: 'npm test' },
+      }, null, 2), 'utf-8');
+
+      const first = run(['bootstrap', '--for', 'src/auth/routes.ts', '--json'], dir);
+      assert.equal(first.exitCode, 0);
+      const firstParsed = JSON.parse(first.stdout);
+      assert.equal(firstParsed.reused_profile, false);
+      assert.ok(firstParsed.seed_count > 0);
+      assert.ok(firstParsed.seeds.some((seed: { source_kind: string }) => seed.source_kind === 'agents_md'));
+
+      const second = run(['bootstrap', '--for', 'src/auth/routes.ts', '--json'], dir);
+      assert.equal(second.exitCode, 0);
+      const secondParsed = JSON.parse(second.stdout);
+      assert.equal(secondParsed.reused_profile, true);
+    });
+  });
+
   describe('rebuild', () => {
     it('regenerates project.md from state.json', () => {
       run(['init', '-y'], dir);

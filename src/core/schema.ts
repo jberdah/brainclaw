@@ -394,6 +394,57 @@ export const CurrentSessionStateSchema = z.object({
 });
 export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
 
+export const MemorySeedKindSchema = z.enum([
+  'command',
+  'convention',
+  'entrypoint',
+  'hotspot',
+  'agent_rule',
+  'warning',
+]);
+export type MemorySeedKind = z.infer<typeof MemorySeedKindSchema>;
+
+export const MemorySeedSourceKindSchema = z.enum([
+  'readme',
+  'agents_md',
+  'manifest',
+  'repo_analysis',
+  'git',
+  'inference',
+]);
+export type MemorySeedSourceKind = z.infer<typeof MemorySeedSourceKindSchema>;
+
+export const MemorySeedConfidenceSchema = z.enum(['low', 'medium', 'high']);
+export type MemorySeedConfidence = z.infer<typeof MemorySeedConfidenceSchema>;
+
+export const MemorySeedDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  derived_at: z.string(),
+  text: z.string(),
+  seed_kind: MemorySeedKindSchema,
+  source_kind: MemorySeedSourceKindSchema,
+  source_ref: z.string(),
+  confidence: MemorySeedConfidenceSchema,
+  related_paths: z.array(z.string()).optional(),
+  tags: z.array(z.string()).default([]),
+  promotion_hint: z.enum(['constraint', 'decision', 'trap']).optional(),
+});
+export type MemorySeedDocument = z.infer<typeof MemorySeedDocumentSchema>;
+
+export const BootstrapProfileDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  derived_at: z.string(),
+  repo_fingerprint: z.string().optional(),
+  summary: z.string(),
+  sources_scanned: z.array(z.string()).default([]),
+  git_available: z.boolean().default(false),
+  agents_md_present: z.boolean().default(false),
+  seed_count: z.number().int().nonnegative(),
+  target: z.string().optional(),
+});
+export type BootstrapProfileDocument = z.infer<typeof BootstrapProfileDocumentSchema>;
+
 export const ConfigSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),

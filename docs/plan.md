@@ -165,6 +165,17 @@ Conséquence produit :
   - couverture des documents métier versionnés : config, docs canoniques split, candidates, claims, runtime notes, instructions, identités agent/projet, snapshots de session et `.current-session`
   - ajout de `JsonStore<T>` pour les collections JSON homogènes et adoption ciblée dans `candidates`, `claims`, `instructions` et `agent-registry`
   - ajout de `brainclaw doctor --migration-check` avec sortie JSON structurée pour repérer les documents outdated ou invalides
+- Livraison du lot brownfield `2.6 + 2.7 + 2.8` :
+  - nouvelle commande `brainclaw bootstrap` avec persistance d'un `BootstrapProfileDocument` et de `MemorySeedDocument` non canoniques sous `.brainclaw/bootstrap/`
+  - extraction brownfield v1 depuis `README*`, `AGENTS.md`, `package.json`, `Makefile`, marqueurs repo-analysis et hotspots Git récents
+  - intégration de `memory_density`, `bootstrap_available` et `derived_signals` dans `context`
+  - fallback opportuniste de `context` quand la mémoire canonique est sparse, avec distinction explicite entre mémoire canonique et signaux dérivés
+  - nouvel outil MCP `bclaw_bootstrap` et extension de `bclaw_get_context` avec `bootstrap` / `refreshBootstrap`
+- Couverture brownfield ajoutée :
+  - tests unitaires du moteur `bootstrap.ts` sur extraction, réutilisation de profil, refresh et fingerprint Git
+  - tests unitaires `context` sur auto-bootstrap, désactivation explicite et digest avec signaux dérivés
+  - tests CLI pour `brainclaw bootstrap --json`
+  - contrats MCP unitaires et E2E pour `bclaw_bootstrap` et le fallback sparse-memory dans `bclaw_get_context`
 - Couverture ajoutée pour le socle migration/storage :
   - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
   - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
@@ -179,7 +190,7 @@ Conséquence produit :
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 67.33%`, `branches 67.30%`, `functions 73.91%`, `lines 67.33%`
+  - couverture fast path : `statements 69.00%`, `branches 69.36%`, `functions 76.05%`, `lines 69.00%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -221,9 +232,9 @@ Conséquence produit :
 - `2.3` Session implicite / auto-session : `done`
 - `2.4` Alias courts sur les IDs : `todo`
 - `2.5` Résumé d'activité récente par scope : `done`
-- `2.6` Bootstrap brownfield : `todo`
-- `2.7` Memory seeds dérivés du repo : `todo`
-- `2.8` Fallback context sur mémoire sparse : `todo`
+- `2.6` Bootstrap brownfield : `done`
+- `2.7` Memory seeds dérivés du repo : `done`
+- `2.8` Fallback context sur mémoire sparse : `done`
 
 **Phase 3 — MCP Universel**
 - `3.1` Conformité protocole MCP : `done`
@@ -251,7 +262,7 @@ Conséquence produit :
 - `6.3` Notification de changements : `partial`
 - `6.4` Context format versionné : `todo`
 - `6.5` Contexte machine et environnement d'exécution : `todo`
-- `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP : `todo`
+- `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP : `partial`
 
 **Phase 7 — Observabilité et Audit**
 - `7.1` Event log immuable : `partial`

@@ -1,5 +1,6 @@
 import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
+import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { loadState } from '../core/state.js';
@@ -102,9 +103,22 @@ export const MCP_READ_TOOLS = [
         maxItems: { type: 'number', description: 'Maximum number of ranked items to return.' },
         maxChars: { type: 'number', description: 'Approximate character budget applied after ranking.' },
         digest: { type: 'boolean', description: 'Include a short deterministic digest for the selected context.' },
+        bootstrap: { type: 'boolean', description: 'Enable brownfield bootstrap fallback when memory is sparse.' },
+        refreshBootstrap: { type: 'boolean', description: 'Refresh the brownfield bootstrap profile before building context.' },
         format: { type: 'string', description: 'Output format: markdown, json, or template.' },
         explain: { type: 'boolean', description: 'Include ranking reasons in markdown output.' },
         compactTemplate: { type: 'boolean', description: 'Use compact template format when format=template.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_bootstrap',
+    description: 'Derive brownfield bootstrap signals from repository docs, manifests, and git history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Optional path or scope to tailor the bootstrap.' },
+        refresh: { type: 'boolean', description: 'Force a fresh bootstrap scan.' },
       },
     },
   },
@@ -816,6 +830,8 @@ export function handleMcpReadToolCall(
       maxItems: args.maxItems as number | undefined,
       maxChars: args.maxChars as number | undefined,
       digest: args.digest as boolean | undefined,
+      bootstrap: args.bootstrap as boolean | undefined,
+      refreshBootstrap: args.refreshBootstrap as boolean | undefined,
       cwd,
     });
     const format = normaliseFormat(args.format);
@@ -826,6 +842,26 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: content || 'No relevant memory found.' }],
       structuredContent: { ...result },
+    };
+  }
+
+  if (name === 'bclaw_bootstrap') {
+    const result = runBootstrapProfile({
+      target: args.target as string | undefined,
+      refresh: args.refresh as boolean | undefined,
+      cwd,
+    });
+    return {
+      content: [{ type: 'text', text: renderBootstrapSummary(result) }],
+      structuredContent: {
+        summary: result.profile.summary,
+        target: result.profile.target,
+        repo_fingerprint: result.profile.repo_fingerprint,
+        sources_scanned: result.profile.sources_scanned,
+        seed_count: result.profile.seed_count,
+        seeds: result.seeds,
+        reused_profile: result.reusedProfile,
+      },
     };
   }
 

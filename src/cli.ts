@@ -32,6 +32,7 @@ import { runRuntimeNote } from './commands/runtime-note.js';
 import { runRuntimeStatus } from './commands/runtime-status.js';
 import { runSync } from './commands/sync.js';
 import { runContext } from './commands/context.js';
+import { runBootstrap } from './commands/bootstrap.js';
 import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js';
 import { runInstallHooks } from './commands/install-hooks.js';
 import { runRegisterAgent } from './commands/register-agent.js';
@@ -260,12 +261,25 @@ program
   .option('--max-items <count>', 'Limit number of items', parseInt)
   .option('--max-chars <count>', 'Approximate output budget for selected item content', parseInt)
   .option('--digest', 'Include a short deterministic digest ahead of the detailed context')
+  .option('--no-bootstrap', 'Disable brownfield bootstrap fallback when canonical memory is sparse')
+  .option('--refresh-bootstrap', 'Refresh brownfield bootstrap profile before building context')
   .option('--template', 'Output prompt-ready context template')
   .option('--compact-template', 'Use compact template format (default for openclaw profile)')
   .option('--explain', 'Show ranking reasons in human-readable output')
   .option('--json', 'Output as JSON')
   .action((options) => {
     runContext(options);
+  });
+
+// --- bootstrap ---
+program
+  .command('bootstrap')
+  .description('Derive brownfield bootstrap signals from the current repository')
+  .option('--for <target>', 'Target path or scope to tailor the bootstrap')
+  .option('--json', 'Output as JSON')
+  .option('--refresh', 'Force a fresh bootstrap scan instead of reusing the current profile')
+  .action((options) => {
+    runBootstrap(options);
   });
 
 // --- instruction ---

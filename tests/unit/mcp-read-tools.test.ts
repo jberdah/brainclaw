@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { handleMcpReadToolCall } from '../../src/commands/mcp.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveClaim } from '../../src/core/claims.js';
@@ -236,5 +238,52 @@ describe('commands/mcp read tools', () => {
 
     assert.throws(() => handleMcpReadToolCall('bclaw_search', {}, { cwd: workspace.dir }), /Missing required argument: query/);
     assert.throws(() => handleMcpReadToolCall('bclaw_unknown_tool', {}, { cwd: workspace.dir }), /Unknown read tool/);
+  });
+
+  it('returns bootstrap signals and brownfield context fallback through MCP', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Brownfield Auth\n\n## Test\n\n- npm test\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Guide\n\n- Read memory first\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
+      scripts: { test: 'npm test' },
+    }, null, 2), 'utf-8');
+
+    const bootstrap = handleMcpReadToolCall('bclaw_bootstrap', {
+      target: 'src/auth/routes.ts',
+    }, { cwd: workspace.dir });
+    const bootstrapStructured = bootstrap.structuredContent as {
+      seed_count: number;
+      seeds: Array<{ seed_kind: string; source_kind: string }>;
+      reused_profile: boolean;
+    };
+    assert.ok(bootstrap.content[0].text.includes('Bootstrap summary'));
+    assert.ok(bootstrapStructured.seed_count > 0);
+    assert.ok(bootstrapStructured.seeds.some((seed) => seed.source_kind === 'agents_md'));
+    assert.equal(bootstrapStructured.reused_profile, false);
+
+    const context = handleMcpReadToolCall('bclaw_get_context', {
+      path: 'src/auth/routes.ts',
+      format: 'json',
+    }, { cwd: workspace.dir });
+    const contextStructured = context.structuredContent as {
+      memory_density: string;
+      bootstrap_available: boolean;
+      derived_signals?: Array<{ seed_kind: string }>;
+    };
+    assert.equal(contextStructured.memory_density, 'low');
+    assert.equal(contextStructured.bootstrap_available, true);
+    assert.ok((contextStructured.derived_signals?.length ?? 0) > 0);
+    assert.ok(contextStructured.derived_signals?.some((signal) => signal.seed_kind === 'agent_rule'));
+
+    const disabledContext = handleMcpReadToolCall('bclaw_get_context', {
+      path: 'src/auth/routes.ts',
+      format: 'json',
+      bootstrap: false,
+    }, { cwd: workspace.dir });
+    const disabledStructured = disabledContext.structuredContent as {
+      bootstrap_available: boolean;
+      derived_signals?: Array<unknown>;
+    };
+    assert.equal(disabledStructured.bootstrap_available, true);
+    assert.equal(disabledStructured.derived_signals, undefined);
   });
 });

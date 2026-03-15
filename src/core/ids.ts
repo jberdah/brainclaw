@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 const PREFIXES: Record<string, string> = {
   active_constraints: 'cst',
+  bootstrap_seeds: 'bsd',
   recent_decisions: 'dec',
   known_traps: 'trp',
   open_handoffs: 'hnd',

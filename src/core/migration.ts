@@ -5,9 +5,11 @@ import YAML from 'yaml';
 import { memoryDir, memoryPath, readFileSync, writeFileAtomic } from './io.js';
 import {
   AgentIdentityDocumentSchema,
+  BootstrapProfileDocumentSchema,
   CandidateSchema,
   ClaimSchema,
   ConfigSchema,
+  MemorySeedDocumentSchema,
   ConstraintSchema,
   CurrentSessionStateSchema,
   DecisionSchema,
@@ -22,6 +24,7 @@ import {
 
 export type VersionedDocumentType =
   | 'agent_identity'
+  | 'bootstrap_profile'
   | 'candidate'
   | 'claim'
   | 'config'
@@ -30,6 +33,7 @@ export type VersionedDocumentType =
   | 'decision'
   | 'handoff'
   | 'instruction'
+  | 'memory_seed'
   | 'plan'
   | 'project_identity'
   | 'runtime_note'
@@ -84,6 +88,7 @@ const CURRENT_SCHEMA_VERSION = 2;
 
 const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> = {
   agent_identity: createRegistryEntry(AgentIdentityDocumentSchema),
+  bootstrap_profile: createRegistryEntry(BootstrapProfileDocumentSchema),
   candidate: createRegistryEntry(CandidateSchema),
   claim: createRegistryEntry(ClaimSchema),
   config: createRegistryEntry(ConfigSchema),
@@ -92,6 +97,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   decision: createRegistryEntry(DecisionSchema),
   handoff: createRegistryEntry(HandoffSchema),
   instruction: createRegistryEntry(InstructionEntrySchema),
+  memory_seed: createRegistryEntry(MemorySeedDocumentSchema),
   plan: createRegistryEntry(PlanItemSchema),
   project_identity: createRegistryEntry(ProjectIdentityDocumentSchema),
   runtime_note: createRegistryEntry(RuntimeNoteSchema),
@@ -242,6 +248,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectSingle(entries, memoryPath('config.yaml', cwd), 'config', 'yaml');
   collectSingle(entries, memoryPath('project.identity.json', cwd), 'project_identity');
   collectSingle(entries, memoryPath('.current-session', cwd), 'current_session');
+  collectSingle(entries, memoryPath(path.join('bootstrap', 'profile.json'), cwd), 'bootstrap_profile');
 
   collectDirectory(entries, path.join(baseDir, 'constraints'), 'constraint');
   collectDirectory(entries, path.join(baseDir, 'decisions'), 'decision');
@@ -258,6 +265,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, path.join(baseDir, 'runtime-hosts'), 'runtime_note', true);
   collectDirectory(entries, path.join(baseDir, 'runtime-private'), 'runtime_note', true);
   collectDirectory(entries, path.join(baseDir, 'instructions'), 'instruction');
+  collectDirectory(entries, path.join(baseDir, 'bootstrap', 'seeds'), 'memory_seed');
   collectDirectory(entries, path.join(baseDir, 'agents'), 'agent_identity');
   collectDirectory(entries, path.join(baseDir, 'sessions'), 'session_snapshot');
 
