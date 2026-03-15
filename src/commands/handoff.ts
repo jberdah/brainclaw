@@ -1,0 +1,79 @@
+import { execSync } from 'node:child_process';
+import { loadState, saveState } from '../core/state.js';
+import { loadConfig } from '../core/config.js';
+import { generateMarkdown } from '../core/markdown.js';
+import { generateId, nowISO } from '../core/ids.js';
+import { scanText } from '../core/security.js';
+import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import type { Handoff } from '../core/schema.js';
+
+export interface HandoffOptions {
+  from: string;
+  to: string;
+  tag?: string[];
+  path?: string[];
+  project?: string;
+  plan?: string;
+  author?: string;
+  captureDiff?: boolean;
+}
+
+export function runHandoff(text: string, options: HandoffOptions): void {
+  if (!memoryExists()) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const config = loadConfig();
+  const warnings = scanText(text, config);
+  for (const w of warnings) {
+    console.warn(`⚠ ${w.message}`);
+    if (w.level === 'block') {
+      console.error('Blocked: strict redaction is enabled. Entry not added.');
+      process.exit(1);
+    }
+  }
+
+  const state = loadState();
+  const plan = options.plan ? state.plan_items.find((item) => item.id === options.plan) : undefined;
+  if (options.plan && !plan) {
+    console.error(`Error: Plan item '${options.plan}' not found.`);
+    process.exit(1);
+  }
+  const id = generateId('open_handoffs');
+
+  let diff;
+  if (options.captureDiff) {
+    try {
+      diff = execSync('git diff HEAD', { encoding: 'utf-8' });
+    } catch {
+      diff = "Could not capture git diff.";
+    }
+  }
+
+  const entry: Handoff = {
+    id,
+    from: options.from,
+    to: options.to,
+    text,
+    created_at: nowISO(),
+    author: options.author ?? getDefaultAuthor(),
+    status: 'open',
+    project: options.project ?? plan?.project,
+    plan_id: options.plan,
+    tags: options.tag ?? [],
+    related_paths: options.path,
+    snapshot: diff ? { diff } : undefined,
+  };
+
+  state.open_handoffs.push(entry);
+  saveState(state);
+
+  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+
+  console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
+}
+
+function getDefaultAuthor(): string {
+  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
+}

@@ -1,0 +1,93 @@
+import YAML from 'yaml';
+import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from './schema.js';
+import { memoryPath, readFileSync, writeFileAtomic } from './io.js';
+
+const CONFIG_FILE = 'config.yaml';
+
+export interface DefaultConfigOptions {
+  projectId?: string;
+  currentAgent?: string;
+  currentAgentId?: string;
+  projectMode?: ProjectMode;
+  projectStrategy?: ProjectStrategy;
+  storageDir?: string;
+  topology?: TopologyMode;
+  ignoreStrategy?: IgnoreStrategy;
+}
+
+export function defaultConfig(projectName: string, options: DefaultConfigOptions = {}): Config {
+  return {
+    version: 1,
+    project_name: projectName,
+    project_id: options.projectId,
+    current_agent: options.currentAgent,
+    current_agent_id: options.currentAgentId,
+    storage_dir: options.storageDir ?? '.brainclaw',
+    topology: options.topology ?? 'embedded',
+    ignore_strategy: options.ignoreStrategy ?? 'none',
+    project_mode: options.projectMode ?? 'auto',
+    projects: {
+      strategy: options.projectStrategy ?? 'manual',
+      known: [],
+    },
+    profile: 'dev',
+    target_audience: 'human',
+    openclaw_bridge: false,
+    telemetry: false,
+    allow_network: false,
+    redaction: {
+      enabled: true,
+      patterns: [
+        '(?i)api[_-]?key',
+        '(?i)secret',
+        '(?i)token',
+        '(?i)password',
+      ],
+    },
+    sensitive_paths: ['.env', 'secrets/', '.git/', 'node_modules/'],
+    security: {
+      mode: 'warn',
+      strict_redaction: false,
+      block_sensitive_paths: true,
+    },
+    markdown: {
+      max_items_per_section: 20,
+      compact_mode: false,
+    },
+    reflective_memory: {
+      enabled: true,
+      auto_accept: false,
+      max_pending: 50,
+      promotion_stars_threshold: 3,
+      promotion_uses_threshold: 2,
+      prune_rejected_after_days: 30,
+      auto_promote_trusted: false,
+      auto_promote_score_threshold: 5,
+    },
+    governance: {
+      approval_policy: 'review',
+      curators: [],
+      review_sla_hours: 24,
+    },
+    reputation: {
+      enabled: false,
+      visibility: 'internal-only',
+      decay_days: 30,
+      ranking_weight: 0.15,
+      resume_weight: 0.35,
+      mcp_exposure: false,
+    },
+  };
+}
+
+export function loadConfig(cwd?: string, preferredDirName?: string): Config {
+  const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
+  const raw = readFileSync(filepath);
+  return ConfigSchema.parse(YAML.parse(raw));
+}
+
+export function saveConfig(config: Config, cwd?: string, preferredDirName?: string): void {
+  const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
+  const yamlStr = YAML.stringify(config, { lineWidth: 0 });
+  writeFileAtomic(filepath, yamlStr);
+}

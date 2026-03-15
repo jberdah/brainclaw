@@ -1,0 +1,615 @@
+import { loadConfig } from './config.js';
+import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
+import { getVisibleMemoryVersion } from './freshness.js';
+import { resolveCurrentHostId } from './host.js';
+import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
+import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type AgentResumeSummary } from './reputation.js';
+import { loadState } from './state.js';
+import { listCandidates } from './candidates.js';
+import { listRuntimeNotes } from './runtime.js';
+import { listOperationalTraps } from './traps.js';
+import type { InstructionEntry, ProjectMode, ProjectStrategy } from './schema.js';
+
+export interface ContextOptions {
+  target?: string;
+  project?: string;
+  agent?: string;
+  host?: string;
+  allHosts?: boolean;
+  includePending?: boolean;
+  profile?: 'dev' | 'openclaw' | 'ops' | 'research';
+  maxItems?: number;
+  maxChars?: number;
+}
+
+export interface ContextItem {
+  id: string;
+  section: 'plan' | 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate' | 'runtime';
+  text: string;
+  tags: string[];
+  score: number;
+  reasons: string[];
+  related_paths?: string[];
+  extra?: string;
+  provenance?: {
+    actor?: string;
+    actor_id?: string;
+    project_id?: string;
+    host_id?: string;
+    session_id?: string;
+  };
+}
+
+export interface ContextResult {
+  context_schema: string;
+  profile: string;
+  project_id?: string;
+  agent_id?: string;
+  project_mode: ProjectMode;
+  project_strategy: ProjectStrategy;
+  current_host: string;
+  host_filter?: string;
+  all_hosts: boolean;
+  memory_version: string;
+  target: string;
+  project?: string;
+  agent?: string;
+  resolved_instructions: InstructionEntry[];
+  resume_summary?: AgentResumeSummary;
+  selected: ContextItem[];
+}
+
+export function buildContext(options: ContextOptions = {}): ContextResult {
+  const state = loadState();
+  const config = loadConfig();
+
+  const profile = options.profile ?? config.profile ?? 'dev';
+  const projectMode = config.project_mode ?? 'auto';
+  const projectStrategy = config.projects?.strategy ?? 'manual';
+  const currentHost = resolveCurrentHostId();
+  const memoryVersion = getVisibleMemoryVersion({ hostId: options.host, allHosts: options.allHosts });
+  const target = options.target?.trim() ?? '';
+  const project = options.project?.trim() || inferProjectFromTarget(target, config);
+  const agent = options.agent?.trim() || config.current_agent?.trim();
+  const currentAgentIdentity = agent
+    ? (options.agent?.trim() ? findAgentIdentityByName(agent) : resolveCurrentAgentIdentity())
+    : undefined;
+  const maxItems = options.maxItems ?? 8;
+  const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
+  const resolvedInstructions = resolveInstructions(loadInstructions(), { project, agent });
+  const rankingLookup = buildReputationRankingLookup();
+
+  const items: ContextItem[] = [];
+
+  for (const plan of state.plan_items.filter((item) => item.status !== 'done' && item.status !== 'dropped')) {
+    const meta: string[] = [plan.status, plan.priority];
+    if (plan.assignee) meta.push(`assignee:${plan.assignee}`);
+    if (plan.project) meta.push(`project:${plan.project}`);
+    items.push({
+      id: plan.id,
+      section: 'plan',
+      text: plan.text,
+      tags: plan.tags,
+      related_paths: plan.related_paths,
+      score: 0,
+      reasons: [],
+      extra: meta.join(', '),
+    });
+  }
+
+  for (const c of state.active_constraints) {
+    items.push({
+      id: c.id,
+      section: 'constraint',
+      text: c.text,
+      tags: c.tags,
+      related_paths: c.related_paths,
+      score: 0,
+      reasons: [],
+      extra: c.status,
+      provenance: {
+        actor: c.author,
+        actor_id: c.author_id,
+        project_id: c.project_id,
+        host_id: c.host_id,
+        session_id: c.session_id,
+      },
+    });
+  }
+
+  for (const d of state.recent_decisions) {
+    items.push({
+      id: d.id,
+      section: 'decision',
+      text: d.text,
+      tags: d.tags,
+      related_paths: d.related_paths,
+      score: 0,
+      reasons: [],
+      extra: d.related_paths?.join(', '),
+      provenance: {
+        actor: d.author,
+        actor_id: d.author_id,
+        project_id: d.project_id,
+        host_id: d.host_id,
+        session_id: d.session_id,
+      },
+    });
+  }
+
+  for (const t of state.known_traps) {
+    items.push({
+      id: t.id,
+      section: 'trap',
+      text: t.text,
+      tags: t.tags,
+      related_paths: t.related_paths,
+      score: 0,
+      reasons: [],
+      extra: `${t.severity}, visibility:${t.visibility ?? 'shared'}`,
+      provenance: {
+        actor: t.author,
+        actor_id: t.author_id,
+        project_id: t.project_id,
+        host_id: t.host_id,
+        session_id: t.session_id,
+      },
+    });
+  }
+
+  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts })) {
+    items.push({
+      id: trap.id,
+      section: 'trap',
+      text: trap.text,
+      tags: trap.tags,
+      related_paths: trap.related_paths,
+      score: 0,
+      reasons: [],
+      extra: `${trap.severity}, visibility:${trap.visibility ?? 'machine'}${trap.host_id ? `, host:${trap.host_id}` : ''}`,
+    });
+  }
+
+  for (const h of state.open_handoffs.filter((x) => x.status === 'open')) {
+    items.push({
+      id: h.id,
+      section: 'handoff',
+      text: h.text,
+      tags: h.tags,
+      related_paths: h.related_paths,
+      score: 0,
+      reasons: [],
+      extra: `${h.from} -> ${h.to}`,
+      provenance: {
+        actor: h.author,
+        actor_id: h.author_id,
+        project_id: h.project_id,
+        host_id: h.host_id,
+        session_id: h.session_id,
+      },
+    });
+  }
+
+  const runtimeNotes = listRuntimeNotes({
+    hostId: options.host,
+    includeAllHosts: options.allHosts,
+  });
+  for (const note of runtimeNotes) {
+    if (project && note.project && note.project !== project) {
+      continue;
+    }
+
+    const meta: string[] = [`agent:${note.agent}`, `visibility:${note.visibility}`];
+    if (note.host_id) meta.push(`host:${note.host_id}`);
+    if (note.agent_id) meta.push(`agent_id:${note.agent_id}`);
+    if (note.session_id) meta.push(`session:${note.session_id}`);
+    if (note.plan_id) meta.push(`plan:${note.plan_id}`);
+    if (note.project) meta.push(`project:${note.project}`);
+    items.push({
+      id: note.id,
+      section: 'runtime',
+      text: note.text,
+      tags: note.tags,
+      score: 0,
+      reasons: [],
+      extra: meta.join(', '),
+      provenance: {
+        actor: note.agent,
+        actor_id: note.agent_id,
+        project_id: note.project_id,
+        host_id: note.host_id,
+        session_id: note.session_id,
+      },
+    });
+  }
+
+  if (options.includePending) {
+    for (const p of listCandidates('pending')) {
+      const meta: string[] = [`${p.type}`, `stars:${p.star_count ?? 0}`, `uses:${p.usage_count ?? 0}`];
+      if (p.author_id) meta.push(`author_id:${p.author_id}`);
+      if (p.session_id) meta.push(`session:${p.session_id}`);
+      items.push({
+        id: p.id,
+        section: 'candidate',
+        text: p.text,
+        tags: p.tags,
+        related_paths: p.related_paths,
+        score: 0,
+        reasons: [],
+        extra: meta.join(', '),
+        provenance: {
+          actor: p.author,
+          actor_id: p.author_id,
+          project_id: p.project_id,
+          host_id: p.host_id,
+          session_id: p.session_id,
+        },
+      });
+    }
+  }
+
+  const queryTerms = tokenise(target);
+  for (const item of items) {
+    const relevance = computeRelevance(item, queryTerms, profile, target);
+    item.score = relevance.score;
+    item.reasons = relevance.reasons;
+    if (item.score >= 0 && item.provenance) {
+      const trustBonus = rankingLookup.getRankingBonus(item.provenance.actor_id, item.provenance.actor);
+      if (trustBonus > 0) {
+        item.score += trustBonus;
+        item.reasons = uniqueReasons([...item.reasons, `reputation signal:+${trustBonus.toFixed(2)}`]);
+      }
+    }
+  }
+
+  const ranked = items
+    .filter(item => item.score >= 0)
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .slice(0, maxItems);
+
+  const selected = maxChars ? applyCharBudget(ranked, maxChars) : ranked;
+  const resumeSummary = buildCurrentAgentResumeSummary();
+
+  return {
+    context_schema: '1.0',
+    profile,
+    project_id: config.project_id,
+    agent_id: currentAgentIdentity?.agent_id,
+    project_mode: projectMode,
+    project_strategy: projectStrategy,
+    current_host: currentHost,
+    host_filter: options.host,
+    all_hosts: options.allHosts ?? false,
+    memory_version: memoryVersion,
+    target,
+    project,
+    agent,
+    resolved_instructions: resolvedInstructions,
+    resume_summary: resumeSummary,
+    selected,
+  };
+}
+
+export function renderContextMarkdown(result: ContextResult, explain: boolean = false): string {
+  const lines: string[] = [];
+  lines.push(`# Agent Context (${result.profile})`);
+  lines.push('');
+  if (result.project_id) {
+    lines.push(`Project ID: ${result.project_id}`);
+  }
+  if (result.agent_id && result.agent) {
+    lines.push(`Agent ID: ${result.agent_id}`);
+  }
+  lines.push(`Project mode: ${result.project_mode} (${result.project_strategy})`);
+  lines.push(`Current host: ${result.current_host}`);
+  lines.push(`Memory version: ${result.memory_version}`);
+  if (result.all_hosts) {
+    lines.push('Runtime host filter: all-hosts');
+  } else if (result.host_filter) {
+    lines.push(`Runtime host filter: ${result.host_filter}`);
+  }
+  if (result.project) {
+    lines.push(`Resolved project: ${result.project}`);
+  }
+  if (result.agent) {
+    const suffix = result.agent_id ? ` (${result.agent_id})` : '';
+    lines.push(`Resolved agent: ${result.agent}${suffix}`);
+  }
+  if (result.resume_summary) {
+    lines.push('');
+    lines.push(`Resume summary for ${result.resume_summary.agent_name}:`);
+    lines.push(`- Internal trust: ${result.resume_summary.internal_trust}`);
+    lines.push(`- Contribution quality: ${result.resume_summary.contribution_quality}`);
+    lines.push(`- Review reliability: ${result.resume_summary.review_reliability}`);
+    lines.push(`- Continuity hygiene: ${result.resume_summary.continuity_hygiene}`);
+    for (const item of result.resume_summary.strengths) {
+      lines.push(`- Strength: ${item}`);
+    }
+    for (const item of result.resume_summary.cautions) {
+      lines.push(`- Caution: ${item}`);
+    }
+    for (const item of result.resume_summary.suggested_focus) {
+      lines.push(`- Focus: ${item}`);
+    }
+  }
+  lines.push('');
+  if (result.target) {
+    lines.push(`Target: ${result.target}`);
+    lines.push('');
+  }
+
+  lines.push('Instructions:');
+  if (result.resolved_instructions.length === 0) {
+    lines.push('- None resolved.');
+  } else {
+    for (const instruction of result.resolved_instructions) {
+      const scope = instruction.scope ? `:${instruction.scope}` : '';
+      const tags = instruction.tags.length ? ` [${instruction.tags.join(', ')}]` : '';
+      lines.push(`- [${instruction.id}] <${instruction.layer}${scope}> ${instruction.text}${tags}`);
+    }
+  }
+  lines.push('');
+
+  if (result.selected.length === 0) {
+    lines.push('- No relevant memory found.');
+    return lines.join('\n');
+  }
+
+  for (const item of result.selected) {
+    const tags = item.tags.length ? ` [${item.tags.join(', ')}]` : '';
+    const extra = item.extra ? ` (${item.extra})` : '';
+    const why = explain && item.reasons.length ? ` {why: ${item.reasons.join(', ')}}` : '';
+    lines.push(`- [${item.id}] <${item.section}> ${item.text}${extra}${tags}${why}`);
+  }
+
+  return lines.join('\n');
+}
+
+export function renderContextPromptTemplate(result: ContextResult, compact: boolean = false): string {
+  const lines: string[] = [];
+  if (!compact) {
+    lines.push('Use the following project memory context before planning or making changes:');
+    lines.push('');
+  }
+  lines.push('```memory-context');
+  if (compact) {
+    lines.push(`p=${result.profile}`);
+    if (result.project_id) {
+      lines.push(`pid=${result.project_id}`);
+    }
+    if (result.agent_id) {
+      lines.push(`aid=${result.agent_id}`);
+    }
+    lines.push(`pm=${result.project_mode}`);
+    lines.push(`ps=${result.project_strategy}`);
+    lines.push(`ch=${result.current_host}`);
+    lines.push(`mv=${result.memory_version}`);
+    if (result.all_hosts) {
+      lines.push('hf=all-hosts');
+    } else if (result.host_filter) {
+      lines.push(`hf=${result.host_filter}`);
+    }
+    if (result.project) {
+      lines.push(`pr=${result.project}`);
+    }
+    if (result.agent) {
+      lines.push(`ag=${result.agent}`);
+    }
+    if (result.resume_summary) {
+      lines.push(`rt=${result.resume_summary.internal_trust}`);
+      lines.push('rs:');
+      for (const item of result.resume_summary.suggested_focus) {
+        lines.push(`  - ${item}`);
+      }
+    }
+    if (result.target) {
+      lines.push(`t=${result.target}`);
+    }
+  } else {
+    lines.push(`profile: ${result.profile}`);
+    if (result.project_id) {
+      lines.push(`project_id: ${result.project_id}`);
+    }
+    if (result.agent_id) {
+      lines.push(`agent_id: ${result.agent_id}`);
+    }
+    lines.push(`project_mode: ${result.project_mode}`);
+    lines.push(`project_strategy: ${result.project_strategy}`);
+    lines.push(`current_host: ${result.current_host}`);
+    lines.push(`memory_version: ${result.memory_version}`);
+    if (result.all_hosts) {
+      lines.push('host_filter: all-hosts');
+    } else if (result.host_filter) {
+      lines.push(`host_filter: ${result.host_filter}`);
+    }
+    if (result.project) {
+      lines.push(`project: ${result.project}`);
+    }
+    if (result.agent) {
+      lines.push(`agent: ${result.agent}`);
+    }
+    if (result.resume_summary) {
+      lines.push('resume_summary:');
+      lines.push(`  agent_name: ${result.resume_summary.agent_name}`);
+      if (result.resume_summary.agent_id) {
+        lines.push(`  agent_id: ${result.resume_summary.agent_id}`);
+      }
+      lines.push(`  internal_trust: ${result.resume_summary.internal_trust}`);
+      lines.push(`  contribution_quality: ${result.resume_summary.contribution_quality}`);
+      lines.push(`  review_reliability: ${result.resume_summary.review_reliability}`);
+      lines.push(`  continuity_hygiene: ${result.resume_summary.continuity_hygiene}`);
+      lines.push('  suggested_focus:');
+      for (const item of result.resume_summary.suggested_focus) {
+        lines.push(`    - ${item}`);
+      }
+    }
+    if (result.target) {
+      lines.push(`target: ${result.target}`);
+    }
+  }
+  lines.push(compact ? 'ins:' : 'instructions:');
+  if (result.resolved_instructions.length === 0) {
+    lines.push(compact ? '  - n' : '  - none');
+  } else {
+    for (const instruction of result.resolved_instructions) {
+      if (compact) {
+        const scope = instruction.scope ? ` sc=${instruction.scope}` : '';
+        const tags = instruction.tags.length ? ` tg=[${instruction.tags.join(',')}]` : '';
+        lines.push(`  - id=${instruction.id} ly=${instruction.layer}${scope}${tags} tx="${instruction.text}"`);
+      } else {
+        const scope = instruction.scope ? ` scope=${instruction.scope}` : '';
+        const tags = instruction.tags.length ? ` tags=[${instruction.tags.join(',')}]` : '';
+        lines.push(`  - id=${instruction.id} layer=${instruction.layer}${scope}${tags} text="${instruction.text}"`);
+      }
+    }
+  }
+  lines.push(compact ? 'i:' : 'items:');
+  if (result.selected.length === 0) {
+    lines.push(compact ? '  - n' : '  - none');
+  } else {
+    for (const item of result.selected) {
+      if (compact) {
+        const tags = item.tags.length ? ` tg=[${item.tags.join(',')}]` : '';
+        const extra = item.extra ? ` ex="${item.extra}"` : '';
+        const why = item.reasons.length ? ` why=[${item.reasons.join('|')}]` : '';
+        lines.push(`  - id=${item.id} tp=${item.section}${tags}${extra}${why} tx="${item.text}"`);
+      } else {
+        const tags = item.tags.length ? ` tags=[${item.tags.join(',')}]` : '';
+        const extra = item.extra ? ` extra="${item.extra}"` : '';
+        const why = item.reasons.length ? ` why=[${item.reasons.join(', ')}]` : '';
+        lines.push(`  - id=${item.id} type=${item.section}${tags}${extra}${why} text="${item.text}"`);
+      }
+    }
+  }
+  lines.push('```');
+  return lines.join('\n');
+}
+
+function tokenise(input: string): string[] {
+  return input
+    .toLowerCase()
+    .split(/[^a-z0-9_\/-]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function matchesPath(pattern: string, target: string): boolean {
+  if (pattern === target) return true;
+  const regexStr = '^' + pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex chars
+    .replace(/\\\*\\\*/g, '.__GLOBSTAR__.')
+    .replace(/\\\*/g, '[^/]*')
+    .replace(/\.__GLOBSTAR__\./g, '.*') + '$';
+  return new RegExp(regexStr).test(target);
+}
+
+function computeRelevance(item: ContextItem, terms: string[], profile: string, target: string): {
+  score: number;
+  reasons: string[];
+} {
+  let score = 1;
+  const reasons: string[] = ['base memory signal'];
+
+  // Path filtering logic
+  if (item.related_paths && item.related_paths.length > 0 && target) {
+    const isMatch = item.related_paths.some(p => matchesPath(p, target));
+    if (isMatch) {
+      score += 10; // High boost for direct spatial match
+      reasons.push('path match');
+    } else {
+      return { score: -1, reasons: ['filtered out: path mismatch'] };
+    }
+  }
+
+  // Profile weighting
+  if (item.section === 'plan') {
+    score += 2;
+    reasons.push('execution boost');
+  }
+  if (item.section === 'runtime') {
+    score += 1;
+    reasons.push('runtime execution signal');
+  }
+  if (profile === 'dev' && (item.section === 'decision' || item.section === 'trap')) {
+    score += 2;
+    reasons.push('profile boost: dev');
+  }
+  if (profile === 'openclaw' && (item.section === 'constraint' || item.section === 'handoff' || item.section === 'runtime')) {
+    score += 2;
+    reasons.push('profile boost: openclaw');
+  }
+  if (profile === 'ops' && (item.section === 'constraint' || item.section === 'trap')) {
+    score += 2;
+    reasons.push('profile boost: ops');
+  }
+  if (profile === 'research' && (item.section === 'decision' || item.section === 'candidate')) {
+    score += 2;
+    reasons.push('profile boost: research');
+  }
+
+  if (item.section === 'candidate') {
+    const starMatch = (item.extra ?? '').match(/stars:(\d+)/);
+    const useMatch = (item.extra ?? '').match(/uses:(\d+)/);
+    const stars = starMatch ? parseInt(starMatch[1], 10) : 0;
+    const uses = useMatch ? parseInt(useMatch[1], 10) : 0;
+    if (stars > 0) {
+      score += Math.min(stars, 3);
+      reasons.push(`adoption signal:${stars} star(s)`);
+    }
+    if (uses > 0) {
+      score += Math.min(uses * 2, 4);
+      reasons.push(`reuse signal:${uses} use(s)`);
+    }
+  }
+
+  if (terms.length === 0) return { score, reasons };
+
+  const text = item.text.toLowerCase();
+  const tags = item.tags.map((t) => t.toLowerCase());
+  const extra = (item.extra ?? '').toLowerCase();
+
+  for (const term of terms) {
+    if (text.includes(term)) {
+      score += 3;
+      reasons.push(`text match:${term}`);
+    }
+    if (tags.some((tag) => tag.includes(term))) {
+      score += 2;
+      reasons.push(`tag match:${term}`);
+    }
+    if (extra.includes(term)) {
+      score += 1;
+      reasons.push(`metadata match:${term}`);
+    }
+  }
+
+  return { score, reasons: uniqueReasons(reasons) };
+}
+
+function uniqueReasons(reasons: string[]): string[] {
+  return [...new Set(reasons)];
+}
+
+function estimateItemChars(item: ContextItem): number {
+  const tagsLen = item.tags.join(', ').length;
+  const reasonsLen = item.reasons.join(', ').length;
+  const extraLen = item.extra?.length ?? 0;
+  return item.text.length + tagsLen + reasonsLen + extraLen + 32;
+}
+
+function applyCharBudget(items: ContextItem[], maxChars: number): ContextItem[] {
+  let used = 0;
+  const selected: ContextItem[] = [];
+
+  for (const item of items) {
+    const itemChars = estimateItemChars(item);
+    if (selected.length > 0 && used + itemChars > maxChars) {
+      break;
+    }
+
+    selected.push(item);
+    used += itemChars;
+  }
+
+  return selected;
+}

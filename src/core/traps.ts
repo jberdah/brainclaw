@@ -1,0 +1,96 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { resolveCurrentHostId, sanitizeHostId } from './host.js';
+import { generateId } from './ids.js';
+import { memoryDir, readFileSync, writeFileAtomic } from './io.js';
+import { TrapSchema, type MemoryVisibility, type Trap } from './schema.js';
+import { loadState } from './state.js';
+
+const TRAPS_MACHINE_DIR = 'traps-hosts';
+const TRAPS_PRIVATE_DIR = 'traps-private';
+
+export interface TrapListOptions {
+  visibility?: Extract<MemoryVisibility, 'machine' | 'private'> | 'all';
+  hostId?: string;
+  includeAllHosts?: boolean;
+}
+
+function machineTrapsDir(cwd?: string): string {
+  return path.join(memoryDir(cwd), TRAPS_MACHINE_DIR);
+}
+
+function privateTrapsDir(cwd?: string): string {
+  return path.join(memoryDir(cwd), TRAPS_PRIVATE_DIR);
+}
+
+function hostTrapDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string): string {
+  const baseDir = visibility === 'machine' ? machineTrapsDir(cwd) : privateTrapsDir(cwd);
+  return path.join(baseDir, sanitizeHostId(hostId));
+}
+
+function ensureHostTrapDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string): void {
+  const dir = hostTrapDir(visibility, hostId, cwd);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function readTrapFiles(dir: string): Trap[] {
+  if (!fs.existsSync(dir)) return [];
+
+  const traps: Trap[] = [];
+  for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.json')).sort()) {
+    try {
+      traps.push(TrapSchema.parse(JSON.parse(readFileSync(path.join(dir, file)))));
+    } catch {
+      // Ignore malformed files.
+    }
+  }
+  return traps;
+}
+
+function resolveHostIds(rootDir: string, options: TrapListOptions): string[] {
+  if (!fs.existsSync(rootDir)) return [];
+  if (options.includeAllHosts) {
+    return fs.readdirSync(rootDir)
+      .filter((entry) => fs.statSync(path.join(rootDir, entry)).isDirectory())
+      .map((entry) => sanitizeHostId(entry));
+  }
+
+  return [sanitizeHostId(options.hostId ?? resolveCurrentHostId())];
+}
+
+export function listOperationalTraps(options: TrapListOptions = {}, cwd?: string): Trap[] {
+  const visibility = options.visibility;
+  const traps: Trap[] = [];
+
+  if (!visibility || visibility === 'machine' || visibility === 'all') {
+    for (const hostId of resolveHostIds(machineTrapsDir(cwd), options)) {
+      traps.push(...readTrapFiles(hostTrapDir('machine', hostId, cwd)));
+    }
+  }
+
+  if (visibility === 'private' || visibility === 'all') {
+    for (const hostId of resolveHostIds(privateTrapsDir(cwd), options)) {
+      traps.push(...readTrapFiles(hostTrapDir('private', hostId, cwd)));
+    }
+  }
+
+  return traps.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+export function saveOperationalTrap(trap: Trap, cwd?: string): void {
+  const visibility = trap.visibility === 'private' ? 'private' : 'machine';
+  const hostId = sanitizeHostId(trap.host_id ?? resolveCurrentHostId());
+  ensureHostTrapDir(visibility, hostId, cwd);
+  const persisted: Trap = {
+    ...trap,
+    visibility,
+    host_id: hostId,
+  };
+  writeFileAtomic(path.join(hostTrapDir(visibility, hostId, cwd), `${trap.id}.json`), JSON.stringify(persisted, null, 2) + '\n');
+}
+
+export function generateTrapId(): string {
+  return generateId('known_traps');
+}

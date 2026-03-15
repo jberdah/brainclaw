@@ -1,0 +1,34 @@
+{
+  "name": "brainclaw",
+  "version": "0.3.0",
+  "description": "Shared project memory for humans and coding agents.",
+  "type": "module",
+  "bin": {
+    "brainclaw": "./dist/cli.js",
+    "bclaw": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && node dist/cli.js",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/**/*.test.js"
+  },
+  "keywords": [
+    "cli",
+    "memory",
+    "agents",
+    "coding-agents",
+    "project-context",
+    "handoff",
+    "local-first"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^13.1.0",
+    "yaml": "^2.7.1",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

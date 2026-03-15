@@ -1,0 +1,60 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "targeted-test-validation",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"$env:Path = 'C:\\Program Files\\nodejs;' + $env:Path; tsc -p tsconfig.test.json; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; node --test dist-test/tests/cli.test.js dist-test/tests/collaboration.test.js dist-test/tests/mcp.test.js dist-test/tests/plan.test.js dist-test/tests/instructions.test.js"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "targeted-test-validation-quoted",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"& { $env:Path = 'C:\\Program Files\\nodejs;' + $env:Path; tsc -p tsconfig.test.json; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; node --test dist-test/tests/cli.test.js dist-test/tests/collaboration.test.js dist-test/tests/mcp.test.js dist-test/tests/plan.test.js dist-test/tests/instructions.test.js }"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "targeted-test-validation-cmd",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/c",
+				"set \"PATH=C:\\Program Files\\nodejs;%PATH%\" && tsc -p tsconfig.test.json && node --test dist-test/tests/cli.test.js dist-test/tests/collaboration.test.js dist-test/tests/mcp.test.js dist-test/tests/plan.test.js dist-test/tests/instructions.test.js"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "targeted-test-validation-node-explicit",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/c",
+				"\"C:\\Program Files\\nodejs\\node.exe\" node_modules\\typescript\\bin\\tsc -p tsconfig.test.json && \"C:\\Program Files\\nodejs\\node.exe\" --test dist-test/tests/cli.test.js dist-test/tests/collaboration.test.js dist-test/tests/mcp.test.js dist-test/tests/plan.test.js dist-test/tests/instructions.test.js"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "targeted-test-validation-shortpath",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/c",
+				"C:\\Progra~1\\nodejs\\node.exe node_modules\\typescript\\bin\\tsc -p tsconfig.test.json && C:\\Progra~1\\nodejs\\node.exe --test dist-test/tests/cli.test.js dist-test/tests/collaboration.test.js dist-test/tests/mcp.test.js dist-test/tests/plan.test.js dist-test/tests/instructions.test.js"
+			],
+			"isBackground": false
+		}
+	]
+}

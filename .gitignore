@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-test/
+
+# Brainclaw memory (local storage)
+.memory/
+.brainclaw/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.idea/
+
+# Test artifacts
+test_output.txt
+test_spawn_out.txt
+test_spawn2.txt
+test_spawn.cjs
+test_spawn_tmp.cjs
+test_spawn_tmp2.cjs
+full_test_result.txt
+
+# Logs
+*.log
+
+# Lock files from brainclaw
+*.lock
