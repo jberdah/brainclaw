@@ -999,9 +999,15 @@ function computeRelevance(item: ContextItem, terms: string[], profile: string, t
   }
 
   // Profile weighting
+  // Plans are always highest priority (actionable items)
   if (item.section === 'plan') {
-    score += 2;
+    score += 4;
     reasons.push('execution boost');
+  }
+  // Open handoffs are second-highest (pending transitions)
+  if (item.section === 'handoff') {
+    score += 3;
+    reasons.push('open handoff signal');
   }
   if (item.section === 'runtime') {
     score += 1;
