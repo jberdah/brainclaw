@@ -28,8 +28,15 @@ export interface ContextCommandOptions {
 export function runContext(options: ContextCommandOptions = {}): void {
   const cwd = options.cwd ?? process.cwd();
   if (!memoryExists(cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
+    if (options.json) {
+      console.log(JSON.stringify({
+        initialized: false,
+        action_required: 'Run `brainclaw init` to initialize project memory.',
+      }, null, 2));
+    } else {
+      console.log('brainclaw: project memory not initialized. Run `brainclaw init` first.');
+    }
+    return;
   }
 
   const result = buildContext({
