@@ -4,11 +4,13 @@ import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import type { OperationalIdentity } from '../core/identity.js';
 import type { Claim } from '../core/schema.js';
 
 export interface ClaimOptions {
   agent?: string;
+  agentId?: string;
   scope: string;
   project?: string;
   plan?: string;
@@ -23,7 +25,15 @@ export function runClaim(description: string, options: ClaimOptions): void {
 
   let actor: OperationalIdentity;
   try {
-    actor = buildOperationalIdentity(options.agent, options.cwd);
+    const registered = requireRegisteredAgentIdentity({
+      agentName: options.agent,
+      agentId: options.agentId,
+      cwd: options.cwd,
+      allowCurrent: true,
+      allowEnv: true,
+    });
+    requireMinimumTrustLevel(registered, 'contributor');
+    actor = buildOperationalIdentity(registered.agent_name, options.cwd, { agentId: registered.agent_id });
   } catch (error: unknown) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

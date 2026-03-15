@@ -1,14 +1,62 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
 import { MEMORY_DIR, memoryDir } from './io.js';
 import { JsonStore } from './json-store.js';
-import { AgentIdentityDocumentSchema, type AgentIdentityDocument, type AgentKind, type AgentTrustLevel } from './schema.js';
+import {
+  AgentIdentityDocumentSchema,
+  type AgentIdentityDocument,
+  type AgentKind,
+  type AgentTrustLevel,
+} from './schema.js';
 import { logger } from './logger.js';
 
 const AGENTS_DIR = 'agents';
+const TRUST_ORDER: AgentTrustLevel[] = ['observer', 'contributor', 'trusted', 'curator'];
+
+export class AgentIdentityResolutionError extends Error {
+  readonly kind = 'identity_error';
+  readonly details?: Record<string, unknown>;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.details = details;
+  }
+}
+
+export class AgentTrustError extends Error {
+  readonly kind = 'trust_error';
+  readonly details?: Record<string, unknown>;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.details = details;
+  }
+}
+
+export interface RegisterAgentIdentityInput {
+  agentName: string;
+  kind?: AgentKind;
+  capabilities?: string[];
+  replaceCapabilities?: boolean;
+  generateFingerprint?: boolean;
+  cwd?: string;
+  preferredDirName?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface RegisteredAgentIdentityOptions {
+  agentName?: string;
+  agentId?: string;
+  cwd?: string;
+  preferredDirName?: string;
+  env?: NodeJS.ProcessEnv;
+  allowCurrent?: boolean;
+  allowEnv?: boolean;
+}
 
 export function generateAgentId(): string {
   return `agt_${crypto.randomUUID().replace(/-/g, '')}`;
@@ -24,10 +72,6 @@ export function resolveDefaultAgentName(env: NodeJS.ProcessEnv = process.env): s
 
 function agentsDir(cwd?: string, preferredDirName?: string): string {
   return path.join(memoryDir(cwd, preferredDirName), AGENTS_DIR);
-}
-
-function agentIdentityPath(agentId: string, cwd?: string, preferredDirName?: string): string {
-  return path.join(agentsDir(cwd, preferredDirName), `${agentId}.json`);
 }
 
 function ensureAgentsDir(cwd?: string, preferredDirName?: string): void {
@@ -48,6 +92,89 @@ function agentStore(cwd?: string, preferredDirName?: string): JsonStore<AgentIde
 
 function normalizeAgentName(agentName: string): string {
   return agentName.trim().toLowerCase();
+}
+
+function normalizeCapability(capability: string): string | undefined {
+  const normalized = capability.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeCapabilities(capabilities: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const capability of capabilities ?? []) {
+    const next = normalizeCapability(capability);
+    if (!next || seen.has(next)) {
+      continue;
+    }
+    seen.add(next);
+    normalized.push(next);
+  }
+  return normalized;
+}
+
+function mergeCapabilities(existing: string[], next: string[]): string[] {
+  return normalizeCapabilities([...existing, ...next]);
+}
+
+function resolveEnvAgentName(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.BRAINCLAW_AGENT?.trim() || env.OPENCLAW_AGENT?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function codexHome(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.CODEX_HOME?.trim();
+  return explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), '.codex');
+}
+
+function agentKeyPath(agentId: string, env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(codexHome(env), 'brainclaw', 'keys', `${agentId}.ed25519.pem`);
+}
+
+function ensureParentDir(filepath: string): void {
+  const dir = path.dirname(filepath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function fingerprintPublicKey(publicKey: string): string {
+  return crypto.createHash('sha256').update(publicKey).digest('hex');
+}
+
+function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env, forceRegenerate: boolean = false): AgentIdentityDocument['identity_key'] {
+  const filepath = agentKeyPath(agentId, env);
+  const createdAt = nowISO();
+
+  let publicKeyPem: string;
+  if (!forceRegenerate && fs.existsSync(filepath)) {
+    const privateKey = crypto.createPrivateKey(fs.readFileSync(filepath, 'utf-8'));
+    publicKeyPem = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString();
+  } else {
+    const generated = crypto.generateKeyPairSync('ed25519');
+    const privateKeyPem = generated.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    publicKeyPem = generated.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    ensureParentDir(filepath);
+    fs.writeFileSync(filepath, privateKeyPem, 'utf-8');
+  }
+
+  return {
+    algorithm: 'ed25519',
+    public_key: publicKeyPem,
+    fingerprint: fingerprintPublicKey(publicKeyPem),
+    created_at: createdAt,
+  };
+}
+
+function withIdentityKey(
+  agent: AgentIdentityDocument,
+  env: NodeJS.ProcessEnv = process.env,
+  forceRegenerate: boolean = false,
+): AgentIdentityDocument {
+  return {
+    ...agent,
+    identity_key: buildIdentityKey(agent.agent_id, env, forceRegenerate),
+  };
 }
 
 export function loadAgentIdentity(agentId: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument {
@@ -77,23 +204,30 @@ export function findAgentIdentityById(agentId: string, cwd?: string, preferredDi
   }
 }
 
-export function registerAgentIdentity(input: {
-  agentName: string;
-  kind?: AgentKind;
-  cwd?: string;
-  preferredDirName?: string;
-}): AgentIdentityDocument {
+export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentIdentityDocument {
+  const normalizedCapabilities = normalizeCapabilities(input.capabilities);
   const existing = findAgentIdentityByName(input.agentName, input.cwd, input.preferredDirName);
+
   if (existing) {
+    let updated: AgentIdentityDocument = existing;
     if (input.kind && existing.kind !== input.kind) {
-      const updated: AgentIdentityDocument = { ...existing, kind: input.kind };
-      saveAgentIdentity(updated, input.cwd, input.preferredDirName);
-      return updated;
+      updated = { ...updated, kind: input.kind };
     }
-    return existing;
+    if (input.replaceCapabilities) {
+      updated = { ...updated, capabilities: normalizedCapabilities };
+    } else if (normalizedCapabilities.length > 0) {
+      updated = { ...updated, capabilities: mergeCapabilities(existing.capabilities ?? [], normalizedCapabilities) };
+    }
+    if (input.generateFingerprint) {
+      updated = withIdentityKey(updated, input.env, true);
+    }
+    if (JSON.stringify(updated) !== JSON.stringify(existing)) {
+      saveAgentIdentity(updated, input.cwd, input.preferredDirName);
+    }
+    return updated;
   }
 
-  const created: AgentIdentityDocument = {
+  let created: AgentIdentityDocument = {
     schema_version: 2,
     version: 1,
     agent_id: generateAgentId(),
@@ -101,8 +235,11 @@ export function registerAgentIdentity(input: {
     created_at: nowISO(),
     kind: input.kind ?? 'unknown',
     trust_level: 'contributor',
-    capabilities: [],
+    capabilities: normalizedCapabilities,
   };
+  if (input.generateFingerprint) {
+    created = withIdentityKey(created, input.env, true);
+  }
   saveAgentIdentity(created, input.cwd, input.preferredDirName);
   return created;
 }
@@ -123,6 +260,115 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   return undefined;
 }
 
+export function resolveRegisteredAgentIdentity(options: RegisteredAgentIdentityOptions = {}): AgentIdentityDocument | undefined {
+  const agentId = options.agentId?.trim();
+  const agentName = options.agentName?.trim();
+  const cwd = options.cwd;
+  const preferredDirName = options.preferredDirName;
+  const env = options.env ?? process.env;
+
+  if (agentId && agentName) {
+    const byId = findAgentIdentityById(agentId, cwd, preferredDirName);
+    if (!byId) {
+      return undefined;
+    }
+    if (normalizeAgentName(byId.agent_name) !== normalizeAgentName(agentName)) {
+      throw new AgentIdentityResolutionError(
+        `Agent '${agentName}' does not match registered id '${agentId}'.`,
+        { agent_id: agentId, agent_name: agentName },
+      );
+    }
+    return byId;
+  }
+
+  if (agentId) {
+    return findAgentIdentityById(agentId, cwd, preferredDirName);
+  }
+
+  if (agentName) {
+    return findAgentIdentityByName(agentName, cwd, preferredDirName);
+  }
+
+  if (options.allowCurrent !== false) {
+    const current = resolveCurrentAgentIdentity(cwd, preferredDirName);
+    if (current) {
+      return current;
+    }
+  }
+
+  if (options.allowEnv !== false) {
+    const envAgent = resolveEnvAgentName(env);
+    if (envAgent) {
+      return findAgentIdentityByName(envAgent, cwd, preferredDirName);
+    }
+  }
+
+  return undefined;
+}
+
+export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityOptions = {}): AgentIdentityDocument {
+  const agentId = options.agentId?.trim();
+  const agentName = options.agentName?.trim();
+  const cwd = options.cwd;
+  const preferredDirName = options.preferredDirName;
+  const env = options.env ?? process.env;
+
+  if (agentId && agentName) {
+    const resolved = resolveRegisteredAgentIdentity(options);
+    if (!resolved) {
+      throw new AgentIdentityResolutionError(
+        `Registered agent '${agentName}' [${agentId}] not found.`,
+        { agent_id: agentId, agent_name: agentName },
+      );
+    }
+    return resolved;
+  }
+
+  if (agentId) {
+    const resolved = findAgentIdentityById(agentId, cwd, preferredDirName);
+    if (!resolved) {
+      throw new AgentIdentityResolutionError(`Registered agent id '${agentId}' not found.`, { agent_id: agentId });
+    }
+    return resolved;
+  }
+
+  if (agentName) {
+    const resolved = findAgentIdentityByName(agentName, cwd, preferredDirName);
+    if (!resolved) {
+      throw new AgentIdentityResolutionError(
+        `Agent '${agentName}' is not registered. Run \`brainclaw register-agent ${agentName}\`.`,
+        { agent_name: agentName },
+      );
+    }
+    return resolved;
+  }
+
+  const current = options.allowCurrent !== false
+    ? resolveCurrentAgentIdentity(cwd, preferredDirName)
+    : undefined;
+  if (current) {
+    return current;
+  }
+
+  if (options.allowEnv !== false) {
+    const envAgent = resolveEnvAgentName(env);
+    if (envAgent) {
+      const resolved = findAgentIdentityByName(envAgent, cwd, preferredDirName);
+      if (!resolved) {
+        throw new AgentIdentityResolutionError(
+          `Environment agent '${envAgent}' is not registered.`,
+          { agent_name: envAgent },
+        );
+      }
+      return resolved;
+    }
+  }
+
+  throw new AgentIdentityResolutionError(
+    'No registered agent identity resolved. Use --agent/--agent-id or configure a current agent with `brainclaw register-agent <name> --set-current`.',
+  );
+}
+
 export function resolveAgentScope(agentName?: string, cwd?: string, preferredDirName?: string): string | undefined {
   const explicit = agentName?.trim();
   if (explicit) {
@@ -133,22 +379,13 @@ export function resolveAgentScope(agentName?: string, cwd?: string, preferredDir
 }
 
 export function requireOperationalAgentIdentity(agentName?: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument {
-  const explicit = agentName?.trim();
-  if (explicit) {
-    return registerAgentIdentity({
-      agentName: explicit,
-      kind: 'unknown',
-      cwd,
-      preferredDirName,
-    });
-  }
-
-  const current = resolveCurrentAgentIdentity(cwd, preferredDirName);
-  if (current) {
-    return current;
-  }
-
-  throw new Error('No current agent configured. Use --agent or run `brainclaw register-agent <name> --set-current`.');
+  return requireRegisteredAgentIdentity({
+    agentName,
+    cwd,
+    preferredDirName,
+    allowCurrent: true,
+    allowEnv: true,
+  });
 }
 
 export function resolveExistingCurrentAgent(cwd?: string): AgentIdentityDocument | undefined {
@@ -182,10 +419,33 @@ export function setCurrentAgentIdentity(agent: AgentIdentityDocument, cwd?: stri
   saveConfig(config, cwd, preferredDirName);
 }
 
-export function setAgentTrustLevel(agentName: string, level: AgentTrustLevel, cwd?: string): AgentIdentityDocument {
-  const agent = findAgentIdentityByName(agentName, cwd);
+export function hasElevatedAgent(cwd?: string): boolean {
+  return listAgentIdentities(cwd).some((agent) => agent.trust_level === 'trusted' || agent.trust_level === 'curator');
+}
+
+export function hasMinimumTrustLevel(level: AgentTrustLevel, required: AgentTrustLevel): boolean {
+  return TRUST_ORDER.indexOf(level) >= TRUST_ORDER.indexOf(required);
+}
+
+export function requireMinimumTrustLevel(identity: AgentIdentityDocument, required: AgentTrustLevel): void {
+  const current = identity.trust_level ?? 'contributor';
+  if (!hasMinimumTrustLevel(current, required)) {
+    throw new AgentTrustError(
+      `Insufficient trust: agent '${identity.agent_name}' has level '${current}', '${required}' required.`,
+      {
+        agent_id: identity.agent_id,
+        agent_name: identity.agent_name,
+        current_level: current,
+        required_level: required,
+      },
+    );
+  }
+}
+
+export function setAgentTrustLevel(agentNameOrId: string, level: AgentTrustLevel, cwd?: string): AgentIdentityDocument {
+  const agent = findAgentIdentityByName(agentNameOrId, cwd) ?? findAgentIdentityById(agentNameOrId, cwd);
   if (!agent) {
-    throw new Error(`Agent '${agentName}' not found. Register first with \`brainclaw register-agent\`.`);
+    throw new Error(`Agent '${agentNameOrId}' not found. Register first with \`brainclaw register-agent\`.`);
   }
   const updated: AgentIdentityDocument = { ...agent, trust_level: level };
   saveAgentIdentity(updated, cwd);

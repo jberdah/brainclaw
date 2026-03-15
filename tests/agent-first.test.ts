@@ -44,6 +44,11 @@ function extractId(stdout: string): string {
   return match[1];
 }
 
+function bootstrapCurator(dir: string): void {
+  const res = run(['set-trust', 'testuser', '--level', 'curator'], dir);
+  assert.equal(res.exitCode, 0, res.stderr);
+}
+
 describe('Agent-first context and reflective ingestion', () => {
   let dir: string;
 
@@ -146,6 +151,7 @@ describe('Agent-first context and reflective ingestion', () => {
   it('context JSON exposes mono-agent resume summary when reputation is enabled', () => {
     enableReputation(dir);
     const rResume = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
+    bootstrapCurator(dir);
     run(['accept', extractId(rResume.stdout), '--by', 'testuser'], dir);
     run(['runtime-note', 'Resume-worthy observation', '--plan', 'pln_missing'], dir);
 
@@ -165,6 +171,7 @@ describe('Agent-first context and reflective ingestion', () => {
   it('context markdown includes resume summary when reputation is enabled', () => {
     enableReputation(dir);
     const rMd = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
+    bootstrapCurator(dir);
     run(['accept', extractId(rMd.stdout), '--by', 'testuser'], dir);
     run(['runtime-note', 'Resume-worthy observation'], dir);
 
@@ -177,6 +184,7 @@ describe('Agent-first context and reflective ingestion', () => {
 
   it('context keeps semantic matches ahead of higher-trust but irrelevant memory', () => {
     enableReputation(dir);
+    bootstrapCurator(dir);
 
     run(['register-agent', 'trusted-bot', '--kind', 'agent', '--set-current'], dir);
     const rSem1 = run(['reflect', 'Legacy queue fallback', '--type', 'decision', '--tag', 'queue'], dir);
@@ -199,6 +207,7 @@ describe('Agent-first context and reflective ingestion', () => {
 
   it('context uses bounded trust bonus to break otherwise similar ties', () => {
     enableReputation(dir);
+    bootstrapCurator(dir);
 
     run(['register-agent', 'trusted-bot', '--kind', 'agent', '--set-current'], dir);
     const rTrust1 = run(['reflect', 'Worker stability baseline', '--type', 'decision', '--tag', 'ops'], dir);
@@ -223,6 +232,7 @@ describe('Agent-first context and reflective ingestion', () => {
   it('context template includes resume focus when reputation is enabled', () => {
     enableReputation(dir);
     const rTempl = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
+    bootstrapCurator(dir);
     run(['accept', extractId(rTempl.stdout), '--by', 'testuser'], dir);
 
     const res = run(['context', '--template'], dir);
@@ -558,18 +568,16 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('accept enforces strict governance for non-curator', () => {
+    bootstrapCurator(dir);
     const rGov = run(['reflect', 'Use canary for rollout', '--type', 'decision'], dir);
     const cndIdGov = extractId(rGov.stdout);
 
-    const configPath = path.join(dir, '.brainclaw', 'config.yaml');
-    let cfg = fs.readFileSync(configPath, 'utf-8');
-    cfg = cfg.replace('approval_policy: review', 'approval_policy: strict');
-    cfg = cfg.replace('curators: []', 'curators:\n  - curator-user');
-    fs.writeFileSync(configPath, cfg, 'utf-8');
+    run(['register-agent', 'curator-user', '--kind', 'human'], dir);
+    run(['set-trust', 'curator-user', '--level', 'curator'], dir);
 
     const denied = run(['accept', cndIdGov, '--by', 'random-user'], dir);
     assert.notEqual(denied.exitCode, 0);
-    assert.ok(denied.stderr.includes('strict approval policy'));
+    assert.ok(denied.stderr.includes('not registered') || denied.stderr.includes('Insufficient trust'));
 
     const allowed = run(['accept', cndIdGov, '--by', 'curator-user'], dir);
     assert.equal(allowed.exitCode, 0);
@@ -642,6 +650,7 @@ describe('Agent-first context and reflective ingestion', () => {
   it('doctor JSON includes prudent reputation metrics when enabled', () => {
     enableReputation(dir);
     const rDoc = run(['reflect', 'JSON dashboard candidate', '--type', 'decision'], dir);
+    bootstrapCurator(dir);
     run(['accept', extractId(rDoc.stdout), '--by', 'testuser'], dir);
 
     const res = run(['doctor', '--json'], dir);

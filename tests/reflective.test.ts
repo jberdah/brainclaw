@@ -266,6 +266,7 @@ describe('Reflective Memory (Phase 1)', () => {
 
     it('uses author trust as a prudent tie-breaker in prioritized review mode', () => {
       enableReputation(dir);
+      run(['set-trust', 'testuser', '--level', 'curator'], dir);
 
       run(['register-agent', 'trusted-bot', '--kind', 'agent', '--set-current'], dir);
       const rTb1 = run(['reflect', 'Trusted baseline one', '--type', 'decision'], dir);

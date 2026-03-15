@@ -43,6 +43,7 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     trust_level: agent?.trust_level ?? 'contributor',
     capabilities: agent?.capabilities ?? [],
     kind: agent?.kind ?? 'unknown',
+    identity_key: agent?.identity_key ?? null,
     env_agent: process.env.BRAINCLAW_AGENT ?? null,
     env_session: process.env.BRAINCLAW_SESSION_ID ?? null,
     env_host: process.env.BRAINCLAW_HOST_ID ?? null,
@@ -65,6 +66,7 @@ export function runWhoami(options: WhoamiOptions = {}): void {
   if (result.agent_id) console.log(`  Agent ID   : ${result.agent_id}`);
   console.log(`  Trust level: ${result.trust_level}`);
   if (result.capabilities.length > 0) console.log(`  Capabilities: ${result.capabilities.join(', ')}`);
+  if (result.identity_key?.fingerprint) console.log(`  Fingerprint: ${result.identity_key.fingerprint}`);
   console.log(`  Kind       : ${result.kind}`);
   console.log(`  Host ID    : ${result.host_id}`);
   if (result.session_id) console.log(`  Session ID : ${result.session_id}`);

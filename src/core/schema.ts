@@ -352,6 +352,14 @@ export type AgentKind = z.infer<typeof AgentKindSchema>;
 export const AgentTrustLevelSchema = z.enum(['observer', 'contributor', 'trusted', 'curator']);
 export type AgentTrustLevel = z.infer<typeof AgentTrustLevelSchema>;
 
+export const AgentIdentityKeySchema = z.object({
+  algorithm: z.literal('ed25519'),
+  public_key: z.string(),
+  fingerprint: z.string(),
+  created_at: z.string(),
+});
+export type AgentIdentityKey = z.infer<typeof AgentIdentityKeySchema>;
+
 export const ProjectIdentityDocumentSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
@@ -372,6 +380,7 @@ export const AgentIdentityDocumentSchema = z.object({
   kind: AgentKindSchema.default('unknown'),
   trust_level: AgentTrustLevelSchema.default('contributor'),
   capabilities: z.array(z.string()).default([]),
+  identity_key: AgentIdentityKeySchema.optional(),
 });
 export type AgentIdentityDocument = z.infer<typeof AgentIdentityDocumentSchema>;
 

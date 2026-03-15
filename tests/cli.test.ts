@@ -304,6 +304,7 @@ describe('brainclaw CLI', () => {
 
       const reflectRes1 = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
       const cndId1 = extractId(reflectRes1.stdout);
+      run(['set-trust', 'testuser', '--level', 'curator'], dir);
       run(['star-candidate', cndId1, '--by', 'claude'], dir);
       run(['use-candidate', cndId1, '--by', 'claude', '--context', 'auth rollout'], dir);
       run(['accept', cndId1, '--by', 'testuser'], dir);
@@ -472,6 +473,39 @@ describe('brainclaw CLI', () => {
       assert.ok(agents.some((agent) => agent.agent_name === 'copilot' && agent.kind === 'agent'));
     });
 
+    it('upserts agent capabilities and can generate a fingerprint', () => {
+      run(['init', '-y'], dir);
+      const codexHome = path.join(dir, '.codex-home');
+
+      const created = run([
+        'register-agent',
+        'copilot',
+        '--kind',
+        'agent',
+        '--capability',
+        'review',
+        '--capability',
+        'planning',
+        '--generate-fingerprint',
+        '--json',
+      ], dir, { CODEX_HOME: codexHome });
+      assert.equal(created.exitCode, 0);
+      const createdParsed = JSON.parse(created.stdout);
+      assert.deepEqual(createdParsed.capabilities, ['review', 'planning']);
+      assert.ok(createdParsed.identity_key?.fingerprint);
+
+      const updated = run([
+        'register-agent',
+        'copilot',
+        '--capability',
+        'code-generation',
+        '--json',
+      ], dir, { CODEX_HOME: codexHome });
+      assert.equal(updated.exitCode, 0);
+      const updatedParsed = JSON.parse(updated.stdout);
+      assert.deepEqual(updatedParsed.capabilities, ['review', 'planning', 'code-generation']);
+    });
+
     it('lists registered agents as JSON', () => {
       run(['init', '-y'], dir);
       run(['register-agent', 'copilot', '--kind', 'agent'], dir);
@@ -493,6 +527,7 @@ describe('brainclaw CLI', () => {
 
       const reflectRes2 = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
       const cndId2 = extractId(reflectRes2.stdout);
+      run(['set-trust', 'testuser', '--level', 'curator'], dir);
       run(['accept', cndId2, '--by', 'testuser'], dir);
 
       const res = run(['list-agents', '--json', '--with-reputation'], dir);

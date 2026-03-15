@@ -14,7 +14,13 @@ import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
 import { startSession } from './session-start.js';
 import { endSession } from './session-end.js';
-import { agentCanWriteDirect, getAgentTrustLevel } from '../core/agent-registry.js';
+import {
+  agentCanWriteDirect,
+  AgentIdentityResolutionError,
+  AgentTrustError,
+  requireMinimumTrustLevel,
+  requireRegisteredAgentIdentity,
+} from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO } from '../core/ids.js';
 import { search } from '../core/search.js';
@@ -187,12 +193,13 @@ const MCP_WRITE_TOOLS = [
       properties: {
         text: { type: 'string', description: 'Note content.' },
         agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
         visibility: { type: 'string', description: 'Visibility: shared, machine, private.' },
         ttl: { type: 'string', description: 'Optional TTL: 30m, 2h, 7d.' },
         autoReflect: { type: 'boolean', description: 'Attempt to reflect the runtime note into durable memory immediately.' },
       },
-      required: ['text', 'agent'],
+      required: ['text'],
     },
   },
   {
@@ -204,10 +211,11 @@ const MCP_WRITE_TOOLS = [
         text: { type: 'string', description: 'Candidate content.' },
         type: { type: 'string', description: 'Type: constraint, decision, trap, handoff.' },
         agent: { type: 'string', description: 'Author agent name.' },
+        agentId: { type: 'string', description: 'Registered author agent id.' },
         tags: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
       },
-      required: ['text', 'type', 'agent'],
+      required: ['text', 'type'],
     },
   },
   {
@@ -218,19 +226,21 @@ const MCP_WRITE_TOOLS = [
       properties: {
         id: { type: 'string', description: 'Candidate ID to accept.' },
         by: { type: 'string', description: 'Reviewer identity.' },
+        byId: { type: 'string', description: 'Reviewer agent id.' },
       },
       required: ['id'],
     },
   },
   {
     name: 'bclaw_reject',
-    description: 'Reject a pending candidate. Requires contributor trust level or above.',
+    description: 'Reject a pending candidate. Requires trusted or curator trust level.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Candidate ID to reject.' },
         reason: { type: 'string', description: 'Reason for rejection.' },
         by: { type: 'string', description: 'Reviewer identity.' },
+        byId: { type: 'string', description: 'Reviewer agent id.' },
       },
       required: ['id'],
     },
@@ -244,9 +254,10 @@ const MCP_WRITE_TOOLS = [
         scope: { type: 'string', description: 'Scope being claimed.' },
         description: { type: 'string', description: 'Description of the work.' },
         agent: { type: 'string', description: 'Agent or person name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
         planId: { type: 'string', description: 'Optional linked plan item ID.' },
       },
-      required: ['scope', 'description', 'agent'],
+      required: ['scope', 'description'],
     },
   },
   {
@@ -268,6 +279,7 @@ const MCP_WRITE_TOOLS = [
       type: 'object',
       properties: {
         agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
         context: { type: 'string', description: 'Context target path.' },
       },
     },
@@ -280,6 +292,7 @@ const MCP_WRITE_TOOLS = [
       properties: {
         session: { type: 'string', description: 'Session ID.' },
         agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
         summary: { type: 'string', description: 'Session summary text.' },
         autoReflect: { type: 'boolean', description: 'Auto-reflect session notes as candidates.' },
       },
@@ -380,25 +393,66 @@ function getCancelledRequestId(params: Record<string, unknown>): JsonRpcId | und
   return undefined;
 }
 
-function ensureTrust(agentName: string, level: 'contributor' | 'trusted' | 'curator', cwd?: string): McpToolErrorShape | undefined {
+function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameField: string; idField: string }, cwd?: string) {
   try {
-    const trust = getAgentTrustLevel(agentName, cwd);
-    const order = ['observer', 'contributor', 'trusted', 'curator'];
-    if (order.indexOf(trust) < order.indexOf(level)) {
+    return {
+      identity: requireRegisteredAgentIdentity({
+        agentName: typeof args[fields.nameField] === 'string' ? String(args[fields.nameField]) : undefined,
+        agentId: typeof args[fields.idField] === 'string' ? String(args[fields.idField]) : undefined,
+        cwd,
+        allowCurrent: true,
+        allowEnv: true,
+      }),
+    };
+  } catch (error: unknown) {
+    if (error instanceof AgentIdentityResolutionError) {
       return {
-        kind: 'trust_error',
-        message: `Insufficient trust: agent '${agentName}' has level '${trust}', '${level}' required.`,
+        error: {
+          kind: error.kind,
+          message: error.message,
+          details: error.details,
+        } satisfies McpToolErrorShape,
       };
     }
-    return undefined;
-  } catch {
-    if (level === 'trusted' || level === 'curator') {
+    return {
+      error: {
+        kind: 'identity_error',
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies McpToolErrorShape,
+    };
+  }
+}
+
+function ensureTrust(
+  args: Record<string, unknown>,
+  fields: { nameField: string; idField: string },
+  level: 'contributor' | 'trusted' | 'curator',
+  cwd?: string,
+): { identity?: ReturnType<typeof requireRegisteredAgentIdentity>; error?: McpToolErrorShape } {
+  const resolved = resolveMutationIdentity(args, fields, cwd);
+  if ('error' in resolved) {
+    return resolved;
+  }
+
+  try {
+    requireMinimumTrustLevel(resolved.identity, level);
+    return resolved;
+  } catch (error: unknown) {
+    if (error instanceof AgentTrustError) {
       return {
-        kind: 'trust_error',
-        message: `Agent '${agentName}' not registered. '${level}' trust required.`,
+        error: {
+          kind: error.kind,
+          message: error.message,
+          details: error.details,
+        },
       };
     }
-    return undefined;
+    return {
+      error: {
+        kind: 'trust_error',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
   }
 }
 
@@ -996,16 +1050,14 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_write_note') {
-      const agent = String(args.agent ?? '').trim();
-      if (!agent) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: agent') };
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
-      const trustError = ensureTrust(agent, 'contributor', cwd);
-      if (trustError) {
-        return { response: createToolErrorResponse(trustError.kind, trustError.message, trustError.details) };
-      }
+      const identity = resolved.identity!;
       const result = createRuntimeNote(String(args.text ?? ''), {
-        agent,
+        agent: identity.agent_name,
+        agentId: identity.agent_id,
         tag: (args.tags as string[] | undefined) ?? [],
         visibility: (args.visibility as MemoryVisibility | undefined) ?? 'shared',
         ttl: args.ttl as string | undefined,
@@ -1029,18 +1081,18 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_create_candidate') {
-      const agent = String(args.agent ?? '').trim();
-      if (!agent) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: agent') };
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
-      const trustError = ensureTrust(agent, 'contributor', cwd);
-      if (trustError) {
-        return { response: createToolErrorResponse(trustError.kind, trustError.message, trustError.details) };
-      }
-      const identity = buildOperationalIdentity(agent, cwd, { sessionId: connectionSessionId });
+      const resolvedIdentity = resolved.identity!;
+      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
+        agentId: resolvedIdentity.agent_id,
+        sessionId: connectionSessionId,
+      });
       const candId = generateCandidateId();
       const type = String(args.type ?? 'decision') as CandidateType;
-      const writeThrough = agentCanWriteDirect(identity.agent_id ?? agent, cwd);
+      const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const candidate = {
         id: candId,
         type,
@@ -1061,8 +1113,8 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       };
       if (writeThrough) {
         saveCandidate(candidate, cwd);
-        const accepted = acceptCandidate(candId, agent, cwd);
-        appendAuditEntry({ actor: agent, action: 'promote_direct', item_id: candId, item_type: type }, cwd);
+        const accepted = acceptCandidate(candId, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
+        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId, item_type: type }, cwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Direct write [${candId}] (trusted agent)` }],
@@ -1074,7 +1126,7 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         };
       }
       saveCandidate(candidate, cwd);
-      appendAuditEntry({ actor: agent, action: 'create', item_id: candId, item_type: type }, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId, item_type: type }, cwd);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Candidate created [${candId}] (pending review)` }],
@@ -1086,19 +1138,20 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_accept') {
-      const by = String(args.by ?? args.agent ?? '').trim();
-      if (!by) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: by') };
-      }
-      const trustError = ensureTrust(by, 'trusted', cwd);
-      if (trustError) {
-        return { response: createToolErrorResponse(trustError.kind, trustError.message, trustError.details) };
+      const resolved = ensureTrust(
+        { ...args, by: args.by ?? args.agent, byId: args.byId ?? args.agentId },
+        { nameField: 'by', idField: 'byId' },
+        'trusted',
+        cwd,
+      );
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const candId = String(args.id ?? '').trim();
       if (!candId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      const accepted = acceptCandidate(candId, by, cwd);
+      const accepted = acceptCandidate(candId, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Accepted [${candId}]` }],
@@ -1109,19 +1162,20 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_reject') {
-      const by = String(args.by ?? args.agent ?? '').trim();
-      if (!by) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: by') };
-      }
-      const trustError = ensureTrust(by, 'contributor', cwd);
-      if (trustError) {
-        return { response: createToolErrorResponse(trustError.kind, trustError.message, trustError.details) };
+      const resolved = ensureTrust(
+        { ...args, by: args.by ?? args.agent, byId: args.byId ?? args.agentId },
+        { nameField: 'by', idField: 'byId' },
+        'trusted',
+        cwd,
+      );
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const candId = String(args.id ?? '').trim();
       if (!candId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      rejectCandidate(candId, args.reason as string | undefined, by, cwd);
+      rejectCandidate(candId, args.reason as string | undefined, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Rejected [${candId}]` }],
@@ -1131,15 +1185,15 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_claim') {
-      const agent = String(args.agent ?? '').trim();
-      if (!agent) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: agent') };
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
-      const trustError = ensureTrust(agent, 'contributor', cwd);
-      if (trustError) {
-        return { response: createToolErrorResponse(trustError.kind, trustError.message, trustError.details) };
-      }
-      const identity = buildOperationalIdentity(agent, cwd, { sessionId: connectionSessionId });
+      const resolvedIdentity = resolved.identity!;
+      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
+        agentId: resolvedIdentity.agent_id,
+        sessionId: connectionSessionId,
+      });
       const claimId = generateClaimId();
       saveClaim({
         id: claimId,
@@ -1154,7 +1208,7 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         status: 'active',
         plan_id: args.planId as string | undefined,
       }, cwd);
-      appendAuditEntry({ actor: agent, action: 'claim', item_id: claimId, item_type: 'claim' }, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, cwd);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Claimed scope [${claimId}]` }],
@@ -1187,8 +1241,13 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_session_start') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
       const result = startSession({
-        agent: args.agent as string | undefined,
+        agent: resolved.identity?.agent_name,
+        agentId: resolved.identity?.agent_id,
         context: args.context as string | undefined,
         cwd,
       });
@@ -1204,9 +1263,14 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_session_end') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
       const result = endSession({
         session: args.session as string | undefined,
-        agent: args.agent as string | undefined,
+        agent: resolved.identity?.agent_name,
+        agentId: resolved.identity?.agent_id,
         summary: args.summary as string | undefined,
         autoReflect: args.autoReflect as boolean | undefined,
         cwd,

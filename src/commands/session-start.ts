@@ -3,6 +3,7 @@ import path from 'node:path';
 import { memoryExists, memoryDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { buildContext } from '../core/context.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
@@ -31,6 +32,7 @@ function createHash(data: string): string {
 
 export interface SessionStartOptions {
   agent?: string;
+  agentId?: string;
   context?: string;
   json?: boolean;
   cwd?: string;
@@ -61,7 +63,15 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const actor = buildOperationalIdentity(options.agent, options.cwd);
+  const registered = requireRegisteredAgentIdentity({
+    agentName: options.agent,
+    agentId: options.agentId,
+    cwd: options.cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(registered, 'contributor');
+  const actor = buildOperationalIdentity(registered.agent_name, options.cwd, { agentId: registered.agent_id });
 
   // Capture initial context snapshot
   let initialContextHash: string | undefined;
