@@ -119,16 +119,27 @@ Conséquence produit :
   - séparation entre erreurs protocole MCP et erreurs métier d'outils (`isError: true`)
   - exécution sérielle cancellable des `tools/call` avec support réel de `notifications/cancelled`
   - refactor des adapters MCP pour éviter les `process.exit` sur les flows `runtime-note`, `session-start`, `session-end`, `accept`, `reject`
+- Livraison du socle `0.5.2 + 0.5.3 lite` :
+  - ajout d'un registre de migrations par type de document avec stratégie minimale `v1 -> v2` centrée sur `schema_version`
+  - lecture tolérante des documents legacy sans réécriture implicite, puis persistance versionnée au prochain save
+  - couverture des documents métier versionnés : config, docs canoniques split, candidates, claims, runtime notes, instructions, identités agent/projet, snapshots de session et `.current-session`
+  - ajout de `JsonStore<T>` pour les collections JSON homogènes et adoption ciblée dans `candidates`, `claims`, `instructions` et `agent-registry`
+  - ajout de `brainclaw doctor --migration-check` avec sortie JSON structurée pour repérer les documents outdated ou invalides
+- Couverture ajoutée pour le socle migration/storage :
+  - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
+  - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
+  - tests `doctor` sur `--migration-check` en JSON
 - Couverture MCP ajoutée :
   - tests unitaires protocole/lifecycle
   - tests unitaires task runtime / cancellation
   - contrats E2E MCP sur handshake, compat legacy, erreurs d'outils et annulation
 - Fast path actuel vérifié :
+  - `npm run build:test` passe
   - `npm test` passe
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 66.38%`, `branches 66.48%`, `functions 71.06%`, `lines 66.38%`
+  - couverture fast path : `statements 67.33%`, `branches 67.30%`, `functions 73.91%`, `lines 67.33%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -150,8 +161,8 @@ Conséquence produit :
 - `0.3` Fenêtre de corruption dans `saveState` : `partial`
 - `0.4` Nettoyage technique : `done`
 - `0.5.1` Logging et observabilité technique : `done`
-- `0.5.2` Migration de schéma : `todo`
-- `0.5.3` Abstraction storage (`JsonStore<T>`) : `todo`
+- `0.5.2` Migration de schéma : `partial`
+- `0.5.3` Abstraction storage (`JsonStore<T>`) : `partial`
 - `0.5.4` Validation des entrées CLI : `partial`
 - `0.5.5` Tests unitaires du core : `partial`
 - `0.5.6` CI pipeline : `partial`

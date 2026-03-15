@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
-import { MEMORY_DIR, memoryDir, readFileSync, writeFileAtomic } from './io.js';
+import { MEMORY_DIR, memoryDir } from './io.js';
+import { JsonStore } from './json-store.js';
 import { AgentIdentityDocumentSchema, type AgentIdentityDocument, type AgentKind, type AgentTrustLevel } from './schema.js';
 import { logger } from './logger.js';
 
@@ -36,35 +37,30 @@ function ensureAgentsDir(cwd?: string, preferredDirName?: string): void {
   }
 }
 
+function agentStore(cwd?: string, preferredDirName?: string): JsonStore<AgentIdentityDocument> {
+  return new JsonStore<AgentIdentityDocument>({
+    dirPath: agentsDir(cwd, preferredDirName),
+    documentType: 'agent_identity',
+    getId: (agent) => agent.agent_id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at) || a.agent_name.localeCompare(b.agent_name),
+  });
+}
+
 function normalizeAgentName(agentName: string): string {
   return agentName.trim().toLowerCase();
 }
 
 export function loadAgentIdentity(agentId: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument {
-  return AgentIdentityDocumentSchema.parse(JSON.parse(readFileSync(agentIdentityPath(agentId, cwd, preferredDirName))));
+  return agentStore(cwd, preferredDirName).load(agentId);
 }
 
 export function saveAgentIdentity(agent: AgentIdentityDocument, cwd?: string, preferredDirName?: string): void {
   ensureAgentsDir(cwd, preferredDirName);
-  writeFileAtomic(agentIdentityPath(agent.agent_id, cwd, preferredDirName), JSON.stringify(agent, null, 2) + '\n');
+  agentStore(cwd, preferredDirName).save(AgentIdentityDocumentSchema.parse(agent));
 }
 
 export function listAgentIdentities(cwd?: string, preferredDirName?: string): AgentIdentityDocument[] {
-  const dir = agentsDir(cwd, preferredDirName);
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const agents: AgentIdentityDocument[] = [];
-  for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.json'))) {
-    try {
-      agents.push(AgentIdentityDocumentSchema.parse(JSON.parse(readFileSync(path.join(dir, file)))));
-    } catch (err) {
-      logger.debug('Skipping malformed agent identity file:', file, err);
-    }
-  }
-
-  return agents.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.agent_name.localeCompare(b.agent_name));
+  return agentStore(cwd, preferredDirName).list();
 }
 
 export function findAgentIdentityByName(agentName: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined {
@@ -98,6 +94,7 @@ export function registerAgentIdentity(input: {
   }
 
   const created: AgentIdentityDocument = {
+    schema_version: 2,
     version: 1,
     agent_id: generateAgentId(),
     agent_name: input.agentName.trim(),

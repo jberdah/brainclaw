@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CandidateSchema, type Candidate } from './schema.js';
-import { memoryDir, writeFileAtomic, readFileSync } from './io.js';
+import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
-import { logger } from './logger.js';
+import { JsonStore } from './json-store.js';
 
 const INBOX_DIR = 'inbox';
 const ACCEPTED_DIR = 'inbox/accepted';
@@ -30,18 +30,27 @@ export function ensureInboxDirs(cwd?: string): void {
   }
 }
 
+function candidateStore(dest: 'pending' | 'accepted' | 'rejected' = 'pending', cwd?: string): JsonStore<Candidate> {
+  const dir = dest === 'accepted'
+    ? acceptedDir(cwd)
+    : dest === 'rejected'
+      ? rejectedDir(cwd)
+      : inboxDir(cwd);
+  return new JsonStore<Candidate>({
+    dirPath: dir,
+    documentType: 'candidate',
+    getId: (candidate) => candidate.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  });
+}
+
 export function saveCandidate(candidate: Candidate, cwd?: string): void {
   ensureInboxDirs(cwd);
-  const filepath = path.join(inboxDir(cwd), `${candidate.id}.json`);
-  writeFileAtomic(filepath, JSON.stringify(candidate, null, 2) + '\n');
+  candidateStore('pending', cwd).save(CandidateSchema.parse(candidate));
 }
 
 export function loadCandidate(id: string, cwd?: string): Candidate {
-  const filepath = path.join(inboxDir(cwd), `${id}.json`);
-  if (!fs.existsSync(filepath)) {
-    throw new Error(`Candidate '${id}' not found in inbox`);
-  }
-  return CandidateSchema.parse(JSON.parse(readFileSync(filepath)));
+  return candidateStore('pending', cwd).load(id);
 }
 
 export function updateCandidate(candidate: Candidate, cwd?: string): void {
@@ -49,53 +58,18 @@ export function updateCandidate(candidate: Candidate, cwd?: string): void {
 }
 
 export function listCandidates(status?: 'pending' | 'accepted' | 'rejected', cwd?: string): Candidate[] {
-  const dir = inboxDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  const candidates: Candidate[] = [];
-
-  for (const file of files) {
-    try {
-      const raw = readFileSync(path.join(dir, file));
-      const c = CandidateSchema.parse(JSON.parse(raw));
-      if (!status || c.status === status) {
-        candidates.push(c);
-      }
-    } catch (err) {
-      logger.debug('Skipping malformed candidate file:', file, err);
-    }
-  }
-
-  return candidates.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const candidates = candidateStore('pending', cwd).list();
+  return status ? candidates.filter((candidate) => candidate.status === status) : candidates;
 }
 
 export function archiveCandidate(candidate: Candidate, dest: 'accepted' | 'rejected', cwd?: string): void {
-  const destDir = dest === 'accepted' ? acceptedDir(cwd) : rejectedDir(cwd);
   ensureInboxDirs(cwd);
-  const src = path.join(inboxDir(cwd), `${candidate.id}.json`);
-  const target = path.join(destDir, `${candidate.id}.json`);
-  writeFileAtomic(target, JSON.stringify(candidate, null, 2) + '\n');
-  if (fs.existsSync(src)) {
-    fs.unlinkSync(src);
-  }
+  candidateStore(dest, cwd).save(CandidateSchema.parse(candidate));
+  candidateStore('pending', cwd).delete(candidate.id);
 }
 
 export function listArchivedCandidates(dest: 'accepted' | 'rejected', cwd?: string): Candidate[] {
-  const dir = dest === 'accepted' ? acceptedDir(cwd) : rejectedDir(cwd);
-  if (!fs.existsSync(dir)) return [];
-
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  const candidates: Candidate[] = [];
-  for (const file of files) {
-    try {
-      const raw = readFileSync(path.join(dir, file));
-      candidates.push(CandidateSchema.parse(JSON.parse(raw)));
-    } catch (err) {
-      logger.debug('Skipping malformed candidate file:', file, err);
-    }
-  }
-  return candidates.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  return candidateStore(dest, cwd).list();
 }
 
 export function deleteArchivedCandidate(id: string, dest: 'accepted' | 'rejected', cwd?: string): boolean {

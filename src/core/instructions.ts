@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryPath, writeFileAtomic } from './io.js';
+import { memoryPath } from './io.js';
 import { generateId } from './ids.js';
 import { InstructionEntrySchema, type Config, type InstructionEntry, type InstructionLayer } from './schema.js';
-import { logger } from './logger.js';
+import { JsonStore } from './json-store.js';
 
 export interface CreateInstructionOptions {
   layer: InstructionLayer;
@@ -18,34 +18,32 @@ export interface ResolveInstructionsOptions {
   agent?: string;
 }
 
+function instructionStore(cwd?: string): JsonStore<InstructionEntry> {
+  return new JsonStore<InstructionEntry>({
+    dirPath: memoryPath('instructions', cwd),
+    documentType: 'instruction',
+    getId: (entry) => entry.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+  });
+}
+
 export function loadInstructions(cwd?: string): InstructionEntry[] {
   const dir = memoryPath('instructions', cwd);
   if (!fs.existsSync(dir)) {
     return [];
   }
-
-  const entries: InstructionEntry[] = [];
-  for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.json')).sort()) {
-    const filepath = path.join(dir, file);
-    try {
-      const raw = fs.readFileSync(filepath, 'utf-8');
-      entries.push(InstructionEntrySchema.parse(JSON.parse(raw)));
-    } catch (err) {
-      logger.debug('Ignoring malformed instruction file:', filepath, err);
-    }
-  }
-
-  return entries.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  return instructionStore(cwd).list();
 }
 
 export function saveInstruction(entry: InstructionEntry, cwd?: string): void {
-  writeFileAtomic(memoryPath(path.join('instructions', `${entry.id}.json`), cwd), JSON.stringify(entry, null, 2));
+  instructionStore(cwd).save(InstructionEntrySchema.parse(entry));
 }
 
 export function createInstruction(text: string, options: CreateInstructionOptions, cwd?: string): InstructionEntry {
   const entries = loadInstructions(cwd);
   const timestamp = new Date().toISOString();
   const entry: InstructionEntry = {
+    schema_version: 2,
     id: generateId('instruction_entries'),
     layer: options.layer,
     scope: options.scope,

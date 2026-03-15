@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { memoryDir, writeFileAtomic, readFileSync } from './io.js';
+import { memoryDir } from './io.js';
+import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 
 const RUNTIME_SHARED_DIR = 'runtime';
@@ -63,7 +64,7 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
   const filepath = visibility === 'shared'
     ? path.join(sharedAgentDir(note.agent, cwd), `${note.id}.json`)
     : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd), `${note.id}.json`);
-  writeFileAtomic(filepath, JSON.stringify(persistedNote, null, 2) + '\n');
+  saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
 }
 
 export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
@@ -96,8 +97,7 @@ function readAgentNotes(dir: string, agent?: string): RuntimeNote[] {
     const files = fs.readdirSync(agentDirectory).filter((file) => file.endsWith('.json'));
     for (const file of files) {
       try {
-        const raw = readFileSync(path.join(agentDirectory, file));
-        notes.push(RuntimeNoteSchema.parse(JSON.parse(raw)));
+        notes.push(loadVersionedJsonFile<RuntimeNote>('runtime_note', path.join(agentDirectory, file)).document);
       } catch { /* skip */ }
     }
   }

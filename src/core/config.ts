@@ -1,6 +1,6 @@
-import YAML from 'yaml';
 import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from './schema.js';
-import { memoryPath, readFileSync, writeFileAtomic } from './io.js';
+import { memoryPath } from './io.js';
+import { loadVersionedYamlFile, saveVersionedYamlFile } from './migration.js';
 
 const CONFIG_FILE = 'config.yaml';
 
@@ -17,6 +17,7 @@ export interface DefaultConfigOptions {
 
 export function defaultConfig(projectName: string, options: DefaultConfigOptions = {}): Config {
   return {
+    schema_version: 2,
     version: 1,
     project_name: projectName,
     project_id: options.projectId,
@@ -84,12 +85,10 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
 
 export function loadConfig(cwd?: string, preferredDirName?: string): Config {
   const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
-  const raw = readFileSync(filepath);
-  return ConfigSchema.parse(YAML.parse(raw));
+  return loadVersionedYamlFile<Config>('config', filepath).document;
 }
 
 export function saveConfig(config: Config, cwd?: string, preferredDirName?: string): void {
   const filepath = memoryPath(CONFIG_FILE, cwd, preferredDirName);
-  const yamlStr = YAML.stringify(config, { lineWidth: 0 });
-  writeFileAtomic(filepath, yamlStr);
+  saveVersionedYamlFile('config', filepath, ConfigSchema.parse(config));
 }

@@ -18,6 +18,7 @@ export const HandoffStatusSchema = z.enum(['open', 'accepted', 'closed']);
 export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
 
 export const ConstraintSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   text: z.string(),
   created_at: z.string(),
@@ -34,6 +35,7 @@ export const ConstraintSchema = z.object({
 export type Constraint = z.infer<typeof ConstraintSchema>;
 
 export const DecisionSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   text: z.string(),
   created_at: z.string(),
@@ -48,6 +50,7 @@ export const DecisionSchema = z.object({
 export type Decision = z.infer<typeof DecisionSchema>;
 
 export const TrapSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   text: z.string(),
   created_at: z.string(),
@@ -65,6 +68,7 @@ export const TrapSchema = z.object({
 export type Trap = z.infer<typeof TrapSchema>;
 
 export const HandoffSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   from: z.string(),
   to: z.string(),
@@ -90,6 +94,7 @@ export const PlanStatusSchema = z.enum(['todo', 'in_progress', 'blocked', 'done'
 export type PlanStatus = z.infer<typeof PlanStatusSchema>;
 
 export const PlanItemSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   text: z.string(),
   created_at: z.string(),
@@ -109,6 +114,7 @@ export const InstructionLayerSchema = z.enum(['global', 'project', 'agent']);
 export type InstructionLayer = z.infer<typeof InstructionLayerSchema>;
 
 export const InstructionEntrySchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   layer: InstructionLayerSchema,
   scope: z.string().optional(),
@@ -171,6 +177,7 @@ export const CandidateUseSchema = z.object({
 export type CandidateUse = z.infer<typeof CandidateUseSchema>;
 
 export const CandidateSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   type: CandidateTypeSchema,
   text: z.string(),
@@ -233,6 +240,7 @@ export const ClaimStatusSchema = z.enum(['active', 'released', 'stale']);
 export type ClaimStatus = z.infer<typeof ClaimStatusSchema>;
 
 export const ClaimSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   agent: z.string(),
   agent_id: z.string().optional(),
@@ -252,6 +260,7 @@ export type Claim = z.infer<typeof ClaimSchema>;
 // --- Runtime notes schemas ---
 
 export const RuntimeNoteSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   id: z.string(),
   agent: z.string(),
   agent_id: z.string().optional(),
@@ -327,6 +336,7 @@ export const AgentTrustLevelSchema = z.enum(['observer', 'contributor', 'trusted
 export type AgentTrustLevel = z.infer<typeof AgentTrustLevelSchema>;
 
 export const ProjectIdentityDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
   project_id: z.string(),
   project_name: z.string(),
@@ -337,6 +347,7 @@ export const ProjectIdentityDocumentSchema = z.object({
 export type ProjectIdentityDocument = z.infer<typeof ProjectIdentityDocumentSchema>;
 
 export const AgentIdentityDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
   agent_id: z.string(),
   agent_name: z.string(),
@@ -362,6 +373,7 @@ export const RemoteSyncSchema = z.object({
 export type RemoteSync = z.infer<typeof RemoteSyncSchema>;
 
 export const SessionSnapshotSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   session_id: z.string(),
   agent: z.string(),
   agent_id: z.string().optional(),
@@ -371,7 +383,19 @@ export const SessionSnapshotSchema = z.object({
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
+export const CurrentSessionStateSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  session_id: z.string(),
+  started_at: z.string(),
+  last_seen_at: z.string(),
+  agent: z.string(),
+  agent_id: z.string(),
+  host_id: z.string(),
+});
+export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
+
 export const ConfigSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
   project_name: z.string(),
   project_id: z.string().optional(),

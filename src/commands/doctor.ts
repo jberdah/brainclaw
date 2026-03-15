@@ -17,10 +17,12 @@ import { scanText } from '../core/security.js';
 import { listRuntimeEvents } from '../core/events.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
+import { scanMigrationStatus } from '../core/migration.js';
 
 export interface DoctorOptions {
   json?: boolean;
   cwd?: string;
+  migrationCheck?: boolean;
 }
 
 interface DoctorCheck {
@@ -37,6 +39,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
 
   let hasIssues = false;
   const checks: DoctorCheck[] = [];
+  let migrationEntries = [] as ReturnType<typeof scanMigrationStatus>;
 
   // Validate config
   let config;
@@ -74,6 +77,57 @@ export function runDoctor(options: DoctorOptions = {}): void {
       console.log(JSON.stringify({ ok: false, checks, metrics: {} }, null, 2));
     }
     return;
+  }
+
+  if (options.migrationCheck) {
+    migrationEntries = scanMigrationStatus(options.cwd);
+    const outdated = migrationEntries.filter((entry) => entry.status === 'outdated');
+    const invalid = migrationEntries.filter((entry) => entry.status === 'invalid');
+
+    if (outdated.length > 0) {
+      checks.push({
+        name: 'schema_migrations',
+        status: 'warn',
+        message: `${outdated.length} document(s) require schema migration.`,
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${outdated.length} document(s) require schema migration.`);
+        for (const entry of outdated.slice(0, 20)) {
+          console.warn(`  - ${entry.path} [${entry.documentType}] v${entry.detectedVersion} -> v${entry.currentVersion}`);
+        }
+      }
+      hasIssues = true;
+    } else {
+      checks.push({
+        name: 'schema_migrations',
+        status: 'ok',
+        message: 'No documents require schema migration',
+      });
+      if (!options.json) {
+        console.log('✔ No documents require schema migration');
+      }
+    }
+
+    if (invalid.length > 0) {
+      checks.push({
+        name: 'schema_migration_errors',
+        status: 'error',
+        message: `${invalid.length} document(s) are invalid or unreadable for migration.`,
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${invalid.length} document(s) are invalid or unreadable for migration.`);
+        for (const entry of invalid.slice(0, 20)) {
+          console.warn(`  - ${entry.path} [${entry.documentType}] ${entry.error ?? 'invalid document'}`);
+        }
+      }
+      hasIssues = true;
+    } else {
+      checks.push({
+        name: 'schema_migration_errors',
+        status: 'ok',
+        message: 'No invalid versioned documents found',
+      });
+    }
   }
 
   if (config.project_mode === 'multi-project' && (config.projects?.known.length ?? 0) === 0) {
@@ -472,7 +526,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
 
   // --- Expired items check ---
   const nowIso = new Date().toISOString();
-  const expiredNotes = listRuntimeNotes().filter(n => n.expires_at && n.expires_at < nowIso);
+  const expiredNotes = listRuntimeNotes(undefined, options.cwd).filter(n => n.expires_at && n.expires_at < nowIso);
   const expiredConstraints = state.active_constraints.filter(c => c.expires_at && c.expires_at < nowIso && c.status === 'active');
   const expiredTraps = state.known_traps.filter(t => t.expires_at && t.expires_at < nowIso);
   const totalExpired = expiredNotes.length + expiredConstraints.length + expiredTraps.length;
@@ -622,11 +676,20 @@ export function runDoctor(options: DoctorOptions = {}): void {
       checks,
       metrics: {
         ...metrics,
+        migration_outdated_documents: migrationEntries.filter((entry) => entry.status === 'outdated').length,
+        migration_invalid_documents: migrationEntries.filter((entry) => entry.status === 'invalid').length,
         reputation_enabled: reputationSummary.enabled,
         reputation_tracked_agents: reputationSummary.tracked_agents,
         reputation_avg_internal_trust: reputationSummary.avg_internal_trust,
         reputation_current_agent_trust: reputationSummary.current_agent_trust ?? 0,
       },
+      migration: options.migrationCheck
+        ? {
+            entries: migrationEntries,
+            outdated: migrationEntries.filter((entry) => entry.status === 'outdated').length,
+            invalid: migrationEntries.filter((entry) => entry.status === 'invalid').length,
+          }
+        : undefined,
     }, null, 2));
     return;
   }

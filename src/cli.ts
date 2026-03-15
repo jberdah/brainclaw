@@ -195,6 +195,7 @@ program
   .command('doctor')
   .description('Check memory health and security')
   .option('--json', 'Output as JSON dashboard')
+  .option('--migration-check', 'Report versioned documents that need schema migration')
   .action((options) => {
     runDoctor(options);
   });

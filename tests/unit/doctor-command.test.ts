@@ -232,4 +232,33 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'context_freshness' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'runtime_sessions' && check.status === 'warn'));
   });
+
+  it('reports outdated and invalid documents with migration-check enabled', () => {
+    const claimsDir = path.join(workspace.dir, '.brainclaw', 'claims');
+    fs.mkdirSync(claimsDir, { recursive: true });
+    fs.writeFileSync(path.join(claimsDir, 'clm_legacy.json'), JSON.stringify({
+      id: 'clm_legacy',
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_doctor_test',
+      scope: 'src/migration',
+      description: 'Legacy schema claim',
+      created_at: iso(4),
+      status: 'active',
+    }, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(claimsDir, 'broken.json'), '{bad-json', 'utf-8');
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir, migrationCheck: true });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.metrics.migration_outdated_documents, 1);
+    assert.equal(parsed.metrics.migration_invalid_documents, 1);
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'schema_migrations' && check.status === 'warn'));
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'schema_migration_errors' && check.status === 'error'));
+    assert.ok(parsed.migration.entries.some((entry: { documentType: string; status: string }) => entry.documentType === 'claim' && entry.status === 'outdated'));
+    assert.ok(parsed.migration.entries.some((entry: { documentType: string; status: string }) => entry.documentType === 'claim' && entry.status === 'invalid'));
+  });
 });

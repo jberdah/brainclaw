@@ -5,6 +5,8 @@ import { requireOperationalAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { memoryDir, writeFileAtomic } from './io.js';
+import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
+import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 
 export interface OperationalIdentity {
   agent: string;
@@ -12,15 +14,6 @@ export interface OperationalIdentity {
   project_id?: string;
   host_id: string;
   session_id?: string;
-}
-
-export interface CurrentSessionState {
-  session_id: string;
-  started_at: string;
-  last_seen_at: string;
-  agent: string;
-  agent_id: string;
-  host_id: string;
 }
 
 export interface SessionResolutionOptions {
@@ -108,25 +101,14 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   }
 
   try {
-    const raw = JSON.parse(fs.readFileSync(filepath, 'utf-8')) as Partial<CurrentSessionState>;
-    if (
-      typeof raw.session_id !== 'string'
-      || typeof raw.started_at !== 'string'
-      || typeof raw.last_seen_at !== 'string'
-      || typeof raw.agent !== 'string'
-      || typeof raw.agent_id !== 'string'
-      || typeof raw.host_id !== 'string'
-    ) {
-      return undefined;
-    }
-    return raw as CurrentSessionState;
+    return CurrentSessionStateSchema.parse(loadVersionedJsonFile<CurrentSessionState>('current_session', filepath).document);
   } catch {
     return undefined;
   }
 }
 
 export function saveCurrentSession(session: CurrentSessionState, cwd?: string): void {
-  writeFileAtomic(currentSessionPath(cwd), JSON.stringify(session, null, 2) + '\n');
+  saveVersionedJsonFile('current_session', currentSessionPath(cwd), CurrentSessionStateSchema.parse(session));
 }
 
 export function clearCurrentSession(cwd?: string, sessionId?: string): void {

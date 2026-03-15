@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
 import { generateId } from './ids.js';
-import { memoryDir, readFileSync, writeFileAtomic } from './io.js';
+import { memoryDir } from './io.js';
+import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { TrapSchema, type MemoryVisibility, type Trap } from './schema.js';
 import { loadState } from './state.js';
 
@@ -41,7 +42,7 @@ function readTrapFiles(dir: string): Trap[] {
   const traps: Trap[] = [];
   for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.json')).sort()) {
     try {
-      traps.push(TrapSchema.parse(JSON.parse(readFileSync(path.join(dir, file)))));
+      traps.push(loadVersionedJsonFile<Trap>('trap', path.join(dir, file)).document);
     } catch {
       // Ignore malformed files.
     }
@@ -88,7 +89,7 @@ export function saveOperationalTrap(trap: Trap, cwd?: string): void {
     visibility,
     host_id: hostId,
   };
-  writeFileAtomic(path.join(hostTrapDir(visibility, hostId, cwd), `${trap.id}.json`), JSON.stringify(persisted, null, 2) + '\n');
+  saveVersionedJsonFile('trap', path.join(hostTrapDir(visibility, hostId, cwd), `${trap.id}.json`), TrapSchema.parse(persisted));
 }
 
 export function generateTrapId(): string {

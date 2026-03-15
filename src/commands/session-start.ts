@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists, memoryDir } from '../core/io.js';
+import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
 import { buildContext } from '../core/context.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
@@ -70,6 +71,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   } catch { /* non-fatal */ }
 
   const snapshot: SessionSnapshot = {
+    schema_version: 2,
     session_id: actor.session_id ?? generateId('sessions'),
     agent: actor.agent,
     agent_id: actor.agent_id,
@@ -81,8 +83,9 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   // Persist snapshot
   const dir = sessionsDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(sessionSnapshotPath(snapshot.session_id, options.cwd), JSON.stringify(snapshot, null, 2) + '\n', 'utf-8');
+  saveVersionedJsonFile('session_snapshot', sessionSnapshotPath(snapshot.session_id, options.cwd), SessionSnapshotSchema.parse(snapshot));
   saveCurrentSession({
+    schema_version: 2,
     session_id: snapshot.session_id,
     started_at: snapshot.started_at,
     last_seen_at: snapshot.started_at,
@@ -114,7 +117,7 @@ export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSna
   const p = sessionSnapshotPath(sessionId, cwd);
   if (!fs.existsSync(p)) return undefined;
   try {
-    return SessionSnapshotSchema.parse(JSON.parse(fs.readFileSync(p, 'utf-8')));
+    return SessionSnapshotSchema.parse(loadVersionedJsonFile<SessionSnapshot>('session_snapshot', p).document);
   } catch {
     return undefined;
   }
