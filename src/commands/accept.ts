@@ -9,42 +9,52 @@ import { agentCanWriteDirect } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import type { Constraint, Decision, Trap, Handoff } from '../core/schema.js';
 
-export function runAccept(id: string, by?: string): void {
-  if (!memoryExists()) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
+export interface AcceptResult {
+  candidate_id: string;
+  candidate_type: 'constraint' | 'decision' | 'trap' | 'handoff';
+  promoted_item_id: string;
+  actor: string;
+}
 
-  let candidate;
+export function runAccept(id: string, by?: string, cwd?: string): void {
   try {
-    candidate = loadCandidate(id);
+    const result = acceptCandidate(id, by, cwd);
+    console.log(`✔ Promoted to ${result.candidate_type} [${result.promoted_item_id}]`);
+    console.log(`✔ Candidate [${id}] accepted and archived.`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`Error: ${msg}`);
     process.exit(1);
   }
+}
 
-  if (candidate.status !== 'pending') {
-    console.error(`Error: Candidate '${id}' is already ${candidate.status}.`);
-    process.exit(1);
+export function acceptCandidate(id: string, by?: string, cwd?: string): AcceptResult {
+  if (!memoryExists(cwd)) {
+    throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const config = loadConfig();
+  const candidate = loadCandidate(id, cwd);
+
+  if (candidate.status !== 'pending') {
+    throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
+  }
+
+  const config = loadConfig(cwd);
   const approvalPolicy = config.governance?.approval_policy ?? 'review';
   const actor = by ?? process.env.USER ?? process.env.USERNAME ?? 'unknown';
   const curators = config.governance?.curators ?? [];
 
   // Trust-level bypass: trusted/curator agents can accept without being in governance.curators
-  const actorHasTrust = agentCanWriteDirect(actor);
+  const actorHasTrust = agentCanWriteDirect(actor, cwd);
 
   if (approvalPolicy === 'strict' && curators.length > 0 && !curators.includes(actor) && !actorHasTrust) {
-    console.error(
+    throw new Error(
       `Error: strict approval policy enabled. '${actor}' is not in governance.curators and cannot accept candidates.`
     );
-    process.exit(1);
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
+  let promotedItemId = '';
 
   // Promote candidate into canonical state based on type
   switch (candidate.type) {
@@ -63,7 +73,7 @@ export function runAccept(id: string, by?: string): void {
         tags: candidate.tags,
       };
       state.active_constraints.push(entry);
-      console.log(`✔ Promoted to constraint [${entryId}]`);
+      promotedItemId = entryId;
       break;
     }
     case 'decision': {
@@ -81,7 +91,7 @@ export function runAccept(id: string, by?: string): void {
         tags: candidate.tags,
       };
       state.recent_decisions.push(entry);
-      console.log(`✔ Promoted to decision [${entryId}]`);
+      promotedItemId = entryId;
       break;
     }
     case 'trap': {
@@ -100,7 +110,7 @@ export function runAccept(id: string, by?: string): void {
         visibility: 'shared',
       };
       state.known_traps.push(entry);
-      console.log(`✔ Promoted to trap [${entryId}]`);
+      promotedItemId = entryId;
       break;
     }
     case 'handoff': {
@@ -120,19 +130,19 @@ export function runAccept(id: string, by?: string): void {
         tags: candidate.tags,
       };
       state.open_handoffs.push(entry);
-      console.log(`✔ Promoted to handoff [${entryId}]`);
+      promotedItemId = entryId;
       break;
     }
   }
 
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  saveState(state, cwd);
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
 
   // Archive candidate
   candidate.status = 'accepted';
   candidate.resolved_at = nowISO();
   candidate.resolved_by = actor;
-  archiveCandidate(candidate, 'accepted');
+  archiveCandidate(candidate, 'accepted', cwd);
 
   appendAuditEntry({
     actor,
@@ -141,7 +151,12 @@ export function runAccept(id: string, by?: string): void {
     item_type: candidate.type,
     after: { type: candidate.type, text: candidate.text },
     reason: actorHasTrust ? 'trusted-agent' : undefined,
-  });
+  }, cwd);
 
-  console.log(`✔ Candidate [${id}] accepted and archived.`);
+  return {
+    candidate_id: id,
+    candidate_type: candidate.type,
+    promoted_item_id: promotedItemId,
+    actor,
+  };
 }

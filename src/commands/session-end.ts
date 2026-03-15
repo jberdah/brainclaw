@@ -16,6 +16,15 @@ export interface SessionEndOptions {
   cwd?: string;
 }
 
+export interface SessionEndResult {
+  session_id: string;
+  agent: string;
+  notes_in_session: number;
+  candidates_created: number;
+  context_diff?: string;
+  summary: string;
+}
+
 function createHash(data: string): string {
   let hash = 0;
   for (let i = 0; i < data.length; i++) {
@@ -27,23 +36,37 @@ function createHash(data: string): string {
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
-  if (!memoryExists(options.cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
-
-  let actor;
   try {
-    actor = buildOperationalIdentity(options.agent, options.cwd);
+    const result = endSession(options);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log(`✔ Session ended: ${result.session_id} (${result.agent})`);
+    console.log(`  Runtime notes in session: ${result.notes_in_session}`);
+    if (options.autoReflect) {
+      console.log(`  Candidates created from auto-reflect: ${result.candidates_created}`);
+    }
+    if (result.context_diff) {
+      console.log(`  ${result.context_diff}`);
+    }
   } catch (e: unknown) {
     console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
+}
+
+export function endSession(options: SessionEndOptions = {}): SessionEndResult {
+  if (!memoryExists(options.cwd)) {
+    throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
+  }
+
+  const actor = buildOperationalIdentity(options.agent, options.cwd);
 
   const sessionId = options.session ?? actor.session_id;
   if (!sessionId) {
-    console.error('Error: no session ID provided. Use --session <id> or set BRAINCLAW_SESSION_ID.');
-    process.exit(1);
+    throw new Error('no session ID provided. Use --session <id> or set BRAINCLAW_SESSION_ID.');
   }
 
   // Get session notes for summary
@@ -84,7 +107,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     note_type: 'session_end',
   }, options.cwd);
 
-  appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' });
+  appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' }, options.cwd);
   clearCurrentSession(options.cwd, sessionId);
 
   // Auto-reflect: generate candidates from session notes
@@ -107,7 +130,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     }
   }
 
-  const result = {
+  const result: SessionEndResult = {
     session_id: sessionId,
     agent: actor.agent,
     notes_in_session: sessionNotes.length,
@@ -115,18 +138,5 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     context_diff: contextDiff,
     summary: summaryText,
   };
-
-  if (options.json) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
-  console.log(`✔ Session ended: ${sessionId} (${actor.agent})`);
-  console.log(`  Runtime notes in session: ${sessionNotes.length}`);
-  if (options.autoReflect) {
-    console.log(`  Candidates created from auto-reflect: ${candidatesCreated}`);
-  }
-  if (contextDiff) {
-    console.log(`  ${contextDiff}`);
-  }
+  return result;
 }

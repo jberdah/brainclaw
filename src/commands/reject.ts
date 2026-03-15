@@ -2,24 +2,31 @@ import { memoryExists } from '../core/io.js';
 import { loadCandidate, archiveCandidate } from '../core/candidates.js';
 import { nowISO } from '../core/ids.js';
 
-export function runReject(id: string, reason?: string, by?: string): void {
-  if (!memoryExists()) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
+export interface RejectResult {
+  candidate_id: string;
+  actor: string;
+}
 
-  let candidate;
+export function runReject(id: string, reason?: string, by?: string, cwd?: string): void {
   try {
-    candidate = loadCandidate(id);
+    rejectCandidate(id, reason, by, cwd);
+    console.log(`✔ Candidate [${id}] rejected and archived.`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`Error: ${msg}`);
     process.exit(1);
   }
+}
+
+export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: string): RejectResult {
+  if (!memoryExists(cwd)) {
+    throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
+  }
+
+  const candidate = loadCandidate(id, cwd);
 
   if (candidate.status !== 'pending') {
-    console.error(`Error: Candidate '${id}' is already ${candidate.status}.`);
-    process.exit(1);
+    throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
   }
 
   const actor = by ?? process.env.USER ?? process.env.USERNAME ?? 'unknown';
@@ -30,6 +37,6 @@ export function runReject(id: string, reason?: string, by?: string): void {
     candidate.resolution_reason = reason;
   }
 
-  archiveCandidate(candidate, 'rejected');
-  console.log(`✔ Candidate [${id}] rejected and archived.`);
+  archiveCandidate(candidate, 'rejected', cwd);
+  return { candidate_id: id, actor };
 }

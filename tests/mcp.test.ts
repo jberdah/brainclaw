@@ -52,6 +52,10 @@ function startMcp(cwd: string, envOverrides: Record<string, string> = {}): Child
   });
 }
 
+function writeMcp(proc: ChildProcessWithoutNullStreams, payload: unknown): void {
+  proc.stdin.write(JSON.stringify(payload) + '\n');
+}
+
 function stopMcp(proc: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve) => {
     if (proc.exitCode !== null || proc.killed) {
@@ -106,6 +110,87 @@ function sendMcpRequest(proc: ChildProcessWithoutNullStreams, request: unknown):
   });
 }
 
+function sendMcpNotification(proc: ChildProcessWithoutNullStreams, notification: unknown): Promise<void> {
+  return new Promise((resolve) => {
+    writeMcp(proc, notification);
+    setTimeout(resolve, 25);
+  });
+}
+
+function waitForNextMcpMessage(proc: ChildProcessWithoutNullStreams, timeoutMs: number = 5000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for MCP response: ${stderr}`));
+    }, timeoutMs);
+
+    const onData = (chunk: Buffer) => {
+      const text = chunk.toString('utf-8');
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (lines.length === 0) {
+        return;
+      }
+
+      cleanup();
+      try {
+        resolve(JSON.parse(lines[0]));
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString('utf-8');
+    };
+
+    const onExit = () => {
+      cleanup();
+      reject(new Error(`MCP process exited unexpectedly: ${stderr}`));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      proc.stdout.off('data', onData);
+      proc.stderr.off('data', onStderr);
+      proc.off('exit', onExit);
+    };
+
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', onStderr);
+    proc.on('exit', onExit);
+  });
+}
+
+async function expectNoMcpMessage(proc: ChildProcessWithoutNullStreams, durationMs: number = 250): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onData = () => {
+      cleanup();
+      reject(new Error('Unexpected MCP response received'));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      proc.stdout.off('data', onData);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, durationMs);
+    proc.stdout.on('data', onData);
+  });
+}
+
+async function initializeMcp(proc: ChildProcessWithoutNullStreams, protocolVersion: '2024-11-05' | '2025-11-25' = '2025-11-25'): Promise<any> {
+  const response = await sendMcpRequest(proc, {
+    jsonrpc: '2.0',
+    id: 'init',
+    method: 'initialize',
+    params: { protocolVersion },
+  });
+  await sendMcpNotification(proc, { jsonrpc: '2.0', method: 'notifications/initialized' });
+  return response;
+}
+
 describe('MCP server', () => {
   let dir: string;
 
@@ -121,10 +206,50 @@ describe('MCP server', () => {
   it('lists available tools', async () => {
     const proc = startMcp(dir);
     try {
+      const init = await initializeMcp(proc);
+      assert.equal(init.result.protocolVersion, '2025-11-25');
       const response = await sendMcpRequest(proc, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
       assert.equal(response.jsonrpc, '2.0');
       assert.ok(Array.isArray(response.result.tools));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_get_context'));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('requires initialization before tool access and supports the legacy protocol version', async () => {
+    const proc = startMcp(dir);
+    try {
+      const beforeInit = await sendMcpRequest(proc, { jsonrpc: '2.0', id: 'pre', method: 'tools/list' });
+      assert.equal(beforeInit.error.code, -32002);
+
+      const init = await initializeMcp(proc, '2024-11-05');
+      assert.equal(init.result.protocolVersion, '2024-11-05');
+
+      const response = await sendMcpRequest(proc, { jsonrpc: '2.0', id: 'list-legacy', method: 'tools/list' });
+      assert.ok(Array.isArray(response.result.tools));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('returns MCP tool errors instead of protocol errors for invalid tool calls', async () => {
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'bad-tool',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_search',
+          arguments: {},
+        },
+      });
+
+      assert.equal(response.result.isError, true);
+      assert.equal(response.result.schema_version, '0.3.0');
+      assert.equal(response.result.structuredContent.error.kind, 'command_error');
     } finally {
       await stopMcp(proc);
     }
@@ -138,6 +263,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 2,
@@ -177,6 +303,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 21,
@@ -206,6 +333,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 3,
@@ -233,6 +361,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 4,
@@ -261,6 +390,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 5,
@@ -296,6 +426,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 7,
@@ -325,6 +456,7 @@ describe('MCP server', () => {
 
     const proc = startMcp(dir, { BRAINCLAW_HOST_ID: 'host-a' });
     try {
+      await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 6,
@@ -349,6 +481,7 @@ describe('MCP server', () => {
   it('reuses one implicit MCP session across writes and returns auto-reflect metadata', async () => {
     const proc = startMcp(dir);
     try {
+      await initializeMcp(proc);
       const first = await sendMcpRequest(proc, {
         jsonrpc: '2.0',
         id: 22,
@@ -390,6 +523,65 @@ describe('MCP server', () => {
 
       const inboxFile = path.join(dir, '.brainclaw', 'inbox', `${first.result.candidate_id}.json`);
       assert.equal(fs.existsSync(inboxFile), true);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('cancels an in-flight write request without corrupting the next session-aware write', async () => {
+    const proc = startMcp(dir, { BRAINCLAW_MCP_TEST_DELAY_MS: '150' });
+    try {
+      await initializeMcp(proc);
+
+      writeMcp(proc, {
+        jsonrpc: '2.0',
+        id: 30,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_write_note',
+          arguments: {
+            agent: 'copilot',
+            text: 'Delayed note',
+            tags: ['auth'],
+          },
+        },
+      });
+
+      await sendMcpNotification(proc, {
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 30 },
+      });
+
+      writeMcp(proc, {
+        jsonrpc: '2.0',
+        id: 31,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_write_note',
+          arguments: {
+            agent: 'copilot',
+            text: 'Follow-up note',
+            tags: ['auth'],
+          },
+        },
+      });
+
+      const response = await waitForNextMcpMessage(proc, 10000);
+      assert.equal(response.id, 31);
+      assert.equal(response.result.isError, false);
+      assert.match(response.result.session_id, /^sess_[a-f0-9]+$/);
+      await expectNoMcpMessage(proc, 300);
+
+      const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'copilot');
+      const runtimeFiles = fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).filter((file) => file.endsWith('.json')) : [];
+      assert.equal(runtimeFiles.length, 1);
+
+      const note = JSON.parse(fs.readFileSync(path.join(runtimeDir, runtimeFiles[0]!), 'utf-8'));
+      assert.equal(note.text, 'Follow-up note');
+
+      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', '.current-session'), 'utf-8'));
+      assert.equal(currentSession.session_id, response.result.session_id);
     } finally {
       await stopMcp(proc);
     }

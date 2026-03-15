@@ -35,19 +35,32 @@ export interface SessionStartOptions {
   cwd?: string;
 }
 
-export function runSessionStart(options: SessionStartOptions = {}): void {
-  if (!memoryExists(options.cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
+export interface SessionStartResult extends SessionSnapshot {
+  context_target?: string;
+}
 
-  let actor;
+export function runSessionStart(options: SessionStartOptions = {}): void {
   try {
-    actor = buildOperationalIdentity(options.agent, options.cwd);
+    const snapshot = startSession(options);
+    if (options.json) {
+      console.log(JSON.stringify(snapshot, null, 2));
+      return;
+    }
+
+    console.log(`✔ Session started: ${snapshot.session_id} (${snapshot.agent})`);
+    if (options.context) console.log(`  Context target: ${options.context}`);
   } catch (e: unknown) {
     console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
+}
+
+export function startSession(options: SessionStartOptions = {}): SessionStartResult {
+  if (!memoryExists(options.cwd)) {
+    throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
+  }
+
+  const actor = buildOperationalIdentity(options.agent, options.cwd);
 
   // Capture initial context snapshot
   let initialContextHash: string | undefined;
@@ -93,15 +106,8 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
     note_type: 'session_start',
   }, options.cwd);
 
-  appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' });
-
-  if (options.json) {
-    console.log(JSON.stringify(snapshot, null, 2));
-    return;
-  }
-
-  console.log(`✔ Session started: ${snapshot.session_id} (${actor.agent})`);
-  if (options.context) console.log(`  Context target: ${options.context}`);
+  appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' }, options.cwd);
+  return snapshot;
 }
 
 export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {

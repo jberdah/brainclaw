@@ -113,11 +113,22 @@ Conséquence produit :
   - `bclaw_get_context(digest: true)`
   - `bclaw_write_note(autoReflect: true)`
   - réutilisation d'une session implicite par connexion stdio
+- Livraison de la phase MCP nominale sur le chemin principal :
+  - handshake `initialize` / `initialized` avec compatibilité `2024-11-05` et `2025-11-25`
+  - validation JSON-RPC stricte, `ping`, refus des `tools/*` avant initialisation
+  - séparation entre erreurs protocole MCP et erreurs métier d'outils (`isError: true`)
+  - exécution sérielle cancellable des `tools/call` avec support réel de `notifications/cancelled`
+  - refactor des adapters MCP pour éviter les `process.exit` sur les flows `runtime-note`, `session-start`, `session-end`, `accept`, `reject`
+- Couverture MCP ajoutée :
+  - tests unitaires protocole/lifecycle
+  - tests unitaires task runtime / cancellation
+  - contrats E2E MCP sur handshake, compat legacy, erreurs d'outils et annulation
 - Fast path actuel vérifié :
   - `npm test` passe
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
-  - couverture fast path : `statements 64.43%`, `branches 67.57%`, `functions 71.06%`, `lines 64.43%`
+  - `node --test dist-test/tests/mcp.test.js` passe
+  - couverture fast path : `statements 66.38%`, `branches 66.48%`, `functions 71.06%`, `lines 66.38%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -161,7 +172,7 @@ Conséquence produit :
 - `2.5` Résumé d'activité récente par scope : `done`
 
 **Phase 3 — MCP Universel**
-- `3.1` Conformité protocole MCP : `partial`
+- `3.1` Conformité protocole MCP : `done`
 - `3.2` Outils MCP de mutation : `done`
 - `3.3` Contrôle d'accès par niveau de confiance via MCP : `partial`
 - `3.4` Schéma MCP stable et versionné : `done`

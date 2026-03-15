@@ -1,0 +1,191 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  MCP_SERVER_NOT_INITIALIZED,
+  McpServerConnection,
+  createInitializeResult,
+  executeMcpToolCall,
+  parseMcpLine,
+  type McpToolExecutionPayload,
+} from '../../src/commands/mcp.js';
+import { setAgentTrustLevel } from '../../src/core/agent-registry.js';
+import { createTestWorkspace } from '../helpers/workspace.js';
+
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe('commands/mcp protocol core', () => {
+  it('parses valid JSON-RPC messages and rejects malformed envelopes', () => {
+    const parsed = parseMcpLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'ping',
+    }));
+    assert.equal(parsed.method, 'ping');
+    assert.equal(parsed.id, 1);
+    assert.equal(parsed.isNotification, false);
+
+    assert.throws(() => parseMcpLine('{bad json'), /Parse error/);
+    assert.throws(() => parseMcpLine(JSON.stringify([])), /Batch requests are not supported/);
+    assert.throws(() => parseMcpLine(JSON.stringify({ method: 'ping' })), /Invalid Request/);
+  });
+
+  it('creates initialize payloads for supported protocol versions', () => {
+    assert.deepEqual(createInitializeResult('2025-11-25'), {
+      protocolVersion: '2025-11-25',
+      serverInfo: { name: 'brainclaw', version: '0.3.0' },
+      capabilities: { tools: { listChanged: false } },
+    });
+    assert.equal(createInitializeResult('2024-11-05').protocolVersion, '2024-11-05');
+  });
+
+  it('enforces initialize and initialized before tools access', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const payloads: McpToolExecutionPayload[] = [];
+    const connection = new McpServerConnection({
+      cwd: process.cwd(),
+      send: (message) => sent.push(message),
+      executeTool: async (payload) => {
+        payloads.push(payload);
+        return {
+          response: {
+            content: [{ type: 'text', text: 'ok' }],
+            isError: false,
+            schema_version: '0.3.0',
+          },
+          nextConnectionSessionId: 'sess_conn_1',
+        };
+      },
+    });
+
+    connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
+    assert.equal((sent[0]?.error as { code: number }).code, MCP_SERVER_NOT_INITIALIZED);
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25' },
+    }));
+    assert.equal(connection.state, 'awaiting_initialized');
+    assert.equal((sent[1]?.result as { protocolVersion: string }).protocolVersion, '2025-11-25');
+
+    connection.handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+    assert.equal(connection.state, 'ready');
+
+    connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping' }));
+    assert.deepEqual(sent[2], { jsonrpc: '2.0', id: 3, result: {} });
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'bclaw_write_note', arguments: { agent: 'copilot', text: 'hello' } },
+    }));
+    await tick();
+    assert.equal(payloads[0]?.connectionSessionId, undefined);
+    assert.equal(connection.connectionSessionId, 'sess_conn_1');
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: { name: 'bclaw_write_note', arguments: { agent: 'copilot', text: 'again' } },
+    }));
+    await tick();
+    assert.equal(payloads[1]?.connectionSessionId, 'sess_conn_1');
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25' },
+    }));
+    assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32600);
+  });
+
+  it('supports both protocol versions and rejects unsupported ones', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const connection = new McpServerConnection({
+      cwd: process.cwd(),
+      send: (message) => sent.push(message),
+      executeTool: async () => ({
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.3.0' },
+      }),
+    });
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05' },
+    }));
+    assert.equal((sent[0]?.result as { protocolVersion: string }).protocolVersion, '2024-11-05');
+
+    const unsupportedSent: Array<Record<string, unknown>> = [];
+    const unsupported = new McpServerConnection({
+      cwd: process.cwd(),
+      send: (message) => unsupportedSent.push(message),
+      executeTool: async () => ({
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.3.0' },
+      }),
+    });
+    unsupported.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'initialize',
+      params: { protocolVersion: '2099-01-01' },
+    }));
+    const error = unsupportedSent[0]?.error as { code: number; data: { supportedVersions: string[] } };
+    assert.equal(error.code, -32602);
+    assert.deepEqual(error.data.supportedVersions, ['2025-11-25', '2024-11-05']);
+  });
+
+  it('returns protocol errors for unknown methods and invalid params', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const connection = new McpServerConnection({
+      cwd: process.cwd(),
+      send: (message) => sent.push(message),
+      executeTool: async () => ({
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.3.0' },
+      }),
+    });
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25' },
+    }));
+    connection.handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+
+    connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'nope' }));
+    assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32601);
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { arguments: {} },
+    }));
+    assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32602);
+  });
+
+  it('maps tool command failures to MCP tool errors without breaking the session', () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
+    try {
+      setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
+      const result = executeMcpToolCall({
+        name: 'bclaw_accept',
+        args: { id: 'cnd_missing', by: workspace.currentAgent.agent_name },
+        cwd: workspace.dir,
+      });
+      assert.equal(result.response.isError, true);
+      assert.ok(typeof (result.response.structuredContent as { error: { kind: string } }).error.kind === 'string');
+      assert.equal(result.response.schema_version, '0.3.0');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+});

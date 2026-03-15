@@ -37,7 +37,12 @@ export interface RuntimeNoteCommandResult {
 }
 
 export function runRuntimeNote(text: string, options: RuntimeNoteOptions): RuntimeNoteCommandResult {
-  return createRuntimeNote(text, options, true);
+  try {
+    return createRuntimeNote(text, options, true);
+  } catch (error: unknown) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 export function createRuntimeNote(
@@ -46,25 +51,17 @@ export function createRuntimeNote(
   printSuccess: boolean = false,
 ): RuntimeNoteCommandResult {
   if (!memoryExists(options.cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
+    throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  let actor: OperationalIdentity;
-  try {
-    actor = buildOperationalIdentity(options.agent, options.cwd, {
-      sessionId: options.sessionId,
-    });
-  } catch (error: unknown) {
-    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
+  const actor: OperationalIdentity = buildOperationalIdentity(options.agent, options.cwd, {
+    sessionId: options.sessionId,
+  });
 
   const state = loadState(options.cwd);
   const plan = options.plan ? state.plan_items.find((item) => item.id === options.plan) : undefined;
   if (options.plan && !plan) {
-    console.error(`Error: Plan item '${options.plan}' not found.`);
-    process.exit(1);
+    throw new Error(`Plan item '${options.plan}' not found.`);
   }
 
   const id = generateRuntimeNoteId();
