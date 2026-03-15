@@ -10,6 +10,7 @@ import { runHandoff } from './commands/handoff.js';
 import { runPlan } from './commands/plan.js';
 import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
+import { runUpdateHandoff } from './commands/update-handoff.js';
 import { runInstruction } from './commands/instruction.js';
 import { runListAgents } from './commands/list-agents.js';
 import { runListInstructions } from './commands/list-instructions.js';
@@ -194,6 +195,16 @@ program
   .option('--priority <priority>', 'Priority: low, medium, high')
   .action((id, options) => {
     runUpdatePlan(id, options);
+  });
+
+// --- update-handoff ---
+program
+  .command('update-handoff <id>')
+  .description('Update the status of a handoff')
+  .option('--status <status>', 'Status: open, accepted, closed')
+  .option('--to <agent>', 'Change the receiving agent')
+  .action((id, options) => {
+    runUpdateHandoff(id, options);
   });
 
 // --- doctor ---
