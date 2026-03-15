@@ -9,7 +9,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { analyzeRepository } from '../core/repo-analysis.js';
 import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
-import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { writeDetectedAgentExport } from './export.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
 
@@ -146,6 +146,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     for (const reason of analysis.reasons) {
       console.log(`  - ${reason}`);
     }
+  }
+
+  const wsl = detectWslEnvironment();
+  if (wsl) {
+    console.log('');
+    console.log(`⚠  WSL detected (${wsl.distro}). brainclaw is installed in this WSL environment only.`);
+    console.log(`   To use brainclaw from a Windows terminal (PowerShell/cmd), run inside this project:`);
+    console.log(`     npm link    (in PowerShell, with Node.js for Windows)`);
   }
 
   console.log('');

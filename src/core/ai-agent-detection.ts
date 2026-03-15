@@ -123,3 +123,26 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
 
   return undefined;
 }
+
+export interface WslEnvironment {
+  isWsl: true;
+  distro: string;
+  detection_source: string;
+}
+
+/**
+ * Detects whether brainclaw is running inside a WSL (Windows Subsystem for Linux)
+ * environment. Useful to warn users that the install is WSL-local and not
+ * accessible from a Windows terminal.
+ */
+export function detectWslEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): WslEnvironment | undefined {
+  if (env.WSL_DISTRO_NAME) {
+    return { isWsl: true, distro: env.WSL_DISTRO_NAME, detection_source: 'WSL_DISTRO_NAME env var' };
+  }
+  if (env.WSL_INTEROP) {
+    return { isWsl: true, distro: 'unknown', detection_source: 'WSL_INTEROP env var' };
+  }
+  return undefined;
+}
