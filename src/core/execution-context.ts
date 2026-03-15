@@ -251,7 +251,7 @@ function detectShell(env: NodeJS.ProcessEnv): string {
   if (shell) {
     return path.basename(shell).replace(/\.exe$/i, '');
   }
-  if (process.platform === 'win32' && env.PSModulePath) {
+  if (env.PSModulePath) {
     return 'powershell';
   }
   const comspec = env.ComSpec?.trim() ?? env.COMSPEC?.trim();
