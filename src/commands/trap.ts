@@ -69,7 +69,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
   }
 
   const scopeInfo = visibility === 'shared' ? 'shared' : `${visibility}:${hostId}`;
-  console.log(`✔ Trap added: [${short_label}] (${scopeInfo}) ${text}`);
+  console.log(`✔ Trap added: [${id}] (${scopeInfo}) ${text}`);
 }
 
 

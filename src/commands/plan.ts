@@ -6,6 +6,7 @@ import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
+import { runListPlans } from './list-plans.js';
 import type { PlanItem, Priority } from '../core/schema.js';
 
 export interface PlanOptions {
@@ -18,9 +19,25 @@ export interface PlanOptions {
   dependsOn?: string[];
 }
 
+// Known plan subcommands that should not be accepted as plan text
+const PLAN_SUBCOMMAND_ALIASES = new Set(['list', 'ls']);
+const PLAN_SUBCOMMAND_ERRORS = new Set(['update']);
+
 export function runPlan(text: string, options: PlanOptions = {}): void {
   if (!memoryExists()) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const normalized = text.trim().toLowerCase();
+  if (PLAN_SUBCOMMAND_ALIASES.has(normalized)) {
+    // 'brainclaw plan list' → forward to list-plans
+    runListPlans({});
+    return;
+  }
+  if (PLAN_SUBCOMMAND_ERRORS.has(normalized)) {
+    console.error(`Error: '${text}' looks like a subcommand, not a plan description.`);
+    console.error(`  To update a plan, use: brainclaw update-plan <id> --status <status>`);
     process.exit(1);
   }
 
@@ -60,6 +77,6 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   saveState(state);
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Plan item added: [${short_label}] ${text}`);
+  console.log(`✔ Plan item added: [${id}] ${text}`);
 }
 

@@ -114,4 +114,22 @@ describe('Shared plan', () => {
     const res = run(['doctor'], dir);
     assert.ok(res.stdout.includes('in-progress plan item(s) have no assignee') || res.stderr.includes('in-progress plan item(s) have no assignee'));
   });
+
+  it('rejects reserved subcommand words as plan text', () => {
+    // 'update' should error with exit 1
+    const updateRes = run(['plan', 'update'], dir);
+    assert.equal(updateRes.exitCode, 1, `expected exit 1 for 'plan update'`);
+    assert.ok(updateRes.stderr.includes('looks like a subcommand'), `expected subcommand error for 'plan update'`);
+  });
+
+  it('plan list and plan ls alias behaves like list-plans', () => {
+    run(['plan', 'Task via alias test'], dir);
+
+    for (const alias of ['list', 'ls']) {
+      const res = run(['plan', alias], dir);
+      assert.equal(res.exitCode, 0, `expected exit 0 for 'plan ${alias}'`);
+      assert.ok(!res.stdout.includes('Plan item added'), `'plan ${alias}' should not create a plan`);
+      assert.ok(res.stdout.includes('Task via alias test'), `'plan ${alias}' should list plans`);
+    }
+  });
 });
