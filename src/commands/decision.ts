@@ -51,7 +51,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
   // Rebuild markdown
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Decision added: [${short_label}] ${text}`);
+  console.log(`✔ Decision added: [${id}] ${text}`);
 }
 
 

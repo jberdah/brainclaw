@@ -76,7 +76,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
 
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Handoff added: [${short_label}] ${options.from} → ${options.to}: ${text}`);
+  console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
 }
 
 

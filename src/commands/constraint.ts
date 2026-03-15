@@ -51,7 +51,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
 
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Constraint added: [${short_label}] ${text}`);
+  console.log(`✔ Constraint added: [${id}] ${text}`);
 }
 
 
