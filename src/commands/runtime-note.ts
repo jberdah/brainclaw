@@ -34,6 +34,9 @@ export interface RuntimeNoteCommandResult {
   candidateId?: string;
   promotedItemId?: string;
   skipReason?: string;
+  contradictionsDetected?: Array<{ severity: 'low' | 'medium' | 'high'; reason: string; conflicts_with: string }>;
+  contradictionSummary?: string;
+  promotionBlockedReason?: string;
 }
 
 export function runRuntimeNote(text: string, options: RuntimeNoteOptions): RuntimeNoteCommandResult {
@@ -139,13 +142,20 @@ function maybeAutoReflectRuntimeNote(note: RuntimeNote, options: RuntimeNoteOpti
     sessionId: note.session_id,
     source: `runtime-note:${note.agent}:${note.id}`,
     cwd: options.cwd,
-  }, false);
+  }, false, false, true);
 
   return {
     autoReflectAttempted: true,
     detectedType: detected.type,
     candidateId: creation.candidateId,
     promotedItemId: creation.promotedItemId,
+    contradictionsDetected: creation.contradictionsDetected?.map((item) => ({
+      severity: item.severity,
+      reason: item.reason,
+      conflicts_with: item.conflicts_with,
+    })),
+    contradictionSummary: creation.contradictionSummary,
+    promotionBlockedReason: creation.promotionBlockedReason,
   };
 }
 

@@ -1,9 +1,10 @@
 import { memoryExists } from '../core/io.js';
 import { listCandidates, saveCandidate } from '../core/candidates.js';
 import { loadConfig } from '../core/config.js';
+import { detectNewItemContradictions, summarizeContradictions } from '../core/contradictions.js';
 import { buildReputationRankingLookup } from '../core/reputation.js';
+import { loadState } from '../core/state.js';
 import { runAccept } from './accept.js';
-import { appendAuditEntry } from '../core/audit.js';
 
 export interface ReviewOptions {
   json?: boolean;
@@ -81,21 +82,40 @@ export function runReview(options: ReviewOptions = {}): void {
   if (options.auto) {
     const scoreThreshold = config.reflective_memory?.auto_promote_score_threshold ?? 5;
     const autoBy = options.autoBy ?? process.env.USER ?? process.env.USERNAME ?? 'auto';
+    const state = loadState(options.cwd);
     const promoted: string[] = [];
-    const autoSkipped: string[] = [];
+    const autoSkipped: Array<{ id: string; reason: string }> = [];
     for (const c of candidates) {
       const score = (c.star_count ?? 0) + (c.usage_count ?? 0);
       if (score >= scoreThreshold ||
           (c.star_count ?? 0) >= promotionThreshold ||
           (c.usage_count ?? 0) >= promotionUsesThreshold) {
+        const contradictions = detectNewItemContradictions(
+          c.text,
+          c.tags,
+          c.related_paths,
+          state,
+          c.project_id,
+        );
+        const blocking = contradictions.filter((item) => item.severity === 'medium' || item.severity === 'high');
+        if (blocking.length > 0) {
+          saveCandidate({
+            ...c,
+            contradictions_detected: contradictions,
+            contradiction_summary: summarizeContradictions(contradictions),
+            promotion_blocked_reason: 'contradiction_detected',
+          }, options.cwd);
+          autoSkipped.push({ id: c.id, reason: 'contradiction_detected' });
+          continue;
+        }
         try {
           runAccept(c.id, autoBy);
           promoted.push(c.id);
         } catch {
-          autoSkipped.push(c.id);
+          autoSkipped.push({ id: c.id, reason: 'accept_failed' });
         }
       } else {
-        autoSkipped.push(c.id);
+        autoSkipped.push({ id: c.id, reason: 'below_threshold' });
       }
     }
     if (options.json) {

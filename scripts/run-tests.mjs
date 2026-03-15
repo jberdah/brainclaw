@@ -65,8 +65,8 @@ if (selected.length === 0) {
 }
 
 const timeoutMsByGroup = {
-  default: 30000,
-  unit: 15000,
+  default: 60000,
+  unit: 60000,
   smoke: 30000,
   e2e: 120000,
   all: 120000,

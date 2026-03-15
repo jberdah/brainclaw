@@ -5,6 +5,7 @@ import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildContext, buildContextDigest, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
+import { runSessionStart } from '../../src/commands/session-start.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
 import { saveOperationalTrap } from '../../src/core/traps.js';
@@ -502,7 +503,7 @@ describe('core/context', () => {
       cwd: workspace.dir,
     });
 
-    assert.equal(result.context_schema, '1.1');
+    assert.equal(result.context_schema, '1.2');
     assert.equal(result.memory_density, 'low');
     assert.equal(result.bootstrap_available, true);
     assert.ok((result.derived_signals?.length ?? 0) > 0);
@@ -515,14 +516,14 @@ describe('core/context', () => {
     assert.match(result.digest ?? '', /Agent rule: Read AGENTS\.md before edits/);
 
     const markdown = renderContextMarkdown(result, false);
-    assert.match(markdown, /Context schema: 1\.1/);
+    assert.match(markdown, /Context schema: 1\.2/);
     assert.match(markdown, /Derived signals:/);
     assert.match(markdown, /No relevant canonical memory found\./);
     assert.match(markdown, /Execution context:/);
     assert.match(markdown, /Agent tooling:/);
 
     const template = renderContextPromptTemplate(result, false);
-    assert.match(template, /context_schema: 1\.1/);
+    assert.match(template, /context_schema: 1\.2/);
   });
 
   it('can disable bootstrap fallback when memory is sparse', () => {
@@ -550,5 +551,75 @@ describe('core/context', () => {
 
     assert.ok(result.agent_tooling);
     assert.deepEqual(result.agent_tooling?.agents_rules, ['Prefer focused diffs']);
+  });
+
+  it('includes a compact context diff when sinceSession is requested', () => {
+    process.env.BRAINCLAW_SESSION_ID = 'sess_ctx_diff';
+    runSessionStart({ context: 'auth', cwd: workspace.dir });
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [
+        {
+          id: 'cst_ctx_diff',
+          text: 'Auth deploys are frozen',
+          created_at: new Date().toISOString(),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          status: 'active',
+          tags: ['auth'],
+        },
+      ],
+      recent_decisions: [
+        {
+          id: 'dec_ctx_diff',
+          text: 'Auth requests now go through the gateway',
+          created_at: new Date().toISOString(),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          tags: ['auth'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+    saveCandidate({
+      id: 'cnd_ctx_diff',
+      type: 'decision',
+      text: 'Document auth rollback flow',
+      created_at: new Date().toISOString(),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_ctx_test',
+      tags: ['auth'],
+      status: 'pending',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    }, workspace.dir);
+
+    const result = buildContext({
+      target: 'auth',
+      sinceSession: 'sess_ctx_diff',
+      digest: true,
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.context_schema, '1.2');
+    assert.ok(result.context_diff);
+    assert.equal(result.context_diff?.since_session, 'sess_ctx_diff');
+    assert.equal(result.context_diff?.counts.constraints, 1);
+    assert.equal(result.context_diff?.counts.decisions, 1);
+    assert.equal(result.context_diff?.counts.pending_candidates, 1);
+    assert.match(result.digest ?? '', /New since session started:/);
+
+    const markdown = renderContextMarkdown(result, false);
+    assert.match(markdown, /New since session started:/);
+    const template = renderContextPromptTemplate(result, false);
+    assert.match(template, /context_diff:/);
   });
 });

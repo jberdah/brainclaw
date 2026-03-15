@@ -373,6 +373,22 @@ describe('brainclaw CLI', () => {
     });
   });
 
+  describe('context', () => {
+    it('includes session-aware context diffs in JSON output', () => {
+      run(['init', '-y'], dir);
+      run(['session-start', '--context', 'auth'], dir, { BRAINCLAW_SESSION_ID: 'sess_cli_diff' });
+      run(['decision', 'Auth requests now go through the gateway', '--tag', 'auth'], dir);
+
+      const res = run(['context', '--for', 'auth', '--since-session', 'sess_cli_diff', '--json'], dir);
+      assert.equal(res.exitCode, 0);
+      const parsed = JSON.parse(res.stdout);
+      assert.equal(parsed.context_schema, '1.2');
+      assert.equal(parsed.context_diff.since_session, 'sess_cli_diff');
+      assert.equal(parsed.context_diff.counts.decisions, 1);
+      assert.equal(parsed.context_diff.counts.total, 1);
+    });
+  });
+
   describe('env', () => {
     it('prints the execution context and optional agent tooling as JSON', () => {
       run(['init', '-y'], dir);

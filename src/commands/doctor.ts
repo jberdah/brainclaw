@@ -30,6 +30,7 @@ interface DoctorCheck {
   name: string;
   status: 'ok' | 'warn' | 'error';
   message: string;
+  details?: unknown;
 }
 
 export function runDoctor(options: DoctorOptions = {}): void {
@@ -570,11 +571,20 @@ export function runDoctor(options: DoctorOptions = {}): void {
         name: 'contradictions',
         status: 'warn',
         message: `${contradictions.length} potential contradiction(s) detected in state.`,
+        details: contradictions.slice(0, 5).map((item) => ({
+          item_id: item.item_id,
+          conflicts_with: item.conflicts_with,
+          section: item.section,
+          kind: item.kind,
+          severity: item.severity,
+          score: item.score,
+          reason: item.reason,
+        })),
       });
       if (!options.json) {
         console.warn(`⚠ ${contradictions.length} potential contradiction(s) detected:`);
         for (const c of contradictions.slice(0, 5)) {
-          console.warn(`  - [${c.item_id}] vs [${c.conflicts_with}]: ${c.reason}`);
+          console.warn(`  - [${c.item_id}] vs [${c.conflicts_with}] (${c.severity}, score ${c.score}): ${c.reason}`);
         }
       }
     } else {

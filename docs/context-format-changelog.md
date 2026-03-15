@@ -1,5 +1,11 @@
 # Context Format Changelog
 
+## 1.2
+
+- Added `context_diff` to expose compact memory deltas since a session started.
+- Clarified the public contract for contradiction-aware session context refreshes.
+- Kept the contract additive and backward-compatible with `1.1`.
+
 ## 1.1
 
 - Added explicit `context_schema` rendering in markdown and template outputs.

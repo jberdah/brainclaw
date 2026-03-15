@@ -6,7 +6,6 @@ import { clearCurrentSession, loadCurrentSession } from '../../src/core/identity
 import { runSessionEnd } from '../../src/commands/session-end.js';
 import { loadSessionSnapshot, runSessionStart } from '../../src/commands/session-start.js';
 import { listCandidates } from '../../src/core/candidates.js';
-import { buildContext } from '../../src/core/context.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -30,16 +29,6 @@ function captureLogs(fn: () => void): string[] {
     console.log = originalLog;
     console.error = originalError;
   }
-}
-
-function createHash(data: string): string {
-  let hash = 0;
-  for (let i = 0; i < data.length; i++) {
-    const chr = data.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
-    hash |= 0;
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 describe('session commands', () => {
@@ -107,7 +96,7 @@ describe('session commands', () => {
     }
   });
 
-  it('ends a session, reports context drift, and auto-reflects observation notes', () => {
+  it('ends a session, reports memory changes, and auto-reflects observation notes', () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_end_test';
     try {
@@ -121,7 +110,7 @@ describe('session commands', () => {
         agent_id: workspace.currentAgent.agent_id,
         project_id: 'prj_session_test',
         session_id: 'sess_end_test',
-        text: 'Observed auth rollout insight',
+        text: 'Use auth rollout gateway policy for this session',
         created_at: new Date().toISOString(),
         tags: ['auth'],
         visibility: 'shared',
@@ -154,11 +143,11 @@ describe('session commands', () => {
 
       assert.ok(logs[0].includes('Session ended: sess_end_test'));
       assert.ok(logs.some((line) => line.includes('Candidates created from auto-reflect: 1')));
-      assert.ok(logs.some((line) => line.includes('Context changed since session start')));
+      assert.ok(logs.some((line) => line.includes('1 decision')));
 
       const pending = listCandidates('pending', workspace.dir);
       assert.equal(pending.length, 1);
-      assert.equal(pending[0].text, 'Observed auth rollout insight');
+      assert.equal(pending[0].text, 'Use auth rollout gateway policy for this session');
       assert.equal(pending[0].session_id, 'sess_end_test');
       assert.equal(loadCurrentSession(workspace.dir), undefined);
     } finally {
@@ -170,7 +159,7 @@ describe('session commands', () => {
     }
   });
 
-  it('supports JSON session start/end flows without auto-reflect when context stays stable', () => {
+  it('supports JSON session start/end flows without auto-reflect when no memory changes occur', () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_json_test';
     try {
@@ -201,22 +190,6 @@ describe('session commands', () => {
       assert.equal(startResult.session_id, 'sess_json_test');
       assert.equal(startResult.context_target, 'auth');
 
-      const snapshot = loadSessionSnapshot('sess_json_test', workspace.dir);
-      assert.ok(snapshot);
-      const currentContext = buildContext({
-        target: 'auth',
-        agent: workspace.currentAgent.agent_name,
-        cwd: workspace.dir,
-      });
-      fs.writeFileSync(
-        path.join(workspace.dir, '.brainclaw', 'sessions', 'sess_json_test.json'),
-        JSON.stringify({
-          ...snapshot,
-          initial_context_hash: createHash(JSON.stringify(currentContext.selected)),
-        }, null, 2),
-        'utf-8',
-      );
-
       const endLogs = captureLogs(() => {
         runSessionEnd({
           session: 'sess_json_test',
@@ -234,7 +207,7 @@ describe('session commands', () => {
       };
       assert.equal(endResult.session_id, 'sess_json_test');
       assert.equal(endResult.candidates_created, 0);
-      assert.equal(endResult.context_diff, 'Context unchanged since session start');
+      assert.equal(endResult.context_diff, 'No memory changes detected');
       assert.equal(endResult.summary, 'Stable session summary');
     } finally {
       if (previousSession === undefined) {
@@ -258,5 +231,64 @@ describe('session commands', () => {
     });
 
     assert.equal(loadCurrentSession(workspace.dir)?.session_id, active?.session_id);
+  });
+
+  it('does not auto-promote contradictory session observations', () => {
+    const previousSession = process.env.BRAINCLAW_SESSION_ID;
+    process.env.BRAINCLAW_SESSION_ID = 'sess_contradiction_test';
+    try {
+      captureLogs(() => {
+        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      });
+
+      saveState({
+        version: 1,
+        write_version: 1,
+        active_constraints: [],
+        recent_decisions: [
+          {
+            id: 'dec_auth_existing',
+            text: 'Use auth gateway policy and always enable OAuth fallback',
+            created_at: new Date(Date.now() - 15 * 60_000).toISOString(),
+            author: workspace.currentAgent.agent_name,
+            author_id: workspace.currentAgent.agent_id,
+            project_id: 'prj_session_test',
+            tags: ['auth'],
+            related_paths: ['src/auth/**'],
+          },
+        ],
+        known_traps: [],
+        open_handoffs: [],
+        plan_items: [],
+      }, workspace.dir);
+
+      saveRuntimeNote({
+        id: 'rtn_session_conflict',
+        agent: workspace.currentAgent.agent_name,
+        agent_id: workspace.currentAgent.agent_id,
+        project_id: 'prj_session_test',
+        session_id: 'sess_contradiction_test',
+        text: 'Use auth gateway policy and never enable OAuth fallback',
+        created_at: new Date().toISOString(),
+        tags: ['auth'],
+        visibility: 'shared',
+        note_type: 'observation',
+      }, workspace.dir);
+
+      captureLogs(() => {
+        runSessionEnd({ session: 'sess_contradiction_test', autoReflect: true, cwd: workspace.dir });
+      });
+
+      const pending = listCandidates('pending', workspace.dir);
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].promotion_blocked_reason, 'contradiction_detected');
+      assert.ok((pending[0].contradictions_detected?.length ?? 0) > 0);
+    } finally {
+      if (previousSession === undefined) {
+        delete process.env.BRAINCLAW_SESSION_ID;
+      } else {
+        process.env.BRAINCLAW_SESSION_ID = previousSession;
+      }
+    }
   });
 });

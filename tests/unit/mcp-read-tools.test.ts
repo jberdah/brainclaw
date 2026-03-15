@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { handleMcpReadToolCall } from '../../src/commands/mcp.js';
+import { startSession } from '../../src/commands/session-start.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
@@ -291,7 +292,7 @@ describe('commands/mcp read tools', () => {
       derived_signals?: Array<{ seed_kind: string }>;
       agent_tooling?: { agents_rules: string[] };
     };
-    assert.equal(contextStructured.context_schema, '1.1');
+    assert.equal(contextStructured.context_schema, '1.2');
     assert.equal(contextStructured.memory_density, 'low');
     assert.equal(contextStructured.bootstrap_available, true);
     assert.ok((contextStructured.derived_signals?.length ?? 0) > 0);
@@ -334,5 +335,49 @@ describe('commands/mcp read tools', () => {
     assert.equal(structured.agent_tooling.skills[0]?.scripts_present, false);
     assert.equal(structured.agent_tooling.mcp_servers[0]?.name, 'atlassian');
     assert.equal(structured.agent_tooling.mcp_servers[0]?.availability, 'remote');
+  });
+
+  it('returns session-aware context diffs through the read-tool handler', () => {
+    const sessionId = 'sess_mcp_diff';
+    process.env.BRAINCLAW_SESSION_ID = sessionId;
+    startSession({
+      agent: workspace.currentAgent.agent_name,
+      context: 'auth',
+      cwd: workspace.dir,
+    });
+
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [
+        {
+          id: 'dec_mcp_diff',
+          text: 'Auth requests now go through the gateway',
+          created_at: new Date().toISOString(),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_mcp_read_test',
+          tags: ['auth'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const context = handleMcpReadToolCall('bclaw_get_context', {
+      path: 'auth',
+      format: 'json',
+      since_session: sessionId,
+    }, { cwd: workspace.dir });
+    const structured = context.structuredContent as {
+      context_schema: string;
+      context_diff?: { since_session?: string; counts: { decisions: number; total: number } };
+    };
+    assert.equal(structured.context_schema, '1.2');
+    assert.equal(structured.context_diff?.since_session, sessionId);
+    assert.equal(structured.context_diff?.counts.decisions, 1);
+    assert.equal(structured.context_diff?.counts.total, 1);
   });
 });

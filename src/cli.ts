@@ -262,6 +262,7 @@ program
   .option('--max-items <count>', 'Limit number of items', parseInt)
   .option('--max-chars <count>', 'Approximate output budget for selected item content', parseInt)
   .option('--digest', 'Include a short deterministic digest ahead of the detailed context')
+  .option('--since-session <id>', 'Include a compact memory diff since the given session started')
   .option('--no-bootstrap', 'Disable brownfield bootstrap fallback when canonical memory is sparse')
   .option('--refresh-bootstrap', 'Refresh brownfield bootstrap profile before building context')
   .option('--template', 'Output prompt-ready context template')

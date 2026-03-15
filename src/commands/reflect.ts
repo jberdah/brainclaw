@@ -13,6 +13,8 @@ import { listRuntimeEventsBySession } from '../core/events.js';
 import { agentCanWriteDirect } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { generateTrapId } from '../core/traps.js';
+import { evaluateReflectionSafety } from '../core/reflection-safety.js';
+import type { ContradictionReport } from '../core/contradictions.js';
 
 export interface ReflectOptions {
   type?: CandidateType;
@@ -37,6 +39,9 @@ export interface CandidateCreationResult {
   type: CandidateType;
   writeThrough: boolean;
   promotedItemId?: string;
+  contradictionsDetected?: ContradictionReport[];
+  contradictionSummary?: string;
+  promotionBlockedReason?: string;
 }
 
 export function runReflect(text: string | undefined, options: ReflectOptions): void {
@@ -102,7 +107,7 @@ function runReflectBatchFromFile(filepath: string, baseOptions: ReflectOptions):
         from: baseOptions.from ?? event.from,
         to: baseOptions.to ?? event.to,
         path: baseOptions.path ?? event.related_paths?.[0],
-      }, false, true);
+      }, false, true, true);
       created++;
     } catch {
       // skip malformed event records
@@ -135,7 +140,7 @@ function runReflectBatchFromSession(session: string, baseOptions: ReflectOptions
       from: baseOptions.from ?? event.from,
       to: baseOptions.to ?? event.to,
       path: baseOptions.path ?? event.related_paths?.[0],
-    }, false, true);
+    }, false, true, true);
     created++;
   }
 
@@ -148,6 +153,7 @@ export function createCandidateFromInput(
   options: ReflectOptions,
   printSuccess: boolean = true,
   forceStrict: boolean = false,
+  automation: boolean = false,
 ): CandidateCreationResult {
   const config = loadConfig(options.cwd);
   let actorIdentity;
@@ -209,12 +215,30 @@ export function createCandidateFromInput(
     usage_count: 0,
     usage_events: [],
   };
+  const safety = evaluateReflectionSafety({
+    text,
+    type,
+    tags: candidate.tags,
+    relatedPaths: candidate.related_paths,
+    projectId: candidate.project_id,
+    cwd: options.cwd,
+    automation,
+  });
+  if (safety.contradiction_summary) {
+    console.warn(`⚠ ${safety.contradiction_summary}`);
+  }
+  const candidateWithSafety = {
+    ...candidate,
+    contradictions_detected: safety.contradictions_detected,
+    contradiction_summary: safety.contradiction_summary,
+    promotion_blocked_reason: safety.promotion_blocked_reason,
+  };
 
   // Write-through for trusted/curator agents — bypass pending inbox
   if (!forceStrict) {
     try {
-      if (agentCanWriteDirect(candidate.author_id ?? candidate.author, options.cwd)) {
-        const promotedItemId = promoteCandidateToState(candidate, options.cwd);
+      if (!safety.promotion_blocked_reason && agentCanWriteDirect(candidate.author_id ?? candidate.author, options.cwd)) {
+        const promotedItemId = promoteCandidateToState(candidateWithSafety, options.cwd);
         appendAuditEntry({
           actor: candidate.author,
           actor_id: candidate.author_id,
@@ -231,19 +255,27 @@ export function createCandidateFromInput(
           type,
           writeThrough: true,
           promotedItemId,
+          contradictionsDetected: safety.contradictions_detected,
+          contradictionSummary: safety.contradiction_summary,
         };
       }
     } catch { /* trust check failed — fall through to pending */ }
   }
 
-  saveCandidate(candidate, options.cwd);
+  saveCandidate(candidateWithSafety, options.cwd);
   if (printSuccess) {
     console.log(`✔ Candidate created: [${id}] (${type}) ${text}`);
+    if (safety.promotion_blocked_reason) {
+      console.log(`  Auto-promotion blocked: ${safety.promotion_blocked_reason}`);
+    }
   }
   return {
     candidateId: id,
     type,
     writeThrough: false,
+    contradictionsDetected: safety.contradictions_detected,
+    contradictionSummary: safety.contradiction_summary,
+    promotionBlockedReason: safety.promotion_blocked_reason,
   };
 }
 

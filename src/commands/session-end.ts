@@ -1,11 +1,11 @@
 import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
-import { buildContext } from '../core/context.js';
+import { buildContextDiff } from '../core/context-diff.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { createCandidateFromInput } from './reflect.js';
+import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
-import { loadSessionSnapshot } from './session-start.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -23,16 +23,6 @@ export interface SessionEndResult {
   candidates_created: number;
   context_diff?: string;
   summary: string;
-}
-
-function createHash(data: string): string {
-  let hash = 0;
-  for (let i = 0; i < data.length; i++) {
-    const chr = data.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
-    hash |= 0;
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
@@ -73,20 +63,12 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
   const agentNotes = listRuntimeNotes(actor.agent, options.cwd);
   const sessionNotes = agentNotes.filter(n => n.session_id === sessionId);
 
-  // Compute context diff
-  const snapshot = loadSessionSnapshot(sessionId, options.cwd);
-  let contextDiff: string | undefined;
-  if (snapshot?.initial_context_hash) {
-    try {
-      const currentCtx = buildContext({ target: snapshot.context_target, agent: actor.agent, cwd: options.cwd });
-      const currentHash = createHash(JSON.stringify(currentCtx.selected));
-      if (currentHash !== snapshot.initial_context_hash) {
-        contextDiff = `Context changed since session start (${snapshot.initial_context_hash} → ${currentHash})`;
-      } else {
-        contextDiff = 'Context unchanged since session start';
-      }
-    } catch { /* non-fatal */ }
-  }
+  const diff = buildContextDiff({
+    session: sessionId,
+    cwd: options.cwd,
+    includeItems: true,
+  });
+  const contextDiff = diff?.summary;
 
   const summaryText = options.summary
     ? options.summary
@@ -116,15 +98,22 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     for (const note of sessionNotes) {
       if (note.note_type === 'observation' || !note.note_type) {
         try {
-          createCandidateFromInput(note.text, 'decision', {
+          const detected = suggestCandidateTypes(note.text, note.tags).find((entry) => entry.type !== 'handoff');
+          if (!detected || detected.score < 4) {
+            continue;
+          }
+          const creation = createCandidateFromInput(note.text, detected.type, {
             tag: note.tags,
             author: note.agent,
             authorId: note.agent_id,
             projectId: note.project_id,
             sessionId: note.session_id,
+            source: `runtime-note:${note.agent}:${note.id}`,
             cwd: options.cwd,
-          }, false, false);
-          candidatesCreated++;
+          }, false, false, true);
+          if (creation.candidateId) {
+            candidatesCreated++;
+          }
         } catch { /* skip */ }
       }
     }

@@ -298,4 +298,51 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_skills' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_mcp' && check.status === 'warn'));
   });
+
+  it('includes scored contradiction details in doctor json output', () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [
+        {
+          id: 'cst_doctor_a',
+          text: 'Auth gateway must allow refresh tokens',
+          created_at: iso(2),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_doctor_test',
+          status: 'active',
+          tags: ['auth'],
+          related_paths: ['src/auth/**'],
+        },
+        {
+          id: 'cst_doctor_b',
+          text: 'Auth gateway must not allow refresh tokens',
+          created_at: iso(1),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_doctor_test',
+          status: 'active',
+          tags: ['auth'],
+          related_paths: ['src/auth/**'],
+        },
+      ],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const contradictionCheck = parsed.checks.find((check: { name: string }) => check.name === 'contradictions');
+    assert.ok(contradictionCheck);
+    assert.equal(contradictionCheck.status, 'warn');
+    assert.ok(Array.isArray(contradictionCheck.details));
+    assert.equal(contradictionCheck.details[0].severity, 'high');
+    assert.ok(contradictionCheck.details[0].score >= 10);
+  });
 });

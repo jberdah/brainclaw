@@ -44,6 +44,9 @@ describe('core/contradictions', () => {
     assert.equal(reports[0].section, 'constraints');
     assert.equal(reports[0].item_id, 'cst_a');
     assert.equal(reports[0].conflicts_with, 'cst_b');
+    assert.equal(reports[0].kind, 'negation_pair');
+    assert.equal(reports[0].severity, 'high');
+    assert.ok(reports[0].score >= 10);
   });
 
   it('ignores contradictory wording when tags and paths do not overlap', () => {
@@ -92,5 +95,29 @@ describe('core/contradictions', () => {
     assert.equal(reports.length, 1);
     assert.equal(reports[0].conflicts_with, 'dec_auth');
     assert.equal(reports[0].section, 'decisions');
+    assert.ok(['medium', 'high'].includes(reports[0].severity));
+  });
+
+  it('keeps lexical overlap bounded to avoid broad false positives', () => {
+    const state = createState();
+    state.active_constraints.push({
+      id: 'cst_cache',
+      text: 'Cache layer must allow warmup jobs',
+      created_at: '2026-03-15T10:00:00Z',
+      author: 'alice',
+      status: 'active',
+      tags: ['cache'],
+      related_paths: ['src/cache'],
+    });
+
+    const reports = detectNewItemContradictions(
+      'Cache metrics should not alert on warmup noise',
+      ['cache'],
+      ['src/cache/metrics.ts'],
+      state,
+      'prj_ctx',
+    );
+
+    assert.equal(reports.length, 0);
   });
 });
