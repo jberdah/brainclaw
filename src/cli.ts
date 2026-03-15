@@ -258,6 +258,7 @@ program
   .option('--include-pending', 'Include pending candidates')
   .option('--max-items <count>', 'Limit number of items', parseInt)
   .option('--max-chars <count>', 'Approximate output budget for selected item content', parseInt)
+  .option('--digest', 'Include a short deterministic digest ahead of the detailed context')
   .option('--template', 'Output prompt-ready context template')
   .option('--compact-template', 'Use compact template format (default for openclaw profile)')
   .option('--explain', 'Show ranking reasons in human-readable output')
@@ -465,8 +466,9 @@ program
   .option('--host <host>', 'Optional host identifier override for machine/private runtime notes')
   .option('--tag <tags...>', 'Tags')
   .option('--ttl <duration>', 'Time-to-live: 30m, 2h, 7d (note auto-expires after this duration)')
+  .option('--auto-reflect', 'Attempt to turn this runtime note into durable memory immediately')
   .action((text, options) => {
-    runRuntimeNote(text, options);
+    runRuntimeNote(text, { ...options, autoReflect: options.autoReflect });
   });
 
 // --- runtime-status ---

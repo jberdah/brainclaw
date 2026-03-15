@@ -20,6 +20,7 @@ export interface ContextOptions {
   profile?: 'dev' | 'openclaw' | 'ops' | 'research';
   maxItems?: number;
   maxChars?: number;
+  digest?: boolean;
   cwd?: string;
 }
 
@@ -55,9 +56,27 @@ export interface ContextResult {
   target: string;
   project?: string;
   agent?: string;
+  digest?: string;
+  scoped_activity?: ScopedActivitySummary;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
   selected: ContextItem[];
+}
+
+export interface ScopedActivityItemSummary {
+  id: string;
+  text: string;
+  age_hours: number;
+}
+
+export interface ScopedActivitySummary {
+  scope: string;
+  last_decision?: ScopedActivityItemSummary;
+  last_trap?: ScopedActivityItemSummary;
+  recent_notes: number;
+  pending_candidates: number;
+  last_agent?: string;
+  last_session?: string;
 }
 
 export function buildContext(options: ContextOptions = {}): ContextResult {
@@ -270,8 +289,15 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
 
   const selected = maxChars ? applyCharBudget(ranked, maxChars) : ranked;
   const resumeSummary = buildCurrentAgentResumeSummary(options.cwd);
+  const scopedActivity = buildScopedActivity({
+    target,
+    project,
+    state,
+    runtimeNotes,
+    pendingCandidates: listCandidates('pending', options.cwd),
+  });
 
-  return {
+  const result: ContextResult = {
     context_schema: '1.0',
     profile,
     project_id: config.project_id,
@@ -285,10 +311,17 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     target,
     project,
     agent,
+    scoped_activity: scopedActivity,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     selected,
   };
+
+  if (options.digest) {
+    result.digest = buildContextDigest(result);
+  }
+
+  return result;
 }
 
 export function renderContextMarkdown(result: ContextResult, explain: boolean = false): string {
@@ -315,6 +348,13 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   if (result.agent) {
     const suffix = result.agent_id ? ` (${result.agent_id})` : '';
     lines.push(`Resolved agent: ${result.agent}${suffix}`);
+  }
+  if (result.digest) {
+    lines.push('');
+    lines.push('Digest:');
+    for (const line of result.digest.split('\n')) {
+      lines.push(`- ${line}`);
+    }
   }
   if (result.resume_summary) {
     lines.push('');
@@ -374,6 +414,12 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
   }
   lines.push('```memory-context');
   if (compact) {
+    if (result.digest) {
+      lines.push('dg:');
+      for (const line of result.digest.split('\n')) {
+        lines.push(`  - ${line}`);
+      }
+    }
     lines.push(`p=${result.profile}`);
     if (result.project_id) {
       lines.push(`pid=${result.project_id}`);
@@ -407,6 +453,12 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       lines.push(`t=${result.target}`);
     }
   } else {
+    if (result.digest) {
+      lines.push('digest:');
+      for (const line of result.digest.split('\n')) {
+        lines.push(`  - ${line}`);
+      }
+    }
     lines.push(`profile: ${result.profile}`);
     if (result.project_id) {
       lines.push(`project_id: ${result.project_id}`);
@@ -486,6 +538,86 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
   return lines.join('\n');
 }
 
+export function buildScopedActivity(input: {
+  target?: string;
+  project?: string;
+  state: ReturnType<typeof loadState>;
+  runtimeNotes: ReturnType<typeof listRuntimeNotes>;
+  pendingCandidates: ReturnType<typeof listCandidates>;
+}): ScopedActivitySummary | undefined {
+  const target = input.target?.trim();
+  if (!target) {
+    return undefined;
+  }
+
+  const project = input.project?.trim();
+  const matchingDecisions = input.state.recent_decisions.filter((item) => matchesScopeTarget(item, target, project));
+  const matchingTraps = [
+    ...input.state.known_traps.filter((item) => matchesScopeTarget(item, target, project)),
+  ].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const matchingRuntime = input.runtimeNotes
+    .filter((item) => matchesScopeTarget(item, target, project))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const matchingPending = input.pendingCandidates.filter((item) => matchesScopeTarget(item, target, project));
+
+  if (
+    matchingDecisions.length === 0
+    && matchingTraps.length === 0
+    && matchingRuntime.length === 0
+    && matchingPending.length === 0
+  ) {
+    return undefined;
+  }
+
+  const lastDecision = matchingDecisions.sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  const lastTrap = matchingTraps[0];
+  const latestRuntime = matchingRuntime[0];
+
+  return {
+    scope: target,
+    last_decision: lastDecision ? summariseScopedItem(lastDecision) : undefined,
+    last_trap: lastTrap ? summariseScopedItem(lastTrap) : undefined,
+    recent_notes: matchingRuntime.filter((item) => isRecent(item.created_at, 7 * 24)).length,
+    pending_candidates: matchingPending.length,
+    last_agent: latestRuntime?.agent,
+    last_session: latestRuntime?.session_id,
+  };
+}
+
+export function buildContextDigest(result: ContextResult): string {
+  const lines: string[] = [];
+  const highTraps = result.selected.filter((item) => item.section === 'trap' && item.extra?.includes('high'));
+  const constraints = result.selected.filter((item) => item.section === 'constraint');
+  const decisions = result.selected.filter((item) => item.section === 'decision');
+  const candidates = result.selected.filter((item) => item.section === 'candidate');
+  const scoped = result.scoped_activity;
+
+  if (highTraps.length > 0) {
+    lines.push(`High trap: ${highTraps[0].text}`);
+  }
+  if (constraints.length > 0) {
+    lines.push(`Active constraint: ${constraints[0].text}`);
+  }
+  if (decisions.length > 0) {
+    lines.push(`Recent decision: ${decisions[0].text}`);
+  }
+  if (candidates.length > 0 || (scoped?.pending_candidates ?? 0) > 0) {
+    const pendingCount = Math.max(candidates.length, scoped?.pending_candidates ?? 0);
+    lines.push(`Pending candidates: ${pendingCount}`);
+  }
+  if (scoped) {
+    const scopedParts = [`Scoped activity on ${scoped.scope}: ${scoped.recent_notes} recent note(s)`];
+    if (scoped.last_agent) {
+      scopedParts.push(`last agent ${scoped.last_agent}`);
+    }
+    lines.push(scopedParts.join(', '));
+  } else if (result.selected.some((item) => item.section === 'runtime')) {
+    lines.push(`Runtime signal: ${result.selected.find((item) => item.section === 'runtime')?.text}`);
+  }
+
+  return lines.slice(0, 5).join('\n');
+}
+
 function tokenise(input: string): string[] {
   return input
     .toLowerCase()
@@ -503,6 +635,47 @@ function matchesPath(pattern: string, target: string): boolean {
     .replace(/__GLOBSTAR__/g, '.*')
     .replace(/__GLOB__/g, '[^/]*') + '$';
   return new RegExp(regexStr).test(target);
+}
+
+function summariseScopedItem(item: { id: string; text: string; created_at: string }): ScopedActivityItemSummary {
+  return {
+    id: item.id,
+    text: item.text,
+    age_hours: Math.max(0, Math.floor((Date.now() - Date.parse(item.created_at)) / 3_600_000)),
+  };
+}
+
+function isRecent(createdAt: string, hours: number): boolean {
+  return Date.now() - Date.parse(createdAt) <= hours * 3_600_000;
+}
+
+function matchesScopeTarget(
+  item: { text: string; tags: string[]; related_paths?: string[]; project?: string },
+  target: string,
+  project?: string,
+): boolean {
+  if (project && item.project && item.project !== project) {
+    return false;
+  }
+
+  if (item.related_paths && item.related_paths.length > 0) {
+    return item.related_paths.some((pattern) => matchesPath(pattern, target));
+  }
+
+  const terms = scopeTerms(target);
+  if (terms.length === 0) {
+    return false;
+  }
+  const haystack = `${item.text.toLowerCase()} ${(item.tags ?? []).join(' ').toLowerCase()}`;
+  return terms.some((term) => haystack.includes(term));
+}
+
+function scopeTerms(target: string): string[] {
+  const direct = tokenise(target);
+  const segments = target
+    .split(/[\\/]/)
+    .flatMap((segment) => tokenise(segment));
+  return [...new Set([...direct, ...segments])];
 }
 
 function computeRelevance(item: ContextItem, terms: string[], profile: string, target: string): {

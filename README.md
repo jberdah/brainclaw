@@ -255,6 +255,7 @@ Generate compact, prompt-ready context for agents.
 
 ```bash
 brainclaw context --for auth
+brainclaw context --for auth --digest
 brainclaw context --for auth --explain
 brainclaw context --for npm --host ci-runner-a
 brainclaw context --for npm --all-hosts
@@ -266,10 +267,12 @@ brainclaw context --json --max-chars 1200
 ```
 
 `context --json` includes selection scores and reasons so agents can inspect why an item was ranked.
+`context --digest` prepends a short deterministic summary with the highest-signal traps, constraints, decisions, and scoped runtime activity for the requested target.
 `context --explain` surfaces those reasons in human-readable markdown output.
 `context --max-chars` applies an approximate character budget after ranking, which is useful when preparing prompt-sized context.
 When `--include-pending` is used, starred candidates get a small adoption boost in ranking.
 Visible runtime notes are included in context retrieval. By default this means `shared` runtime notes plus `machine-local` notes from the current host only.
+When a target path is provided, `context` also computes `scoped_activity` so agents can see the latest decision, latest trap, recent runtime notes, and pending candidates for that scope in both JSON and MCP responses.
 When reputation is enabled, context can include a compact `resume_summary` for the current agent and may add a small explainable `reputation signal` bonus to provenance-backed items.
 
 ### `brainclaw runtime-note <text>`
@@ -278,11 +281,18 @@ Record an operational observation for an agent.
 
 ```bash
 brainclaw runtime-note "Started auth rollout" --agent copilot
+brainclaw runtime-note "Use auth gateway convention for new routes" --agent copilot --auto-reflect
 brainclaw runtime-note "Node is not on PATH on this host" --agent copilot --visibility machine --tag windows --tag npm
 brainclaw runtime-note "Scratch note for this agent only" --agent copilot --visibility private
 ```
 
 Use `--visibility machine` for host-specific facts that should be shared with agents on the same machine but not synchronized by default.
+`--auto-reflect` attempts to promote the note into durable memory immediately:
+- `contributor` agents create a pending candidate
+- `trusted` and `curator` agents can promote directly
+- low-confidence notes stay as runtime-only observations with a skip reason
+
+When no explicit `BRAINCLAW_SESSION_ID` is provided, brainclaw now creates and reuses an implicit local session in `.brainclaw/.current-session`. This lets CLI and MCP write flows preserve session continuity without extra setup.
 
 ### `brainclaw runtime-status`
 
@@ -344,8 +354,13 @@ The MCP server exposes both ranked memory context and an agent collaboration boa
 Tool names:
 
 - `bclaw_get_context`
+- `bclaw_write_note`
 - `bclaw_read_handoff`
 - `bclaw_get_agent_board`
+
+`bclaw_get_context` accepts `digest: true` and returns both `digest` and `scoped_activity` in `structuredContent`.
+`bclaw_write_note` accepts `autoReflect: true` and returns `session_id`, `auto_reflect_attempted`, `candidate_id`, `promoted_item_id`, and `skip_reason` when relevant.
+When no explicit session is supplied through the environment, the MCP server reuses one implicit session per stdio connection for write operations.
 
 Board consumers can explicitly request bounded trust summaries with `includeReputation` when reputation is enabled and MCP exposure is allowed.
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstruction } from '../../src/core/instructions.js';
 import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
-import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
+import { buildContext, buildContextDigest, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
 import { saveOperationalTrap } from '../../src/core/traps.js';
@@ -379,5 +379,109 @@ describe('core/context', () => {
     } finally {
       restoreHost();
     }
+  });
+
+  it('builds scoped activity and a bounded digest for a target', () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [
+        {
+          id: 'cst_auth_freeze',
+          text: 'Auth rollout is frozen for production deploys',
+          created_at: iso(90),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          status: 'active',
+          tags: ['auth'],
+          related_paths: ['auth/**'],
+        },
+      ],
+      recent_decisions: [
+        {
+          id: 'dec_auth_recent',
+          text: 'Auth requests now go through the gateway',
+          created_at: iso(20),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          related_paths: ['auth/routes.ts'],
+          tags: ['auth'],
+        },
+      ],
+      known_traps: [
+        {
+          id: 'trp_auth_high',
+          text: 'Auth refresh is flaky in CI',
+          created_at: iso(10),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          severity: 'high',
+          tags: ['auth'],
+          related_paths: ['auth/**'],
+          visibility: 'shared',
+        },
+      ],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    saveCandidate({
+      id: 'cnd_auth_scope',
+      type: 'decision',
+      text: 'Document auth rollback flow',
+      created_at: iso(5),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_ctx_test',
+      session_id: 'sess_scope_pending',
+      related_paths: ['auth/**'],
+      tags: ['auth'],
+      status: 'pending',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    }, workspace.dir);
+
+    saveRuntimeNote({
+      id: 'rtn_auth_scope',
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_ctx_test',
+      session_id: 'sess_scope_runtime',
+      text: 'Auth runtime note for current rollout',
+      created_at: iso(4),
+      project: 'auth',
+      tags: ['auth'],
+      visibility: 'shared',
+      note_type: 'observation',
+    }, workspace.dir);
+
+    const result = buildContext({
+      target: 'auth/routes.ts',
+      includePending: true,
+      digest: true,
+      maxItems: 8,
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.scoped_activity?.scope, 'auth/routes.ts');
+    assert.equal(result.scoped_activity?.last_decision?.id, 'dec_auth_recent');
+    assert.equal(result.scoped_activity?.last_trap?.id, 'trp_auth_high');
+    assert.equal(result.scoped_activity?.recent_notes, 1);
+    assert.equal(result.scoped_activity?.pending_candidates, 1);
+    assert.equal(result.scoped_activity?.last_agent, workspace.currentAgent.agent_name);
+    assert.equal(result.scoped_activity?.last_session, 'sess_scope_runtime');
+    assert.ok(result.digest);
+    assert.ok(result.digest?.includes('High trap: Auth refresh is flaky in CI'));
+    assert.ok(result.digest?.includes('Active constraint: Auth rollout is frozen for production deploys'));
+    assert.ok(result.digest?.includes('Scoped activity on auth/routes.ts: 1 recent note(s)'));
+    assert.ok((result.digest?.split('\n').length ?? 0) <= 5);
+
+    const rebuiltDigest = buildContextDigest(result);
+    assert.equal(rebuiltDigest, result.digest);
   });
 });

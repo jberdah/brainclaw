@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { clearCurrentSession, loadCurrentSession } from '../../src/core/identity.js';
 import { runSessionEnd } from '../../src/commands/session-end.js';
 import { loadSessionSnapshot, runSessionStart } from '../../src/commands/session-start.js';
 import { listCandidates } from '../../src/core/candidates.js';
@@ -90,6 +91,7 @@ describe('session commands', () => {
       assert.equal(snapshot?.agent, workspace.currentAgent.agent_name);
       assert.equal(snapshot?.context_target, 'auth');
       assert.ok(snapshot?.initial_context_hash);
+      assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_start_test');
 
       const sessionDir = path.join(workspace.dir, '.brainclaw', 'runtime', workspace.currentAgent.agent_name);
       const sessionNotes = fs.readdirSync(sessionDir)
@@ -158,6 +160,7 @@ describe('session commands', () => {
       assert.equal(pending.length, 1);
       assert.equal(pending[0].text, 'Observed auth rollout insight');
       assert.equal(pending[0].session_id, 'sess_end_test');
+      assert.equal(loadCurrentSession(workspace.dir), undefined);
     } finally {
       if (previousSession === undefined) {
         delete process.env.BRAINCLAW_SESSION_ID;
@@ -240,5 +243,20 @@ describe('session commands', () => {
         process.env.BRAINCLAW_SESSION_ID = previousSession;
       }
     }
+  });
+
+  it('only clears the active implicit session when the ended session matches it', () => {
+    clearCurrentSession(workspace.dir);
+    captureLogs(() => {
+      runSessionStart({ context: 'auth', cwd: workspace.dir });
+    });
+    const active = loadCurrentSession(workspace.dir);
+    assert.ok(active);
+
+    captureLogs(() => {
+      runSessionEnd({ session: 'sess_other', summary: 'Other session', cwd: workspace.dir });
+    });
+
+    assert.equal(loadCurrentSession(workspace.dir)?.session_id, active?.session_id);
   });
 });

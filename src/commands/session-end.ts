@@ -1,5 +1,5 @@
 import { memoryExists } from '../core/io.js';
-import { buildOperationalIdentity } from '../core/identity.js';
+import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContext } from '../core/context.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { createCandidateFromInput } from './reflect.js';
@@ -85,6 +85,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
   }, options.cwd);
 
   appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' });
+  clearCurrentSession(options.cwd, sessionId);
 
   // Auto-reflect: generate candidates from session notes
   let candidatesCreated = 0;

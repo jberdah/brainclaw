@@ -104,11 +104,20 @@ Conséquence produit :
   - extraction de logique métier hors des gros tests spawn/MCP vers des tests unitaires rapides
   - couverture directe des zones critiques : `context`, `reputation`, `coordination`, `doctor`, `review`, `claim`, `runtime-status`, `sync`, helpers MCP, `session-start` / `session-end`
   - ajout de la couverture `c8` avec seuils minimaux sur le fast path
+- Livraison du premier lot agent-first prioritaire :
+  - `2.2` digest déterministe dans `context`
+  - `2.3` session implicite persistée via `.brainclaw/.current-session`
+  - `2.5` `scoped_activity` exposé en CLI/MCP/JSON
+  - `2.1` auto-reflect prudent sur `runtime-note`, avec promotion directe pour `trusted` / `curator`
+- Contrats ciblés ajoutés pour la surface MCP agent-first :
+  - `bclaw_get_context(digest: true)`
+  - `bclaw_write_note(autoReflect: true)`
+  - réutilisation d'une session implicite par connexion stdio
 - Fast path actuel vérifié :
   - `npm test` passe
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
-  - couverture fast path : `statements 62.49%`, `branches 65.89%`, `functions 68.58%`, `lines 62.49%`
+  - couverture fast path : `statements 64.43%`, `branches 67.57%`, `functions 71.06%`, `lines 64.43%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -145,11 +154,11 @@ Conséquence produit :
 - `1.6` Export vers formats agents natifs : `partial`
 
 **Phase 2 — Agent-First UX**
-- `2.1` Auto-reflect notes pour agents trusted : `todo`
-- `2.2` Context digest : `todo`
-- `2.3` Session implicite / auto-session : `todo`
+- `2.1` Auto-reflect notes pour agents trusted : `done`
+- `2.2` Context digest : `done`
+- `2.3` Session implicite / auto-session : `done`
 - `2.4` Alias courts sur les IDs : `todo`
-- `2.5` Résumé d'activité récente par scope : `todo`
+- `2.5` Résumé d'activité récente par scope : `done`
 
 **Phase 3 — MCP Universel**
 - `3.1` Conformité protocole MCP : `partial`

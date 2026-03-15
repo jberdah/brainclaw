@@ -72,17 +72,22 @@ describe('commands/mcp read tools', () => {
       path: 'auth',
       format: 'json',
       maxItems: 5,
+      digest: true,
     }, { cwd: workspace.dir });
 
     assert.ok(response.content[0].text.includes('selected'));
     const structured = response.structuredContent as {
       selected: Array<{ section: string; provenance?: { session_id?: string } }>;
       resolved_instructions: unknown[];
+      digest?: string;
+      scoped_activity?: { recent_notes: number };
     };
     assert.ok(Array.isArray(structured.selected));
     assert.ok(structured.selected.some((item) => item.section === 'runtime' && item.provenance?.session_id === 'sess_mcp_context'));
     assert.ok(Array.isArray(structured.resolved_instructions));
     assert.ok(structured.resolved_instructions.length >= 1);
+    assert.ok(structured.digest?.includes('Recent decision: OAuth migration now goes through auth-gateway'));
+    assert.equal(structured.scoped_activity?.recent_notes, 1);
   });
 
   it('returns agent board and search payloads through the read-tool handler', () => {

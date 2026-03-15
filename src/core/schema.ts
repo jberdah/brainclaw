@@ -395,5 +395,7 @@ export const ConfigSchema = z.object({
   reflective_memory: ReflectiveMemoryConfigSchema.optional(),
   governance: GovernanceConfigSchema.optional(),
   reputation: ReputationConfigSchema.optional(),
+  implicit_session_ttl: z.string().default('4h'),
+  auto_reflect_notes: z.boolean().default(false),
 });
 export type Config = z.infer<typeof ConfigSchema>;
