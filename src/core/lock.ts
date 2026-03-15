@@ -14,54 +14,67 @@ function lockFilePath(targetPath: string): string {
   return targetPath + '.lock';
 }
 
-function isLockExpired(lockPath: string): boolean {
+function syncSleep(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isProcessAlive(pid: number): boolean {
   try {
-    const raw = fs.readFileSync(lockPath, 'utf-8');
-    const data: LockData = JSON.parse(raw);
-    return Date.now() - data.timestamp > LOCK_EXPIRY_MS;
-  } catch {
+    process.kill(pid, 0);
     return true;
+  } catch {
+    return false;
   }
 }
 
-function writeLock(lockPath: string): void {
+function readLockData(lockPath: string): LockData | null {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8');
+    return JSON.parse(raw) as LockData;
+  } catch {
+    return null;
+  }
+}
+
+function tryCreateLock(lockPath: string): boolean {
   const data: LockData = { pid: process.pid, timestamp: Date.now() };
-  fs.writeFileSync(lockPath, JSON.stringify(data), 'utf-8');
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify(data), { encoding: 'utf-8', flag: 'wx' });
+    return true;
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw err;
+  }
+}
+
+function tryBreakLock(lockPath: string): boolean {
+  const data = readLockData(lockPath);
+  if (!data) return false;
+  const expired = Date.now() - data.timestamp > LOCK_EXPIRY_MS;
+  const ownerDead = !isProcessAlive(data.pid);
+  if (!expired && !ownerDead) return false;
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    return false;
+  }
+  return tryCreateLock(lockPath);
 }
 
 export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS): boolean {
   const lockPath = lockFilePath(targetPath);
   const deadline = Date.now() + timeoutMs;
 
-  // Ensure directory exists
   const dir = path.dirname(lockPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
   while (Date.now() < deadline) {
-    if (!fs.existsSync(lockPath)) {
-      try {
-        writeLock(lockPath);
-        return true;
-      } catch {
-        // Another process may have grabbed it between check and write
-      }
-    } else if (isLockExpired(lockPath)) {
-      try {
-        fs.unlinkSync(lockPath);
-        writeLock(lockPath);
-        return true;
-      } catch {
-        // Race condition — try again
-      }
-    }
-
-    // Spin-wait (sync — this is a CLI tool, not a server)
-    const until = Date.now() + LOCK_RETRY_INTERVAL_MS;
-    while (Date.now() < until) {
-      // busy-wait
-    }
+    if (tryCreateLock(lockPath)) return true;
+    if (tryBreakLock(lockPath)) return true;
+    syncSleep(Math.min(LOCK_RETRY_INTERVAL_MS, deadline - Date.now()));
   }
 
   return false;
@@ -90,4 +103,31 @@ export function withLock<T>(targetPath: string, fn: () => T, timeoutMs = DEFAULT
       releaseLock(targetPath);
     }
   }
+}
+
+export function cleanStaleLocks(dirPath: string): number {
+  let removed = 0;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dirPath);
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith('.lock')) continue;
+    const lockPath = path.join(dirPath, entry);
+    const data = readLockData(lockPath);
+    if (!data) continue;
+    const expired = Date.now() - data.timestamp > LOCK_EXPIRY_MS;
+    const ownerDead = !isProcessAlive(data.pid);
+    if (expired || ownerDead) {
+      try {
+        fs.unlinkSync(lockPath);
+        removed++;
+      } catch {
+        // Another process may have already cleaned it
+      }
+    }
+  }
+  return removed;
 }
