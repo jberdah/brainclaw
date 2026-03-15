@@ -14,12 +14,12 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tm-test-'));
 }
 
-function run(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
+function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser' },
+    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
   });
   return {
     stdout: result.stdout ?? '',
@@ -370,6 +370,31 @@ describe('brainclaw CLI', () => {
       assert.equal(second.exitCode, 0);
       const secondParsed = JSON.parse(second.stdout);
       assert.equal(secondParsed.reused_profile, true);
+    });
+  });
+
+  describe('env', () => {
+    it('prints the execution context and optional agent tooling as JSON', () => {
+      run(['init', '-y'], dir);
+      const codexHome = path.join(dir, '.codex-home');
+      fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
+      fs.writeFileSync(
+        path.join(codexHome, 'skills', '.system', 'openai-docs', 'SKILL.md'),
+        '# OpenAI Docs\n\nUse when official OpenAI docs are needed.\n',
+        'utf-8',
+      );
+      fs.writeFileSync(
+        path.join(codexHome, 'config.toml'),
+        '[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+        'utf-8',
+      );
+
+      const res = run(['env', '--json', '--agent-tooling'], dir, { CODEX_HOME: codexHome });
+      assert.equal(res.exitCode, 0);
+      const parsed = JSON.parse(res.stdout);
+      assert.ok(parsed.execution_context);
+      assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');
+      assert.equal(parsed.agent_tooling.mcp_servers[0].name, 'atlassian');
     });
   });
 

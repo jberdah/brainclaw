@@ -16,6 +16,7 @@ function iso(minutesAgo: number): string {
 
 describe('commands/mcp read tools', () => {
   let workspace: TestWorkspace;
+  let previousCodexHome: string | undefined;
 
   beforeEach(() => {
     workspace = createTestWorkspace({
@@ -25,9 +26,28 @@ describe('commands/mcp read tools', () => {
       knownProjects: ['auth'],
       reputationEnabled: true,
     });
+    const codexHome = path.join(workspace.dir, '.codex-home');
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(codexHome, 'skills', '.system', 'openai-docs', 'SKILL.md'),
+      '# OpenAI Docs\n\nUse when official OpenAI docs are needed.\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      '[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+      'utf-8',
+    );
+    previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
   });
 
   afterEach(() => {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
     workspace.cleanup();
   });
 
@@ -285,5 +305,22 @@ describe('commands/mcp read tools', () => {
     };
     assert.equal(disabledStructured.bootstrap_available, true);
     assert.equal(disabledStructured.derived_signals, undefined);
+  });
+
+  it('returns execution context and agent tooling through the dedicated MCP read tool', () => {
+    const response = handleMcpReadToolCall('bclaw_get_execution_context', {
+      includeAgentTooling: true,
+    }, { cwd: workspace.dir });
+
+    assert.match(response.content[0].text, /Platform:/);
+    const structured = response.structuredContent as {
+      execution_context: { git_status: string; toolchains: Array<unknown> };
+      agent_tooling: { agents_md_present: boolean; skills: Array<{ name: string }>; mcp_servers: Array<{ name: string }> };
+    };
+    assert.ok(structured.execution_context);
+    assert.ok(Array.isArray(structured.execution_context.toolchains));
+    assert.equal(structured.agent_tooling.agents_md_present, false);
+    assert.equal(structured.agent_tooling.skills[0]?.name, 'openai-docs');
+    assert.equal(structured.agent_tooling.mcp_servers[0]?.name, 'atlassian');
   });
 });

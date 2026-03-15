@@ -15,6 +15,8 @@ import {
 } from './schema.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { analyzeRepository } from './repo-analysis.js';
+import { buildExecutionContext, compactExecutionContext } from './execution-context.js';
+import { buildAgentToolingContext } from './agent-context.js';
 
 const README_CANDIDATES = ['README.md', 'README', 'README.txt', 'README.mdx'];
 const DOC_HINTS = ['docs', 'doc'];
@@ -179,6 +181,20 @@ function buildBootstrapArtifacts(input: {
   if (manifestResult.seeds.length > 0) {
     sourcesScanned.push(...manifestResult.sources);
     seeds.push(...manifestResult.seeds);
+  }
+
+  const executionContext = compactExecutionContext(buildExecutionContext({ cwd: input.cwd }));
+  sourcesScanned.push('execution_context');
+  seeds.push(...extractExecutionContextSeeds(executionContext, input.target));
+
+  const agentTooling = buildAgentToolingContext({ cwd: input.cwd });
+  if (agentTooling.skills.length > 0) {
+    sourcesScanned.push('skills');
+    seeds.push(...extractSkillSeeds(agentTooling.skills, input.target));
+  }
+  if (agentTooling.mcp_servers.length > 0) {
+    sourcesScanned.push('local_mcp');
+    seeds.push(...extractMcpSeeds(agentTooling.mcp_servers, input.target));
   }
 
   const repoAnalysis = analyzeRepository(input.cwd);
@@ -419,6 +435,81 @@ function extractRepoAnalysisSeeds(result: ReturnType<typeof analyzeRepository>, 
   return seeds;
 }
 
+function extractExecutionContextSeeds(
+  snapshot: ReturnType<typeof compactExecutionContext>,
+  target?: string,
+): MemorySeedDocument[] {
+  const seeds: MemorySeedDocument[] = [];
+
+  if (snapshot.branch) {
+    seeds.push(createSeed({
+      text: `Current branch: ${snapshot.branch}`,
+      seedKind: 'environment',
+      sourceKind: 'machine',
+      sourceRef: 'git:branch',
+      confidence: 'high',
+      tags: ['bootstrap', 'execution', 'git'],
+      relatedPaths: target ? [target] : undefined,
+    }));
+  }
+
+  if (snapshot.git_status === 'dirty') {
+    seeds.push(createSeed({
+      text: 'Repository has uncommitted changes.',
+      seedKind: 'warning',
+      sourceKind: 'machine',
+      sourceRef: 'git:status',
+      confidence: 'high',
+      tags: ['bootstrap', 'execution', 'git'],
+      relatedPaths: target ? [target] : undefined,
+    }));
+  }
+
+  for (const tool of snapshot.toolchains.slice(0, 3)) {
+    seeds.push(createSeed({
+      text: `Toolchain available: ${tool.name}${tool.version ? ` ${tool.version}` : ''}`,
+      seedKind: 'tooling',
+      sourceKind: 'machine',
+      sourceRef: `tool:${tool.name}`,
+      confidence: 'medium',
+      tags: ['bootstrap', 'execution', 'toolchain'],
+      relatedPaths: target ? [target] : undefined,
+    }));
+  }
+
+  return seeds;
+}
+
+function extractSkillSeeds(
+  skills: ReturnType<typeof buildAgentToolingContext>['skills'],
+  target?: string,
+): MemorySeedDocument[] {
+  return skills.slice(0, 5).map((skill) => createSeed({
+    text: `Skill available: ${skill.name}${skill.description ? ` - ${skill.description}` : ''}`,
+    seedKind: 'tooling',
+    sourceKind: 'skill',
+    sourceRef: skill.source_path,
+    confidence: 'high',
+    tags: ['bootstrap', 'agent', 'skill'],
+    relatedPaths: target ? [target] : undefined,
+  }));
+}
+
+function extractMcpSeeds(
+  servers: ReturnType<typeof buildAgentToolingContext>['mcp_servers'],
+  target?: string,
+): MemorySeedDocument[] {
+  return servers.slice(0, 5).map((server) => createSeed({
+    text: `Local MCP server configured: ${server.name} (${server.transport})`,
+    seedKind: 'tooling',
+    sourceKind: 'mcp',
+    sourceRef: server.config_path,
+    confidence: 'high',
+    tags: ['bootstrap', 'agent', 'mcp'],
+    relatedPaths: target ? [target] : undefined,
+  }));
+}
+
 function probeGit(cwd: string, target?: string): GitProbeResult {
   const headResult = spawnSync('git', ['rev-parse', 'HEAD'], {
     cwd,
@@ -619,9 +710,13 @@ function seedKindWeight(kind: MemorySeedKind): number {
       return 12;
     case 'warning':
       return 10;
+    case 'tooling':
+      return 9;
     case 'entrypoint':
       return 8;
     case 'command':
+      return 7;
+    case 'environment':
       return 7;
     case 'convention':
       return 6;

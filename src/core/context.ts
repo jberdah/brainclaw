@@ -1,6 +1,8 @@
 import { loadConfig } from './config.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
+import { buildAgentToolingContext, type AgentToolingSnapshot } from './agent-context.js';
+import { buildExecutionContext, compactExecutionContext, type CompactExecutionContextSnapshot } from './execution-context.js';
 import { getVisibleMemoryVersion } from './freshness.js';
 import { resolveCurrentHostId } from './host.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
@@ -63,6 +65,8 @@ export interface ContextResult {
   memory_density: 'low' | 'medium' | 'high';
   bootstrap_available: boolean;
   derived_signals?: DerivedContextSignal[];
+  execution_context?: CompactExecutionContextSnapshot;
+  agent_tooling?: Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'skills' | 'mcp_servers'>;
   scoped_activity?: ScopedActivitySummary;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
@@ -327,6 +331,18 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     }
   }
 
+  const executionSensitive = isExecutionSensitiveTarget(target);
+  const derivedUsesExecution = derivedSignals?.some((signal) => signal.source_kind === 'machine') ?? false;
+  const derivedUsesTooling = derivedSignals?.some((signal) => signal.source_kind === 'skill' || signal.source_kind === 'mcp') ?? false;
+  const shouldExposeExecution = memoryDensity === 'low' || executionSensitive || derivedUsesExecution;
+  const shouldExposeAgentTooling = memoryDensity === 'low' || executionSensitive || derivedUsesTooling;
+  const executionContext = shouldExposeExecution
+    ? compactExecutionContext(buildExecutionContext({ cwd: options.cwd }))
+    : undefined;
+  const agentTooling = shouldExposeAgentTooling
+    ? summariseAgentTooling(buildAgentToolingContext({ cwd: options.cwd }))
+    : undefined;
+
   const result: ContextResult = {
     context_schema: '1.0',
     profile,
@@ -344,6 +360,8 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     memory_density: memoryDensity,
     bootstrap_available: bootstrapAvailable,
     derived_signals: derivedSignals,
+    execution_context: executionContext,
+    agent_tooling: agentTooling,
     scoped_activity: scopedActivity,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
@@ -383,6 +401,30 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   if (result.agent) {
     const suffix = result.agent_id ? ` (${result.agent_id})` : '';
     lines.push(`Resolved agent: ${result.agent}${suffix}`);
+  }
+  if (result.execution_context) {
+    lines.push('');
+    lines.push('Execution context:');
+    if (result.execution_context.branch) {
+      lines.push(`- Branch: ${result.execution_context.branch}`);
+    }
+    lines.push(`- Git status: ${result.execution_context.git_status}`);
+    lines.push(`- Workspace: ${result.execution_context.workspace_root}`);
+    const toolchains = result.execution_context.toolchains.map((tool) => `${tool.name}${tool.version ? ` ${tool.version}` : ''}`);
+    if (toolchains.length > 0) {
+      lines.push(`- Toolchains: ${toolchains.join(', ')}`);
+    }
+  }
+  if (result.agent_tooling) {
+    lines.push('');
+    lines.push('Agent tooling:');
+    lines.push(`- AGENTS.md: ${result.agent_tooling.agents_md_present ? 'present' : 'absent'}`);
+    if (result.agent_tooling.skills.length > 0) {
+      lines.push(`- Skills: ${result.agent_tooling.skills.map((skill) => skill.name).join(', ')}`);
+    }
+    if (result.agent_tooling.mcp_servers.length > 0) {
+      lines.push(`- MCP servers: ${result.agent_tooling.mcp_servers.map((server) => server.name).join(', ')}`);
+    }
   }
   if (result.digest) {
     lines.push('');
@@ -495,6 +537,18 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     if (result.agent) {
       lines.push(`ag=${result.agent}`);
     }
+    if (result.execution_context) {
+      if (result.execution_context.branch) {
+        lines.push(`br=${result.execution_context.branch}`);
+      }
+      lines.push(`gs=${result.execution_context.git_status}`);
+      lines.push(`wr=${result.execution_context.workspace_root}`);
+    }
+    if (result.agent_tooling) {
+      lines.push(`am=${result.agent_tooling.agents_md_present ? 'y' : 'n'}`);
+      lines.push(`sk=${result.agent_tooling.skills.length}`);
+      lines.push(`ms=${result.agent_tooling.mcp_servers.length}`);
+    }
     if (result.resume_summary) {
       lines.push(`rt=${result.resume_summary.internal_trust}`);
       lines.push('rs:');
@@ -535,6 +589,34 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
     if (result.agent) {
       lines.push(`agent: ${result.agent}`);
+    }
+    if (result.execution_context) {
+      lines.push('execution_context:');
+      lines.push(`  platform: ${result.execution_context.platform}`);
+      if (result.execution_context.branch) {
+        lines.push(`  branch: ${result.execution_context.branch}`);
+      }
+      lines.push(`  git_status: ${result.execution_context.git_status}`);
+      lines.push(`  workspace_root: ${result.execution_context.workspace_root}`);
+      lines.push('  toolchains:');
+      for (const tool of result.execution_context.toolchains) {
+        lines.push(`    - ${tool.name}${tool.version ? ` ${tool.version}` : ''}`);
+      }
+    }
+    if (result.agent_tooling) {
+      lines.push('agent_tooling:');
+      lines.push(`  agents_md_present: ${result.agent_tooling.agents_md_present}`);
+      if (result.agent_tooling.agents_md_title) {
+        lines.push(`  agents_md_title: ${result.agent_tooling.agents_md_title}`);
+      }
+      lines.push('  skills:');
+      for (const skill of result.agent_tooling.skills) {
+        lines.push(`    - ${skill.name}`);
+      }
+      lines.push('  mcp_servers:');
+      for (const server of result.agent_tooling.mcp_servers) {
+        lines.push(`    - ${server.name}`);
+      }
     }
     if (result.resume_summary) {
       lines.push('resume_summary:');
@@ -685,6 +767,16 @@ export function buildContextDigest(result: ContextResult): string {
     const signal = result.derived_signals[0];
     lines.push(`Derived ${signal.seed_kind}: ${signal.text}`);
   }
+  if ((result.memory_density === 'low' || result.execution_context?.git_status === 'dirty') && result.execution_context) {
+    if (result.execution_context.git_status === 'dirty') {
+      lines.push('Execution: repository has uncommitted changes.');
+    } else if (result.execution_context.branch) {
+      lines.push(`Execution: branch ${result.execution_context.branch}`);
+    } else if (result.execution_context.toolchains[0]) {
+      const tool = result.execution_context.toolchains[0];
+      lines.push(`Execution: toolchain ${tool.name}${tool.version ? ` ${tool.version}` : ''}`);
+    }
+  }
 
   return lines.slice(0, 5).join('\n');
 }
@@ -693,6 +785,43 @@ function classifyMemoryDensity(selectedCount: number): 'low' | 'medium' | 'high'
   if (selectedCount < 3) return 'low';
   if (selectedCount <= 6) return 'medium';
   return 'high';
+}
+
+function summariseAgentTooling(
+  snapshot: AgentToolingSnapshot,
+): Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'skills' | 'mcp_servers'> {
+  return {
+    agents_md_present: snapshot.agents_md_present,
+    agents_md_title: snapshot.agents_md_title,
+    skills: snapshot.skills.slice(0, 5),
+    mcp_servers: snapshot.mcp_servers.slice(0, 5),
+  };
+}
+
+function isExecutionSensitiveTarget(target: string): boolean {
+  const terms = target.toLowerCase();
+  return [
+    'package.json',
+    'makefile',
+    'pyproject',
+    'cargo',
+    'go.mod',
+    'docker',
+    'workflow',
+    'github',
+    'git',
+    'npm',
+    'pnpm',
+    'python',
+    'shell',
+    'env',
+    'mcp',
+    'skill',
+    'agent',
+    'build',
+    'test',
+    'lint',
+  ].some((token) => terms.includes(token));
 }
 
 function tokenise(input: string): string[] {

@@ -33,6 +33,7 @@ import { runRuntimeStatus } from './commands/runtime-status.js';
 import { runSync } from './commands/sync.js';
 import { runContext } from './commands/context.js';
 import { runBootstrap } from './commands/bootstrap.js';
+import { runEnv } from './commands/env.js';
 import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js';
 import { runInstallHooks } from './commands/install-hooks.js';
 import { runRegisterAgent } from './commands/register-agent.js';
@@ -280,6 +281,16 @@ program
   .option('--refresh', 'Force a fresh bootstrap scan instead of reusing the current profile')
   .action((options) => {
     runBootstrap(options);
+  });
+
+// --- env ---
+program
+  .command('env')
+  .description('Show the local execution context and optionally detected agent tooling')
+  .option('--json', 'Output as JSON')
+  .option('--agent-tooling', 'Include AGENTS.md, local skills, and local MCP inventory')
+  .action((options) => {
+    runEnv({ ...options, agentTooling: options.agentTooling });
   });
 
 // --- instruction ---

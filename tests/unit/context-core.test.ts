@@ -154,6 +154,8 @@ describe('core/context', () => {
     assert.ok(result.resume_summary);
     assert.equal(result.resume_summary?.agent_name, currentAgent.agent_name);
     assert.ok(result.resume_summary && result.resume_summary.internal_trust > 0);
+    assert.equal(result.execution_context, undefined);
+    assert.equal(result.agent_tooling, undefined);
     assert.deepEqual(
       result.resolved_instructions.map((item) => item.text),
       [
@@ -504,11 +506,16 @@ describe('core/context', () => {
     assert.equal(result.bootstrap_available, true);
     assert.ok((result.derived_signals?.length ?? 0) > 0);
     assert.ok(result.derived_signals?.some((signal) => signal.seed_kind === 'agent_rule'));
+    assert.ok(result.execution_context);
+    assert.ok(result.agent_tooling);
+    assert.equal(result.agent_tooling?.agents_md_present, true);
     assert.match(result.digest ?? '', /Derived (agent_rule|command|convention):/);
 
     const markdown = renderContextMarkdown(result, false);
     assert.match(markdown, /Derived signals:/);
     assert.match(markdown, /No relevant canonical memory found\./);
+    assert.match(markdown, /Execution context:/);
+    assert.match(markdown, /Agent tooling:/);
   });
 
   it('can disable bootstrap fallback when memory is sparse', () => {

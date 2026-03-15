@@ -401,6 +401,8 @@ export const MemorySeedKindSchema = z.enum([
   'hotspot',
   'agent_rule',
   'warning',
+  'environment',
+  'tooling',
 ]);
 export type MemorySeedKind = z.infer<typeof MemorySeedKindSchema>;
 
@@ -411,6 +413,9 @@ export const MemorySeedSourceKindSchema = z.enum([
   'repo_analysis',
   'git',
   'inference',
+  'machine',
+  'skill',
+  'mcp',
 ]);
 export type MemorySeedSourceKind = z.infer<typeof MemorySeedSourceKindSchema>;
 
