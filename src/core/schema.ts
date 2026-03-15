@@ -176,6 +176,20 @@ export const CandidateUseSchema = z.object({
 });
 export type CandidateUse = z.infer<typeof CandidateUseSchema>;
 
+export const ContradictionSeveritySchema = z.enum(['low', 'medium', 'high']);
+export type ContradictionSeverity = z.infer<typeof ContradictionSeveritySchema>;
+
+export const CandidateContradictionSchema = z.object({
+  item_id: z.string(),
+  conflicts_with: z.string(),
+  reason: z.string(),
+  section: z.string(),
+  severity: ContradictionSeveritySchema,
+  score: z.number(),
+  kind: z.string(),
+});
+export type CandidateContradiction = z.infer<typeof CandidateContradictionSchema>;
+
 export const CandidateSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -201,9 +215,12 @@ export const CandidateSchema = z.object({
   usage_count: z.number().default(0),
   usage_events: z.array(CandidateUseSchema).default([]),
   last_used_at: z.string().optional(),
+  contradictions_detected: z.array(CandidateContradictionSchema).optional(),
+  contradiction_summary: z.string().optional(),
+  promotion_blocked_reason: z.string().optional(),
   resolved_at: z.string().optional(),
   resolved_by: z.string().optional(),
-    resolution_reason: z.string().optional(),
+  resolution_reason: z.string().optional(),
 });
 export type Candidate = z.infer<typeof CandidateSchema>;
 

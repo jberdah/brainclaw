@@ -366,12 +366,44 @@ describe('MCP server', () => {
         },
       });
 
-      assert.equal(context.result.structuredContent.context_schema, '1.1');
+      assert.equal(context.result.structuredContent.context_schema, '1.2');
       assert.equal(context.result.structuredContent.memory_density, 'low');
       assert.equal(context.result.structuredContent.bootstrap_available, true);
       assert.ok(Array.isArray(context.result.structuredContent.derived_signals));
       assert.ok(context.result.structuredContent.derived_signals.length > 0);
       assert.deepEqual(context.result.structuredContent.agent_tooling.agents_rules, ['Read AGENTS.md before edits']);
+
+      const started = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 26,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_start',
+          arguments: {
+            agent: 'testuser',
+            context: 'auth',
+          },
+        },
+      });
+      const startedSessionId = started.result.session_id;
+      run(['decision', 'Auth deploys are frozen', '--tag', 'auth'], dir);
+
+      const diffedContext = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 27,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_get_context',
+          arguments: {
+            path: 'auth',
+            format: 'json',
+            since_session: startedSessionId,
+          },
+        },
+      });
+      assert.equal(diffedContext.result.structuredContent.context_schema, '1.2');
+      assert.equal(diffedContext.result.structuredContent.context_diff.since_session, startedSessionId);
+      assert.equal(diffedContext.result.structuredContent.context_diff.counts.decisions, 1);
     } finally {
       await stopMcp(proc);
     }

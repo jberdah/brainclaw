@@ -2,7 +2,7 @@
 
 `brainclaw context` and `bclaw_get_context` expose a versioned public contract for agent consumers.
 
-Current version: `1.1`
+Current version: `1.2`
 
 ## Stable top-level fields
 
@@ -14,6 +14,7 @@ Current version: `1.1`
 - `execution_context`
 - `agent_tooling`
 - `scoped_activity`
+- `context_diff`
 - `selected`
 
 ## Compatibility policy
@@ -22,6 +23,11 @@ Current version: `1.1`
 - Breaking changes bump the major version.
 - Fields listed above are treated as public and stable for agent consumers.
 - Future enrichments should prefer optional fields over reshaping existing ones.
+
+## `1.2` additions over `1.1`
+
+- `context_diff` is available for session-aware deltas through `brainclaw context --since-session` and `bclaw_get_context`.
+- `context_schema: 1.2` is emitted across JSON, markdown, template, and MCP structured content.
 
 ## `1.1` additions over `1.0`
 

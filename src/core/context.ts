@@ -1,4 +1,5 @@
 import { loadConfig } from './config.js';
+import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
 import { buildAgentToolingContext, type AgentToolingSnapshot } from './agent-context.js';
@@ -13,7 +14,7 @@ import { listRuntimeNotes } from './runtime.js';
 import { listOperationalTraps } from './traps.js';
 import type { InstructionEntry, ProjectMode, ProjectStrategy } from './schema.js';
 
-export const CONTEXT_SCHEMA_VERSION = '1.1';
+export const CONTEXT_SCHEMA_VERSION = '1.2';
 
 export interface ContextOptions {
   target?: string;
@@ -28,6 +29,7 @@ export interface ContextOptions {
   digest?: boolean;
   bootstrap?: boolean;
   refreshBootstrap?: boolean;
+  sinceSession?: string;
   cwd?: string;
 }
 
@@ -70,6 +72,7 @@ export interface ContextResult {
   execution_context?: CompactExecutionContextSnapshot;
   agent_tooling?: Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'agents_rules' | 'skills' | 'mcp_servers'>;
   scoped_activity?: ScopedActivitySummary;
+  context_diff?: ContextDiffResult;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
   selected: ContextItem[];
@@ -372,6 +375,13 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     execution_context: executionContext,
     agent_tooling: agentTooling,
     scoped_activity: scopedActivity,
+    context_diff: options.sinceSession
+      ? buildContextDiff({
+          session: options.sinceSession,
+          cwd: options.cwd,
+          includeItems: true,
+        })
+      : undefined,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     selected,
@@ -441,6 +451,11 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
     if (result.agent_tooling.mcp_servers.length > 0) {
       lines.push(`- MCP servers: ${result.agent_tooling.mcp_servers.map((server) => formatMcpServerSummary(server)).join(', ')}`);
     }
+  }
+  if (result.context_diff) {
+    lines.push('');
+    lines.push('New since session started:');
+    lines.push(`- ${result.context_diff.summary}`);
   }
   if (result.digest) {
     lines.push('');
@@ -567,6 +582,10 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       lines.push(`sk=${result.agent_tooling.skills.length}`);
       lines.push(`ms=${result.agent_tooling.mcp_servers.length}`);
     }
+    if (result.context_diff) {
+      lines.push(`sd=${result.context_diff.since_session ?? ''}`);
+      lines.push(`dc=${result.context_diff.counts.total}`);
+    }
     if (result.resume_summary) {
       lines.push(`rt=${result.resume_summary.internal_trust}`);
       lines.push('rs:');
@@ -641,6 +660,23 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
         lines.push(`    - ${formatMcpServerSummary(server)}`);
       }
     }
+    if (result.context_diff) {
+      lines.push('context_diff:');
+      if (result.context_diff.since_session) {
+        lines.push(`  since_session: ${result.context_diff.since_session}`);
+      }
+      if (result.context_diff.since) {
+        lines.push(`  since: ${result.context_diff.since}`);
+      }
+      lines.push(`  summary: ${result.context_diff.summary}`);
+      lines.push('  counts:');
+      lines.push(`    constraints: ${result.context_diff.counts.constraints}`);
+      lines.push(`    decisions: ${result.context_diff.counts.decisions}`);
+      lines.push(`    traps: ${result.context_diff.counts.traps}`);
+      lines.push(`    handoffs: ${result.context_diff.counts.handoffs}`);
+      lines.push(`    pending_candidates: ${result.context_diff.counts.pending_candidates}`);
+      lines.push(`    total: ${result.context_diff.counts.total}`);
+    }
     if (result.resume_summary) {
       lines.push('resume_summary:');
       lines.push(`  agent_name: ${result.resume_summary.agent_name}`);
@@ -703,6 +739,16 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       } else {
         const paths = signal.related_paths?.length ? ` related_paths=[${signal.related_paths.join(',')}]` : '';
         lines.push(`  - id=${signal.id} seed_kind=${signal.seed_kind} confidence=${signal.confidence} source=${signal.source_kind}:${signal.source_ref}${paths} text="${signal.text}"`);
+      }
+    }
+  }
+  if (result.context_diff) {
+    lines.push(compact ? 'cd:' : 'context_diff_items:');
+    for (const item of result.context_diff.changed_items ?? []) {
+      if (compact) {
+        lines.push(`  - tp=${item.section} id=${item.id} tx="${item.text}"`);
+      } else {
+        lines.push(`  - type=${item.section} id=${item.id} created_at=${item.created_at} text="${item.text}"`);
       }
     }
   }
@@ -789,6 +835,9 @@ export function buildContextDigest(result: ContextResult): string {
   if (result.memory_density === 'low' && result.derived_signals && result.derived_signals.length > 0) {
     const signal = result.derived_signals[0];
     lines.push(`Derived ${signal.seed_kind}: ${signal.text}`);
+  }
+  if (result.context_diff && result.context_diff.counts.total > 0) {
+    lines.push(`New since session started: ${result.context_diff.summary}`);
   }
   if (result.agent_tooling?.agents_rules.length) {
     lines.push(`Agent rule: ${result.agent_tooling.agents_rules[0]}`);

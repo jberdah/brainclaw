@@ -21,6 +21,7 @@ export interface ContextCommandOptions {
   digest?: boolean;
   bootstrap?: boolean;
   refreshBootstrap?: boolean;
+  sinceSession?: string;
   cwd?: string;
 }
 
@@ -44,6 +45,7 @@ export function runContext(options: ContextCommandOptions = {}): void {
     digest: options.digest,
     bootstrap: options.bootstrap,
     refreshBootstrap: options.refreshBootstrap,
+    sinceSession: options.sinceSession,
     cwd,
   });
 

@@ -185,6 +185,13 @@ Conséquence produit :
   - enrichissement statique et borné de `agent-context` avec `agents_rules`, drapeaux `scripts/references/assets` pour les skills, et classification MCP `available | missing_command | unknown | remote`
   - intégration du signal agentique utile dans `context`, `bootstrap`, `env`, `whoami` et MCP, avec warning explicite sur les serveurs MCP stdio configurés mais indisponibles
   - ajout de checks `doctor` sur les règles agentiques absentes/inexploitables, les skills incomplètes et les commandes MCP locales manquantes
+- Livraison du lot `4.2 + 4.3 + 4.4` :
+  - détection de contradictions enrichie avec scoring lexical borné, overlap de domaine (`tags`, `related_paths`, `project_id`), `severity`, `score` et `kind`
+  - helpers partagés de safety pour `reflect`, `runtime-note --auto-reflect`, `session-end --autoReflect` et `review --auto`
+  - politique produit appliquée : contradictions advisory pour les flows manuels, blocage des promotions directes uniquement sur les automatisations
+  - `context_schema` incrémenté à `1.2` avec `context_diff` session-aware dans `brainclaw context`, MCP et les rendus markdown/template
+  - nouveau coeur `context-diff` réutilisé par `context`, `context-diff` et `session-end`
+  - enrichissement de `doctor --json` avec détails de contradictions triés et stables (`severity`, `score`, `kind`)
 - Couverture brownfield ajoutée :
   - tests unitaires du moteur `bootstrap.ts` sur extraction, réutilisation de profil, refresh et fingerprint Git
   - tests unitaires `context` sur auto-bootstrap, désactivation explicite et digest avec signaux dérivés
@@ -200,6 +207,11 @@ Conséquence produit :
   - tests unitaires `context.ts` sur `context_schema: 1.1`, l'exposition bornée de `agents_rules` et le digest enrichi
   - tests unitaires `doctor`, `env` et `whoami` sur les nouveaux signaux d'outillage agent local
   - contrats MCP unitaires et E2E sur `context_schema`, `agents_rules` et l'inventaire enrichi des serveurs MCP/skills
+- Couverture ajoutée pour le lot intelligence contextuelle `4.2 + 4.3 + 4.4` :
+  - tests unitaires `contradictions.ts` sur negation pairs, scoring lexical et réduction des faux positifs
+  - tests unitaires `runtime-note`, `review` et `session-end` sur les garde-fous contradictions dans les flows auto
+  - tests unitaires `context-diff` et `context.ts` sur `since_session` et `context_diff`
+  - contrats CLI/MCP sur `context_schema: 1.2`, `context --since-session` et `bclaw_get_context(since_session)`
 - Couverture ajoutée pour le socle migration/storage :
   - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
   - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
@@ -215,7 +227,7 @@ Conséquence produit :
   - `npm run test:coverage:check` passe
   - `node --test dist-test/tests/cli.test.js` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 71.26%`, `branches 70.69%`, `functions 78.51%`, `lines 71.26%`
+  - couverture fast path : `statements 72.63%`, `branches 71.19%`, `functions 79.42%`, `lines 72.63%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -269,9 +281,9 @@ Conséquence produit :
 
 **Phase 4 — Intelligence Contextuelle**
 - `4.1` Recherche full-text : `done`
-- `4.2` Détection de contradictions : `partial`
+- `4.2` Détection de contradictions : `done`
 - `4.3` Auto-reflect amélioré : `partial`
-- `4.4` Context diff de session : `partial`
+- `4.4` Context diff de session : `done`
 - `4.5` Knowledge relationships : `partial`
 
 **Phase 5 — Git Distribué**

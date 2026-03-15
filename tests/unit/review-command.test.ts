@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { archiveCandidate, listCandidates, saveCandidate } from '../../src/core/candidates.js';
 import { runReview } from '../../src/commands/review.js';
+import { saveState } from '../../src/core/state.js';
 import type { Candidate } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -220,5 +221,57 @@ describe('commands/review', () => {
     const untouched = stored.find((item) => item.id === 'cnd_assigned_bob');
     assert.ok(claimed?.tags.includes('assignee:alice'));
     assert.ok(untouched?.tags.includes('assignee:bob'));
+  });
+
+  it('blocks auto-promotion when a candidate contradicts canonical memory', () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [
+        {
+          id: 'dec_review_existing',
+          text: 'Auth gateway should always enable OAuth fallback',
+          created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_review_test',
+          tags: ['auth'],
+          related_paths: ['src/auth/**'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    saveCandidate({
+      id: 'cnd_review_conflict',
+      type: 'decision',
+      text: 'Auth gateway should never enable OAuth fallback',
+      created_at: iso(1),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_review_test',
+      tags: ['auth'],
+      related_paths: ['src/auth/**'],
+      status: 'pending',
+      star_count: 3,
+      starred_by: ['a', 'b', 'c'],
+      usage_count: 0,
+      usage_events: [],
+    }, workspace.dir);
+
+    const logs = captureLogs(() => {
+      runReview({ json: true, auto: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(logs.at(-1) as string);
+    assert.deepEqual(parsed.auto_promoted, []);
+    assert.deepEqual(parsed.skipped, [{ id: 'cnd_review_conflict', reason: 'contradiction_detected' }]);
+
+    const pending = listCandidates('pending', workspace.dir);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].promotion_blocked_reason, 'contradiction_detected');
+    assert.ok((pending[0].contradictions_detected?.length ?? 0) > 0);
   });
 });
