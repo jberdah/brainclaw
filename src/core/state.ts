@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { type ZodType, type ZodTypeDef } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
 import { memoryDir, ensureMemoryDir, writeFileAtomic } from './io.js';
 export function emptyState(): State {
@@ -14,7 +15,7 @@ export function emptyState(): State {
   };
 }
 
-function loadDirectoryItems<T>(dirPath: string, schema: { parse: (data: unknown) => T }): T[] {
+function loadDirectoryItems<T>(dirPath: string, schema: ZodType<T, ZodTypeDef, unknown>): T[] {
   if (!fs.existsSync(dirPath)) return [];
   const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'));
   const items: T[] = [];
