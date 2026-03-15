@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { withLock } from './lock.js';
+import { withLock, cleanStaleLocks } from './lock.js';
 
 export const MEMORY_DIR = '.brainclaw';
 
@@ -42,4 +42,31 @@ export function writeFileAtomic(filepath: string, content: string): void {
     fs.writeFileSync(tmp, content, 'utf-8');
     fs.renameSync(tmp, filepath);
   });
+}
+
+/**
+ * Remove orphan .tmp and .lock files left by crashed processes.
+ * Call once at CLI startup. Returns count of removed files.
+ */
+export function cleanOrphanFiles(dirPath: string): number {
+  let removed = 0;
+  if (!fs.existsSync(dirPath)) return 0;
+
+  // Clean .tmp files (residual from crashed writeFileAtomic)
+  try {
+    for (const entry of fs.readdirSync(dirPath)) {
+      const full = path.join(dirPath, entry);
+      if (entry.endsWith('.tmp') && fs.statSync(full).isFile()) {
+        try { fs.unlinkSync(full); removed++; } catch { /* already gone */ }
+      }
+      // Recurse into subdirectories
+      if (fs.statSync(full).isDirectory()) {
+        removed += cleanOrphanFiles(full);
+      }
+    }
+  } catch { /* dir unreadable — skip */ }
+
+  // Clean stale .lock files
+  removed += cleanStaleLocks(dirPath);
+  return removed;
 }
