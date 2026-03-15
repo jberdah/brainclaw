@@ -1,4 +1,5 @@
 import { loadState, saveState } from '../core/state.js';
+import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
@@ -39,7 +40,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     short_label,
     text,
     created_at: nowISO(),
-    author: options.author ?? getDefaultAuthor(),
+    author: options.author ?? resolveCurrentAgentName(),
     status: 'active',
     tags: options.tag ?? [],
     related_paths: options.path,
@@ -53,6 +54,4 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
   console.log(`✔ Constraint added: [${short_label}] ${text}`);
 }
 
-function getDefaultAuthor(): string {
-  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
-}
+

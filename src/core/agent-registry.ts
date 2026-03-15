@@ -378,6 +378,16 @@ export function resolveAgentScope(agentName?: string, cwd?: string, preferredDir
   return loadConfig(cwd, preferredDirName).current_agent?.trim() || undefined;
 }
 
+/**
+ * Returns the name of the current agent from config, falling back to the OS user.
+ * Use in place of local `getDefaultAuthor()` copies.
+ */
+export function resolveCurrentAgentName(cwd?: string): string {
+  const fromConfig = loadConfig(cwd).current_agent?.trim();
+  if (fromConfig) return fromConfig;
+  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
+}
+
 export function requireOperationalAgentIdentity(agentName?: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument {
   return requireRegisteredAgentIdentity({
     agentName,

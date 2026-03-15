@@ -1,4 +1,4 @@
-import { resolveAgentScope } from '../core/agent-registry.js';
+import { resolveAgentScope, resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { createInstruction } from '../core/instructions.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
@@ -41,7 +41,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
     layer,
     scope,
     tags: options.tag,
-    author: options.author ?? getDefaultAuthor(),
+    author: options.author ?? resolveCurrentAgentName(),
     supersedes: options.supersedes,
   });
 
@@ -68,6 +68,3 @@ function resolveScope(layer: InstructionLayer, options: InstructionOptions): str
   return agentScope;
 }
 
-function getDefaultAuthor(): string {
-  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
-}
