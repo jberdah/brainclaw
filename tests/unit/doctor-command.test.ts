@@ -73,6 +73,7 @@ function syncProjectArtifacts(workspace: TestWorkspace): void {
 
 describe('commands/doctor', () => {
   let workspace: TestWorkspace;
+  let previousCodexHome: string | undefined;
 
   beforeEach(() => {
     workspace = createTestWorkspace({
@@ -82,9 +83,15 @@ describe('commands/doctor', () => {
       reputationEnabled: true,
     });
     syncProjectArtifacts(workspace);
+    previousCodexHome = process.env.CODEX_HOME;
   });
 
   afterEach(() => {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
     workspace.cleanup();
   });
 
@@ -260,5 +267,35 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'schema_migration_errors' && check.status === 'error'));
     assert.ok(parsed.migration.entries.some((entry: { documentType: string; status: string }) => entry.documentType === 'claim' && entry.status === 'outdated'));
     assert.ok(parsed.migration.entries.some((entry: { documentType: string; status: string }) => entry.documentType === 'claim' && entry.status === 'invalid'));
+  });
+
+  it('reports local agent tooling issues in doctor json output', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Guide\n\nThis file has no actionable bullets.\n', 'utf-8');
+    const codexHome = path.join(workspace.dir, '.codex-home');
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'thin-skill'), { recursive: true });
+    fs.writeFileSync(
+      path.join(codexHome, 'skills', '.system', 'thin-skill', 'SKILL.md'),
+      '# Thin Skill\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      '[mcp_servers.local_missing]\ncommand = "definitely-missing-brainclaw-command"\n',
+      'utf-8',
+    );
+    process.env.CODEX_HOME = codexHome;
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.metrics.agent_rules, 0);
+    assert.equal(parsed.metrics.incomplete_skills, 1);
+    assert.equal(parsed.metrics.missing_mcp_commands, 1);
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_rules' && check.status === 'warn'));
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_skills' && check.status === 'warn'));
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_mcp' && check.status === 'warn'));
   });
 });

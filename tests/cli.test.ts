@@ -376,6 +376,7 @@ describe('brainclaw CLI', () => {
   describe('env', () => {
     it('prints the execution context and optional agent tooling as JSON', () => {
       run(['init', '-y'], dir);
+      fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Guide\n\n- Read AGENTS.md before edits\n', 'utf-8');
       const codexHome = path.join(dir, '.codex-home');
       fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
       fs.writeFileSync(
@@ -393,8 +394,10 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       const parsed = JSON.parse(res.stdout);
       assert.ok(parsed.execution_context);
+      assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read AGENTS.md before edits']);
       assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');
       assert.equal(parsed.agent_tooling.mcp_servers[0].name, 'atlassian');
+      assert.equal(parsed.agent_tooling.mcp_servers[0].availability, 'remote');
     });
   });
 

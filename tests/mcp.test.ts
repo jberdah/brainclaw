@@ -366,10 +366,12 @@ describe('MCP server', () => {
         },
       });
 
+      assert.equal(context.result.structuredContent.context_schema, '1.1');
       assert.equal(context.result.structuredContent.memory_density, 'low');
       assert.equal(context.result.structuredContent.bootstrap_available, true);
       assert.ok(Array.isArray(context.result.structuredContent.derived_signals));
       assert.ok(context.result.structuredContent.derived_signals.length > 0);
+      assert.deepEqual(context.result.structuredContent.agent_tooling.agents_rules, ['Read AGENTS.md before edits']);
     } finally {
       await stopMcp(proc);
     }
@@ -409,6 +411,7 @@ describe('MCP server', () => {
       assert.ok(Array.isArray(response.result.structuredContent.execution_context.toolchains));
       assert.equal(response.result.structuredContent.agent_tooling.skills[0].name, 'openai-docs');
       assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].name, 'atlassian');
+      assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].availability, 'remote');
     } finally {
       await stopMcp(proc);
     }

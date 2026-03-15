@@ -72,9 +72,12 @@ describe('commands/env + whoami', () => {
     assert.equal(output.errors.length, 0);
     const parsed = JSON.parse(output.logs.at(-1) as string);
     assert.equal(parsed.agent_tooling.agents_md_present, true);
+    assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read memory first']);
     assert.ok(Array.isArray(parsed.execution_context.toolchains));
     assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');
+    assert.equal(parsed.agent_tooling.skills[0].references_present, false);
     assert.equal(parsed.agent_tooling.mcp_servers[0].name, 'atlassian');
+    assert.equal(parsed.agent_tooling.mcp_servers[0].availability, 'remote');
   });
 
   it('enriches whoami json with execution context and agent tooling', () => {
@@ -87,7 +90,9 @@ describe('commands/env + whoami', () => {
     assert.equal(parsed.resolved_agent, 'copilot');
     assert.ok(parsed.execution_context);
     assert.equal(parsed.agent_tooling.agents_md_present, true);
+    assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read memory first']);
     assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');
     assert.equal(parsed.agent_tooling.mcp_servers[0].name, 'atlassian');
+    assert.equal(parsed.agent_tooling.mcp_servers[0].availability, 'remote');
   });
 });
