@@ -9,6 +9,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { analyzeRepository } from '../core/repo-analysis.js';
 import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
+import { detectAiAgent } from '../core/ai-agent-detection.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
@@ -49,10 +50,22 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   const currentAgent = registerAgentIdentity({
     agentName: existingCurrentAgent?.agent_name ?? resolveDefaultAgentName(),
-    kind: existingCurrentAgent?.kind ?? 'unknown',
+    kind: existingCurrentAgent?.kind ?? 'human',
     cwd,
     preferredDirName: storageDir,
   });
+
+  // Auto-detect and register the AI coding agent running in this environment
+  const detectedAi = detectAiAgent();
+  let registeredAiAgent = detectedAi
+    ? registerAgentIdentity({
+        agentName: detectedAi.name,
+        kind: detectedAi.kind,
+        trustLevel: detectedAi.trust_level,
+        cwd,
+        preferredDirName: storageDir,
+      })
+    : undefined;
 
   const state = emptyState();
   saveState(state, cwd);
@@ -98,6 +111,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   console.log('✔ Created project.md, config.yaml, and split state directories');
   console.log(`✔ Project ID: ${projectIdentity.project_id}`);
   console.log(`✔ Current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
+  if (registeredAiAgent) {
+    console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi!.detection_source}] (${registeredAiAgent.agent_id})`);
+  }
   console.log(`✔ Topology: ${topology}`);
   console.log(`✔ Storage dir: ${storageDir}`);
   console.log(`✔ Project mode: ${projectMode}`);
