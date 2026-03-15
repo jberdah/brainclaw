@@ -643,8 +643,10 @@ program
 program
   .command('export')
   .description('Export memory as instructions for IDE/AI tools')
-  .requiredOption('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-system')
-  .option('--output <file>', 'Write to file instead of stdout')
+  .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, windsurf, cline, roo, continue')
+  .option('--detect', 'Auto-detect agent environment and write to its native file')
+  .option('--write', 'Write to canonical file path instead of stdout (when --format is given)')
+  .option('--output <file>', 'Write to a specific file path instead of stdout')
   .option('--project <project>', 'Project namespace filter')
   .option('--agent <agent>', 'Agent name for agent-layer instructions')
   .action((options) => {

@@ -10,6 +10,7 @@ import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdenti
 import { analyzeRepository } from '../core/repo-analysis.js';
 import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { writeDetectedAgentExport } from './export.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
@@ -67,6 +68,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       })
     : undefined;
 
+  // Write to the detected agent's native instruction file
+  const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
+
   const state = emptyState();
   saveState(state, cwd);
 
@@ -113,8 +117,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   console.log(`✔ Current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
   if (registeredAiAgent) {
     console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi!.detection_source}] (${registeredAiAgent.agent_id})`);
-  }
-  console.log(`✔ Topology: ${topology}`);
+  }  if (detectedExport) {
+    console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
+  }  console.log(`✔ Topology: ${topology}`);
   console.log(`✔ Storage dir: ${storageDir}`);
   console.log(`✔ Project mode: ${projectMode}`);
   if (projectMode === 'multi-project') {
