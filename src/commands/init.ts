@@ -8,6 +8,7 @@ import { defaultConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { analyzeRepository } from '../core/repo-analysis.js';
+import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
@@ -87,6 +88,12 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     ensureProjectGitignore(cwd, storageDir);
   }
 
+  // Create or update AGENTS.md and .github/copilot-instructions.md
+  const agentFiles = ensureAgentFiles(cwd, storageDir);
+
+  // Add agent instruction files to .gitignore (they are generated, not source)
+  ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md']);
+
   console.log(`✔ Initialized project memory in ${storageDir}/`);
   console.log('✔ Created project.md, config.yaml, and split state directories');
   console.log(`✔ Project ID: ${projectIdentity.project_id}`);
@@ -100,6 +107,17 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if (ignoreStrategy === 'project-gitignore') {
     console.log(`✔ Added ${storageDir}/ to .gitignore`);
   }
+  if (agentFiles.agentsMdCreated) {
+    console.log('✔ Created AGENTS.md with brainclaw bootstrap section');
+  } else if (agentFiles.agentsMdUpdated) {
+    console.log('✔ Updated AGENTS.md with brainclaw bootstrap section');
+  }
+  if (agentFiles.copilotInstructionsCreated) {
+    console.log('✔ Created .github/copilot-instructions.md with brainclaw bootstrap section');
+  } else if (agentFiles.copilotInstructionsUpdated) {
+    console.log('✔ Updated .github/copilot-instructions.md with brainclaw bootstrap section');
+  }
+  console.log('✔ Added AGENTS.md and .github/copilot-instructions.md to .gitignore');
 
   if (analysis) {
     console.log('');
@@ -109,16 +127,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     }
   }
 
-  // Check for AGENTS.md
-  if (fs.existsSync(path.join(cwd, 'AGENTS.md'))) {
-    console.log('');
-    console.log('Tip: AGENTS.md detected. Consider adding:');
-    console.log('  ## Shared project memory');
-    console.log(`  Read ${storageDir}/project.md before making significant changes or handing off work.`);
-  }
-
   console.log('');
-  console.log(`Tip: add ${storageDir}/project.md to your agent context files.`);
+  console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);
 }
 
 function resolveStorageDir(storageDir?: string): string {
