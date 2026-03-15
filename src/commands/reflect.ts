@@ -1,8 +1,9 @@
 import fs from 'node:fs';
-import { memoryExists } from '../core/io.js';
+import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { loadState, saveState } from '../core/state.js';
+import { generateMarkdown } from '../core/markdown.js';
 import { scanText } from '../core/security.js';
 import { nowISO, generateId } from '../core/ids.js';
 import { saveCandidate, generateCandidateId, listCandidates, archiveCandidate } from '../core/candidates.js';
@@ -29,6 +30,13 @@ export interface ReflectOptions {
   batch?: string;
   session?: string;
   cwd?: string;
+}
+
+export interface CandidateCreationResult {
+  candidateId: string;
+  type: CandidateType;
+  writeThrough: boolean;
+  promotedItemId?: string;
 }
 
 export function runReflect(text: string | undefined, options: ReflectOptions): void {
@@ -140,7 +148,7 @@ export function createCandidateFromInput(
   options: ReflectOptions,
   printSuccess: boolean = true,
   forceStrict: boolean = false,
-): void {
+): CandidateCreationResult {
   const config = loadConfig(options.cwd);
   let actorIdentity;
   try {
@@ -205,8 +213,8 @@ export function createCandidateFromInput(
   // Write-through for trusted/curator agents — bypass pending inbox
   if (!forceStrict) {
     try {
-      if (agentCanWriteDirect(candidate.author_id ?? candidate.author)) {
-        promoteCandidateToState(candidate, options.cwd);
+      if (agentCanWriteDirect(candidate.author_id ?? candidate.author, options.cwd)) {
+        const promotedItemId = promoteCandidateToState(candidate, options.cwd);
         appendAuditEntry({
           actor: candidate.author,
           actor_id: candidate.author_id,
@@ -218,7 +226,12 @@ export function createCandidateFromInput(
         if (printSuccess) {
           console.log(`✔ Direct write: [${id}] (${type}) ${text} (trusted agent — bypassed inbox)`);
         }
-        return;
+        return {
+          candidateId: id,
+          type,
+          writeThrough: true,
+          promotedItemId,
+        };
       }
     } catch { /* trust check failed — fall through to pending */ }
   }
@@ -227,33 +240,45 @@ export function createCandidateFromInput(
   if (printSuccess) {
     console.log(`✔ Candidate created: [${id}] (${type}) ${text}`);
   }
+  return {
+    candidateId: id,
+    type,
+    writeThrough: false,
+  };
 }
 
-function promoteCandidateToState(candidate: Candidate, cwd?: string): void {
+function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
   const state = loadState(cwd);
+  let promotedItemId = '';
   switch (candidate.type) {
     case 'constraint': {
       const entry: Constraint = { id: generateId('active_constraints'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags };
       state.active_constraints.push(entry);
+      promotedItemId = entry.id;
       break;
     }
     case 'decision': {
       const entry: Decision = { id: generateId('recent_decisions'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, related_paths: candidate.related_paths, tags: candidate.tags };
       state.recent_decisions.push(entry);
+      promotedItemId = entry.id;
       break;
     }
     case 'trap': {
       const entry: Trap = { id: generateTrapId(), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
       state.known_traps.push(entry);
+      promotedItemId = entry.id;
       break;
     }
     case 'handoff': {
       const entry: Handoff = { id: generateId('open_handoffs'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, from: candidate.from ?? '', to: candidate.to ?? '', status: 'open', tags: candidate.tags, related_paths: candidate.related_paths };
       state.open_handoffs.push(entry);
+      promotedItemId = entry.id;
       break;
     }
   }
   saveState(state, cwd);
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
+  return promotedItemId;
 }
 
 export function mapEventTypeToCandidateType(eventType: string): CandidateType {

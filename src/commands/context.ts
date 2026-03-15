@@ -18,6 +18,7 @@ export interface ContextCommandOptions {
   profile?: 'dev' | 'openclaw' | 'ops' | 'research';
   maxItems?: number;
   maxChars?: number;
+  digest?: boolean;
 }
 
 export function runContext(options: ContextCommandOptions = {}): void {
@@ -36,6 +37,7 @@ export function runContext(options: ContextCommandOptions = {}): void {
     profile: options.profile,
     maxItems: options.maxItems,
     maxChars: options.maxChars,
+    digest: options.digest,
   });
 
   if (options.json) {

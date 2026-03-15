@@ -168,6 +168,38 @@ describe('MCP server', () => {
     }
   });
 
+  it('includes digest and scoped activity in MCP context responses when requested', async () => {
+    run(['decision', 'Auth gateway owns OAuth routing', '--tag', 'auth', '--path', 'src/auth/routes.ts'], dir);
+    run(['trap', 'Auth routes fail without the gateway policy sync', '--severity', 'high', '--tag', 'auth', '--path', 'src/auth/routes.ts'], dir);
+    run(['runtime-note', 'Auth routes rollout in progress', '--agent', 'copilot', '--tag', 'auth'], dir, {
+      BRAINCLAW_SESSION_ID: 'sess_digest_ctx',
+    });
+
+    const proc = startMcp(dir);
+    try {
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 21,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_get_context',
+          arguments: {
+            path: 'src/auth/routes.ts',
+            digest: true,
+          },
+        },
+      });
+
+      const text = response.result.content[0].text as string;
+      assert.match(text, /^Digest:/m);
+      assert.ok(typeof response.result.structuredContent.digest === 'string');
+      assert.equal(response.result.structuredContent.scoped_activity.scope, 'src/auth/routes.ts');
+      assert.equal(response.result.structuredContent.scoped_activity.recent_notes, 1);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('renders explain mode for markdown context responses', async () => {
     run(['decision', 'Auth gateway routes OAuth', '--tag', 'auth'], dir);
     run(['instruction', 'Check auth gateway conventions first'], dir);
@@ -309,6 +341,55 @@ describe('MCP server', () => {
       assert.equal(response.result.structuredContent.runtime_notes.length, 1);
       assert.equal(response.result.structuredContent.runtime_notes[0].text, 'Host A runtime');
       assert.ok(!response.result.content[0].text.includes('Host B runtime'));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('reuses one implicit MCP session across writes and returns auto-reflect metadata', async () => {
+    const proc = startMcp(dir);
+    try {
+      const first = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 22,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_write_note',
+          arguments: {
+            agent: 'copilot',
+            text: 'Use auth gateway convention for new routes',
+            tags: ['auth'],
+            autoReflect: true,
+          },
+        },
+      });
+
+      const second = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 23,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_write_note',
+          arguments: {
+            agent: 'copilot',
+            text: 'Second auth runtime note',
+            tags: ['auth'],
+          },
+        },
+      });
+
+      assert.match(first.result.session_id, /^sess_[a-f0-9]+$/);
+      assert.equal(second.result.session_id, first.result.session_id);
+      assert.equal(first.result.auto_reflect_attempted, true);
+      assert.match(first.result.candidate_id, /^cnd_[a-f0-9]+$/);
+      assert.equal(first.result.skip_reason, undefined);
+      assert.equal(second.result.auto_reflect_attempted, false);
+
+      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', '.current-session'), 'utf-8'));
+      assert.equal(currentSession.session_id, first.result.session_id);
+
+      const inboxFile = path.join(dir, '.brainclaw', 'inbox', `${first.result.candidate_id}.json`);
+      assert.equal(fs.existsSync(inboxFile), true);
     } finally {
       await stopMcp(proc);
     }

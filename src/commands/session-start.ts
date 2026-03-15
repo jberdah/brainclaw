@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists, memoryDir } from '../core/io.js';
-import { buildOperationalIdentity } from '../core/identity.js';
+import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
 import { buildContext } from '../core/context.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
@@ -69,6 +69,14 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
   const dir = sessionsDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(sessionSnapshotPath(snapshot.session_id, options.cwd), JSON.stringify(snapshot, null, 2) + '\n', 'utf-8');
+  saveCurrentSession({
+    session_id: snapshot.session_id,
+    started_at: snapshot.started_at,
+    last_seen_at: snapshot.started_at,
+    agent: actor.agent,
+    agent_id: actor.agent_id,
+    host_id: actor.host_id,
+  }, options.cwd);
 
   // Write session_start runtime note
   const noteId = generateRuntimeNoteId();

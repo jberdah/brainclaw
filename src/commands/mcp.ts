@@ -10,10 +10,12 @@ import { runAccept } from './accept.js';
 import { runReject } from './reject.js';
 import { runSessionStart } from './session-start.js';
 import { runSessionEnd } from './session-end.js';
+import { createRuntimeNote } from './runtime-note.js';
 import { agentCanWriteDirect, agentCanCurate, getAgentTrustLevel } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO } from '../core/ids.js';
 import { search } from '../core/search.js';
+import { buildOperationalIdentity } from '../core/identity.js';
 import type { CandidateType, MemoryVisibility } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -46,6 +48,7 @@ export const MCP_READ_TOOLS = [
         includePending: { type: 'boolean', description: 'Include pending candidates in the context.' },
         maxItems: { type: 'number', description: 'Maximum number of ranked items to return.' },
         maxChars: { type: 'number', description: 'Approximate character budget applied after ranking.' },
+        digest: { type: 'boolean', description: 'Include a short deterministic digest for the selected context.' },
         format: { type: 'string', description: 'Output format: markdown, json, or template.' },
         explain: { type: 'boolean', description: 'Include ranking reasons in markdown output.' },
         compactTemplate: { type: 'boolean', description: 'Use compact template format when format=template.' }
@@ -124,7 +127,8 @@ export function runMcp(): void {
           agent: { type: 'string', description: 'Agent name.' },
           tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
           visibility: { type: 'string', description: 'Visibility: shared, machine, private.' },
-          ttl: { type: 'string', description: 'Optional TTL: 30m, 2h, 7d.' }
+          ttl: { type: 'string', description: 'Optional TTL: 30m, 2h, 7d.' },
+          autoReflect: { type: 'boolean', description: 'Attempt to reflect the runtime note into durable memory immediately.' }
         },
         required: ['text', 'agent']
       }
@@ -222,6 +226,7 @@ export function runMcp(): void {
   ];
 
   const allTools = [...MCP_READ_TOOLS, ...writeTools];
+  let connectionSessionId: string | undefined;
 
   function sendResult(id: unknown, result: unknown): void {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
@@ -307,36 +312,54 @@ export function runMcp(): void {
         if (name === 'bclaw_write_note') {
           const agent = String(args.agent ?? '');
           if (!requireTrust(agent, 'contributor', id)) return;
-          const noteId = generateRuntimeNoteId();
-          const ttlStr = args.ttl as string | undefined;
-          const expiresAt = ttlStr ? parseTtl(ttlStr) : undefined;
-          saveRuntimeNote({
-            id: noteId,
+          const result = createRuntimeNote(String(args.text ?? ''), {
             agent,
-            text: String(args.text ?? ''),
-            created_at: nowISO(),
-            tags: (args.tags as string[] | undefined) ?? [],
+            tag: (args.tags as string[] | undefined) ?? [],
             visibility: (args.visibility as MemoryVisibility | undefined) ?? 'shared',
-            expires_at: expiresAt,
-            note_type: 'observation',
+            ttl: args.ttl as string | undefined,
+            autoReflect: args.autoReflect as boolean | undefined,
+            cwd,
+            sessionId: connectionSessionId,
           });
-          appendAuditEntry({ actor: agent, action: 'create', item_id: noteId, item_type: 'runtime_note' });
-          sendResult(id, { content: [{ type: 'text', text: `✔ Note created [${noteId}]` }], note_id: noteId, schema_version: SCHEMA_VERSION });
+          if (!resolveCurrentSessionIdForMcp()) {
+            connectionSessionId = result.sessionId;
+          } else {
+            connectionSessionId = undefined;
+          }
+          sendResult(id, {
+            content: [{ type: 'text', text: `✔ Note created [${result.noteId}]` }],
+            note_id: result.noteId,
+            session_id: result.sessionId,
+            auto_reflect_attempted: result.autoReflectAttempted,
+            detected_type: result.detectedType,
+            candidate_id: result.candidateId,
+            promoted_item_id: result.promotedItemId,
+            skip_reason: result.skipReason,
+            schema_version: SCHEMA_VERSION,
+          });
           return;
         }
 
         if (name === 'bclaw_create_candidate') {
           const agent = String(args.agent ?? '');
           if (!requireTrust(agent, 'contributor', id)) return;
+          const identity = buildOperationalIdentity(agent, cwd, { sessionId: connectionSessionId });
+          if (!resolveCurrentSessionIdForMcp()) {
+            connectionSessionId = identity.session_id;
+          }
           const candId = generateCandidateId();
           const type = String(args.type ?? 'decision') as CandidateType;
-          const writeThrough = agentCanWriteDirect(agent);
+          const writeThrough = agentCanWriteDirect(identity.agent_id ?? agent);
           const candidate = {
             id: candId,
             type,
             text: String(args.text ?? ''),
             created_at: nowISO(),
-            author: agent,
+            author: identity.agent,
+            author_id: identity.agent_id,
+            project_id: identity.project_id,
+            host_id: identity.host_id,
+            session_id: identity.session_id,
             tags: (args.tags as string[] | undefined) ?? [],
             status: 'pending' as const,
             severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
@@ -389,10 +412,18 @@ export function runMcp(): void {
         if (name === 'bclaw_claim') {
           const agent = String(args.agent ?? '');
           if (!requireTrust(agent, 'contributor', id)) return;
+          const identity = buildOperationalIdentity(agent, cwd, { sessionId: connectionSessionId });
+          if (!resolveCurrentSessionIdForMcp()) {
+            connectionSessionId = identity.session_id;
+          }
           const claimId = generateClaimId();
           saveClaim({
             id: claimId,
-            agent,
+            agent: identity.agent,
+            agent_id: identity.agent_id,
+            project_id: identity.project_id,
+            host_id: identity.host_id,
+            session_id: identity.session_id,
             scope: String(args.scope ?? ''),
             description: String(args.description ?? ''),
             created_at: nowISO(),
@@ -424,7 +455,11 @@ export function runMcp(): void {
               agent: args.agent as string | undefined,
               context: args.context as string | undefined,
               json: false,
+              cwd,
             });
+            if (!resolveCurrentSessionIdForMcp()) {
+              connectionSessionId = buildOperationalIdentity(args.agent as string | undefined, cwd).session_id;
+            }
             sendResult(id, { content: [{ type: 'text', text: '✔ Session started' }], schema_version: SCHEMA_VERSION });
           } catch (e: unknown) {
             sendError(id, -32603, e instanceof Error ? e.message : String(e));
@@ -440,7 +475,11 @@ export function runMcp(): void {
               summary: args.summary as string | undefined,
               autoReflect: args.autoReflect as boolean | undefined,
               json: false,
+              cwd,
             });
+            if (!resolveCurrentSessionIdForMcp()) {
+              connectionSessionId = undefined;
+            }
             sendResult(id, { content: [{ type: 'text', text: '✔ Session ended' }], schema_version: SCHEMA_VERSION });
           } catch (e: unknown) {
             sendError(id, -32603, e instanceof Error ? e.message : String(e));
@@ -457,6 +496,13 @@ export function runMcp(): void {
       sendError(id, -32603, e instanceof Error ? e.message : 'Internal error');
     }
   });
+
+  function resolveCurrentSessionIdForMcp(): string | undefined {
+    return process.env.BRAINCLAW_SESSION_ID?.trim()
+      || process.env.OPENCLAW_SESSION_ID?.trim()
+      || process.env.CLAUDE_SESSION_ID?.trim()
+      || process.env.COPILOT_SESSION_ID?.trim();
+  }
 }
 
 export function normaliseFormat(value: unknown): ContextFormat {
@@ -508,6 +554,7 @@ export function handleMcpReadToolCall(
       includePending: args.includePending as boolean | undefined,
       maxItems: args.maxItems as number | undefined,
       maxChars: args.maxChars as number | undefined,
+      digest: args.digest as boolean | undefined,
       cwd,
     });
     const format = normaliseFormat(args.format);
