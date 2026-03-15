@@ -622,4 +622,75 @@ describe('core/context', () => {
     const template = renderContextPromptTemplate(result, false);
     assert.match(template, /context_diff:/);
   });
+
+  it('plans and open handoffs appear in context even when many decisions exist', () => {
+    const decisions = Array.from({ length: 10 }, (_, i) => ({
+      id: `dec_priority_${i}`,
+      text: `Decision signal ${i}`,
+      created_at: iso(20 + i),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_ctx_test',
+      host_id: 'host-a',
+      session_id: 'sess_priority',
+      related_paths: [] as string[],
+      tags: [] as string[],
+    }));
+
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: decisions,
+      known_traps: [],
+      open_handoffs: [
+        {
+          id: 'hnd_priority_open',
+          text: 'Open handoff from previous session',
+          created_at: iso(5),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          host_id: 'host-a',
+          session_id: 'sess_priority',
+          from: 'copilot',
+          to: workspace.currentAgent.agent_name,
+          status: 'open',
+          tags: [] as string[],
+          related_paths: [] as string[],
+        },
+      ],
+      plan_items: [
+        {
+          id: 'pln_priority_todo',
+          text: 'Ship the next fix',
+          created_at: iso(15),
+          updated_at: iso(10),
+          author: workspace.currentAgent.agent_name,
+          status: 'todo',
+          priority: 'high',
+          tags: [] as string[],
+          related_paths: [] as string[],
+          depends_on: [],
+        },
+      ],
+    }, workspace.dir);
+
+    // No target — base scoring only. Plans and handoffs must beat decisions.
+    const result = buildContext({ maxItems: 8, cwd: workspace.dir });
+
+    const planItem = result.selected.find((i) => i.section === 'plan');
+    const handoffItem = result.selected.find((i) => i.section === 'handoff');
+    assert.ok(planItem, 'plan item should appear in context');
+    assert.ok(handoffItem, 'open handoff should appear in context');
+    assert.ok(planItem!.reasons.some((r) => r.includes('execution boost')), 'plan should have execution boost reason');
+    assert.ok(handoffItem!.reasons.some((r) => r.includes('open handoff signal')), 'handoff should have open handoff signal reason');
+
+    // Plans must rank above decisions
+    const planIdx = result.selected.indexOf(planItem!);
+    const firstDecisionIdx = result.selected.findIndex((i) => i.section === 'decision');
+    if (firstDecisionIdx !== -1) {
+      assert.ok(planIdx < firstDecisionIdx, 'plan should rank before decisions');
+    }
+  });
 });
