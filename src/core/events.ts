@@ -3,6 +3,7 @@ import path from 'node:path';
 import { resolveEventSessionId } from './identity.js';
 import { RuntimeEventSchema, type RuntimeEvent } from './schema.js';
 import { memoryDir, readFileSync } from './io.js';
+import { logger } from './logger.js';
 
 function runtimeDir(cwd?: string): string {
   return path.join(memoryDir(cwd), 'runtime');
@@ -42,8 +43,8 @@ export function listRuntimeEvents(cwd?: string): RuntimeEvent[] {
       } else {
         events.push(RuntimeEventSchema.parse(parsed));
       }
-    } catch {
-      // ignore malformed/unrelated JSON files in runtime
+    } catch (err) {
+      logger.debug('Ignoring malformed runtime event file:', file, err);
     }
   }
 

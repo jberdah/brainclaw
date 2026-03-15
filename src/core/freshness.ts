@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId } from './host.js';
 import { memoryPath, readFileSync, writeFileAtomic } from './io.js';
+import { logger } from './logger.js';
 
 export interface ContextMarker {
   read_at: string;
@@ -72,7 +73,8 @@ export function readContextMarker(cwd?: string): ContextMarker | undefined {
       if (parsed && typeof parsed.read_at === 'string') {
         return parsed;
       }
-    } catch {
+    } catch (err) {
+      logger.debug('Failed to parse context marker:', err);
       return undefined;
     }
   }

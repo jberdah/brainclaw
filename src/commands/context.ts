@@ -2,6 +2,7 @@ import { memoryExists } from '../core/io.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { writeContextMarker } from '../core/freshness.js';
 import { nowISO } from '../core/ids.js';
+import { logger } from '../core/logger.js';
 
 export interface ContextCommandOptions {
   for?: string;
@@ -59,7 +60,7 @@ function writeLastContextMarker(result: ReturnType<typeof buildContext>, options
       project: result.project,
       all_hosts: options.allHosts ?? false,
     });
-  } catch {
-    // Non-fatal: marker update failure does not affect output
+  } catch (err) {
+    logger.debug('Failed to write context marker:', err);
   }
 }

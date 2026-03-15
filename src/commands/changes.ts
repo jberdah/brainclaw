@@ -4,6 +4,7 @@ import { loadState } from '../core/state.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { nowISO } from '../core/ids.js';
 import type { Candidate } from '../core/schema.js';
+import { logger } from '../core/logger.js';
 
 export interface DiffOptions {
   since?: string;
@@ -126,8 +127,8 @@ export function runDiff(options: DiffOptions = {}): void {
         project: marker?.project,
         all_hosts: marker?.all_hosts,
       });
-    } catch {
-      // Non-fatal
+    } catch (err) {
+      logger.debug('Failed to write context marker:', err);
     }
   }
 }

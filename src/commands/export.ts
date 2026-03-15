@@ -4,6 +4,7 @@ import { memoryExists } from '../core/io.js';
 import { loadState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
+import { logger } from '../core/logger.js';
 
 export interface ExportOptions {
   format: 'copilot-instructions' | 'cursor-rules' | 'agents-md' | 'claude-system';
@@ -53,7 +54,8 @@ function getInstructionText(options: ExportOptions): string[] {
       agent: options.agent,
     });
     return resolved.filter(i => i.active).map(i => i.text);
-  } catch {
+  } catch (err) {
+    logger.debug('Failed to resolve instructions for export:', err);
     return [];
   }
 }
@@ -64,7 +66,8 @@ function getConstraintsSummary(): string {
     const active = state.active_constraints.filter(c => c.status === 'active');
     if (active.length === 0) return '';
     return '## Active Constraints\n\n' + active.map(c => `- ${c.text}`).join('\n');
-  } catch {
+  } catch (err) {
+    logger.debug('Failed to load constraints for export:', err);
     return '';
   }
 }

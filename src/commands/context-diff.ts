@@ -5,6 +5,7 @@ import { loadState } from '../core/state.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { nowISO } from '../core/ids.js';
+import { logger } from '../core/logger.js';
 
 export interface ContextDiffOptions {
   since?: string;
@@ -39,8 +40,8 @@ export function runContextDiff(options: ContextDiffOptions = {}): void {
       try {
         const marker = JSON.parse(fs.readFileSync(markerPath, 'utf-8')) as { read_at?: string };
         sinceDate = marker.read_at;
-      } catch {
-        // ignore
+      } catch (err) {
+        logger.debug('Failed to read context marker:', err);
       }
     }
   }

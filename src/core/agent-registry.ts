@@ -5,6 +5,7 @@ import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
 import { MEMORY_DIR, memoryDir, readFileSync, writeFileAtomic } from './io.js';
 import { AgentIdentityDocumentSchema, type AgentIdentityDocument, type AgentKind, type AgentTrustLevel } from './schema.js';
+import { logger } from './logger.js';
 
 const AGENTS_DIR = 'agents';
 
@@ -58,8 +59,8 @@ export function listAgentIdentities(cwd?: string, preferredDirName?: string): Ag
   for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.json'))) {
     try {
       agents.push(AgentIdentityDocumentSchema.parse(JSON.parse(readFileSync(path.join(dir, file)))));
-    } catch {
-      // Ignore malformed docs and let doctor surface mismatches for the current agent.
+    } catch (err) {
+      logger.debug('Skipping malformed agent identity file:', file, err);
     }
   }
 
@@ -74,7 +75,8 @@ export function findAgentIdentityByName(agentName: string, cwd?: string, preferr
 export function findAgentIdentityById(agentId: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined {
   try {
     return loadAgentIdentity(agentId, cwd, preferredDirName);
-  } catch {
+  } catch (err) {
+    logger.debug('Failed to find agent identity by ID:', agentId, err);
     return undefined;
   }
 }
@@ -168,8 +170,8 @@ export function resolveExistingCurrentAgent(cwd?: string): AgentIdentityDocument
           return byName;
         }
       }
-    } catch {
-      // Ignore missing or malformed config and keep searching.
+    } catch (err) {
+      logger.debug('Ignoring missing or malformed config while searching for current agent:', err);
     }
   }
 

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
+import { logger } from './logger.js';
 
 const AUDIT_LOG_FILE = 'audit.log';
 
@@ -51,8 +52,8 @@ export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAct
     // Remove undefined fields for compactness
     const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
     fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');
-  } catch {
-    // Audit logging is best-effort — never crash the main operation
+  } catch (err) {
+    logger.debug('Failed to write audit log entry:', err);
   }
 }
 
@@ -66,8 +67,8 @@ export function readAuditLog(options: { since?: string; actor?: string; action?:
   for (const line of lines) {
     try {
       entries.push(JSON.parse(line) as AuditEntry);
-    } catch {
-      // skip malformed entries
+    } catch (err) {
+      logger.debug('Skipping malformed audit log entry:', err);
     }
   }
 

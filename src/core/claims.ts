@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ClaimSchema, type Claim } from './schema.js';
 import { memoryDir, writeFileAtomic, readFileSync } from './io.js';
 import { nowISO } from './ids.js';
+import { logger } from './logger.js';
 
 const CLAIMS_DIR = 'claims';
 
@@ -42,7 +43,9 @@ export function listClaims(cwd?: string): Claim[] {
     try {
       const raw = readFileSync(path.join(dir, file));
       claims.push(ClaimSchema.parse(JSON.parse(raw)));
-    } catch { /* skip malformed */ }
+    } catch (err) {
+      logger.debug('Skipping malformed claim file:', file, err);
+    }
   }
   return claims.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }

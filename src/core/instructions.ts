@@ -3,6 +3,7 @@ import path from 'node:path';
 import { memoryPath, writeFileAtomic } from './io.js';
 import { generateId } from './ids.js';
 import { InstructionEntrySchema, type Config, type InstructionEntry, type InstructionLayer } from './schema.js';
+import { logger } from './logger.js';
 
 export interface CreateInstructionOptions {
   layer: InstructionLayer;
@@ -29,8 +30,8 @@ export function loadInstructions(cwd?: string): InstructionEntry[] {
     try {
       const raw = fs.readFileSync(filepath, 'utf-8');
       entries.push(InstructionEntrySchema.parse(JSON.parse(raw)));
-    } catch {
-      // Ignore malformed instruction files.
+    } catch (err) {
+      logger.debug('Ignoring malformed instruction file:', filepath, err);
     }
   }
 

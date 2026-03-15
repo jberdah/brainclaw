@@ -52,13 +52,20 @@ import { runPush } from './commands/push.js';
 import { runAuditCommand } from './commands/audit.js';
 import { runHistory } from './commands/history.js';
 import { runContextDiff } from './commands/context-diff.js';
+import { initLogLevel } from './core/logger.js';
 
 const program = new Command();
 
 program
   .name('brainclaw')
   .description('Shared project memory for humans and coding agents.')
-  .version('0.3.0');
+  .version('0.3.0')
+  .option('--verbose', 'Show info-level log messages on stderr')
+  .option('--debug', 'Show debug-level log messages on stderr')
+  .hook('preAction', (_thisCommand, actionCommand) => {
+    const root = actionCommand.optsWithGlobals();
+    initLogLevel({ verbose: root.verbose, debug: root.debug });
+  });
 
 // --- init ---
 program

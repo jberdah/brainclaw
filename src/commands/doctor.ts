@@ -8,6 +8,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { loadProjectIdentity, projectIdentityExists } from '../core/project-registry.js';
 import { findInstructionConflicts, loadInstructions } from '../core/instructions.js';
 import { memoryExists, memoryPath, readFileSync } from '../core/io.js';
+import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { listClaims } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
@@ -219,7 +220,8 @@ export function runDoctor(options: DoctorOptions = {}): void {
       console.warn('⚠ project.md is out of sync with state. Run `brainclaw rebuild` to fix.');
       hasIssues = true;
     }
-  } catch {
+  } catch (err) {
+    logger.debug('Failed to check project.md sync:', err);
     checks.push({ name: 'markdown_sync', status: 'warn', message: 'project.md is missing. Run `brainclaw rebuild` to regenerate.' });
     console.warn('⚠ project.md is missing. Run `brainclaw rebuild` to regenerate.');
     hasIssues = true;
@@ -463,7 +465,9 @@ export function runDoctor(options: DoctorOptions = {}): void {
     } else {
       checks.push({ name: 'contradictions', status: 'ok', message: 'No contradictions detected in state' });
     }
-  } catch { /* skip if contradictions module unavailable */ }
+  } catch (err) {
+    logger.debug('Skipping contradictions check (module unavailable):', err);
+  }
 
   // --- Expired items check ---
   const nowIso = new Date().toISOString();

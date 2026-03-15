@@ -3,6 +3,7 @@ import { memoryExists } from '../core/io.js';
 import { runReflect } from './reflect.js';
 import { RuntimeEventSchema, type RuntimeEvent } from '../core/schema.js';
 import { listRuntimeEventsBySession } from '../core/events.js';
+import { logger } from '../core/logger.js';
 
 export interface OpenclawImportOptions {
   source?: string;
@@ -54,8 +55,8 @@ function listRuntimeEventsFromFile(file: string): RuntimeEvent[] {
   for (const raw of rawEvents) {
     try {
       events.push(RuntimeEventSchema.parse(raw));
-    } catch {
-      // ignore malformed records
+    } catch (err) {
+      logger.debug('Ignoring malformed OpenClaw event record:', err);
     }
   }
   return events;

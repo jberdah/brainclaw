@@ -4,6 +4,7 @@ import path from 'node:path';
 import { CandidateSchema, type Candidate } from './schema.js';
 import { memoryDir, writeFileAtomic, readFileSync } from './io.js';
 import { nowISO } from './ids.js';
+import { logger } from './logger.js';
 
 const INBOX_DIR = 'inbox';
 const ACCEPTED_DIR = 'inbox/accepted';
@@ -61,8 +62,8 @@ export function listCandidates(status?: 'pending' | 'accepted' | 'rejected', cwd
       if (!status || c.status === status) {
         candidates.push(c);
       }
-    } catch {
-      // skip malformed files
+    } catch (err) {
+      logger.debug('Skipping malformed candidate file:', file, err);
     }
   }
 
@@ -90,7 +91,9 @@ export function listArchivedCandidates(dest: 'accepted' | 'rejected', cwd?: stri
     try {
       const raw = readFileSync(path.join(dir, file));
       candidates.push(CandidateSchema.parse(JSON.parse(raw)));
-    } catch { /* skip */ }
+    } catch (err) {
+      logger.debug('Skipping malformed candidate file:', file, err);
+    }
   }
   return candidates.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
