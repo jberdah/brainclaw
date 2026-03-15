@@ -14,6 +14,7 @@
 
 Version opérationnelle de cette ambition :
 - Un agent stateless doit pouvoir obtenir un contexte réellement utile en moins de 30 secondes.
+- Sur un repo déjà démarré sans `brainclaw`, un agent doit obtenir un bootstrap utile en moins de 5 minutes.
 - Le chemin nominal doit demander 1 à 2 appels explicites maximum.
 - Le contexte retourné doit être assez court pour tenir dans un budget prompt réaliste.
 - Chaque interaction doit augmenter la mémoire collective sans imposer une discipline manuelle forte.
@@ -24,7 +25,8 @@ Version opérationnelle de cette ambition :
 2. Low Friction Capture — une observation utile doit devenir mémoire presque automatiquement
 3. Correctness — fondations fiables, writes sûrs, tests rapides, comportement prédictible
 4. Connectivity — MCP universel et exports natifs avant toute sophistication d'écosystème
-5. Advanced Coordination — trust, réputation, sync distribué, audit complet en couches avancées
+5. Brownfield Bootstrap — utile même quand la mémoire `brainclaw` est encore vide
+6. Advanced Coordination — trust, réputation, sync distribué, audit complet en couches avancées
 
 ## Chemin nominal vs chemin avancé
 
@@ -37,6 +39,15 @@ Le produit doit être excellent sur ce flux minimal :
 
 Si ce chemin n'est pas meilleur que "lire quelques fichiers et improviser", `brainclaw` ne sera pas indispensable.
 
+### Chemin brownfield
+Le produit doit aussi être excellent sur ce flux critique :
+1. l'agent arrive sur un repo qui n'a jamais utilisé `brainclaw`
+2. `brainclaw` reconstruit un premier socle de contexte depuis le repo réel et l'environnement d'exécution
+3. l'agent agit sans avoir à relire manuellement tout le projet
+4. les signaux découverts deviennent progressivement une mémoire canonique mieux structurée
+
+Si `brainclaw` ne gagne pas nettement contre une lecture rapide de `README`, `package.json`, quelques fichiers clés et l'historique Git, il restera secondaire sur les projets brownfield.
+
 ### Chemin avancé
 Les couches suivantes restent importantes, mais ne doivent pas alourdir le coeur du produit :
 - trust tiers
@@ -46,6 +57,12 @@ Les couches suivantes restent importantes, mais ne doivent pas alourdir le coeur
 - intégrations spécialisées et compliance
 
 ## Parcours agents canoniques
+
+### 0. Agent sur projet brownfield sans mémoire
+Objectif : rendre `brainclaw` utile dès le premier contact avec un repo qui n'a pas été instrumenté.
+- Entrée idéale : `brainclaw bootstrap` puis `brainclaw context --for <target>`
+- Sortie idéale : résumé des conventions, commandes utiles, zones sensibles, pièges probables, provenance des signaux, niveau de confiance
+- Condition de succès : en moins de 5 minutes, l'agent obtient un contexte meilleur que sa lecture manuelle rapide du repo
 
 ### 1. Agent solo sur repo inconnu
 Objectif : comprendre rapidement un scope sans relire tout le repo.
@@ -69,25 +86,48 @@ Objectif : juger rapidement si un changement respecte les contraintes et décisi
 
 Le plan doit être évalué contre ces signaux :
 - Temps pour obtenir un contexte utile sur un scope donné
+- Temps pour obtenir un bootstrap utile sur un repo brownfield
 - Taille moyenne du contexte utile retourné
 - Taux de rappel des contraintes/traps critiques dans le contexte
 - Taux de faux positifs du ranking et du digest
 - Nombre d'actions explicites nécessaires dans le chemin nominal
 - Taux de réutilisation du produit par un agent d'une session à l'autre
+- Taux de transformation des signaux brownfield en mémoire canonique validée
+- Part des éléments de contexte accompagnés d'une provenance et d'un niveau de confiance explicites
+
+## Sources de contexte agentique à intégrer
+
+Pour devenir une extension de mémoire naturelle d'un agent de code, `brainclaw` doit agréger plusieurs couches de contexte, pas seulement sa mémoire interne.
+
+Sources prioritaires à intégrer :
+- mémoire `brainclaw` canonique : contraintes, décisions, traps, handoffs, plans, notes runtime, claims
+- repo-derived signals : `README`, docs locales, manifests, CI, structure du code, points d'entrée, modules chauds, historique Git récent
+- contexte machine : OS, shell, cwd, branche Git active, état dirty/clean, runtime/toolchain détectés, répertoires workspace
+- contexte agent local : `AGENTS.md`, règles agents locales, skills actives, surfaces/outils MCP disponibles
+- contexte de session : agent courant, session, scope ciblé, machine courante, contexte récemment lu
+
+Règles produit pour ces sources :
+- chaque signal doit exposer sa provenance : `memory`, `repo`, `machine`, `agents_md`, `skill`, `mcp`, `inference`
+- chaque signal dérivé doit exposer un niveau de confiance borné
+- les données sensibles ou trop bruitées doivent être redacted, résumées ou opt-in
+- `context` doit dire clairement quand la mémoire canonique est pauvre et quand il compense via des signaux dérivés
 
 ## Priorités produit révisées
 
 Avant d'ajouter de nouvelles couches avancées, le produit doit rendre excellents les chantiers suivants :
-1. `2.2` Context digest
-2. `2.3` Session implicite / auto-session
-3. `2.5` Scoped activity par scope/fichier
-4. `2.1` Auto-reflect des notes utiles
-5. `3.1` Conformité MCP complète sur le chemin nominal
-6. `0.5.2` Migration de schéma
-7. `0.5.3` Abstraction storage
+1. `2.6` Bootstrap brownfield
+2. `2.7` Memory seeds dérivés du repo
+3. `2.8` Fallback context quand la mémoire est sparse
+4. `6.5` Contexte machine et environnement d'exécution
+5. `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP
+6. `2.2` Context digest
+7. `2.3` Session implicite / auto-session
+8. `2.5` Scoped activity par scope/fichier
+9. `2.1` Auto-reflect des notes utiles
+10. `3.1` Conformité MCP complète sur le chemin nominal
 
 Conséquence produit :
-- le coeur v1 est `context + capture + coordination + MCP`
+- le coeur v1 est `bootstrap + context + capture + coordination + MCP`
 - la gouvernance avancée vient ensuite
 - la sophistication Git distribuée ne doit pas détourner l'effort tant que le coeur n'est pas excellent
 
@@ -181,6 +221,9 @@ Conséquence produit :
 - `2.3` Session implicite / auto-session : `done`
 - `2.4` Alias courts sur les IDs : `todo`
 - `2.5` Résumé d'activité récente par scope : `done`
+- `2.6` Bootstrap brownfield : `todo`
+- `2.7` Memory seeds dérivés du repo : `todo`
+- `2.8` Fallback context sur mémoire sparse : `todo`
 
 **Phase 3 — MCP Universel**
 - `3.1` Conformité protocole MCP : `done`
@@ -207,6 +250,8 @@ Conséquence produit :
 - `6.2` Profil d'agent déclaratif : `partial`
 - `6.3` Notification de changements : `partial`
 - `6.4` Context format versionné : `todo`
+- `6.5` Contexte machine et environnement d'exécution : `todo`
+- `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP : `todo`
 
 **Phase 7 — Observabilité et Audit**
 - `7.1` Event log immuable : `partial`
@@ -443,6 +488,57 @@ ne sait pas "qu'est-ce qui s'est passé récemment sur auth/ spécifiquement".
 
 **Fichiers à modifier** : `src/core/context.ts` (nouveau `buildScopedActivity`), `src/core/audit.ts` (filtrage par related_paths/tags)
 
+### 2.6 Bootstrap brownfield
+**Problème** : sur un repo déjà démarré sans `brainclaw`, la mémoire est vide. Un agent doit alors retomber sur une lecture manuelle du repo, ce qui réduit fortement la valeur initiale du produit.
+
+- Nouvelle commande : `brainclaw bootstrap`
+- But : produire un premier socle de contexte à partir de signaux existants, sans prétendre créer immédiatement une mémoire canonique parfaite
+- Sources minimales scannées :
+  - `README*`, docs locales, manifests (`package.json`, `pyproject.toml`, etc.)
+  - CI et scripts de build/test
+  - structure du repo et points d'entrée détectés
+  - historique Git récent et zones les plus modifiées
+- Sortie v1 :
+  - résumé bootstrap lisible
+  - candidats dérivés à faible/moyenne confiance
+  - recommandations de zones à confirmer manuellement
+- Les signaux bootstrap sont taggés avec provenance et confidence
+- Les items issus du bootstrap restent review-first par défaut, pas d'auto-promotion agressive
+
+### 2.7 Memory seeds dérivés du repo
+**Problème** : beaucoup de conventions, décisions et traps sont déjà implicites dans le code, mais invisibles pour `brainclaw` tant qu'aucun agent ne les a formalisés.
+
+- Introduire des `memory seeds` dérivés du repo :
+  - conventions d'architecture
+  - commandes utiles
+  - zones sensibles
+  - modules chauds
+  - décisions probables observées dans le code/config
+- Chaque seed expose :
+  - `source_kind`
+  - `source_ref`
+  - `confidence`
+  - `derived_at`
+- Les seeds peuvent alimenter `context` même avant leur promotion en mémoire canonique
+- Le review flow doit permettre de transformer un seed utile en vrai `constraint` / `decision` / `trap`
+
+### 2.8 Fallback context quand la mémoire est sparse
+**Problème** : `context` est excellent quand la mémoire existe déjà, mais doit rester utile quand elle est encore pauvre.
+
+- `brainclaw context` doit détecter la densité mémoire du scope demandé
+- Quand la mémoire est faible, `context` enrichit sa réponse avec :
+  - signaux bootstrap
+  - conventions dérivées du repo
+  - contexte machine/agent utile à l'exécution
+- La sortie doit distinguer explicitement :
+  - mémoire canonique
+  - signaux dérivés
+  - inférences
+- Nouveau signal recommandé dans `structuredContent` / JSON :
+  - `memory_density: low|medium|high`
+  - `bootstrap_available: boolean`
+  - `derived_signals: [...]`
+
 ---
 
 ## Phase 3 — MCP Universel (Mois 4-5)
@@ -565,6 +661,33 @@ Outils MCP :
 - Chaque sortie de context inclut "context_schema": "1.0"
 - Breaking changes incrémentent la version majeure
 - Changelog dans docs/context-format-changelog.md
+
+### 6.5 Contexte machine et environnement d'exécution
+- Nouveau flux `brainclaw env` ou sous-commande équivalente pour capturer un contexte machine utile aux agents
+- Signaux prioritaires :
+  - OS, shell, cwd, workspace root
+  - branche Git active, état dirty/clean, remote détecté
+  - runtimes et toolchains visibles (`node`, `python`, `npm`, `pnpm`, etc.)
+  - variables d'environnement utiles mais redacted par défaut
+  - hôte courant et capacités locales pertinentes
+- Usage produit :
+  - enrichir `context`
+  - améliorer `doctor`
+  - alimenter les handoffs et la reprise de session
+- Règle stricte : toute capture machine doit être bornée, locale-first et consciente de la sensibilité des données
+
+### 6.6 Ingestion `AGENTS.md`, skills et surfaces MCP
+- Découvrir et résumer automatiquement :
+  - `AGENTS.md`
+  - règles agents locales et conventions d'orchestration
+  - skills disponibles/actives
+  - serveurs MCP configurés et outils exposés
+- Usage produit :
+  - injecter les instructions agentiques pertinentes dans `context`
+  - aider `bootstrap` à comprendre comment l'agent est censé travailler sur ce repo
+  - améliorer `whoami`, `doctor` et les handoffs avec un profil d'outillage réel
+- Les signaux dérivés de `AGENTS.md`, skills et MCP doivent être versionnés séparément de la mémoire canonique métier
+- La provenance doit rester explicite : un outil disponible n'est pas une décision projet, seulement une capacité ou une contrainte d'exécution
 
 ---
 
