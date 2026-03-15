@@ -111,7 +111,8 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
       console.log(`Registered agents: ${agents.length}`);
       for (const a of agents) {
         const caps = (a.capabilities ?? []).length > 0 ? ` — ${a.capabilities!.join(', ')}` : '';
-        console.log(`  ${a.agent_name} (${a.trust_level ?? 'contributor'})${caps}`);
+        const fingerprint = a.identity_key?.fingerprint ? ` fp=${a.identity_key.fingerprint.slice(0, 12)}` : '';
+        console.log(`  ${a.agent_name} (${a.trust_level ?? 'contributor'})${caps}${fingerprint}`);
       }
     }
   }

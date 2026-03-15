@@ -192,6 +192,13 @@ Conséquence produit :
   - `context_schema` incrémenté à `1.2` avec `context_diff` session-aware dans `brainclaw context`, MCP et les rendus markdown/template
   - nouveau coeur `context-diff` réutilisé par `context`, `context-diff` et `session-end`
   - enrichissement de `doctor --json` avec détails de contradictions triés et stables (`severity`, `score`, `kind`)
+- Livraison du lot `6.1 + 6.2 + 3.3` :
+  - résolution d'identité stricte et partagée pour tous les write-paths CLI/MCP, sans auto-enregistrement implicite des agents en mutation
+  - ajout d'un bloc `identity_key` public sur `AgentIdentityDocument` avec fingerprint `ed25519`, clé privée générée localement hors repo
+  - `register-agent` devient un vrai upsert déclaratif avec `capabilities[]`, fusion ou remplacement explicite, et génération optionnelle du fingerprint public
+  - `set-trust` durci : bootstrap local unique du premier `curator`, puis promotion/rétrogradation réservée aux curators
+  - alignement complet CLI/MCP du trust contract : `observer` lecture seule, writes réservés aux identités enregistrées, `accept`/`reject` réservés à `trusted`/`curator`
+  - support MCP explicite de `agentId` / `byId` avec erreurs stables `identity_error`, `trust_error`, `validation_error`
 - Couverture brownfield ajoutée :
   - tests unitaires du moteur `bootstrap.ts` sur extraction, réutilisation de profil, refresh et fingerprint Git
   - tests unitaires `context` sur auto-bootstrap, désactivation explicite et digest avec signaux dérivés
@@ -212,6 +219,11 @@ Conséquence produit :
   - tests unitaires `runtime-note`, `review` et `session-end` sur les garde-fous contradictions dans les flows auto
   - tests unitaires `context-diff` et `context.ts` sur `since_session` et `context_diff`
   - contrats CLI/MCP sur `context_schema: 1.2`, `context --since-session` et `bclaw_get_context(since_session)`
+- Couverture ajoutée pour le lot identité/trust `6.1 + 6.2 + 3.3` :
+  - tests unitaires `agent-registry` sur résolution stricte par `agent_id` / `agent_name`, rejet des identités incohérentes et gestion du fingerprint public
+  - tests unitaires trust/gouvernance sur bootstrap du premier curator, réservations curator-only de `set-trust` et restrictions `accept` / `reject`
+  - contrats MCP sur refus des writes pour identités non enregistrées, mismatch `agent` / `agentId`, mismatch `by` / `byId` et erreurs `identity_error` / `trust_error`
+  - tests CLI/E2E ajustés pour refléter le nouveau contrat d'identité stricte sur les mutations
 - Couverture ajoutée pour le socle migration/storage :
   - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
   - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
@@ -227,7 +239,7 @@ Conséquence produit :
   - `npm run test:coverage:check` passe
   - `node --test dist-test/tests/cli.test.js` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 72.63%`, `branches 71.19%`, `functions 79.42%`, `lines 72.63%`
+  - couverture fast path : `statements 73.80%`, `branches 71.73%`, `functions 80.79%`, `lines 73.80%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -276,7 +288,7 @@ Conséquence produit :
 **Phase 3 — MCP Universel**
 - `3.1` Conformité protocole MCP : `done`
 - `3.2` Outils MCP de mutation : `done`
-- `3.3` Contrôle d'accès par niveau de confiance via MCP : `partial`
+- `3.3` Contrôle d'accès par niveau de confiance via MCP : `done`
 - `3.4` Schéma MCP stable et versionné : `done`
 
 **Phase 4 — Intelligence Contextuelle**
@@ -294,8 +306,8 @@ Conséquence produit :
 - `5.5` GitHub Action (sync distribuable) : `partial`
 
 **Phase 6 — Expérience Agent**
-- `6.1` Identité agent robuste : `partial`
-- `6.2` Profil d'agent déclaratif : `partial`
+- `6.1` Identité agent robuste : `done`
+- `6.2` Profil d'agent déclaratif : `done`
 - `6.3` Notification de changements : `partial`
 - `6.4` Context format versionné : `done`
 - `6.5` Contexte machine et environnement d'exécution : `done`

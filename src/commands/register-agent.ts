@@ -4,6 +4,9 @@ import type { AgentKind } from '../core/schema.js';
 
 export interface RegisterAgentOptions {
   kind?: AgentKind;
+  capability?: string[];
+  replaceCapabilities?: boolean;
+  generateFingerprint?: boolean;
   setCurrent?: boolean;
   json?: boolean;
 }
@@ -17,6 +20,9 @@ export function runRegisterAgent(agentName: string, options: RegisterAgentOption
   const agent = registerAgentIdentity({
     agentName,
     kind: options.kind ?? 'unknown',
+    capabilities: options.capability,
+    replaceCapabilities: options.replaceCapabilities,
+    generateFingerprint: options.generateFingerprint,
   });
 
   if (options.setCurrent) {
@@ -29,5 +35,7 @@ export function runRegisterAgent(agentName: string, options: RegisterAgentOption
   }
 
   const currentLabel = options.setCurrent ? ' [current]' : '';
-  console.log(`✔ Agent registered: ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}`);
+  const capabilitiesLabel = agent.capabilities.length > 0 ? `, capabilities=${agent.capabilities.join(',')}` : '';
+  const fingerprintLabel = agent.identity_key ? `, fp=${agent.identity_key.fingerprint.slice(0, 12)}` : '';
+  console.log(`✔ Agent registered: ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind}${capabilitiesLabel}${fingerprintLabel})${currentLabel}`);
 }

@@ -109,7 +109,7 @@ export function runReview(options: ReviewOptions = {}): void {
           continue;
         }
         try {
-          runAccept(c.id, autoBy);
+          runAccept(c.id, autoBy, options.cwd);
           promoted.push(c.id);
         } catch {
           autoSkipped.push({ id: c.id, reason: 'accept_failed' });

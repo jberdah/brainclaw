@@ -366,6 +366,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
 
     it('can include bounded reputation in board JSON when explicitly requested', () => {
       enableReputation(dir);
+      run(['set-trust', 'testuser', '--level', 'curator'], dir);
       run(['register-agent', 'copilot', '--kind', 'agent', '--set-current'], dir);
       const reflectBoardRes = run(['reflect', 'Copilot useful proposal', '--type', 'decision'], dir);
       const cndBoardId = extractId(reflectBoardRes.stdout);

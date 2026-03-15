@@ -59,6 +59,10 @@ import { initLogLevel, logger } from './core/logger.js';
 
 const program = new Command();
 
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
 program
   .name('brainclaw')
   .description('Shared project memory for humans and coding agents.')
@@ -328,6 +332,9 @@ program
   .command('register-agent <name>')
   .description('Register an agent or human identity in project memory')
   .option('--kind <kind>', 'Identity kind: agent, human, unknown', 'unknown')
+  .option('--capability <value>', 'Declare a capability on the agent profile (repeatable)', collect, [])
+  .option('--replace-capabilities', 'Replace existing capabilities instead of merging')
+  .option('--generate-fingerprint', 'Generate or rotate a local public identity fingerprint for this agent')
   .option('--set-current', 'Set this identity as the current agent in config')
   .option('--json', 'Output as JSON')
   .action((name, options) => {

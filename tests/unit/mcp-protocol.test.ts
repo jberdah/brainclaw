@@ -188,4 +188,59 @@ describe('commands/mcp protocol core', () => {
       workspace.cleanup();
     }
   });
+
+  it('rejects unregistered identities and mismatched id/name pairs on write tools', () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
+    try {
+      const missingIdentity = executeMcpToolCall({
+        name: 'bclaw_write_note',
+        args: { agent: 'ghost', text: 'hello' },
+        cwd: workspace.dir,
+      });
+      assert.equal(missingIdentity.response.isError, true);
+      assert.equal((missingIdentity.response.structuredContent as { error: { kind: string } }).error.kind, 'identity_error');
+
+      const mismatch = executeMcpToolCall({
+        name: 'bclaw_write_note',
+        args: { agent: 'ghost', agentId: workspace.currentAgent.agent_id, text: 'hello' },
+        cwd: workspace.dir,
+      });
+      assert.equal(mismatch.response.isError, true);
+      assert.equal((mismatch.response.structuredContent as { error: { kind: string } }).error.kind, 'identity_error');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  it('enforces trusted review rights and supports explicit byId parameters', () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
+    try {
+      const rejectBlocked = executeMcpToolCall({
+        name: 'bclaw_reject',
+        args: { id: 'cnd_missing', by: workspace.currentAgent.agent_name },
+        cwd: workspace.dir,
+      });
+      assert.equal(rejectBlocked.response.isError, true);
+      assert.equal((rejectBlocked.response.structuredContent as { error: { kind: string } }).error.kind, 'trust_error');
+
+      const mismatch = executeMcpToolCall({
+        name: 'bclaw_accept',
+        args: { id: 'cnd_missing', by: 'ghost', byId: workspace.currentAgent.agent_id },
+        cwd: workspace.dir,
+      });
+      assert.equal(mismatch.response.isError, true);
+      assert.equal((mismatch.response.structuredContent as { error: { kind: string } }).error.kind, 'identity_error');
+
+      setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
+      const trusted = executeMcpToolCall({
+        name: 'bclaw_accept',
+        args: { id: 'cnd_missing', byId: workspace.currentAgent.agent_id },
+        cwd: workspace.dir,
+      });
+      assert.equal(trusted.response.isError, true);
+      assert.ok(typeof (trusted.response.structuredContent as { error: { kind: string } }).error.kind === 'string');
+    } finally {
+      workspace.cleanup();
+    }
+  });
 });

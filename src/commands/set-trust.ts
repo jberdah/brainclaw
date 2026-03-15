@@ -1,5 +1,10 @@
 import { memoryExists } from '../core/io.js';
-import { setAgentTrustLevel } from '../core/agent-registry.js';
+import {
+  hasElevatedAgent,
+  requireMinimumTrustLevel,
+  requireRegisteredAgentIdentity,
+  setAgentTrustLevel,
+} from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import type { AgentTrustLevel } from '../core/schema.js';
@@ -22,10 +27,32 @@ export function runSetTrust(agentName: string, options: SetTrustOptions): void {
   }
 
   let actor = 'unknown';
+  let actorId: string | undefined;
   try {
     const identity = buildOperationalIdentity();
     actor = identity.agent;
+    actorId = identity.agent_id;
   } catch { /* use default */ }
+
+  let bootstrapCurator = false;
+  if (!hasElevatedAgent()) {
+    if (options.level !== 'curator') {
+      console.error("Error: no trusted or curator agent exists yet. Bootstrap the first curator with `brainclaw set-trust <agent> --level curator`.");
+      process.exit(1);
+    }
+    bootstrapCurator = true;
+  } else {
+    try {
+      const actorIdentity = requireRegisteredAgentIdentity();
+      requireMinimumTrustLevel(actorIdentity, 'curator');
+      actor = actorIdentity.agent_name;
+      actorId = actorIdentity.agent_id;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+  }
 
   let updated;
   try {
@@ -39,10 +66,11 @@ export function runSetTrust(agentName: string, options: SetTrustOptions): void {
   appendAuditEntry({
     action: 'trust_change',
     actor,
+    actor_id: actorId,
     item_id: updated.agent_id,
     item_type: 'agent',
     after: { trust_level: options.level },
-    reason: `set by ${actor}`,
+    reason: bootstrapCurator ? 'bootstrap_curator' : `set by ${actor}`,
   });
 
   if (options.json) {

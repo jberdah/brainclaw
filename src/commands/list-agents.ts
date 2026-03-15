@@ -46,6 +46,8 @@ export function runListAgents(options: ListAgentsOptions = {}): void {
           return summary ? ` trust=${summary.internal_trust} cq=${summary.contribution_quality} rv=${summary.review_reliability} ct=${summary.continuity_hygiene}` : '';
         })()
       : '';
-    console.log(`  - ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}${reputationLabel}`);
+    const capabilitiesLabel = agent.capabilities.length > 0 ? ` caps=${agent.capabilities.join(',')}` : '';
+    const fingerprintLabel = agent.identity_key ? ` fp=${agent.identity_key.fingerprint.slice(0, 12)}` : '';
+    console.log(`  - ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}${reputationLabel}${capabilitiesLabel}${fingerprintLabel}`);
   }
 }

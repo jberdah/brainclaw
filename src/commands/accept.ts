@@ -1,11 +1,10 @@
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { loadCandidate, archiveCandidate } from '../core/candidates.js';
 import { loadState, saveState } from '../core/state.js';
-import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { generateId, nowISO } from '../core/ids.js';
 import { generateTrapId } from '../core/traps.js';
-import { agentCanWriteDirect } from '../core/agent-registry.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import type { Constraint, Decision, Trap, Handoff } from '../core/schema.js';
 
@@ -28,7 +27,7 @@ export function runAccept(id: string, by?: string, cwd?: string): void {
   }
 }
 
-export function acceptCandidate(id: string, by?: string, cwd?: string): AcceptResult {
+export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: string): AcceptResult {
   if (!memoryExists(cwd)) {
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
@@ -39,19 +38,15 @@ export function acceptCandidate(id: string, by?: string, cwd?: string): AcceptRe
     throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
   }
 
-  const config = loadConfig(cwd);
-  const approvalPolicy = config.governance?.approval_policy ?? 'review';
-  const actor = by ?? process.env.USER ?? process.env.USERNAME ?? 'unknown';
-  const curators = config.governance?.curators ?? [];
-
-  // Trust-level bypass: trusted/curator agents can accept without being in governance.curators
-  const actorHasTrust = agentCanWriteDirect(actor, cwd);
-
-  if (approvalPolicy === 'strict' && curators.length > 0 && !curators.includes(actor) && !actorHasTrust) {
-    throw new Error(
-      `Error: strict approval policy enabled. '${actor}' is not in governance.curators and cannot accept candidates.`
-    );
-  }
+  const actorIdentity = requireRegisteredAgentIdentity({
+    agentName: by,
+    agentId: byId,
+    cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(actorIdentity, 'trusted');
+  const actor = actorIdentity.agent_name;
 
   const state = loadState(cwd);
   let promotedItemId = '';
@@ -146,11 +141,12 @@ export function acceptCandidate(id: string, by?: string, cwd?: string): AcceptRe
 
   appendAuditEntry({
     actor,
+    actor_id: actorIdentity.agent_id,
     action: 'accept',
     item_id: id,
     item_type: candidate.type,
     after: { type: candidate.type, text: candidate.text },
-    reason: actorHasTrust ? 'trusted-agent' : undefined,
+    reason: 'trusted-agent',
   }, cwd);
 
   return {

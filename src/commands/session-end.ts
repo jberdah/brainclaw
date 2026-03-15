@@ -6,11 +6,13 @@ import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 
 export interface SessionEndOptions {
   session?: string;
   summary?: string;
   agent?: string;
+  agentId?: string;
   autoReflect?: boolean;
   json?: boolean;
   cwd?: string;
@@ -52,7 +54,15 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const actor = buildOperationalIdentity(options.agent, options.cwd);
+  const registered = requireRegisteredAgentIdentity({
+    agentName: options.agent,
+    agentId: options.agentId,
+    cwd: options.cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(registered, 'contributor');
+  const actor = buildOperationalIdentity(registered.agent_name, options.cwd, { agentId: registered.agent_id });
 
   const sessionId = options.session ?? actor.session_id;
   if (!sessionId) {

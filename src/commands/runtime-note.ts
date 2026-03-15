@@ -1,7 +1,7 @@
 import { buildOperationalIdentity } from '../core/identity.js';
 import { memoryExists } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
-import { getAgentTrustLevel } from '../core/agent-registry.js';
+import { getAgentTrustLevel, requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { loadState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
@@ -12,6 +12,7 @@ import type { CandidateType, MemoryVisibility, RuntimeNote } from '../core/schem
 
 export interface RuntimeNoteOptions {
   agent?: string;
+  agentId?: string;
   tag?: string[];
   project?: string;
   plan?: string;
@@ -57,7 +58,16 @@ export function createRuntimeNote(
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const actor: OperationalIdentity = buildOperationalIdentity(options.agent, options.cwd, {
+  const registeredAgent = requireRegisteredAgentIdentity({
+    agentName: options.agent,
+    agentId: options.agentId,
+    cwd: options.cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(registeredAgent, 'contributor');
+  const actor: OperationalIdentity = buildOperationalIdentity(registeredAgent.agent_name, options.cwd, {
+    agentId: registeredAgent.agent_id,
     sessionId: options.sessionId,
   });
 

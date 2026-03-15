@@ -297,7 +297,7 @@ describe('MCP server', () => {
   it('includes digest and scoped activity in MCP context responses when requested', async () => {
     run(['decision', 'Auth gateway owns OAuth routing', '--tag', 'auth', '--path', 'src/auth/routes.ts'], dir);
     run(['trap', 'Auth routes fail without the gateway policy sync', '--severity', 'high', '--tag', 'auth', '--path', 'src/auth/routes.ts'], dir);
-    run(['runtime-note', 'Auth routes rollout in progress', '--agent', 'copilot', '--tag', 'auth'], dir, {
+    run(['runtime-note', 'Auth routes rollout in progress', '--tag', 'auth'], dir, {
       BRAINCLAW_SESSION_ID: 'sess_digest_ctx',
     });
 
@@ -503,6 +503,7 @@ describe('MCP server', () => {
   });
 
   it('returns an agent collaboration board', async () => {
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
     run(['instruction', 'Read auth memory first', '--layer', 'project', '--project', 'auth'], dir);
     const mcpPlanRes = run(['plan', 'Own auth rollout', '--project', 'auth'], dir);
     const mcpPlanId = extractId(mcpPlanRes.stdout);
@@ -541,6 +542,7 @@ describe('MCP server', () => {
 
   it('can include bounded reputation summaries in MCP board responses when requested', async () => {
     enableReputation(dir);
+    run(['set-trust', 'testuser', '--level', 'curator'], dir);
     run(['register-agent', 'copilot', '--kind', 'agent', '--set-current'], dir);
     const reflectMcpRes = run(['reflect', 'Copilot useful proposal', '--type', 'decision'], dir);
     const cndMcpId = extractId(reflectMcpRes.stdout);
@@ -573,6 +575,7 @@ describe('MCP server', () => {
   });
 
   it('keeps machine-local runtime notes host-aware in MCP responses', async () => {
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
     run(['runtime-note', 'Host A runtime', '--agent', 'copilot', '--visibility', 'machine'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
     run(['runtime-note', 'Host B runtime', '--agent', 'copilot', '--visibility', 'machine'], dir, { BRAINCLAW_HOST_ID: 'host-b' });
 
@@ -601,6 +604,7 @@ describe('MCP server', () => {
   });
 
   it('reuses one implicit MCP session across writes and returns auto-reflect metadata', async () => {
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
     const proc = startMcp(dir);
     try {
       await initializeMcp(proc);
@@ -651,6 +655,7 @@ describe('MCP server', () => {
   });
 
   it('cancels an in-flight write request without corrupting the next session-aware write', async () => {
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
     const proc = startMcp(dir, { BRAINCLAW_MCP_TEST_DELAY_MS: '150' });
     try {
       await initializeMcp(proc);

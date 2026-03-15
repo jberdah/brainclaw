@@ -10,7 +10,7 @@ import { saveCandidate, generateCandidateId, listCandidates, archiveCandidate } 
 import { detectDuplicates } from '../core/duplicates.js';
 import { RuntimeEventSchema, type CandidateType, type Candidate, type Constraint, type Decision, type Trap, type Handoff } from '../core/schema.js';
 import { listRuntimeEventsBySession } from '../core/events.js';
-import { agentCanWriteDirect } from '../core/agent-registry.js';
+import { agentCanWriteDirect, requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { generateTrapId } from '../core/traps.js';
 import { evaluateReflectionSafety } from '../core/reflection-safety.js';
@@ -156,12 +156,20 @@ export function createCandidateFromInput(
   automation: boolean = false,
 ): CandidateCreationResult {
   const config = loadConfig(options.cwd);
-  let actorIdentity;
-  try {
-    actorIdentity = buildOperationalIdentity(undefined, options.cwd);
-  } catch {
-    actorIdentity = undefined;
-  }
+  const explicitAuthor = options.author?.trim();
+  const explicitAuthorId = options.authorId?.trim();
+  const registeredAuthor = requireRegisteredAgentIdentity({
+    agentName: explicitAuthor,
+    agentId: explicitAuthorId,
+    cwd: options.cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(registeredAuthor, 'contributor');
+  const actorIdentity = buildOperationalIdentity(registeredAuthor.agent_name, options.cwd, {
+    agentId: registeredAuthor.agent_id,
+    sessionId: options.sessionId,
+  });
 
   // Security scan — batch/automated imports always block on sensitive content
   const rawWarnings = scanText(text, config);
@@ -198,11 +206,11 @@ export function createCandidateFromInput(
     type,
     text,
     created_at: nowISO(),
-    author: options.author ?? actorIdentity?.agent ?? getDefaultAuthor(),
-    author_id: options.authorId ?? actorIdentity?.agent_id,
-    project_id: options.projectId ?? actorIdentity?.project_id,
-    host_id: options.hostId ?? actorIdentity?.host_id,
-    session_id: options.sessionId ?? actorIdentity?.session_id,
+    author: options.author ?? actorIdentity.agent,
+    author_id: options.authorId ?? actorIdentity.agent_id,
+    project_id: options.projectId ?? actorIdentity.project_id,
+    host_id: options.hostId ?? actorIdentity.host_id,
+    session_id: options.sessionId ?? actorIdentity.session_id,
     source: options.source,
     tags: options.tag ?? [],
     status: 'pending' as const,
@@ -326,8 +334,4 @@ export function mapEventTypeToCandidateType(eventType: string): CandidateType {
     default:
       return 'decision';
   }
-}
-
-function getDefaultAuthor(): string {
-  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
 }

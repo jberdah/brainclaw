@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { requireOperationalAgentIdentity } from './agent-registry.js';
+import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { memoryDir, writeFileAtomic } from './io.js';
@@ -25,6 +25,7 @@ export interface SessionResolutionOptions {
 }
 
 export interface OperationalIdentityOptions {
+  agentId?: string;
   sessionId?: string;
   persistImplicitSession?: boolean;
 }
@@ -66,7 +67,13 @@ export function buildOperationalIdentity(
   cwd?: string,
   options: OperationalIdentityOptions = {},
 ): OperationalIdentity {
-  const actor = requireOperationalAgentIdentity(agentName, cwd);
+  const actor = requireRegisteredAgentIdentity({
+    agentName,
+    agentId: options.agentId,
+    cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
   const config = loadConfig(cwd);
   const hostId = resolveCurrentHostId();
   return {

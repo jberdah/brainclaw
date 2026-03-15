@@ -1,6 +1,8 @@
 import { memoryExists } from '../core/io.js';
 import { loadCandidate, archiveCandidate } from '../core/candidates.js';
 import { nowISO } from '../core/ids.js';
+import { appendAuditEntry } from '../core/audit.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 
 export interface RejectResult {
   candidate_id: string;
@@ -18,7 +20,7 @@ export function runReject(id: string, reason?: string, by?: string, cwd?: string
   }
 }
 
-export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: string): RejectResult {
+export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: string, byId?: string): RejectResult {
   if (!memoryExists(cwd)) {
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
@@ -29,7 +31,15 @@ export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: 
     throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
   }
 
-  const actor = by ?? process.env.USER ?? process.env.USERNAME ?? 'unknown';
+  const actorIdentity = requireRegisteredAgentIdentity({
+    agentName: by,
+    agentId: byId,
+    cwd,
+    allowCurrent: true,
+    allowEnv: true,
+  });
+  requireMinimumTrustLevel(actorIdentity, 'trusted');
+  const actor = actorIdentity.agent_name;
   candidate.status = 'rejected';
   candidate.resolved_at = nowISO();
   candidate.resolved_by = actor;
@@ -38,5 +48,13 @@ export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: 
   }
 
   archiveCandidate(candidate, 'rejected', cwd);
+  appendAuditEntry({
+    actor,
+    actor_id: actorIdentity.agent_id,
+    action: 'reject',
+    item_id: id,
+    item_type: candidate.type,
+    reason,
+  }, cwd);
   return { candidate_id: id, actor };
 }
