@@ -1,7 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { generateId, nowISO } from '../core/ids.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -32,10 +32,11 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
   }
 
   const state = loadState();
-  const id = generateId('recent_decisions');
+  const { id, short_label } = generateIdWithLabel('recent_decisions');
 
   const entry: Decision = {
     id,
+    short_label,
     text,
     created_at: nowISO(),
     author: options.author ?? getDefaultAuthor(),
@@ -49,7 +50,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
   // Rebuild markdown
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Decision added: [${id}] ${text}`);
+  console.log(`✔ Decision added: [${short_label}] ${text}`);
 }
 
 function getDefaultAuthor(): string {

@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { loadState, saveState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { generateId, nowISO } from '../core/ids.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -43,7 +43,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     console.error(`Error: Plan item '${options.plan}' not found.`);
     process.exit(1);
   }
-  const id = generateId('open_handoffs');
+  const { id, short_label } = generateIdWithLabel('open_handoffs');
 
   let diff;
   if (options.captureDiff) {
@@ -56,6 +56,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
 
   const entry: Handoff = {
     id,
+    short_label,
     from: options.from,
     to: options.to,
     text,
@@ -74,7 +75,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
 
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
+  console.log(`✔ Handoff added: [${short_label}] ${options.from} → ${options.to}: ${text}`);
 }
 
 function getDefaultAuthor(): string {

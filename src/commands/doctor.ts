@@ -1,5 +1,6 @@
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { buildReputationSummary } from '../core/reputation.js';
+import { buildCircuitBreakerSnapshot } from '../core/circuit-breaker.js';
 import { loadState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { doctorCheck } from '../core/security.js';
@@ -325,7 +326,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   // Check project.md consistency
   try {
     const currentMd = readFileSync(memoryPath('project.md', options.cwd));
-    const expectedMd = generateMarkdown(state);
+    const expectedMd = generateMarkdown(state, options.cwd);
     if (currentMd === expectedMd) {
       checks.push({ name: 'markdown_sync', status: 'ok', message: 'project.md is in sync with state' });
       if (!options.json) {
@@ -745,6 +746,28 @@ export function runDoctor(options: DoctorOptions = {}): void {
     }
   }
 
+  // Circuit-breaker health check
+  const circuitSnapshot = buildCircuitBreakerSnapshot(options.cwd);
+  if (circuitSnapshot.tripped_agents.length > 0) {
+    const names = circuitSnapshot.tripped_agents.map(a => `${a.agent_key}(${a.rejection_count}/${a.threshold})`).join(', ');
+    checks.push({
+      name: 'circuit_breaker',
+      status: 'warn',
+      message: `${circuitSnapshot.tripped_agents.length} agent(s) in circuit-breaker: ${names}`,
+      details: circuitSnapshot.tripped_agents,
+    });
+    hasIssues = true;
+    if (!options.json) {
+      console.warn(`⚠ Circuit-breaker: ${circuitSnapshot.tripped_agents.length} agent(s) suspended from auto-promote: ${names}`);
+      console.warn(`  Use 'brainclaw set-trust <agent> --reset-breaker' to restore.`);
+    }
+  } else {
+    checks.push({ name: 'circuit_breaker', status: 'ok', message: 'No agents in circuit-breaker' });
+    if (!options.json) {
+      console.log('✔ Circuit-breaker: no agents suspended');
+    }
+  }
+
   if (options.json) {
     console.log(JSON.stringify({
       ok: !hasIssues,
@@ -757,6 +780,9 @@ export function runDoctor(options: DoctorOptions = {}): void {
         reputation_tracked_agents: reputationSummary.tracked_agents,
         reputation_avg_internal_trust: reputationSummary.avg_internal_trust,
         reputation_current_agent_trust: reputationSummary.current_agent_trust ?? 0,
+        circuit_breaker_tripped_count: circuitSnapshot.tripped_agents.length,
+        circuit_breaker_threshold: circuitSnapshot.threshold,
+        circuit_breaker_window_days: circuitSnapshot.window_days,
       },
       migration: options.migrationCheck
         ? {

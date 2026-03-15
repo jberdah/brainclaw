@@ -3,6 +3,7 @@ import { listCandidates, saveCandidate } from '../core/candidates.js';
 import { loadConfig } from '../core/config.js';
 import { detectNewItemContradictions, summarizeContradictions } from '../core/contradictions.js';
 import { buildReputationRankingLookup } from '../core/reputation.js';
+import { checkCircuitBreaker } from '../core/circuit-breaker.js';
 import { loadState } from '../core/state.js';
 import { runAccept } from './accept.js';
 
@@ -90,6 +91,12 @@ export function runReview(options: ReviewOptions = {}): void {
       if (score >= scoreThreshold ||
           (c.star_count ?? 0) >= promotionThreshold ||
           (c.usage_count ?? 0) >= promotionUsesThreshold) {
+        // Circuit-breaker: skip auto-promote if agent has too many recent rejections
+        const breaker = checkCircuitBreaker(c.author_id ?? c.author, options.cwd);
+        if (breaker.tripped) {
+          autoSkipped.push({ id: c.id, reason: `circuit_breaker:${c.author}(${breaker.rejection_count}/${breaker.threshold} rejections in ${breaker.window_days}d)` });
+          continue;
+        }
         const contradictions = detectNewItemContradictions(
           c.text,
           c.tags,
@@ -228,7 +235,7 @@ export function runReview(options: ReviewOptions = {}): void {
     const promote = stars >= promotionThreshold || uses >= promotionUsesThreshold ? ' · PROMOTE?' : '';
     const ageHours = Math.floor((now - Date.parse(c.created_at)) / (1000 * 60 * 60));
     const overdue = ageHours > slaHours ? ' OVERDUE' : '';
-    console.log(`  [${c.id}] (${c.type}) ${c.text}${extra}${tags}`);
+    console.log(`  [${c.short_label ?? c.id}] (${c.type}) ${c.text}${extra}${tags}`);
     console.log(`         by ${c.author} at ${c.created_at}${assigneePart} · stars ${stars}/${promotionThreshold} · uses ${uses}/${promotionUsesThreshold}${promote} · age ${ageHours}h · SLA ${slaHours}h${overdue}`);
   }
 }

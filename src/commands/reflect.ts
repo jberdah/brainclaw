@@ -5,14 +5,14 @@ import { buildOperationalIdentity } from '../core/identity.js';
 import { loadState, saveState } from '../core/state.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { scanText } from '../core/security.js';
-import { nowISO, generateId } from '../core/ids.js';
-import { saveCandidate, generateCandidateId, listCandidates, archiveCandidate } from '../core/candidates.js';
+import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
+import { saveCandidate, generateCandidateIdWithLabel, listCandidates, archiveCandidate } from '../core/candidates.js';
 import { detectDuplicates } from '../core/duplicates.js';
 import { RuntimeEventSchema, type CandidateType, type Candidate, type Constraint, type Decision, type Trap, type Handoff } from '../core/schema.js';
 import { listRuntimeEventsBySession } from '../core/events.js';
 import { agentCanWriteDirect, requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
-import { generateTrapId } from '../core/traps.js';
+import { generateTrapIdWithLabel } from '../core/traps.js';
 import { evaluateReflectionSafety } from '../core/reflection-safety.js';
 import type { ContradictionReport } from '../core/contradictions.js';
 
@@ -200,9 +200,10 @@ export function createCandidateFromInput(
     }
   }
 
-  const id = generateCandidateId();
+  const { id, short_label } = generateCandidateIdWithLabel(options.cwd);
   const candidate = {
     id,
+    short_label,
     type,
     text,
     created_at: nowISO(),
@@ -292,25 +293,29 @@ function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
   let promotedItemId = '';
   switch (candidate.type) {
     case 'constraint': {
-      const entry: Constraint = { id: generateId('active_constraints'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags };
+      const { id: cId, short_label } = generateIdWithLabel('active_constraints', cwd);
+      const entry: Constraint = { id: cId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags };
       state.active_constraints.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'decision': {
-      const entry: Decision = { id: generateId('recent_decisions'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, related_paths: candidate.related_paths, tags: candidate.tags };
+      const { id: dId, short_label } = generateIdWithLabel('recent_decisions', cwd);
+      const entry: Decision = { id: dId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, related_paths: candidate.related_paths, tags: candidate.tags };
       state.recent_decisions.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'trap': {
-      const entry: Trap = { id: generateTrapId(), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
+      const { id: tId, short_label } = generateTrapIdWithLabel(cwd);
+      const entry: Trap = { id: tId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
       state.known_traps.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'handoff': {
-      const entry: Handoff = { id: generateId('open_handoffs'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, from: candidate.from ?? '', to: candidate.to ?? '', status: 'open', tags: candidate.tags, related_paths: candidate.related_paths };
+      const { id: hId, short_label } = generateIdWithLabel('open_handoffs', cwd);
+      const entry: Handoff = { id: hId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, from: candidate.from ?? '', to: candidate.to ?? '', status: 'open', tags: candidate.tags, related_paths: candidate.related_paths };
       state.open_handoffs.push(entry);
       promotedItemId = entry.id;
       break;

@@ -1,9 +1,9 @@
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { loadCandidate, archiveCandidate } from '../core/candidates.js';
+import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
 import { loadState, saveState } from '../core/state.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { generateId, nowISO } from '../core/ids.js';
-import { generateTrapId } from '../core/traps.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
+import { generateTrapIdWithLabel } from '../core/traps.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import type { Constraint, Decision, Trap, Handoff } from '../core/schema.js';
@@ -32,7 +32,8 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const candidate = loadCandidate(id, cwd);
+  const resolvedId = resolveIdOrAlias(id, cwd);
+  const candidate = loadCandidate(resolvedId, cwd);
 
   if (candidate.status !== 'pending') {
     throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
@@ -54,9 +55,10 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
   // Promote candidate into canonical state based on type
   switch (candidate.type) {
     case 'constraint': {
-      const entryId = generateId('active_constraints');
+      const { id: entryId, short_label } = generateIdWithLabel('active_constraints', cwd);
       const entry: Constraint = {
         id: entryId,
+        short_label,
         text: candidate.text,
         created_at: candidate.created_at,
         author: candidate.author,
@@ -72,9 +74,10 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
       break;
     }
     case 'decision': {
-      const entryId = generateId('recent_decisions');
+      const { id: entryId, short_label } = generateIdWithLabel('recent_decisions', cwd);
       const entry: Decision = {
         id: entryId,
+        short_label,
         text: candidate.text,
         created_at: candidate.created_at,
         author: candidate.author,
@@ -90,9 +93,10 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
       break;
     }
     case 'trap': {
-      const entryId = generateTrapId();
+      const { id: entryId, short_label } = generateTrapIdWithLabel(cwd);
       const entry: Trap = {
         id: entryId,
+        short_label,
         text: candidate.text,
         created_at: candidate.created_at,
         author: candidate.author,
@@ -109,9 +113,10 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
       break;
     }
     case 'handoff': {
-      const entryId = generateId('open_handoffs');
+      const { id: entryId, short_label } = generateIdWithLabel('open_handoffs', cwd);
       const entry: Handoff = {
         id: entryId,
+        short_label,
         from: candidate.from ?? 'unknown',
         to: candidate.to ?? 'unknown',
         text: candidate.text,
@@ -133,7 +138,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
   saveState(state, cwd);
   writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
 
-  // Archive candidate
+  // Archive candidate (use resolved hash ID)
   candidate.status = 'accepted';
   candidate.resolved_at = nowISO();
   candidate.resolved_by = actor;
@@ -143,14 +148,14 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
     actor,
     actor_id: actorIdentity.agent_id,
     action: 'accept',
-    item_id: id,
+    item_id: resolvedId,
     item_type: candidate.type,
     after: { type: candidate.type, text: candidate.text },
     reason: 'trusted-agent',
   }, cwd);
 
   return {
-    candidate_id: id,
+    candidate_id: resolvedId,
     candidate_type: candidate.type,
     promoted_item_id: promotedItemId,
     actor,

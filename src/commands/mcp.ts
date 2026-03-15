@@ -7,7 +7,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import { saveCandidate, generateCandidateId } from '../core/candidates.js';
+import { saveCandidate, generateCandidateIdWithLabel } from '../core/candidates.js';
 import { loadClaim, saveClaim, generateClaimId } from '../core/claims.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { acceptCandidate } from './accept.js';
@@ -1103,11 +1103,12 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         agentId: resolvedIdentity.agent_id,
         sessionId: connectionSessionId,
       });
-      const candId = generateCandidateId();
+      const candId = generateCandidateIdWithLabel(cwd);
       const type = String(args.type ?? 'decision') as CandidateType;
       const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const candidate = {
-        id: candId,
+        id: candId.id,
+        short_label: candId.short_label,
         type,
         text: candidateText,
         created_at: nowISO(),
@@ -1126,12 +1127,12 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       };
       if (writeThrough) {
         saveCandidate(candidate, cwd);
-        const accepted = acceptCandidate(candId, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
-        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId, item_type: type }, cwd);
+        const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
+        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, cwd);
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ Direct write [${candId}] (trusted agent)` }],
-            candidate_id: candId,
+            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)` }],
+            candidate_id: candId.id,
             promoted_item_id: accepted.promoted_item_id,
             write_through: true,
           }),
@@ -1139,11 +1140,11 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         };
       }
       saveCandidate(candidate, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId, item_type: type }, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Candidate created [${candId}] (pending review)` }],
-          candidate_id: candId,
+          content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)` }],
+          candidate_id: candId.id,
           write_through: false,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,

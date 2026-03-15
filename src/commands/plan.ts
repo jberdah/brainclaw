@@ -1,7 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { generateId, nowISO } from '../core/ids.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -36,11 +36,12 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   }
 
   const state = loadState();
-  const id = generateId('plan_items');
+  const { id, short_label } = generateIdWithLabel('plan_items');
   const timestamp = nowISO();
 
   const entry: PlanItem = {
     id,
+    short_label,
     text,
     created_at: timestamp,
     updated_at: timestamp,
@@ -58,7 +59,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   saveState(state);
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Plan item added: [${id}] ${text}`);
+  console.log(`✔ Plan item added: [${short_label}] ${text}`);
 }
 
 function getDefaultAuthor(): string {

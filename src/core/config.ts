@@ -64,6 +64,8 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
       prune_rejected_after_days: 30,
       auto_promote_trusted: false,
       auto_promote_score_threshold: 5,
+      circuit_breaker_threshold: 5,
+      circuit_breaker_window_days: 7,
     },
     governance: {
       approval_policy: 'review',

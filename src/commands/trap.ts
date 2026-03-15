@@ -5,7 +5,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateTrapId, saveOperationalTrap } from '../core/traps.js';
+import { generateTrapIdWithLabel, saveOperationalTrap } from '../core/traps.js';
 import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import type { Trap, Severity, MemoryVisibility } from '../core/schema.js';
 
@@ -41,12 +41,13 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
   }
 
   const state = loadState();
-  const id = generateTrapId();
+  const { id, short_label } = generateTrapIdWithLabel();
   const visibility = options.visibility ?? 'shared';
   const hostId = visibility === 'shared' ? undefined : resolveCurrentHostId(options.host);
 
   const entry: Trap = {
     id,
+    short_label,
     text,
     created_at: nowISO(),
     author: options.author ?? getDefaultAuthor(),
@@ -67,7 +68,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
   }
 
   const scopeInfo = visibility === 'shared' ? 'shared' : `${visibility}:${hostId}`;
-  console.log(`✔ Trap added: [${id}] (${scopeInfo}) ${text}`);
+  console.log(`✔ Trap added: [${short_label}] (${scopeInfo}) ${text}`);
 }
 
 function getDefaultAuthor(): string {

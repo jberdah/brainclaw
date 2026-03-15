@@ -20,6 +20,7 @@ export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
 export const ConstraintSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   text: z.string(),
   created_at: z.string(),
   author: z.string(),
@@ -37,6 +38,7 @@ export type Constraint = z.infer<typeof ConstraintSchema>;
 export const DecisionSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   text: z.string(),
   created_at: z.string(),
   author: z.string(),
@@ -52,6 +54,7 @@ export type Decision = z.infer<typeof DecisionSchema>;
 export const TrapSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   text: z.string(),
   created_at: z.string(),
   author: z.string(),
@@ -70,6 +73,7 @@ export type Trap = z.infer<typeof TrapSchema>;
 export const HandoffSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   from: z.string(),
   to: z.string(),
   text: z.string(),
@@ -96,6 +100,7 @@ export type PlanStatus = z.infer<typeof PlanStatusSchema>;
 export const PlanItemSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   text: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -193,6 +198,7 @@ export type CandidateContradiction = z.infer<typeof CandidateContradictionSchema
 export const CandidateSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
+  short_label: z.string().optional(),
   type: CandidateTypeSchema,
   text: z.string(),
   created_at: z.string(),
@@ -233,6 +239,8 @@ export const ReflectiveMemoryConfigSchema = z.object({
   prune_rejected_after_days: z.number().default(30),
   auto_promote_trusted: z.boolean().default(false),
   auto_promote_score_threshold: z.number().default(5),
+  circuit_breaker_threshold: z.number().int().positive().default(5),
+  circuit_breaker_window_days: z.number().int().positive().default(7),
 });
 
 export const GovernanceConfigSchema = z.object({

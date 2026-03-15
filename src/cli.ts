@@ -572,11 +572,12 @@ program
 // --- set-trust ---
 program
   .command('set-trust <agent>')
-  .description('Set the trust level for a registered agent')
-  .requiredOption('--level <level>', 'Trust level: observer, contributor, trusted, curator')
+  .description('Set the trust level for a registered agent or manage circuit-breaker state')
+  .option('--level <level>', 'Trust level: observer, contributor, trusted, curator')
+  .option('--reset-breaker', 'Reset circuit-breaker suspension for the agent (restores auto-promote)')
   .option('--json', 'Output as JSON')
   .action((agent, options) => {
-    runSetTrust(agent, options);
+    runSetTrust(agent, { level: options.level, resetBreaker: options.resetBreaker, json: options.json });
   });
 
 // --- session-start ---

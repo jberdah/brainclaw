@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { generateId } from './ids.js';
+import { generateId, generateIdWithLabel } from './ids.js';
 import { memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { TrapSchema, type MemoryVisibility, type Trap } from './schema.js';
@@ -94,4 +94,8 @@ export function saveOperationalTrap(trap: Trap, cwd?: string): void {
 
 export function generateTrapId(): string {
   return generateId('known_traps');
+}
+
+export function generateTrapIdWithLabel(cwd?: string): { id: string; short_label: string } {
+  return generateIdWithLabel('known_traps', cwd);
 }

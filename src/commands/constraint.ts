@@ -1,7 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { generateId, nowISO } from '../core/ids.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -32,10 +32,11 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
   }
 
   const state = loadState();
-  const id = generateId('active_constraints');
+  const { id, short_label } = generateIdWithLabel('active_constraints');
 
   const entry: Constraint = {
     id,
+    short_label,
     text,
     created_at: nowISO(),
     author: options.author ?? getDefaultAuthor(),
@@ -49,7 +50,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
 
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
 
-  console.log(`✔ Constraint added: [${id}] ${text}`);
+  console.log(`✔ Constraint added: [${short_label}] ${text}`);
 }
 
 function getDefaultAuthor(): string {

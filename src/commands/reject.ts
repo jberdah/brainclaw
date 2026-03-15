@@ -1,5 +1,5 @@
 import { memoryExists } from '../core/io.js';
-import { loadCandidate, archiveCandidate } from '../core/candidates.js';
+import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
 import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
@@ -25,10 +25,11 @@ export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: 
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const candidate = loadCandidate(id, cwd);
+  const resolvedId = resolveIdOrAlias(id, cwd);
+  const candidate = loadCandidate(resolvedId, cwd);
 
   if (candidate.status !== 'pending') {
-    throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
+    throw new Error(`Candidate '${resolvedId}' is already ${candidate.status}.`);
   }
 
   const actorIdentity = requireRegisteredAgentIdentity({
@@ -52,9 +53,9 @@ export function rejectCandidate(id: string, reason?: string, by?: string, cwd?: 
     actor,
     actor_id: actorIdentity.agent_id,
     action: 'reject',
-    item_id: id,
+    item_id: resolvedId,
     item_type: candidate.type,
     reason,
   }, cwd);
-  return { candidate_id: id, actor };
+  return { candidate_id: resolvedId, actor };
 }

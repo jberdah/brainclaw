@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CandidateSchema, type Candidate } from './schema.js';
 import { memoryDir } from './io.js';
-import { nowISO } from './ids.js';
+import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 
 const INBOX_DIR = 'inbox';
@@ -137,4 +137,26 @@ export function addCandidateUse(id: string, by: string, context: string, cwd?: s
 export function generateCandidateId(): string {
   const rand = crypto.randomBytes(4).toString('hex');
   return `cnd_${rand}`;
+}
+
+/** Generate both a hash candidate ID and a short label (e.g. `cnd#47`). */
+export function generateCandidateIdWithLabel(cwd?: string): { id: string; short_label: string } {
+  const rand = crypto.randomBytes(4).toString('hex');
+  const id = `cnd_${rand}`;
+  const short_label = getNextShortLabel('cnd', cwd);
+  return { id, short_label };
+}
+
+/**
+ * Resolve a candidate alias (`cnd#47`) or hash ID to the canonical hash ID.
+ * Searches pending inbox only — use `resolveArchivedIdOrAlias` for historical items.
+ */
+export function resolveIdOrAlias(input: string, cwd?: string): string {
+  if (!/^[a-z]+#\d+$/.test(input)) return input;
+  const candidates = listCandidates(undefined, cwd);
+  const found = candidates.find(c => c.short_label === input);
+  if (!found) {
+    throw new Error(`No pending candidate found with alias '${input}'.`);
+  }
+  return found.id;
 }
