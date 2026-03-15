@@ -133,9 +133,17 @@ Conséquence produit :
 
 ---
 
-## Mise à jour d'avancement — 2026-03-15
+## Mise à jour d'avancement — 2026-03-15 (session 3)
 
-### Travail réalisé récemment
+### Session 3 — Livré
+- Livraison de `2.4` Alias courts sur les IDs : champ `short_label` sur tous les types (candidates, decisions, constraints, traps, handoffs, plans), compteur par prefix dans `.brainclaw/.id-counter.json`, affichage `[cnd#47]` en CLI/MCP, résolution des deux formats en input (`cnd#47` ou `cnd_a3f2b1c4`) dans `accept`, `reject`, `reflect`.
+- Livraison de `1.3` Circuit-breaker auto-promote : suspension de l'auto-promote pour un agent après N rejets (défaut 5) sur 7 jours glissants, `doctor` signale les agents en breaker, `set-trust --reset-breaker` pour restaurer manuellement. Nouveau module `src/core/circuit-breaker.ts`. 37 suites, 0 échecs.
+- Fix régression `doctor.ts` : `generateMarkdown(state)` → `generateMarkdown(state, options.cwd)` — comparaison `project.md` utilisait `process.cwd()` au lieu du workspace de test.
+- Workflow git documenté dans brainclaw : branche par phase, tests validés, commit + push branche, merge master, nettoyage.
+- Trap enregistré : Git push SSH ne fonctionne pas depuis PowerShell — utiliser `wsl -- bash -c ...`.
+- Décisions architecturales enregistrées : pattern `cwd` optionnel fragile (à terme : injecter un `ExecutionContext`), dualité state YAML central vs fichiers JSON individuels (les fichiers JSON sont la source de vérité, le state YAML est une vue dénormalisée).
+
+### Travail réalisé antérieurement
 - Rebranding produit stabilisé : `brainclaw` / `bclaw`, `.brainclaw/` comme seul répertoire supporté, suppression de la surface legacy `--storage-dir`.
 - Hardening du write-path : verrou strict, nettoyage des `.tmp` / `.lock` orphelins au démarrage, correction de `prune --expired`, réalignement de plusieurs flows CLI/MCP.
 - Restructuration profonde de la suite de tests :
@@ -270,7 +278,7 @@ Conséquence produit :
 **Phase 1 — Autonomie agentique**
 - `1.1` Système de niveaux de confiance : `partial`
 - `1.2` Write-through direct pour agents de confiance : `partial`
-- `1.3` Auto-promote pipeline : `partial`
+- `1.3` Auto-promote pipeline : `done`
 - `1.4` Session lifecycle : `partial`
 - `1.5` TTL natif sur les items éphémères : `partial`
 - `1.6` Export vers formats agents natifs : `partial`
@@ -279,7 +287,7 @@ Conséquence produit :
 - `2.1` Auto-reflect notes pour agents trusted : `done`
 - `2.2` Context digest : `done`
 - `2.3` Session implicite / auto-session : `done`
-- `2.4` Alias courts sur les IDs : `todo`
+- `2.4` Alias courts sur les IDs : `done`
 - `2.5` Résumé d'activité récente par scope : `done`
 - `2.6` Bootstrap brownfield : `done`
 - `2.7` Memory seeds dérivés du repo : `done`
@@ -318,6 +326,12 @@ Conséquence produit :
 - `7.2` History par item : `partial`
 - `7.3` Métriques de santé : `partial`
 - `7.4` Rollback : `partial`
+
+**Phase 0.6 — Correctness & DX (bugs identifiés par usage)**
+- `0.6.1` Bug: `plan list` crée un plan texte "list" : `todo`
+- `0.6.2` Bug: `context` retourne `plan_items`/`handoffs` vides (lit state YAML au lieu des fichiers JSON) : `todo`
+- `0.6.3` Bug: `package.json` version `0.3.0` désynchronisée avec commits `0.5.x` : `todo`
+- `0.6.4` Feature: commande `update-handoff <id> --status` : `todo`
 
 **Post-v1**
 - `VS Code Extension` : `todo`
@@ -426,7 +440,9 @@ Nouvelle commande : `brainclaw set-trust <agent> --level trusted`
 - Option --force-review pour forcer le cycle même pour un agent trusted
 - Audit trail obligatoire : toute écriture directe horodatée avec agent_id + host_id + session_id
 
-### 1.3 Auto-promote pipeline
+### 1.3 Auto-promote pipeline — `done`
+**Livré en session 3 (commit 8119e33).** Circuit-breaker implémenté dans `src/core/circuit-breaker.ts`, intégré dans `review --auto`, `doctor --json`, `set-trust --reset-breaker`.
+
 - Seuils configurables dans reflective_memory : promotion_stars_threshold, promotion_uses_threshold
 - Nouveau : auto_promote_trusted boolean — si true, les items d'agents trusted sont promus automatiquement sans humain
 - Nouveau : auto_promote_score_threshold : score minimum (stars + uses) pour promotion automatique tous agents
@@ -458,6 +474,39 @@ Nouvelle commande : `brainclaw set-trust <agent> --level trusted`
 - Synchronisation automatique optionnelle : auto_export_on_accept: true dans config
 
 **Rationale** : l'export multi-format est le hook d'adoption le plus puissant de brainclaw. Un utilisateur qui génère son `copilot-instructions.md` depuis brainclaw a une raison immédiate de l'installer. Cette feature doit exister tôt pour accélérer l'adoption.
+
+---
+
+## Phase 0.6 — Correctness & DX (bugs identifiés par usage)
+
+Bugs et manques identifiés lors de l'utilisation de brainclaw sur son propre développement (session 3).
+
+### 0.6.1 Bug : `plan list` crée un plan texte "list"
+**Problème** : `brainclaw plan list` est interprété comme "ajouter un plan avec le texte 'list'" car `plan <text>` prend le premier argument comme texte.
+
+- Ajouter `plan list` comme alias de `list-plans` dans le CLI
+- Ou valider que le texte ne correspond pas à une sous-commande connue et émettre une erreur explicite
+- Test : `brainclaw plan list` ne doit plus créer un item parasite
+
+### 0.6.2 Bug : `context` retourne `plan_items` et `handoffs` vides
+**Problème** : `brainclaw context --json` retourne des arrays vides pour `plan_items` et `handoffs` même quand les fichiers existent dans `.brainclaw/plans/` et `.brainclaw/handoffs/`.
+
+- Cause : `context` lit depuis `state.plan_items` (state YAML central), pas depuis les fichiers JSON individuels
+- Fix : `context` doit lire les plans/handoffs depuis leurs fichiers JSON (source de vérité), comme le fait `list-plans`
+- Décision architecturale déjà enregistrée : les fichiers JSON individuels sont la source de vérité, le state YAML est une vue dénormalisée
+
+### 0.6.3 Bug : `package.json` version désynchronisée
+**Problème** : `brainclaw --version` retourne `0.3.0` alors que le projet est fonctionnellement à `0.5.x` selon les commits.
+
+- Mettre à jour `package.json` version → `0.6.0` (prochaine milestone propre)
+- Ajouter une étape dans le CI qui vérifie que `--version` correspond au `package.json`
+
+### 0.6.4 Feature : commande `update-handoff`
+**Problème** : il n'existe pas de commande pour fermer ou mettre à jour un handoff. Actuellement on doit éditer le JSON directement.
+
+- Nouvelle commande : `brainclaw update-handoff <id> --status open|accepted|rejected`
+- Alignement avec `update-plan <id> --status`
+- Exposer aussi via MCP
 
 ---
 
@@ -513,9 +562,10 @@ actionnable en 3-5 lignes : "voilà ce que tu dois savoir avant de toucher à ce
 
 **Fichiers à modifier** : `src/core/identity.ts` (auto-génération session_id), `src/commands/mcp.ts` (persist session dans le handler), config schema (champ `implicit_session_ttl`)
 
-### 2.4 Alias courts sur les IDs
-**Problème** : `cnd_a3f2b1c4` est inutilisable en conversation. Les anciens IDs séquentiels `cnd_001`
-étaient meilleurs pour l'UX mais mauvais pour la concurrence.
+### 2.4 Alias courts sur les IDs — `done`
+**Livré en session 3 (commit 8119e33).** Implémentation : `short_label` sur tous les types, compteur dans `.brainclaw/.id-counter.json`, affichage `[cnd#47]` en CLI/MCP, résolution des deux formats (`cnd#47` ou `cnd_a3f2b1c4`) dans `accept`, `reject`, `reflect`, MCP.
+
+**Problème initial** : `cnd_a3f2b1c4` est inutilisable en conversation.
 
 - Ajouter un compteur auto-incrémenté par type dans `.brainclaw/.id-counter.json`
   (ex: `{ "cnd": 47, "dec": 12, ... }`)
