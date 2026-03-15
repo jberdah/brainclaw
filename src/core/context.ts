@@ -10,9 +10,10 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type AgentResumeSummary } from './reputation.js';
 import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
+import { listClaims } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
 import { listOperationalTraps } from './traps.js';
-import type { InstructionEntry, ProjectMode, ProjectStrategy } from './schema.js';
+import type { Claim, InstructionEntry, PlanItem, ProjectMode, ProjectStrategy } from './schema.js';
 
 export const CONTEXT_SCHEMA_VERSION = '1.2';
 
@@ -51,6 +52,11 @@ export interface ContextItem {
   };
 }
 
+export interface OpenWorkSummary {
+  active_claims: Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id'>[];
+  in_progress_plans: Pick<PlanItem, 'id' | 'text' | 'assignee'>[];
+}
+
 export interface ContextResult {
   context_schema: string;
   profile: string;
@@ -75,6 +81,7 @@ export interface ContextResult {
   context_diff?: ContextDiffResult;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
+  open_work?: OpenWorkSummary;
   selected: ContextItem[];
 }
 
@@ -355,6 +362,29 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     ? summariseAgentTooling(rawAgentTooling)
     : undefined;
 
+  // Build open_work: active claims and in_progress plans owned by the current agent
+  let openWork: OpenWorkSummary | undefined;
+  if (currentAgentIdentity || agent) {
+    const agentName = agent;
+    const agentId = currentAgentIdentity?.agent_id;
+    const allClaims = listClaims(options.cwd);
+    const activeClaims = allClaims.filter(
+      (c) => c.status === 'active' && (agentId ? c.agent_id === agentId : c.agent === agentName)
+    );
+    const claimPlanIds = new Set(activeClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
+    const inProgressPlans = state.plan_items.filter(
+      (p) =>
+        p.status === 'in_progress' &&
+        (p.assignee === agentName || claimPlanIds.has(p.id))
+    );
+    if (activeClaims.length > 0 || inProgressPlans.length > 0) {
+      openWork = {
+        active_claims: activeClaims.map(({ id, scope, description, created_at, plan_id }) => ({ id, scope, description, created_at, plan_id })),
+        in_progress_plans: inProgressPlans.map(({ id, text, assignee }) => ({ id, text, assignee })),
+      };
+    }
+  }
+
   const result: ContextResult = {
     context_schema: CONTEXT_SCHEMA_VERSION,
     profile,
@@ -384,6 +414,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       : undefined,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
+    open_work: openWork,
     selected,
   };
 
@@ -398,6 +429,25 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   const lines: string[] = [];
   lines.push(`# Agent Context (${result.profile})`);
   lines.push('');
+  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.in_progress_plans.length > 0)) {
+    lines.push('## ⚠ Your open work');
+    lines.push('');
+    if (result.open_work.active_claims.length > 0) {
+      lines.push('Active claims (release when done):');
+      for (const claim of result.open_work.active_claims) {
+        const planRef = claim.plan_id ? ` [plan: ${claim.plan_id}]` : '';
+        lines.push(`- [${claim.id}] ${claim.description}${planRef}`);
+        lines.push(`  scope: ${claim.scope}`);
+      }
+    }
+    if (result.open_work.in_progress_plans.length > 0) {
+      lines.push('In-progress plan items (update status when done):');
+      for (const plan of result.open_work.in_progress_plans) {
+        lines.push(`- [${plan.id}] ${plan.text}`);
+      }
+    }
+    lines.push('');
+  }
   lines.push(`Context schema: ${result.context_schema}`);
   if (result.project_id) {
     lines.push(`Project ID: ${result.project_id}`);
@@ -694,6 +744,31 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
     if (result.target) {
       lines.push(`target: ${result.target}`);
+    }
+  }
+  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.in_progress_plans.length > 0)) {
+    lines.push(compact ? 'ow:' : 'open_work:');
+    if (result.open_work.active_claims.length > 0) {
+      lines.push(compact ? '  claims:' : '  active_claims:');
+      for (const claim of result.open_work.active_claims) {
+        if (compact) {
+          const planRef = claim.plan_id ? ` pl=${claim.plan_id}` : '';
+          lines.push(`    - id=${claim.id}${planRef} sc="${claim.scope}" tx="${claim.description}"`);
+        } else {
+          const planRef = claim.plan_id ? ` plan_id=${claim.plan_id}` : '';
+          lines.push(`    - id=${claim.id}${planRef} scope="${claim.scope}" description="${claim.description}"`);
+        }
+      }
+    }
+    if (result.open_work.in_progress_plans.length > 0) {
+      lines.push(compact ? '  plans:' : '  in_progress_plans:');
+      for (const plan of result.open_work.in_progress_plans) {
+        if (compact) {
+          lines.push(`    - id=${plan.id} tx="${plan.text}"`);
+        } else {
+          lines.push(`    - id=${plan.id} text="${plan.text}"`);
+        }
+      }
     }
   }
   lines.push(compact ? 'ins:' : 'instructions:');
