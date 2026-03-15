@@ -6,13 +6,90 @@
 - Autonomie : pleine autonomie agentique, humain uniquement pour les conflits
 - Infrastructure : local-first + repo Git distant partagé pour la mémoire distribuée
 - Principe directeur : **agent-first** — chaque feature doit être utilisable par un LLM stateless sans intervention humaine
+- Ambition révisée : faire de `brainclaw` une **extension de mémoire naturelle** pour un agent IA, pas seulement un stockage structuré de notes
+
+## North Star produit
+
+`brainclaw` doit permettre à un agent de développement de reprendre un repo, comprendre un scope, agir, puis laisser une trace utile sans avoir à réapprendre le projet à chaque requête.
+
+Version opérationnelle de cette ambition :
+- Un agent stateless doit pouvoir obtenir un contexte réellement utile en moins de 30 secondes.
+- Le chemin nominal doit demander 1 à 2 appels explicites maximum.
+- Le contexte retourné doit être assez court pour tenir dans un budget prompt réaliste.
+- Chaque interaction doit augmenter la mémoire collective sans imposer une discipline manuelle forte.
+- La valeur perçue doit être immédiate : moins d'erreurs, moins de relecture du repo, moins de pertes de contexte.
 
 ## Piliers stratégiques
-1. Correctness — fondations fiables et engineering hygiene
-2. Adoption — UX agent et export multi-format comme accélérateurs d'adoption
-3. Autonomy — agents comme participants de première classe
-4. Connectivity — Git distribué + MCP universel
-5. Intelligence — recherche, détection de contradictions, auto-réflexion
+1. Useful Context First — le produit vit ou meurt sur la qualité de `context`
+2. Low Friction Capture — une observation utile doit devenir mémoire presque automatiquement
+3. Correctness — fondations fiables, writes sûrs, tests rapides, comportement prédictible
+4. Connectivity — MCP universel et exports natifs avant toute sophistication d'écosystème
+5. Advanced Coordination — trust, réputation, sync distribué, audit complet en couches avancées
+
+## Chemin nominal vs chemin avancé
+
+### Chemin nominal
+Le produit doit être excellent sur ce flux minimal :
+1. l'agent lit un contexte ciblé
+2. l'agent déclare ou prend un scope si nécessaire
+3. l'agent laisse des observations opérationnelles
+4. le système transforme les signaux utiles en mémoire durable avec un minimum de friction
+
+Si ce chemin n'est pas meilleur que "lire quelques fichiers et improviser", `brainclaw` ne sera pas indispensable.
+
+### Chemin avancé
+Les couches suivantes restent importantes, mais ne doivent pas alourdir le coeur du produit :
+- trust tiers
+- réputation
+- sync Git distribué avancé
+- audit/rollback exhaustifs
+- intégrations spécialisées et compliance
+
+## Parcours agents canoniques
+
+### 1. Agent solo sur repo inconnu
+Objectif : comprendre rapidement un scope sans relire tout le repo.
+- Entrée idéale : `brainclaw context --for <target>`
+- Sortie idéale : digest court + contraintes/traps/décisions critiques + activité récente sur le scope
+- Condition de succès : l'agent évite une erreur ou une perte de temps dans les premières minutes
+
+### 2. Deux agents sur une même feature
+Objectif : coordination légère sans serveur ni supervision constante.
+- Entrée idéale : `claim`, `agent-board`, `runtime-note`, `handoff`
+- Sortie idéale : ownership clair, handoff explicite, dernière activité lisible
+- Condition de succès : moins de collisions, moins de doublons, meilleures passations
+
+### 3. Agent reviewer
+Objectif : juger rapidement si un changement respecte les contraintes et décisions existantes.
+- Entrée idéale : `context`, `search`, `review`, `doctor`
+- Sortie idéale : rappel des invariants, files de review priorisées, signaux de confiance bornés
+- Condition de succès : meilleure qualité de review avec moins de contexte brut
+
+## Métriques de succès produit
+
+Le plan doit être évalué contre ces signaux :
+- Temps pour obtenir un contexte utile sur un scope donné
+- Taille moyenne du contexte utile retourné
+- Taux de rappel des contraintes/traps critiques dans le contexte
+- Taux de faux positifs du ranking et du digest
+- Nombre d'actions explicites nécessaires dans le chemin nominal
+- Taux de réutilisation du produit par un agent d'une session à l'autre
+
+## Priorités produit révisées
+
+Avant d'ajouter de nouvelles couches avancées, le produit doit rendre excellents les chantiers suivants :
+1. `2.2` Context digest
+2. `2.3` Session implicite / auto-session
+3. `2.5` Scoped activity par scope/fichier
+4. `2.1` Auto-reflect des notes utiles
+5. `3.1` Conformité MCP complète sur le chemin nominal
+6. `0.5.2` Migration de schéma
+7. `0.5.3` Abstraction storage
+
+Conséquence produit :
+- le coeur v1 est `context + capture + coordination + MCP`
+- la gouvernance avancée vient ensuite
+- la sophistication Git distribuée ne doit pas détourner l'effort tant que le coeur n'est pas excellent
 
 ---
 
@@ -38,6 +115,11 @@
 - `partial` : présent mais incomplet, limité ou non aligné à 100% avec la cible roadmap
 - `in progress` : chantier engagé mais encore en cours
 - `todo` : non démarré ou seulement esquissé
+
+### Lecture recommandée du plan
+- Lire d'abord `North Star produit`, `Chemin nominal vs chemin avancé` et `Priorités produit révisées`
+- Considérer les phases 0 à 3 comme le coeur du produit
+- Traiter les phases 5 à 7 comme des multiplicateurs de valeur, pas comme le point de départ de l'adoption
 
 ### Statut par feature
 
