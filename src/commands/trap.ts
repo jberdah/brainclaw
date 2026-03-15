@@ -1,4 +1,5 @@
 import { loadState, saveState } from '../core/state.js';
+import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
@@ -50,7 +51,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     short_label,
     text,
     created_at: nowISO(),
-    author: options.author ?? getDefaultAuthor(),
+    author: options.author ?? resolveCurrentAgentName(),
     severity: options.severity ?? 'medium',
     tags: options.tag ?? [],
     related_paths: options.path,
@@ -71,9 +72,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
   console.log(`✔ Trap added: [${short_label}] (${scopeInfo}) ${text}`);
 }
 
-function getDefaultAuthor(): string {
-  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
-}
+
 
 /** Parse a TTL string like "30m", "2h", "7d" and return an ISO expiry timestamp. */
 function parseTtl(ttl: string): string | undefined {

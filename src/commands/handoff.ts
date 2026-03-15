@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process';
 import { loadState, saveState } from '../core/state.js';
+import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
@@ -61,7 +62,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     to: options.to,
     text,
     created_at: nowISO(),
-    author: options.author ?? getDefaultAuthor(),
+    author: options.author ?? resolveCurrentAgentName(),
     status: 'open',
     project: options.project ?? plan?.project,
     plan_id: options.plan,
@@ -78,6 +79,4 @@ export function runHandoff(text: string, options: HandoffOptions): void {
   console.log(`✔ Handoff added: [${short_label}] ${options.from} → ${options.to}: ${text}`);
 }
 
-function getDefaultAuthor(): string {
-  return process.env.USER ?? process.env.USERNAME ?? 'unknown';
-}
+
