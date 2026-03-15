@@ -123,8 +123,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
 function resolveStorageDir(storageDir?: string): string {
   const candidate = (storageDir ?? MEMORY_DIR).trim();
-  if (!candidate || candidate === '.' || candidate === '..' || candidate.includes('/') || candidate.includes('\\')) {
-    console.error(`Error: invalid storage directory "${storageDir}". Use a single directory name such as "${MEMORY_DIR}".`);
+  if (candidate !== MEMORY_DIR) {
+    console.error(`Error: custom storage directories are no longer supported. Use "${MEMORY_DIR}".`);
     process.exit(1);
   }
   return candidate;

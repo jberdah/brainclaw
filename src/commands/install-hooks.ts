@@ -58,16 +58,16 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-TMEM_CMD=""
-if command -v brainclaw >/dev/null 2>&1; then
-  TMEM_CMD="brainclaw"
-elif command -v bclaw >/dev/null 2>&1; then
-  TMEM_CMD="bclaw"
-else
-  TMEM_CMD="npx --no brainclaw"
-fi
+  BCLAW_CMD=""
+  if command -v brainclaw >/dev/null 2>&1; then
+    BCLAW_CMD="brainclaw"
+  elif command -v bclaw >/dev/null 2>&1; then
+    BCLAW_CMD="bclaw"
+  else
+    BCLAW_CMD="npx --no brainclaw"
+  fi
 
-RESULT=$($TMEM_CMD doctor --json 2>/dev/null) || {
+RESULT=$($BCLAW_CMD doctor --json 2>/dev/null) || {
   echo "brainclaw hook: could not run doctor check, skipping."
   exit 0
 }

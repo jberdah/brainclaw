@@ -14,28 +14,31 @@ export interface CoordinationOptions {
   host?: string;
   allHosts?: boolean;
   includeReputation?: boolean;
+  cwd?: string;
 }
 
 export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
-  const config = loadConfig();
-  const state = loadState();
+  const config = loadConfig(options.cwd);
+  const state = loadState(options.cwd);
   const currentHost = resolveCurrentHostId();
   const project = options.project ?? inferProjectFromTarget(options.target, config);
-  const agent = resolveAgentScope(options.agent);
+  const agent = resolveAgentScope(options.agent, options.cwd);
   const resolvedAgentIdentity = agent
-    ? (options.agent ? findAgentIdentityByName(agent) : resolveCurrentAgentIdentity())
+    ? (options.agent ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
     : undefined;
-  const claims = listClaims().filter((claim) => claim.status === 'active');
+  const claims = listClaims(options.cwd).filter((claim) => claim.status === 'active');
   const runtimeNotes = listRuntimeNotes({
     agent,
     hostId: options.host,
     includeAllHosts: options.allHosts,
-  });
+  }, options.cwd);
   const activePlans = state.plan_items.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
   const openHandoffs = state.open_handoffs.filter((handoff) => handoff.status === 'open');
-  const instructions = resolveInstructions(loadInstructions(), { project, agent });
-  const reputationSummary = options.includeReputation ? buildReputationSummary() : undefined;
-  const agentReputation = options.includeReputation && agent ? findAgentReputationSummary(resolvedAgentIdentity?.agent_id ?? agent) : undefined;
+  const instructions = resolveInstructions(loadInstructions(options.cwd), { project, agent });
+  const reputationSummary = options.includeReputation ? buildReputationSummary(options.cwd) : undefined;
+  const agentReputation = options.includeReputation && agent
+    ? findAgentReputationSummary(resolvedAgentIdentity?.agent_id ?? agent, options.cwd)
+    : undefined;
 
   const filteredPlans = project
     ? activePlans.filter((plan) => !plan.project || plan.project === project)

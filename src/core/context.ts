@@ -20,6 +20,7 @@ export interface ContextOptions {
   profile?: 'dev' | 'openclaw' | 'ops' | 'research';
   maxItems?: number;
   maxChars?: number;
+  cwd?: string;
 }
 
 export interface ContextItem {
@@ -60,24 +61,24 @@ export interface ContextResult {
 }
 
 export function buildContext(options: ContextOptions = {}): ContextResult {
-  const state = loadState();
-  const config = loadConfig();
+  const state = loadState(options.cwd);
+  const config = loadConfig(options.cwd);
 
   const profile = options.profile ?? config.profile ?? 'dev';
   const projectMode = config.project_mode ?? 'auto';
   const projectStrategy = config.projects?.strategy ?? 'manual';
   const currentHost = resolveCurrentHostId();
-  const memoryVersion = getVisibleMemoryVersion({ hostId: options.host, allHosts: options.allHosts });
+  const memoryVersion = getVisibleMemoryVersion({ cwd: options.cwd, hostId: options.host, allHosts: options.allHosts });
   const target = options.target?.trim() ?? '';
   const project = options.project?.trim() || inferProjectFromTarget(target, config);
   const agent = options.agent?.trim() || config.current_agent?.trim();
   const currentAgentIdentity = agent
-    ? (options.agent?.trim() ? findAgentIdentityByName(agent) : resolveCurrentAgentIdentity())
+    ? (options.agent?.trim() ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
     : undefined;
   const maxItems = options.maxItems ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
-  const resolvedInstructions = resolveInstructions(loadInstructions(), { project, agent });
-  const rankingLookup = buildReputationRankingLookup();
+  const resolvedInstructions = resolveInstructions(loadInstructions(options.cwd), { project, agent });
+  const rankingLookup = buildReputationRankingLookup(options.cwd);
 
   const items: ContextItem[] = [];
 
@@ -157,7 +158,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     });
   }
 
-  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts })) {
+  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts }, options.cwd)) {
     items.push({
       id: trap.id,
       section: 'trap',
@@ -193,7 +194,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const runtimeNotes = listRuntimeNotes({
     hostId: options.host,
     includeAllHosts: options.allHosts,
-  });
+  }, options.cwd);
   for (const note of runtimeNotes) {
     if (project && note.project && note.project !== project) {
       continue;
@@ -224,7 +225,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   }
 
   if (options.includePending) {
-    for (const p of listCandidates('pending')) {
+    for (const p of listCandidates('pending', options.cwd)) {
       const meta: string[] = [`${p.type}`, `stars:${p.star_count ?? 0}`, `uses:${p.usage_count ?? 0}`];
       if (p.author_id) meta.push(`author_id:${p.author_id}`);
       if (p.session_id) meta.push(`session:${p.session_id}`);
@@ -268,7 +269,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     .slice(0, maxItems);
 
   const selected = maxChars ? applyCharBudget(ranked, maxChars) : ranked;
-  const resumeSummary = buildCurrentAgentResumeSummary();
+  const resumeSummary = buildCurrentAgentResumeSummary(options.cwd);
 
   return {
     context_schema: '1.0',
@@ -496,10 +497,11 @@ function tokenise(input: string): string[] {
 function matchesPath(pattern: string, target: string): boolean {
   if (pattern === target) return true;
   const regexStr = '^' + pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex chars
-    .replace(/\\\*\\\*/g, '.__GLOBSTAR__.')
-    .replace(/\\\*/g, '[^/]*')
-    .replace(/\.__GLOBSTAR__\./g, '.*') + '$';
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex chars but keep globs intact
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '__GLOB__')
+    .replace(/__GLOBSTAR__/g, '.*')
+    .replace(/__GLOB__/g, '[^/]*') + '$';
   return new RegExp(regexStr).test(target);
 }
 

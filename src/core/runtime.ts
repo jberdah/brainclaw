@@ -66,6 +66,23 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
   writeFileAtomic(filepath, JSON.stringify(persistedNote, null, 2) + '\n');
 }
 
+export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
+  const visibility = note.visibility ?? 'shared';
+  const hostId = sanitizeHostId(note.host_id ?? resolveCurrentHostId());
+  return visibility === 'shared'
+    ? path.join(sharedAgentDir(note.agent, cwd), `${note.id}.json`)
+    : path.join(hostAgentDir(visibility, hostId, note.agent, cwd), `${note.id}.json`);
+}
+
+export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
+  const filepath = runtimeNotePath(note, cwd);
+  if (!fs.existsSync(filepath)) {
+    return false;
+  }
+  fs.unlinkSync(filepath);
+  return true;
+}
+
 function readAgentNotes(dir: string, agent?: string): RuntimeNote[] {
   if (!fs.existsSync(dir)) return [];
 

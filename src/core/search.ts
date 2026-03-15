@@ -13,7 +13,7 @@ export interface SearchResult {
   score: number;
 }
 
-interface BM25Doc {
+export interface SearchCorpusDocument {
   id: string;
   section: string;
   text: string;
@@ -21,6 +21,11 @@ interface BM25Doc {
   created_at: string;
   tags: string[];
   related_paths?: string[];
+}
+
+type SearchCorpusInput = Omit<SearchCorpusDocument, 'section'>;
+
+interface BM25Doc extends SearchCorpusDocument {
   terms: string[];
 }
 
@@ -38,7 +43,7 @@ function tokenize(text: string): string[] {
 function buildCorpus(state: State, includePending: boolean): BM25Doc[] {
   const docs: BM25Doc[] = [];
 
-  const add = (section: string, item: { id: string; text: string; author?: string; created_at: string; tags: string[]; related_paths?: string[] }) => {
+  const add = (section: string, item: SearchCorpusInput) => {
     const textParts = [item.text, item.author ?? '', ...(item.tags ?? []), ...(item.related_paths ?? [])];
     docs.push({ ...item, section, terms: tokenize(textParts.join(' ')) });
   };
@@ -86,9 +91,14 @@ export interface SearchOptions {
   cwd?: string;
 }
 
-export function search(options: SearchOptions): SearchResult[] {
-  const state = loadState(options.cwd);
-  const corpus = buildCorpus(state, options.includePending ?? false);
+export function searchCorpus(documents: SearchCorpusDocument[], options: Omit<SearchOptions, 'cwd' | 'includePending'>): SearchResult[] {
+  const corpus = documents.map((document) => {
+    const textParts = [document.text, document.author ?? '', ...(document.tags ?? []), ...(document.related_paths ?? [])];
+    return {
+      ...document,
+      terms: tokenize(textParts.join(' ')),
+    };
+  });
 
   // Section filter
   const candidates = options.section
@@ -143,7 +153,13 @@ export function search(options: SearchOptions): SearchResult[] {
     author: r.doc.author,
     created_at: r.doc.created_at,
     tags: r.doc.tags,
-    related_paths: r.doc.related_paths,
-    score: Math.round(r.score * 100) / 100,
+      related_paths: r.doc.related_paths,
+      score: Math.round(r.score * 100) / 100,
   }));
+}
+
+export function search(options: SearchOptions): SearchResult[] {
+  const state = loadState(options.cwd);
+  const corpus = buildCorpus(state, options.includePending ?? false);
+  return searchCorpus(corpus, options);
 }

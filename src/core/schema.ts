@@ -377,7 +377,7 @@ export const ConfigSchema = z.object({
   project_id: z.string().optional(),
   current_agent: z.string().optional(),
   current_agent_id: z.string().optional(),
-  storage_dir: z.string().default('.memory'),
+  storage_dir: z.string().default('.brainclaw'),
   topology: TopologyModeSchema.default('embedded'),
   ignore_strategy: IgnoreStrategySchema.default('none'),
   project_mode: ProjectModeSchema.default('auto'),

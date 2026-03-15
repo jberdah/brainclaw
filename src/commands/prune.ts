@@ -1,9 +1,6 @@
 import { loadState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import { listRuntimeNotes, saveRuntimeNote } from '../core/runtime.js';
-import fs from 'node:fs';
-import path from 'node:path';
-import { memoryDir } from '../core/io.js';
+import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
 
 export interface PruneOptions {
   expired?: boolean;
@@ -39,14 +36,11 @@ export function runPrune(options: PruneOptions = {}): void {
   let expiredNotesCount = 0;
   if (options.expired) {
     // Prune expired runtime notes
-    const notes = listRuntimeNotes();
+    const notes = listRuntimeNotes(undefined, cwd);
     for (const note of notes) {
       if (note.expires_at && note.expires_at < now) {
-        // Delete note file
         try {
-          const notePath = path.join(memoryDir(cwd), 'runtime', `${note.id}.json`);
-          if (fs.existsSync(notePath)) {
-            fs.unlinkSync(notePath);
+          if (deleteRuntimeNote(note, cwd)) {
             expiredNotesCount++;
           }
         } catch { /* ignore */ }

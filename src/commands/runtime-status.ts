@@ -10,10 +10,11 @@ export interface RuntimeStatusOptions {
   visibility?: MemoryVisibility | 'all';
   host?: string;
   allHosts?: boolean;
+  cwd?: string;
 }
 
 export function runRuntimeStatus(options: RuntimeStatusOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -24,7 +25,7 @@ export function runRuntimeStatus(options: RuntimeStatusOptions = {}): void {
     visibility: options.visibility,
     hostId: options.host,
     includeAllHosts: options.allHosts,
-  });
+  }, options.cwd);
   const filtered = options.plan ? notes.filter((note) => note.plan_id === options.plan) : notes;
 
   if (options.json) {

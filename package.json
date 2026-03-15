@@ -10,7 +10,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc && node dist/cli.js",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/**/*.test.js"
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node scripts/run-tests.mjs default",
+    "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
+    "test:smoke": "npm run build:test && node scripts/run-tests.mjs smoke",
+    "test:e2e": "npm run build:test && node scripts/run-tests.mjs e2e",
+    "test:all": "npm run build:test && node scripts/run-tests.mjs all",
+    "test:coverage": "npm run build:test && c8 --all --src dist-test/src --reporter=text-summary --reporter=lcov --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
+    "test:coverage:check": "npm run build:test && c8 --all --check-coverage --lines 55 --functions 60 --branches 65 --statements 55 --src dist-test/src --reporter=text-summary --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default"
   },
   "keywords": [
     "cli",
@@ -29,6 +36,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
+    "c8": "^11.0.0",
     "typescript": "^5.8.3"
   }
 }

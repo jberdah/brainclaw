@@ -7,15 +7,16 @@ export interface ListClaimsOptions {
   project?: string;
   plan?: string;
   agent?: string;
+  cwd?: string;
 }
 
 export function runListClaims(options: ListClaimsOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
-  let claims = listClaims();
+  let claims = listClaims(options.cwd);
   if (!options.all) {
     claims = claims.filter(c => c.status === 'active');
   }

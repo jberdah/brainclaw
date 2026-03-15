@@ -1,17 +1,17 @@
 # OpenClaw Adapter Guide
 
-This adapter helps convert OpenClaw runtime traces into Team Memory candidates.
+This adapter helps convert OpenClaw runtime traces into brainclaw candidates.
 
 ## Supported Inputs
 
 - Runtime event file: JSON array of events.
-- Runtime session import: events filtered by `metadata.session` from `.memory/runtime/`.
+- Runtime session import: events filtered by `metadata.session` from `.brainclaw/runtime/`.
 
 ## Basic Usage
 
 ```bash
-team-memory adapter-openclaw-import ./openclaw-events.json
-team-memory adapter-openclaw-import --session sess_42
+brainclaw adapter-openclaw-import ./openclaw-events.json
+brainclaw adapter-openclaw-import --session sess_42
 ```
 
 ## Dry-Run Workflow
@@ -19,10 +19,10 @@ team-memory adapter-openclaw-import --session sess_42
 Use `--dry-run` to preview what would be ingested without writing any files:
 
 ```bash
-team-memory adapter-openclaw-import ./openclaw-events.json --dry-run
+brainclaw adapter-openclaw-import ./openclaw-events.json --dry-run
 ```
 
-Dry-run is useful for CI checks and for validating mapping quality before modifying `.memory/inbox/`.
+Dry-run is useful for CI checks and for validating mapping quality before modifying `.brainclaw/inbox/`.
 
 ## Event Mapping
 
@@ -38,6 +38,6 @@ If an event type is unknown, it defaults to `decision`.
 ## Recommended Team Flow
 
 1. Import events from file or session.
-2. Run `team-memory review --prioritized`.
-3. Curators process with `team-memory accept` or `team-memory reject`.
-4. Use `team-memory doctor` or `team-memory doctor --json` to monitor quality.
+2. Run `brainclaw review --prioritized`.
+3. Curators process with `brainclaw accept` or `brainclaw reject`.
+4. Use `brainclaw doctor` or `brainclaw doctor --json` to monitor quality.

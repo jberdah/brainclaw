@@ -16,21 +16,22 @@ export interface ReviewOptions {
   claim?: string;
   auto?: boolean;
   autoBy?: string;
+  cwd?: string;
 }
 
 export function runReview(options: ReviewOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
-  let candidates = listCandidates('pending');
-  const config = loadConfig();
+  let candidates = listCandidates('pending', options.cwd);
+  const config = loadConfig(options.cwd);
   const slaHours = config.governance?.review_sla_hours ?? 24;
   const promotionThreshold = config.reflective_memory?.promotion_stars_threshold ?? 3;
   const promotionUsesThreshold = config.reflective_memory?.promotion_uses_threshold ?? 2;
   const now = Date.now();
-  const rankingLookup = buildReputationRankingLookup();
+  const rankingLookup = buildReputationRankingLookup(options.cwd);
 
   if (options.type) {
     candidates = candidates.filter(c => c.type === options.type);
@@ -118,7 +119,7 @@ export function runReview(options: ReviewOptions = {}): void {
         ...c,
         tags: setReviewAssignee(c.tags, curator),
       };
-      saveCandidate(updated);
+      saveCandidate(updated, options.cwd);
       claimed.push(updated);
     }
 

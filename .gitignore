@@ -28,6 +28,7 @@ test_spawn.cjs
 test_spawn_tmp.cjs
 test_spawn_tmp2.cjs
 full_test_result.txt
+coverage/
 
 # Logs
 *.log

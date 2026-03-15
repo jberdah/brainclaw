@@ -20,6 +20,7 @@ import { detectContradictions } from '../core/contradictions.js';
 
 export interface DoctorOptions {
   json?: boolean;
+  cwd?: string;
 }
 
 interface DoctorCheck {
@@ -29,7 +30,7 @@ interface DoctorCheck {
 }
 
 export function runDoctor(options: DoctorOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -40,7 +41,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   // Validate config
   let config;
   try {
-    config = loadConfig();
+    config = loadConfig(options.cwd);
     checks.push({ name: 'config', status: 'ok', message: 'config.yaml is valid' });
     if (!options.json) {
       console.log('✔ config.yaml is valid');
@@ -59,7 +60,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   // Validate state
   let state;
   try {
-    state = loadState();
+    state = loadState(options.cwd);
     checks.push({ name: 'state', status: 'ok', message: 'state is valid' });
     if (!options.json) {
       console.log('✔ state is valid');
@@ -97,8 +98,8 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   try {
-    if (projectIdentityExists()) {
-      const projectIdentity = loadProjectIdentity();
+    if (projectIdentityExists(options.cwd)) {
+      const projectIdentity = loadProjectIdentity(options.cwd);
       if (!config.project_id) {
         checks.push({
           name: 'project_identity',
@@ -156,9 +157,9 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   try {
-    const registeredAgents = listAgentIdentities();
+    const registeredAgents = listAgentIdentities(options.cwd);
     if (config.current_agent || config.current_agent_id) {
-      const currentAgent = resolveCurrentAgentIdentity();
+      const currentAgent = resolveCurrentAgentIdentity(options.cwd);
       if (!currentAgent) {
         checks.push({
           name: 'agent_identity',
@@ -208,7 +209,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
 
   // Check project.md consistency
   try {
-    const currentMd = readFileSync(memoryPath('project.md'));
+    const currentMd = readFileSync(memoryPath('project.md', options.cwd));
     const expectedMd = generateMarkdown(state);
     if (currentMd === expectedMd) {
       checks.push({ name: 'markdown_sync', status: 'ok', message: 'project.md is in sync with state' });
@@ -249,7 +250,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   const planItems = state.plan_items;
-  const instructions = loadInstructions();
+  const instructions = loadInstructions(options.cwd);
   const activePlans = planItems.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
   const blockedPlans = planItems.filter((plan) => plan.status === 'blocked');
   const unassignedInProgress = planItems.filter((plan) => plan.status === 'in_progress' && !plan.assignee);
@@ -326,9 +327,9 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   // --- Reflective memory checks ---
-  const pending = listCandidates('pending');
-  const accepted = listArchivedCandidates('accepted');
-  const rejected = listArchivedCandidates('rejected');
+  const pending = listCandidates('pending', options.cwd);
+  const accepted = listArchivedCandidates('accepted', options.cwd);
+  const rejected = listArchivedCandidates('rejected', options.cwd);
   if (!options.json) {
     console.log('');
     console.log(`Reflective memory: ${pending.length} pending, ${accepted.length} accepted, ${rejected.length} rejected`);
@@ -486,7 +487,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   // --- Claims checks ---
-  const claims = listClaims();
+  const claims = listClaims(options.cwd);
   const activeClaims = claims.filter(c => c.status === 'active');
   if (!options.json) {
     console.log('');
@@ -512,15 +513,15 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   // --- Runtime notes checks ---
-  const notes = listRuntimeNotes();
-  const localTraps = listOperationalTraps();
+  const notes = listRuntimeNotes(undefined, options.cwd);
+  const localTraps = listOperationalTraps({}, options.cwd);
   if (!options.json) {
     console.log(`Runtime notes: ${notes.length} total`);
     console.log(`Local traps: ${localTraps.length} visible on this host`);
   }
 
-  const marker = readContextMarker();
-  const visibleMemoryVersion = getVisibleMemoryVersion();
+  const marker = readContextMarker(options.cwd);
+  const visibleMemoryVersion = getVisibleMemoryVersion({ cwd: options.cwd });
   if (marker?.memory_version && marker.memory_version !== visibleMemoryVersion) {
     checks.push({
       name: 'context_freshness',
@@ -543,7 +544,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   // --- Runtime events integrity checks ---
-  const events = listRuntimeEvents();
+  const events = listRuntimeEvents(options.cwd);
   if (events.length > 0) {
     const sessions = new Map<string, Set<string>>();
     for (const event of events) {
@@ -603,7 +604,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
     runtime_events: events.length,
   };
 
-  const reputationSummary = buildReputationSummary();
+  const reputationSummary = buildReputationSummary(options.cwd);
   if (reputationSummary.enabled) {
     checks.push({
       name: 'reputation_summary',

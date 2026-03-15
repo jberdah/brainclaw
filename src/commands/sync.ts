@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { memoryExists } from '../core/io.js';
 import { loadState } from '../core/state.js';
@@ -15,10 +16,11 @@ export interface SyncOptions {
   scope?: string;
   includeMachineRuntime?: boolean;
   remote?: boolean;
+  cwd?: string;
 }
 
 export function runSync(options: SyncOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -45,14 +47,14 @@ export function runSync(options: SyncOptions = {}): void {
   }
 
   // Summarize current memory state
-  const state = loadState();
-  const pending = listCandidates('pending');
-  const claims = listClaims().filter(c => c.status === 'active');
-  const sharedNotes = listRuntimeNotes({ visibility: 'shared' });
-  const machineNotes = listRuntimeNotes({ visibility: 'machine' });
-  const privateNotes = listRuntimeNotes({ visibility: 'private' });
-  const machineTraps = listOperationalTraps({ visibility: 'machine' });
-  const privateTraps = listOperationalTraps({ visibility: 'private' });
+  const state = loadState(options.cwd);
+  const pending = listCandidates('pending', options.cwd);
+  const claims = listClaims(options.cwd).filter(c => c.status === 'active');
+  const sharedNotes = listRuntimeNotes({ visibility: 'shared' }, options.cwd);
+  const machineNotes = listRuntimeNotes({ visibility: 'machine' }, options.cwd);
+  const privateNotes = listRuntimeNotes({ visibility: 'private' }, options.cwd);
+  const machineTraps = listOperationalTraps({ visibility: 'machine' }, options.cwd);
+  const privateTraps = listOperationalTraps({ visibility: 'private' }, options.cwd);
   const activePlans = state.plan_items.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
 
   console.log('Memory sync summary:');
@@ -63,7 +65,7 @@ export function runSync(options: SyncOptions = {}): void {
   console.log(`  Runtime notes: ${sharedNotes.length} shared, ${machineNotes.length} machine-local, ${privateNotes.length} private`);
   console.log(`  Local traps: ${machineTraps.length} machine-local, ${privateTraps.length} private`);
 
-  const scopePaths = resolveScopePaths(options.scope, options.includeMachineRuntime ?? false);
+  const scopePaths = resolveScopePaths(options.scope, options.includeMachineRuntime ?? false, options.cwd);
   const pathSpec = scopePaths.join(' ');
   console.log(`  Sync scope: ${pathSpec}`);
 
@@ -78,7 +80,7 @@ export function runSync(options: SyncOptions = {}): void {
   try {
     gitStatus = execSync(`git status --porcelain ${pathSpec}`, {
       encoding: 'utf-8',
-      cwd: process.cwd(),
+      cwd: options.cwd ?? process.cwd(),
       timeout: 5000,
     }).trim();
   } catch {
@@ -102,12 +104,12 @@ export function runSync(options: SyncOptions = {}): void {
 
     try {
       execSync(`git add ${pathSpec}`, {
-        cwd: process.cwd(),
+        cwd: options.cwd ?? process.cwd(),
         timeout: 5000,
       });
       execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, {
         encoding: 'utf-8',
-        cwd: process.cwd(),
+        cwd: options.cwd ?? process.cwd(),
         timeout: 10000,
       });
 
@@ -123,7 +125,7 @@ export function runSync(options: SyncOptions = {}): void {
   }
 }
 
-function resolveScopePaths(scope?: string, includeMachineRuntime: boolean = false): string[] {
+export function resolveScopePaths(scope?: string, includeMachineRuntime: boolean = false, cwd?: string): string[] {
   switch ((scope ?? 'all').toLowerCase()) {
     case 'all':
       return existingScopePaths([
@@ -140,31 +142,31 @@ function resolveScopePaths(scope?: string, includeMachineRuntime: boolean = fals
         '.brainclaw/claims/',
         '.brainclaw/runtime/',
         ...(includeMachineRuntime ? ['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/'] : []),
-      ]);
+      ], cwd);
     case 'state':
-      return existingScopePaths(['.brainclaw/constraints/', '.brainclaw/decisions/', '.brainclaw/traps/', '.brainclaw/handoffs/']);
+      return existingScopePaths(['.brainclaw/constraints/', '.brainclaw/decisions/', '.brainclaw/traps/', '.brainclaw/handoffs/'], cwd);
     case 'config':
-      return existingScopePaths(['.brainclaw/config.yaml']);
+      return existingScopePaths(['.brainclaw/config.yaml'], cwd);
     case 'project':
-      return existingScopePaths(['.brainclaw/project.md']);
+      return existingScopePaths(['.brainclaw/project.md'], cwd);
     case 'inbox':
-      return existingScopePaths(['.brainclaw/inbox/']);
+      return existingScopePaths(['.brainclaw/inbox/'], cwd);
     case 'archive':
-      return existingScopePaths(['.brainclaw/archive/']);
+      return existingScopePaths(['.brainclaw/archive/'], cwd);
     case 'claims':
-      return existingScopePaths(['.brainclaw/claims/']);
+      return existingScopePaths(['.brainclaw/claims/'], cwd);
     case 'runtime':
-      return existingScopePaths(['.brainclaw/runtime/']);
+      return existingScopePaths(['.brainclaw/runtime/'], cwd);
     case 'runtime-local':
-      return existingScopePaths(['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/']);
+      return existingScopePaths(['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/'], cwd);
     case 'trap-local':
-      return existingScopePaths(['.brainclaw/traps-hosts/', '.brainclaw/traps-private/']);
+      return existingScopePaths(['.brainclaw/traps-hosts/', '.brainclaw/traps-private/'], cwd);
     default:
       console.warn(`⚠ Unknown sync scope "${scope}"; defaulting to .brainclaw/`);
-      return resolveScopePaths('all', includeMachineRuntime);
+      return resolveScopePaths('all', includeMachineRuntime, cwd);
   }
 }
 
-function existingScopePaths(paths: string[]): string[] {
-  return paths.filter((scopePath) => fs.existsSync(scopePath));
+function existingScopePaths(paths: string[], cwd?: string): string[] {
+  return paths.filter((scopePath) => fs.existsSync(cwd ? path.join(cwd, scopePath) : scopePath));
 }

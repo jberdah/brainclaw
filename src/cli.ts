@@ -52,7 +52,8 @@ import { runPush } from './commands/push.js';
 import { runAuditCommand } from './commands/audit.js';
 import { runHistory } from './commands/history.js';
 import { runContextDiff } from './commands/context-diff.js';
-import { initLogLevel } from './core/logger.js';
+import { cleanOrphanFiles, memoryDir } from './core/io.js';
+import { initLogLevel, logger } from './core/logger.js';
 
 const program = new Command();
 
@@ -65,6 +66,10 @@ program
   .hook('preAction', (_thisCommand, actionCommand) => {
     const root = actionCommand.optsWithGlobals();
     initLogLevel({ verbose: root.verbose, debug: root.debug });
+    const removed = cleanOrphanFiles(memoryDir());
+    if (removed > 0) {
+      logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
+    }
   });
 
 // --- init ---
@@ -74,7 +79,6 @@ program
   .option('-y, --yes', 'Skip interactive wizard and use defaults')
   .option('--force', 'Overwrite existing project memory directory')
   .option('--compact', 'Enable compact markdown mode')
-  .option('--storage-dir <dir>', 'Storage directory name, defaults to .brainclaw')
   .option('--topology <mode>', 'Topology mode: embedded, sidecar, local-only')
   .option('--project-mode <mode>', 'Project mode: single-project, multi-project, auto')
   .option('--project-strategy <strategy>', 'Project strategy for multi-project mode: manual, folder')
@@ -209,7 +213,7 @@ program
   .description('Create a memory candidate for review')
   .option('--type <type>', 'Type: constraint, decision, trap, handoff')
   .option('--batch <file>', 'Import runtime events from JSON file')
-  .option('--session <id>', 'Import runtime events by session id from .memory/runtime/')
+  .option('--session <id>', 'Import runtime events by session id from .brainclaw/runtime/')
   .option('--tag <tags...>', 'Tags')
   .option('--author <author>', 'Author name')
   .option('--source <source>', 'Source context (e.g. agent name)')
@@ -371,7 +375,7 @@ program
 program
   .command('adapter-openclaw-import [file]')
   .description('Import OpenClaw runtime events file as memory candidates')
-  .option('--session <id>', 'Import runtime events from a session id in .memory/runtime/')
+  .option('--session <id>', 'Import runtime events from a session id in .brainclaw/runtime/')
   .option('--dry-run', 'Preview import without creating candidates')
   .option('--source <source>', 'Source label for imported candidates', 'openclaw')
   .option('--author <author>', 'Author for imported candidates')
@@ -496,7 +500,7 @@ program
 // --- install-hooks ---
 program
   .command('install-hooks')
-  .description('Install a Git pre-commit hook that blocks sensitive content in .memory/')
+  .description('Install a Git pre-commit hook that blocks sensitive content in .brainclaw/')
   .option('--force', 'Overwrite existing pre-commit hook')
   .action((options) => {
     runInstallHooks(options);
@@ -505,7 +509,7 @@ program
 // --- diff ---
 program
   .command('diff')
-  .description('Show what changed in .memory/ since a timestamp or last context read')
+  .description('Show what changed in .brainclaw/ since a timestamp or last context read')
   .option('--since <timestamp>', 'ISO 8601 timestamp to diff from')
   .option('--json', 'Output as JSON')
   .action((options) => {

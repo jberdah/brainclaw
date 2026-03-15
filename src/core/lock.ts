@@ -94,14 +94,12 @@ export function releaseLock(targetPath: string): void {
 export function withLock<T>(targetPath: string, fn: () => T, timeoutMs = DEFAULT_TIMEOUT_MS): T {
   const acquired = acquireLock(targetPath, timeoutMs);
   if (!acquired) {
-    console.warn(`⚠ Could not acquire lock on ${path.basename(targetPath)} after ${timeoutMs}ms — proceeding anyway`);
+    throw new Error(`Could not acquire lock on ${path.basename(targetPath)} after ${timeoutMs}ms`);
   }
   try {
     return fn();
   } finally {
-    if (acquired) {
-      releaseLock(targetPath);
-    }
+    releaseLock(targetPath);
   }
 }
 

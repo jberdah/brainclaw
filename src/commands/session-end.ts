@@ -13,6 +13,7 @@ export interface SessionEndOptions {
   agent?: string;
   autoReflect?: boolean;
   json?: boolean;
+  cwd?: string;
 }
 
 function createHash(data: string): string {
@@ -26,14 +27,14 @@ function createHash(data: string): string {
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   let actor;
   try {
-    actor = buildOperationalIdentity(options.agent);
+    actor = buildOperationalIdentity(options.agent, options.cwd);
   } catch (e: unknown) {
     console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
@@ -46,15 +47,15 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
   }
 
   // Get session notes for summary
-  const agentNotes = listRuntimeNotes(actor.agent);
+  const agentNotes = listRuntimeNotes(actor.agent, options.cwd);
   const sessionNotes = agentNotes.filter(n => n.session_id === sessionId);
 
   // Compute context diff
-  const snapshot = loadSessionSnapshot(sessionId);
+  const snapshot = loadSessionSnapshot(sessionId, options.cwd);
   let contextDiff: string | undefined;
   if (snapshot?.initial_context_hash) {
     try {
-      const currentCtx = buildContext({ target: snapshot.context_target, agent: actor.agent });
+      const currentCtx = buildContext({ target: snapshot.context_target, agent: actor.agent, cwd: options.cwd });
       const currentHash = createHash(JSON.stringify(currentCtx.selected));
       if (currentHash !== snapshot.initial_context_hash) {
         contextDiff = `Context changed since session start (${snapshot.initial_context_hash} → ${currentHash})`;
@@ -81,7 +82,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     tags: ['session'],
     visibility: 'shared',
     note_type: 'session_end',
-  });
+  }, options.cwd);
 
   appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' });
 
@@ -97,6 +98,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
             authorId: note.agent_id,
             projectId: note.project_id,
             sessionId: note.session_id,
+            cwd: options.cwd,
           }, false, false);
           candidatesCreated++;
         } catch { /* skip */ }

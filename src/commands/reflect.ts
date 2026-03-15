@@ -28,10 +28,11 @@ export interface ReflectOptions {
   path?: string;
   batch?: string;
   session?: string;
+  cwd?: string;
 }
 
 export function runReflect(text: string | undefined, options: ReflectOptions): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -140,10 +141,10 @@ export function createCandidateFromInput(
   printSuccess: boolean = true,
   forceStrict: boolean = false,
 ): void {
-  const config = loadConfig();
+  const config = loadConfig(options.cwd);
   let actorIdentity;
   try {
-    actorIdentity = buildOperationalIdentity();
+    actorIdentity = buildOperationalIdentity(undefined, options.cwd);
   } catch {
     actorIdentity = undefined;
   }
@@ -167,8 +168,8 @@ export function createCandidateFromInput(
   }
 
   // Duplicate detection
-  const state = loadState();
-  const pending = listCandidates('pending');
+  const state = loadState(options.cwd);
+  const pending = listCandidates('pending', options.cwd);
   const dupes = detectDuplicates(text, type, state, pending);
   if (dupes.length > 0) {
     console.warn('⚠ Possible duplicates detected:');
@@ -205,7 +206,7 @@ export function createCandidateFromInput(
   if (!forceStrict) {
     try {
       if (agentCanWriteDirect(candidate.author_id ?? candidate.author)) {
-        promoteCandidateToState(candidate);
+        promoteCandidateToState(candidate, options.cwd);
         appendAuditEntry({
           actor: candidate.author,
           actor_id: candidate.author_id,
@@ -222,14 +223,14 @@ export function createCandidateFromInput(
     } catch { /* trust check failed — fall through to pending */ }
   }
 
-  saveCandidate(candidate);
+  saveCandidate(candidate, options.cwd);
   if (printSuccess) {
     console.log(`✔ Candidate created: [${id}] (${type}) ${text}`);
   }
 }
 
-function promoteCandidateToState(candidate: Candidate): void {
-  const state = loadState();
+function promoteCandidateToState(candidate: Candidate, cwd?: string): void {
+  const state = loadState(cwd);
   switch (candidate.type) {
     case 'constraint': {
       const entry: Constraint = { id: generateId('active_constraints'), text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags };
@@ -252,10 +253,10 @@ function promoteCandidateToState(candidate: Candidate): void {
       break;
     }
   }
-  saveState(state);
+  saveState(state, cwd);
 }
 
-function mapEventTypeToCandidateType(eventType: string): CandidateType {
+export function mapEventTypeToCandidateType(eventType: string): CandidateType {
   switch (eventType) {
     case 'risk_detected':
       return 'trap';

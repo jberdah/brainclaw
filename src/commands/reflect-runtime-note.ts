@@ -67,7 +67,7 @@ function uniqueTags(tags: string[]): string[] {
   return [...new Set(tags.filter((tag) => tag.trim().length > 0))];
 }
 
-function suggestCandidateTypes(text: string, tags: string[]): Array<{ type: CandidateType; score: number; reason: string }> {
+export function suggestCandidateTypes(text: string, tags: string[]): Array<{ type: CandidateType; score: number; reason: string }> {
   const haystack = `${text.toLowerCase()} ${tags.join(' ').toLowerCase()}`;
   const suggestions: Array<{ type: CandidateType; score: number; reason: string }> = [];
 

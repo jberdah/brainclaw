@@ -6,22 +6,23 @@ import { loadState, saveState } from '../core/state.js';
 
 export interface ReleaseClaimOptions {
   planStatus?: 'todo' | 'in_progress' | 'blocked' | 'done' | 'dropped';
+  cwd?: string;
 }
 
 export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   try {
-    const existing = loadClaim(id);
-    const claim = releaseClaim(id);
+    const existing = loadClaim(id, options.cwd);
+    const claim = releaseClaim(id, options.cwd);
+    let state = loadState(options.cwd);
     if (existing.plan_id) {
-      const state = loadState();
       const plan = state.plan_items.find((item) => item.id === existing.plan_id);
       if (plan) {
-        const otherActiveClaims = listClaims().filter((item) => item.status === 'active' && item.plan_id === existing.plan_id);
+        const otherActiveClaims = listClaims(options.cwd).filter((item) => item.status === 'active' && item.plan_id === existing.plan_id);
         if (options.planStatus) {
           plan.status = options.planStatus;
         } else if (otherActiveClaims.length === 0 && plan.status === 'in_progress') {
@@ -31,10 +32,10 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
           plan.assignee = undefined;
         }
         plan.updated_at = new Date().toISOString();
-        saveState(state);
-        writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+        saveState(state, options.cwd);
       }
     }
+    writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
     console.log(`✔ Claim [${id}] released (was: ${claim.agent} → ${claim.scope})`);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -16,6 +16,99 @@
 
 ---
 
+## Mise à jour d'avancement — 2026-03-15
+
+### Travail réalisé récemment
+- Rebranding produit stabilisé : `brainclaw` / `bclaw`, `.brainclaw/` comme seul répertoire supporté, suppression de la surface legacy `--storage-dir`.
+- Hardening du write-path : verrou strict, nettoyage des `.tmp` / `.lock` orphelins au démarrage, correction de `prune --expired`, réalignement de plusieurs flows CLI/MCP.
+- Restructuration profonde de la suite de tests :
+  - séparation nette `test:unit`, `test:smoke`, `test:e2e`, `test:all`
+  - runner séquentiel dédié via `scripts/run-tests.mjs`
+  - extraction de logique métier hors des gros tests spawn/MCP vers des tests unitaires rapides
+  - couverture directe des zones critiques : `context`, `reputation`, `coordination`, `doctor`, `review`, `claim`, `runtime-status`, `sync`, helpers MCP, `session-start` / `session-end`
+  - ajout de la couverture `c8` avec seuils minimaux sur le fast path
+- Fast path actuel vérifié :
+  - `npm test` passe
+  - `npm run test:unit` passe
+  - `npm run test:coverage:check` passe
+  - couverture fast path : `statements 62.49%`, `branches 65.89%`, `functions 68.58%`, `lines 62.49%`
+
+### Légende de statut
+- `done` : livré et intégré
+- `partial` : présent mais incomplet, limité ou non aligné à 100% avec la cible roadmap
+- `in progress` : chantier engagé mais encore en cours
+- `todo` : non démarré ou seulement esquissé
+
+### Statut par feature
+
+**Phase 0 — Fondations de fiabilité**
+- `0.0` Renommage de marque : `done`
+- `0.1` IDs concurrence-safe : `done`
+- `0.2` File locking sans race condition : `done`
+- `0.3` Fenêtre de corruption dans `saveState` : `partial`
+- `0.4` Nettoyage technique : `done`
+- `0.5.1` Logging et observabilité technique : `done`
+- `0.5.2` Migration de schéma : `todo`
+- `0.5.3` Abstraction storage (`JsonStore<T>`) : `todo`
+- `0.5.4` Validation des entrées CLI : `partial`
+- `0.5.5` Tests unitaires du core : `partial`
+- `0.5.6` CI pipeline : `partial`
+
+**Phase 1 — Autonomie agentique**
+- `1.1` Système de niveaux de confiance : `partial`
+- `1.2` Write-through direct pour agents de confiance : `partial`
+- `1.3` Auto-promote pipeline : `partial`
+- `1.4` Session lifecycle : `partial`
+- `1.5` TTL natif sur les items éphémères : `partial`
+- `1.6` Export vers formats agents natifs : `partial`
+
+**Phase 2 — Agent-First UX**
+- `2.1` Auto-reflect notes pour agents trusted : `todo`
+- `2.2` Context digest : `todo`
+- `2.3` Session implicite / auto-session : `todo`
+- `2.4` Alias courts sur les IDs : `todo`
+- `2.5` Résumé d'activité récente par scope : `todo`
+
+**Phase 3 — MCP Universel**
+- `3.1` Conformité protocole MCP : `partial`
+- `3.2` Outils MCP de mutation : `done`
+- `3.3` Contrôle d'accès par niveau de confiance via MCP : `partial`
+- `3.4` Schéma MCP stable et versionné : `done`
+
+**Phase 4 — Intelligence Contextuelle**
+- `4.1` Recherche full-text : `done`
+- `4.2` Détection de contradictions : `partial`
+- `4.3` Auto-reflect amélioré : `partial`
+- `4.4` Context diff de session : `partial`
+- `4.5` Knowledge relationships : `partial`
+
+**Phase 5 — Git Distribué**
+- `5.1` Remote memory repo : `partial`
+- `5.2` Commandes de sync distribué : `partial`
+- `5.3` Conflict resolution protocol : `partial`
+- `5.4` Branch-based isolation (mode PR) : `todo`
+- `5.5` GitHub Action (sync distribuable) : `partial`
+
+**Phase 6 — Expérience Agent**
+- `6.1` Identité agent robuste : `partial`
+- `6.2` Profil d'agent déclaratif : `partial`
+- `6.3` Notification de changements : `partial`
+- `6.4` Context format versionné : `todo`
+
+**Phase 7 — Observabilité et Audit**
+- `7.1` Event log immuable : `partial`
+- `7.2` History par item : `partial`
+- `7.3` Métriques de santé : `partial`
+- `7.4` Rollback : `partial`
+
+**Post-v1**
+- `VS Code Extension` : `todo`
+- `Adapters pour agents majeurs` : `partial`
+- `Multi-repo federation` : `todo`
+- `Encryption at rest` : `todo`
+
+---
+
 ## Phase 0 — Fondations de fiabilité (Semaines 1-5)
 
 ### 0.0 Renommage de marque : team-memory → brainclaw

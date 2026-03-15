@@ -32,17 +32,18 @@ export interface SessionStartOptions {
   agent?: string;
   context?: string;
   json?: boolean;
+  cwd?: string;
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   let actor;
   try {
-    actor = buildOperationalIdentity(options.agent);
+    actor = buildOperationalIdentity(options.agent, options.cwd);
   } catch (e: unknown) {
     console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
@@ -51,7 +52,7 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
   // Capture initial context snapshot
   let initialContextHash: string | undefined;
   try {
-    const ctx = buildContext({ target: options.context, agent: actor.agent });
+    const ctx = buildContext({ target: options.context, agent: actor.agent, cwd: options.cwd });
     initialContextHash = createHash(JSON.stringify(ctx.selected));
   } catch { /* non-fatal */ }
 
@@ -65,9 +66,9 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
   };
 
   // Persist snapshot
-  const dir = sessionsDir();
+  const dir = sessionsDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(sessionSnapshotPath(snapshot.session_id), JSON.stringify(snapshot, null, 2) + '\n', 'utf-8');
+  fs.writeFileSync(sessionSnapshotPath(snapshot.session_id, options.cwd), JSON.stringify(snapshot, null, 2) + '\n', 'utf-8');
 
   // Write session_start runtime note
   const noteId = generateRuntimeNoteId();
@@ -82,7 +83,7 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
     tags: ['session'],
     visibility: 'shared',
     note_type: 'session_start',
-  });
+  }, options.cwd);
 
   appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' });
 

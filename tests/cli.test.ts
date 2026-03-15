@@ -69,7 +69,7 @@ describe('brainclaw CLI', () => {
   });
 
   describe('init', () => {
-    it('creates .memory/ directory with expected files', () => {
+    it('creates .brainclaw/ directory with expected files', () => {
       const res = run(['init', '-y'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Initialized project memory'));
@@ -151,19 +151,14 @@ describe('brainclaw CLI', () => {
       assert.ok(res.stdout.includes('Recommended project mode: multi-project'));
     });
 
-    it('supports opt-in .brainclaw storage', () => {
-      const res = run(['init', '-y', '--storage-dir', '.brainclaw'], dir);
-      assert.equal(res.exitCode, 0);
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')));
-      assert.ok(res.stdout.includes('Storage dir: .brainclaw'));
-
-      const config = readConfig(dir);
-      assert.equal(config.storage_dir, '.brainclaw');
-      assert.match(config.project_id, /^prj_[a-f0-9]+$/);
+    it('rejects the removed --storage-dir option', () => {
+      const res = run(['init', '-y', '--storage-dir', '.altmem'], dir);
+      assert.equal(res.exitCode, 1);
+      assert.ok(res.stderr.includes('unknown option'));
     });
 
     it('adds storage dir to .gitignore for sidecar mode', () => {
-      const res = run(['init', '-y', '--storage-dir', '.brainclaw', '--topology', 'sidecar'], dir);
+      const res = run(['init', '-y', '--topology', 'sidecar'], dir);
       assert.equal(res.exitCode, 0);
       const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
       assert.ok(gitignore.includes('.brainclaw/'));
@@ -382,7 +377,7 @@ describe('brainclaw CLI', () => {
   });
 
   describe('reversibility', () => {
-    it('removing .memory/ fully uninstalls', () => {
+    it('removing .brainclaw/ fully uninstalls', () => {
       run(['init', '-y'], dir);
       run(['decision', 'Test'], dir);
       fs.rmSync(path.join(dir, '.brainclaw'), { recursive: true, force: true });
