@@ -179,6 +179,12 @@ Conséquence produit :
   - intégration bornée dans `context` via `execution_context` et `agent_tooling`, exposés automatiquement quand utiles
   - enrichissement de `bootstrap` avec des seeds `machine` / `skill` / `mcp`
   - nouvel outil MCP `bclaw_get_execution_context`
+- Livraison du lot `6.6 v2 + 6.4` :
+  - formalisation du contrat public `context` avec `context_schema` versionné, baseline `1.0` documentée et sortie courante `1.1`
+  - ajout de `docs/context-format.md` et `docs/context-format-changelog.md` pour figer les champs publics agents de `brainclaw context` et `bclaw_get_context`
+  - enrichissement statique et borné de `agent-context` avec `agents_rules`, drapeaux `scripts/references/assets` pour les skills, et classification MCP `available | missing_command | unknown | remote`
+  - intégration du signal agentique utile dans `context`, `bootstrap`, `env`, `whoami` et MCP, avec warning explicite sur les serveurs MCP stdio configurés mais indisponibles
+  - ajout de checks `doctor` sur les règles agentiques absentes/inexploitables, les skills incomplètes et les commandes MCP locales manquantes
 - Couverture brownfield ajoutée :
   - tests unitaires du moteur `bootstrap.ts` sur extraction, réutilisation de profil, refresh et fingerprint Git
   - tests unitaires `context` sur auto-bootstrap, désactivation explicite et digest avec signaux dérivés
@@ -189,6 +195,11 @@ Conséquence produit :
   - tests unitaires `agent-context.ts` sur `AGENTS.md`, skills locales et config MCP locale
   - tests unitaires commandes `env` et `whoami`
   - tests `context`, CLI et MCP sur l'exposition conditionnelle du contexte d'exécution et de l'outillage agent
+- Couverture ajoutée pour le lot contrat/outillage `6.6 v2 + 6.4` :
+  - tests unitaires `agent-context.ts` sur la découverte bornée des skills, la présence `scripts/references/assets` et la classification `missing_command`
+  - tests unitaires `context.ts` sur `context_schema: 1.1`, l'exposition bornée de `agents_rules` et le digest enrichi
+  - tests unitaires `doctor`, `env` et `whoami` sur les nouveaux signaux d'outillage agent local
+  - contrats MCP unitaires et E2E sur `context_schema`, `agents_rules` et l'inventaire enrichi des serveurs MCP/skills
 - Couverture ajoutée pour le socle migration/storage :
   - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
   - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
@@ -202,8 +213,9 @@ Conséquence produit :
   - `npm test` passe
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
+  - `node --test dist-test/tests/cli.test.js` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 70.66%`, `branches 70.02%`, `functions 78.09%`, `lines 70.66%`
+  - couverture fast path : `statements 71.26%`, `branches 70.69%`, `functions 78.51%`, `lines 71.26%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -273,7 +285,7 @@ Conséquence produit :
 - `6.1` Identité agent robuste : `partial`
 - `6.2` Profil d'agent déclaratif : `partial`
 - `6.3` Notification de changements : `partial`
-- `6.4` Context format versionné : `todo`
+- `6.4` Context format versionné : `done`
 - `6.5` Contexte machine et environnement d'exécution : `done`
 - `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP : `partial`
 

@@ -484,15 +484,22 @@ function extractSkillSeeds(
   skills: ReturnType<typeof buildAgentToolingContext>['skills'],
   target?: string,
 ): MemorySeedDocument[] {
-  return skills.slice(0, 5).map((skill) => createSeed({
-    text: `Skill available: ${skill.name}${skill.description ? ` - ${skill.description}` : ''}`,
-    seedKind: 'tooling',
-    sourceKind: 'skill',
-    sourceRef: skill.source_path,
-    confidence: 'high',
-    tags: ['bootstrap', 'agent', 'skill'],
-    relatedPaths: target ? [target] : undefined,
-  }));
+  return skills.slice(0, 5).map((skill) => {
+    const capabilities: string[] = [];
+    if (skill.scripts_present) capabilities.push('scripts');
+    if (skill.references_present) capabilities.push('references');
+    if (skill.assets_present) capabilities.push('assets');
+    const capabilityText = capabilities.length > 0 ? ` (${capabilities.join(', ')})` : '';
+    return createSeed({
+      text: `Skill available: ${skill.name}${skill.description ? ` - ${skill.description}` : ''}${capabilityText}`,
+      seedKind: 'tooling',
+      sourceKind: 'skill',
+      sourceRef: skill.source_path,
+      confidence: 'high',
+      tags: ['bootstrap', 'agent', 'skill'],
+      relatedPaths: target ? [target] : undefined,
+    });
+  });
 }
 
 function extractMcpSeeds(
@@ -500,11 +507,13 @@ function extractMcpSeeds(
   target?: string,
 ): MemorySeedDocument[] {
   return servers.slice(0, 5).map((server) => createSeed({
-    text: `Local MCP server configured: ${server.name} (${server.transport})`,
-    seedKind: 'tooling',
+    text: server.availability === 'missing_command'
+      ? `Local MCP server configured but unavailable: ${server.name} (${server.command ?? 'missing command'})`
+      : `Local MCP server configured: ${server.name} (${server.transport}, ${server.availability})`,
+    seedKind: server.availability === 'missing_command' ? 'warning' : 'tooling',
     sourceKind: 'mcp',
     sourceRef: server.config_path,
-    confidence: 'high',
+    confidence: server.availability === 'missing_command' ? 'high' : 'high',
     tags: ['bootstrap', 'agent', 'mcp'],
     relatedPaths: target ? [target] : undefined,
   }));

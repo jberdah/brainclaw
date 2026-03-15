@@ -14,6 +14,8 @@ describe('core/agent-context', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-context-'));
     codexHome = path.join(dir, '.codex-home');
     fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'code-review'), { recursive: true });
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'code-review', 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'code-review', 'references'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Guide\n\n- Read memory first\n- Prefer focused diffs\n', 'utf-8');
     fs.writeFileSync(
       path.join(codexHome, 'skills', '.system', 'code-review', 'SKILL.md'),
@@ -22,7 +24,7 @@ describe('core/agent-context', () => {
     );
     fs.writeFileSync(
       path.join(codexHome, 'config.toml'),
-      'model = "gpt-5.4"\n\n[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+      'model = "gpt-5.4"\n\n[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n\n[mcp_servers.localfs]\ncommand = "node"\n',
       'utf-8',
     );
     previousCodexHome = process.env.CODEX_HOME;
@@ -46,10 +48,16 @@ describe('core/agent-context', () => {
     assert.deepEqual(snapshot.agents_rules, ['Read memory first', 'Prefer focused diffs']);
     assert.equal(snapshot.skills.length, 1);
     assert.equal(snapshot.skills[0]?.name, 'code-review');
+    assert.equal(snapshot.skills[0]?.scripts_present, true);
+    assert.equal(snapshot.skills[0]?.references_present, true);
+    assert.equal(snapshot.skills[0]?.assets_present, false);
     assert.match(snapshot.skills[0]?.source_path ?? '', /SKILL\.md$/);
-    assert.equal(snapshot.mcp_servers.length, 1);
+    assert.equal(snapshot.mcp_servers.length, 2);
     assert.equal(snapshot.mcp_servers[0]?.name, 'atlassian');
     assert.equal(snapshot.mcp_servers[0]?.transport, 'remote');
+    assert.equal(snapshot.mcp_servers[0]?.availability, 'remote');
+    assert.equal(snapshot.mcp_servers[1]?.name, 'localfs');
+    assert.equal(snapshot.mcp_servers[1]?.availability, 'available');
   });
 
   it('returns empty inventories when no local signals are present', () => {
@@ -67,5 +75,20 @@ describe('core/agent-context', () => {
     } finally {
       fs.rmSync(emptyDir, { recursive: true, force: true });
     }
+  });
+
+  it('marks stdio MCP servers with missing local commands', () => {
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      '[mcp_servers.missing]\ncommand = "definitely-missing-brainclaw-command"\n',
+      'utf-8',
+    );
+
+    const snapshot = buildAgentToolingContext({ cwd: dir });
+    assert.equal(snapshot.mcp_servers.length, 1);
+    assert.equal(snapshot.mcp_servers[0]?.name, 'missing');
+    assert.equal(snapshot.mcp_servers[0]?.transport, 'stdio');
+    assert.equal(snapshot.mcp_servers[0]?.availability, 'missing_command');
+    assert.equal(snapshot.mcp_servers[0]?.source, 'codex_home');
   });
 });

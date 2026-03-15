@@ -502,6 +502,7 @@ describe('core/context', () => {
       cwd: workspace.dir,
     });
 
+    assert.equal(result.context_schema, '1.1');
     assert.equal(result.memory_density, 'low');
     assert.equal(result.bootstrap_available, true);
     assert.ok((result.derived_signals?.length ?? 0) > 0);
@@ -509,13 +510,19 @@ describe('core/context', () => {
     assert.ok(result.execution_context);
     assert.ok(result.agent_tooling);
     assert.equal(result.agent_tooling?.agents_md_present, true);
+    assert.deepEqual(result.agent_tooling?.agents_rules, ['Read AGENTS.md before edits']);
     assert.match(result.digest ?? '', /Derived (agent_rule|command|convention):/);
+    assert.match(result.digest ?? '', /Agent rule: Read AGENTS\.md before edits/);
 
     const markdown = renderContextMarkdown(result, false);
+    assert.match(markdown, /Context schema: 1\.1/);
     assert.match(markdown, /Derived signals:/);
     assert.match(markdown, /No relevant canonical memory found\./);
     assert.match(markdown, /Execution context:/);
     assert.match(markdown, /Agent tooling:/);
+
+    const template = renderContextPromptTemplate(result, false);
+    assert.match(template, /context_schema: 1\.1/);
   });
 
   it('can disable bootstrap fallback when memory is sparse', () => {
@@ -531,5 +538,17 @@ describe('core/context', () => {
     assert.equal(result.memory_density, 'low');
     assert.equal(result.bootstrap_available, false);
     assert.equal(result.derived_signals, undefined);
+  });
+
+  it('exposes agent tooling when AGENTS rules are present', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Prefer focused diffs\n', 'utf-8');
+
+    const result = buildContext({
+      bootstrap: false,
+      cwd: workspace.dir,
+    });
+
+    assert.ok(result.agent_tooling);
+    assert.deepEqual(result.agent_tooling?.agents_rules, ['Prefer focused diffs']);
   });
 });

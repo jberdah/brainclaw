@@ -285,14 +285,18 @@ describe('commands/mcp read tools', () => {
       format: 'json',
     }, { cwd: workspace.dir });
     const contextStructured = context.structuredContent as {
+      context_schema: string;
       memory_density: string;
       bootstrap_available: boolean;
       derived_signals?: Array<{ seed_kind: string }>;
+      agent_tooling?: { agents_rules: string[] };
     };
+    assert.equal(contextStructured.context_schema, '1.1');
     assert.equal(contextStructured.memory_density, 'low');
     assert.equal(contextStructured.bootstrap_available, true);
     assert.ok((contextStructured.derived_signals?.length ?? 0) > 0);
     assert.ok(contextStructured.derived_signals?.some((signal) => signal.seed_kind === 'agent_rule'));
+    assert.deepEqual(contextStructured.agent_tooling?.agents_rules, ['Read memory first']);
 
     const disabledContext = handleMcpReadToolCall('bclaw_get_context', {
       path: 'src/auth/routes.ts',
@@ -315,12 +319,20 @@ describe('commands/mcp read tools', () => {
     assert.match(response.content[0].text, /Platform:/);
     const structured = response.structuredContent as {
       execution_context: { git_status: string; toolchains: Array<unknown> };
-      agent_tooling: { agents_md_present: boolean; skills: Array<{ name: string }>; mcp_servers: Array<{ name: string }> };
+      agent_tooling: {
+        agents_md_present: boolean;
+        agents_rules: string[];
+        skills: Array<{ name: string; scripts_present: boolean }>;
+        mcp_servers: Array<{ name: string; availability: string }>;
+      };
     };
     assert.ok(structured.execution_context);
     assert.ok(Array.isArray(structured.execution_context.toolchains));
     assert.equal(structured.agent_tooling.agents_md_present, false);
+    assert.deepEqual(structured.agent_tooling.agents_rules, []);
     assert.equal(structured.agent_tooling.skills[0]?.name, 'openai-docs');
+    assert.equal(structured.agent_tooling.skills[0]?.scripts_present, false);
     assert.equal(structured.agent_tooling.mcp_servers[0]?.name, 'atlassian');
+    assert.equal(structured.agent_tooling.mcp_servers[0]?.availability, 'remote');
   });
 });

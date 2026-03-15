@@ -50,6 +50,7 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     agent_tooling: {
       agents_md_present: agentTooling.agents_md_present,
       agents_md_title: agentTooling.agents_md_title,
+      agents_rules: agentTooling.agents_rules,
       skills: agentTooling.skills,
       mcp_servers: agentTooling.mcp_servers,
     },
@@ -75,6 +76,13 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     const primary = result.execution_context.toolchains[0]!;
     console.log(`  Toolchain  : ${primary.name}${primary.version ? ` ${primary.version}` : ''}`);
   }
+  if (result.agent_tooling.agents_rules.length > 0) {
+    console.log(`  Agent rule : ${result.agent_tooling.agents_rules[0]}`);
+  }
   console.log(`  Skills     : ${result.agent_tooling.skills.length}`);
   console.log(`  MCP servers: ${result.agent_tooling.mcp_servers.length}`);
+  const missingServer = result.agent_tooling.mcp_servers.find((server) => server.availability === 'missing_command');
+  if (missingServer) {
+    console.log(`  MCP issue  : ${missingServer.name} missing ${missingServer.command ?? 'command'}`);
+  }
 }

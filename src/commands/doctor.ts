@@ -18,6 +18,7 @@ import { listRuntimeEvents } from '../core/events.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
 import { scanMigrationStatus } from '../core/migration.js';
+import { buildAgentToolingContext } from '../core/agent-context.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -259,6 +260,65 @@ export function runDoctor(options: DoctorOptions = {}): void {
       console.warn(`⚠ agent identity is invalid: ${msg}`);
     }
     hasIssues = true;
+  }
+
+  const agentTooling = buildAgentToolingContext({ cwd: options.cwd });
+  if (agentTooling.agents_md_present && agentTooling.agents_rules.length === 0) {
+    checks.push({
+      name: 'agent_rules',
+      status: 'warn',
+      message: 'AGENTS.md is present but no actionable rules were extracted.',
+    });
+    if (!options.json) {
+      console.warn('⚠ AGENTS.md is present but no actionable rules were extracted.');
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'agent_rules',
+      status: 'ok',
+      message: agentTooling.agents_md_present
+        ? `${agentTooling.agents_rules.length} actionable agent rule(s) detected`
+        : 'No AGENTS.md detected',
+    });
+  }
+
+  const incompleteSkills = agentTooling.skills.filter((skill) => !skill.description && !skill.scripts_present && !skill.references_present && !skill.assets_present);
+  if (incompleteSkills.length > 0) {
+    checks.push({
+      name: 'agent_skills',
+      status: 'warn',
+      message: `${incompleteSkills.length} skill(s) look incomplete or under-described.`,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${incompleteSkills.length} skill(s) look incomplete or under-described.`);
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'agent_skills',
+      status: 'ok',
+      message: `${agentTooling.skills.length} skill(s) inventoried`,
+    });
+  }
+
+  const missingMcpCommands = agentTooling.mcp_servers.filter((server) => server.availability === 'missing_command');
+  if (missingMcpCommands.length > 0) {
+    checks.push({
+      name: 'agent_mcp',
+      status: 'warn',
+      message: `${missingMcpCommands.length} stdio MCP server(s) are configured with a missing local command.`,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${missingMcpCommands.length} stdio MCP server(s) are configured with a missing local command.`);
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'agent_mcp',
+      status: 'ok',
+      message: `${agentTooling.mcp_servers.length} MCP server(s) inventoried`,
+    });
   }
 
   // Check project.md consistency
@@ -656,6 +716,11 @@ export function runDoctor(options: DoctorOptions = {}): void {
     memory_version: visibleMemoryVersion,
     stale_context: Boolean(marker?.memory_version && marker.memory_version !== visibleMemoryVersion),
     runtime_events: events.length,
+    agent_rules: agentTooling.agents_rules.length,
+    local_skills: agentTooling.skills.length,
+    incomplete_skills: incompleteSkills.length,
+    local_mcp_servers: agentTooling.mcp_servers.length,
+    missing_mcp_commands: missingMcpCommands.length,
   };
 
   const reputationSummary = buildReputationSummary(options.cwd);

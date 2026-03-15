@@ -13,6 +13,8 @@ import { listRuntimeNotes } from './runtime.js';
 import { listOperationalTraps } from './traps.js';
 import type { InstructionEntry, ProjectMode, ProjectStrategy } from './schema.js';
 
+export const CONTEXT_SCHEMA_VERSION = '1.1';
+
 export interface ContextOptions {
   target?: string;
   project?: string;
@@ -66,7 +68,7 @@ export interface ContextResult {
   bootstrap_available: boolean;
   derived_signals?: DerivedContextSignal[];
   execution_context?: CompactExecutionContextSnapshot;
-  agent_tooling?: Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'skills' | 'mcp_servers'>;
+  agent_tooling?: Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'agents_rules' | 'skills' | 'mcp_servers'>;
   scoped_activity?: ScopedActivitySummary;
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
@@ -334,17 +336,24 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const executionSensitive = isExecutionSensitiveTarget(target);
   const derivedUsesExecution = derivedSignals?.some((signal) => signal.source_kind === 'machine') ?? false;
   const derivedUsesTooling = derivedSignals?.some((signal) => signal.source_kind === 'skill' || signal.source_kind === 'mcp') ?? false;
+  const rawAgentTooling = buildAgentToolingContext({ cwd: options.cwd });
+  const actionableAgentRules = rawAgentTooling.agents_rules.length > 0;
+  const blockingTooling = rawAgentTooling.mcp_servers.some((server) => server.availability === 'missing_command');
   const shouldExposeExecution = memoryDensity === 'low' || executionSensitive || derivedUsesExecution;
-  const shouldExposeAgentTooling = memoryDensity === 'low' || executionSensitive || derivedUsesTooling;
+  const shouldExposeAgentTooling = memoryDensity === 'low'
+    || executionSensitive
+    || derivedUsesTooling
+    || actionableAgentRules
+    || blockingTooling;
   const executionContext = shouldExposeExecution
     ? compactExecutionContext(buildExecutionContext({ cwd: options.cwd }))
     : undefined;
   const agentTooling = shouldExposeAgentTooling
-    ? summariseAgentTooling(buildAgentToolingContext({ cwd: options.cwd }))
+    ? summariseAgentTooling(rawAgentTooling)
     : undefined;
 
   const result: ContextResult = {
-    context_schema: '1.0',
+    context_schema: CONTEXT_SCHEMA_VERSION,
     profile,
     project_id: config.project_id,
     agent_id: currentAgentIdentity?.agent_id,
@@ -379,6 +388,7 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   const lines: string[] = [];
   lines.push(`# Agent Context (${result.profile})`);
   lines.push('');
+  lines.push(`Context schema: ${result.context_schema}`);
   if (result.project_id) {
     lines.push(`Project ID: ${result.project_id}`);
   }
@@ -419,11 +429,17 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
     lines.push('');
     lines.push('Agent tooling:');
     lines.push(`- AGENTS.md: ${result.agent_tooling.agents_md_present ? 'present' : 'absent'}`);
+    if (result.agent_tooling.agents_md_title) {
+      lines.push(`- AGENTS title: ${result.agent_tooling.agents_md_title}`);
+    }
+    for (const rule of result.agent_tooling.agents_rules) {
+      lines.push(`- Rule: ${rule}`);
+    }
     if (result.agent_tooling.skills.length > 0) {
-      lines.push(`- Skills: ${result.agent_tooling.skills.map((skill) => skill.name).join(', ')}`);
+      lines.push(`- Skills: ${result.agent_tooling.skills.map((skill) => formatSkillSummary(skill)).join(', ')}`);
     }
     if (result.agent_tooling.mcp_servers.length > 0) {
-      lines.push(`- MCP servers: ${result.agent_tooling.mcp_servers.map((server) => server.name).join(', ')}`);
+      lines.push(`- MCP servers: ${result.agent_tooling.mcp_servers.map((server) => formatMcpServerSummary(server)).join(', ')}`);
     }
   }
   if (result.digest) {
@@ -507,6 +523,7 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
   }
   lines.push('```memory-context');
   if (compact) {
+    lines.push(`cs=${result.context_schema}`);
     if (result.digest) {
       lines.push('dg:');
       for (const line of result.digest.split('\n')) {
@@ -546,6 +563,7 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
     if (result.agent_tooling) {
       lines.push(`am=${result.agent_tooling.agents_md_present ? 'y' : 'n'}`);
+      lines.push(`ar=${result.agent_tooling.agents_rules.length}`);
       lines.push(`sk=${result.agent_tooling.skills.length}`);
       lines.push(`ms=${result.agent_tooling.mcp_servers.length}`);
     }
@@ -560,6 +578,7 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       lines.push(`t=${result.target}`);
     }
   } else {
+    lines.push(`context_schema: ${result.context_schema}`);
     if (result.digest) {
       lines.push('digest:');
       for (const line of result.digest.split('\n')) {
@@ -609,13 +628,17 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       if (result.agent_tooling.agents_md_title) {
         lines.push(`  agents_md_title: ${result.agent_tooling.agents_md_title}`);
       }
+      lines.push('  agents_rules:');
+      for (const rule of result.agent_tooling.agents_rules) {
+        lines.push(`    - ${rule}`);
+      }
       lines.push('  skills:');
       for (const skill of result.agent_tooling.skills) {
-        lines.push(`    - ${skill.name}`);
+        lines.push(`    - ${formatSkillSummary(skill)}`);
       }
       lines.push('  mcp_servers:');
       for (const server of result.agent_tooling.mcp_servers) {
-        lines.push(`    - ${server.name}`);
+        lines.push(`    - ${formatMcpServerSummary(server)}`);
       }
     }
     if (result.resume_summary) {
@@ -767,6 +790,13 @@ export function buildContextDigest(result: ContextResult): string {
     const signal = result.derived_signals[0];
     lines.push(`Derived ${signal.seed_kind}: ${signal.text}`);
   }
+  if (result.agent_tooling?.agents_rules.length) {
+    lines.push(`Agent rule: ${result.agent_tooling.agents_rules[0]}`);
+  }
+  const blockingServer = result.agent_tooling?.mcp_servers.find((server) => server.availability === 'missing_command');
+  if (blockingServer) {
+    lines.push(`Tooling warning: MCP ${blockingServer.name} is configured but ${blockingServer.command ?? 'its command'} is unavailable.`);
+  }
   if ((result.memory_density === 'low' || result.execution_context?.git_status === 'dirty') && result.execution_context) {
     if (result.execution_context.git_status === 'dirty') {
       lines.push('Execution: repository has uncommitted changes.');
@@ -789,13 +819,30 @@ function classifyMemoryDensity(selectedCount: number): 'low' | 'medium' | 'high'
 
 function summariseAgentTooling(
   snapshot: AgentToolingSnapshot,
-): Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'skills' | 'mcp_servers'> {
+): Pick<AgentToolingSnapshot, 'agents_md_present' | 'agents_md_title' | 'agents_rules' | 'skills' | 'mcp_servers'> {
   return {
     agents_md_present: snapshot.agents_md_present,
     agents_md_title: snapshot.agents_md_title,
+    agents_rules: snapshot.agents_rules.slice(0, 5),
     skills: snapshot.skills.slice(0, 5),
     mcp_servers: snapshot.mcp_servers.slice(0, 5),
   };
+}
+
+function formatSkillSummary(skill: AgentToolingSnapshot['skills'][number]): string {
+  const markers: string[] = [];
+  if (skill.scripts_present) markers.push('scripts');
+  if (skill.references_present) markers.push('references');
+  if (skill.assets_present) markers.push('assets');
+  const suffix = markers.length > 0 ? ` [${markers.join(', ')}]` : '';
+  return `${skill.name}${skill.description ? `: ${skill.description}` : ''}${suffix}`;
+}
+
+function formatMcpServerSummary(server: AgentToolingSnapshot['mcp_servers'][number]): string {
+  const availability = server.availability === 'missing_command'
+    ? 'missing-command'
+    : server.availability;
+  return `${server.name} (${server.transport}, ${availability})`;
 }
 
 function isExecutionSensitiveTarget(target: string): boolean {
