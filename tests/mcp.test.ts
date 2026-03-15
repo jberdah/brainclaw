@@ -375,6 +375,45 @@ describe('MCP server', () => {
     }
   });
 
+  it('returns execution context and local agent tooling through MCP', async () => {
+    const codexHome = path.join(dir, '.codex-home');
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(codexHome, 'skills', '.system', 'openai-docs', 'SKILL.md'),
+      '# OpenAI Docs\n\nUse when official OpenAI docs are needed.\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      '[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+      'utf-8',
+    );
+
+    const proc = startMcp(dir, { CODEX_HOME: codexHome });
+    try {
+      await initializeMcp(proc);
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 26,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_get_execution_context',
+          arguments: {
+            includeAgentTooling: true,
+          },
+        },
+      });
+
+      assert.equal(response.result.isError, false);
+      assert.ok(response.result.structuredContent.execution_context);
+      assert.ok(Array.isArray(response.result.structuredContent.execution_context.toolchains));
+      assert.equal(response.result.structuredContent.agent_tooling.skills[0].name, 'openai-docs');
+      assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].name, 'atlassian');
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('renders explain mode for markdown context responses', async () => {
     run(['decision', 'Auth gateway routes OAuth', '--tag', 'auth'], dir);
     run(['instruction', 'Check auth gateway conventions first'], dir);

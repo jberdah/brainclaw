@@ -1,8 +1,10 @@
 import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
 import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
+import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
+import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { saveCandidate, generateCandidateId } from '../core/candidates.js';
@@ -119,6 +121,16 @@ export const MCP_READ_TOOLS = [
       properties: {
         target: { type: 'string', description: 'Optional path or scope to tailor the bootstrap.' },
         refresh: { type: 'boolean', description: 'Force a fresh bootstrap scan.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_get_execution_context',
+    description: 'Inspect the local execution environment and optionally agent tooling signals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeAgentTooling: { type: 'boolean', description: 'Include AGENTS.md, skills, and local MCP inventory.' },
       },
     },
   },
@@ -861,6 +873,22 @@ export function handleMcpReadToolCall(
         seed_count: result.profile.seed_count,
         seeds: result.seeds,
         reused_profile: result.reusedProfile,
+      },
+    };
+  }
+
+  if (name === 'bclaw_get_execution_context') {
+    const executionContext = buildExecutionContext({ cwd });
+    const agentTooling = args.includeAgentTooling ? buildAgentToolingContext({ cwd }) : undefined;
+    const text = [
+      renderExecutionContextSummary(executionContext, true),
+      ...(agentTooling ? ['', renderAgentToolingSummary(agentTooling)] : []),
+    ].join('\n');
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: {
+        execution_context: executionContext,
+        ...(agentTooling ? { agent_tooling: agentTooling } : {}),
       },
     };
   }

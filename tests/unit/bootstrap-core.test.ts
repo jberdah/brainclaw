@@ -8,6 +8,7 @@ import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js
 
 describe('core/bootstrap', () => {
   let workspace: TestWorkspace;
+  let previousCodexHome: string | undefined;
 
   beforeEach(() => {
     workspace = createTestWorkspace({
@@ -15,9 +16,28 @@ describe('core/bootstrap', () => {
       projectId: 'prj_bootstrap_core',
       currentAgent: 'copilot',
     });
+    const codexHome = path.join(workspace.dir, '.codex-home');
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(codexHome, 'skills', '.system', 'openai-docs', 'SKILL.md'),
+      '# OpenAI Docs\n\nUse when official OpenAI docs are needed.\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      '[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+      'utf-8',
+    );
+    previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
   });
 
   afterEach(() => {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
     workspace.cleanup();
   });
 
@@ -42,9 +62,15 @@ describe('core/bootstrap', () => {
     assert.ok(result.profile.sources_scanned.includes('README'));
     assert.ok(result.profile.sources_scanned.includes('AGENTS.md'));
     assert.ok(result.profile.sources_scanned.includes('package.json'));
+    assert.ok(result.profile.sources_scanned.includes('execution_context'));
+    assert.ok(result.profile.sources_scanned.includes('skills'));
+    assert.ok(result.profile.sources_scanned.includes('local_mcp'));
     assert.ok(result.profile.sources_scanned.includes('repo-analysis'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'agents_md' && seed.seed_kind === 'agent_rule'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'manifest' && seed.seed_kind === 'command'));
+    assert.ok(result.seeds.some((seed) => seed.source_kind === 'machine' && seed.seed_kind === 'tooling'));
+    assert.ok(result.seeds.some((seed) => seed.source_kind === 'skill' && seed.seed_kind === 'tooling'));
+    assert.ok(result.seeds.some((seed) => seed.source_kind === 'mcp' && seed.seed_kind === 'tooling'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'repo_analysis'));
     assert.equal(loadBootstrapProfile(workspace.dir)?.seed_count, result.seeds.length);
     assert.equal(listBootstrapSeeds(workspace.dir).length, result.seeds.length);

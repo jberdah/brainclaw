@@ -171,11 +171,24 @@ Conséquence produit :
   - intégration de `memory_density`, `bootstrap_available` et `derived_signals` dans `context`
   - fallback opportuniste de `context` quand la mémoire canonique est sparse, avec distinction explicite entre mémoire canonique et signaux dérivés
   - nouvel outil MCP `bclaw_bootstrap` et extension de `bclaw_get_context` avec `bootstrap` / `refreshBootstrap`
+- Livraison du lot `6.5 + 6.6 v1` :
+  - nouveau coeur `execution-context` pour détecter OS/shell/workspace root, branche Git, état dirty/clean, remote et toolchains locales
+  - nouveau coeur `agent-context` pour inventorier `AGENTS.md`, skills locales et serveurs MCP configurés localement
+  - nouvelle commande `brainclaw env` pour exposer le contexte d'exécution, avec option `--agent-tooling`
+  - enrichissement de `whoami --json` avec le contexte machine borné et l'inventaire d'outillage agent local
+  - intégration bornée dans `context` via `execution_context` et `agent_tooling`, exposés automatiquement quand utiles
+  - enrichissement de `bootstrap` avec des seeds `machine` / `skill` / `mcp`
+  - nouvel outil MCP `bclaw_get_execution_context`
 - Couverture brownfield ajoutée :
   - tests unitaires du moteur `bootstrap.ts` sur extraction, réutilisation de profil, refresh et fingerprint Git
   - tests unitaires `context` sur auto-bootstrap, désactivation explicite et digest avec signaux dérivés
   - tests CLI pour `brainclaw bootstrap --json`
   - contrats MCP unitaires et E2E pour `bclaw_bootstrap` et le fallback sparse-memory dans `bclaw_get_context`
+- Couverture ajoutée pour le lot exécution/outillage :
+  - tests unitaires `execution-context.ts` sur Git, toolchains et redaction des variables d'environnement
+  - tests unitaires `agent-context.ts` sur `AGENTS.md`, skills locales et config MCP locale
+  - tests unitaires commandes `env` et `whoami`
+  - tests `context`, CLI et MCP sur l'exposition conditionnelle du contexte d'exécution et de l'outillage agent
 - Couverture ajoutée pour le socle migration/storage :
   - tests unitaires `migration.ts` sur détection de version, migration legacy, rejet des versions futures et scan des documents
   - tests unitaires `json-store.ts` sur CRUD, lecture legacy, fichiers corrompus et persistance de `schema_version`
@@ -190,7 +203,7 @@ Conséquence produit :
   - `npm run test:unit` passe
   - `npm run test:coverage:check` passe
   - `node --test dist-test/tests/mcp.test.js` passe
-  - couverture fast path : `statements 69.00%`, `branches 69.36%`, `functions 76.05%`, `lines 69.00%`
+  - couverture fast path : `statements 70.66%`, `branches 70.02%`, `functions 78.09%`, `lines 70.66%`
 
 ### Légende de statut
 - `done` : livré et intégré
@@ -261,7 +274,7 @@ Conséquence produit :
 - `6.2` Profil d'agent déclaratif : `partial`
 - `6.3` Notification de changements : `partial`
 - `6.4` Context format versionné : `todo`
-- `6.5` Contexte machine et environnement d'exécution : `todo`
+- `6.5` Contexte machine et environnement d'exécution : `done`
 - `6.6` Ingestion `AGENTS.md`, skills et surfaces MCP : `partial`
 
 **Phase 7 — Observabilité et Audit**

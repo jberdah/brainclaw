@@ -1,0 +1,71 @@
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { buildAgentToolingContext } from '../../src/core/agent-context.js';
+
+describe('core/agent-context', () => {
+  let dir: string;
+  let codexHome: string;
+  let previousCodexHome: string | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-context-'));
+    codexHome = path.join(dir, '.codex-home');
+    fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'code-review'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Guide\n\n- Read memory first\n- Prefer focused diffs\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(codexHome, 'skills', '.system', 'code-review', 'SKILL.md'),
+      '# Code Review\n\nUse this skill when reviewing code changes.\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      'model = "gpt-5.4"\n\n[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
+      'utf-8',
+    );
+    previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+  });
+
+  afterEach(() => {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads AGENTS.md, local skills, and MCP config deterministically', () => {
+    const snapshot = buildAgentToolingContext({ cwd: dir });
+
+    assert.equal(snapshot.agents_md_present, true);
+    assert.equal(snapshot.agents_md_title, 'Agent Guide');
+    assert.deepEqual(snapshot.agents_rules, ['Read memory first', 'Prefer focused diffs']);
+    assert.equal(snapshot.skills.length, 1);
+    assert.equal(snapshot.skills[0]?.name, 'code-review');
+    assert.match(snapshot.skills[0]?.source_path ?? '', /SKILL\.md$/);
+    assert.equal(snapshot.mcp_servers.length, 1);
+    assert.equal(snapshot.mcp_servers[0]?.name, 'atlassian');
+    assert.equal(snapshot.mcp_servers[0]?.transport, 'remote');
+  });
+
+  it('returns empty inventories when no local signals are present', () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-context-empty-'));
+    try {
+      const snapshot = buildAgentToolingContext({
+        cwd: emptyDir,
+        env: { CODEX_HOME: path.join(emptyDir, '.missing-codex') },
+      });
+
+      assert.equal(snapshot.agents_md_present, false);
+      assert.deepEqual(snapshot.agents_rules, []);
+      assert.deepEqual(snapshot.skills, []);
+      assert.deepEqual(snapshot.mcp_servers, []);
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
