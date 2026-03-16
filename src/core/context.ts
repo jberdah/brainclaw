@@ -24,7 +24,7 @@ export interface ContextOptions {
   host?: string;
   allHosts?: boolean;
   includePending?: boolean;
-  profile?: 'dev' | 'openclaw' | 'ops' | 'research';
+  profile?: 'dev' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick';
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
@@ -116,10 +116,20 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const currentAgentIdentity = agent
     ? (options.agent?.trim() ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
     : undefined;
-  const maxItems = options.maxItems ?? 8;
+  const profileMaxItems: Record<string, number> = { compact: 6, copilot: 5, quick: 3 };
+  const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
   const resolvedInstructions = resolveInstructions(loadInstructions(options.cwd), { project, agent });
   const rankingLookup = buildReputationRankingLookup(options.cwd);
+
+  // Profile-specific section allow-list (undefined = all sections allowed)
+  type Section = ContextItem['section'];
+  const profileSections: Record<string, Section[]> = {
+    compact:  ['plan', 'constraint'],
+    copilot:  ['constraint', 'trap'],
+    quick:    ['constraint', 'plan'],
+  };
+  const allowedSections = profileSections[profile] as Section[] | undefined;
 
   const items: ContextItem[] = [];
 
@@ -292,6 +302,12 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         },
       });
     }
+  }
+
+  // Apply profile section filter before scoring
+  if (allowedSections) {
+    const allowed = allowedSections;
+    items.splice(0, items.length, ...items.filter((i) => allowed.includes(i.section)));
   }
 
   const queryTerms = tokenise(target);
@@ -1107,6 +1123,18 @@ function computeRelevance(item: ContextItem, terms: string[], profile: string, t
   if (profile === 'research' && (item.section === 'decision' || item.section === 'candidate')) {
     score += 2;
     reasons.push('profile boost: research');
+  }
+  if (profile === 'compact' && item.section === 'plan' && (item.extra ?? '').includes('in_progress')) {
+    score += 3;
+    reasons.push('profile boost: compact');
+  }
+  if (profile === 'copilot' && item.section === 'constraint') {
+    score += 3;
+    reasons.push('profile boost: copilot');
+  }
+  if (profile === 'quick' && item.section === 'constraint') {
+    score += 4;
+    reasons.push('profile boost: quick');
   }
 
   if (item.section === 'candidate') {
