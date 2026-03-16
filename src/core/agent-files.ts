@@ -469,10 +469,10 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   }
   permissions.allow = allow;
 
-  // Merge hooks — UserPromptSubmit injects fresh context on every exchange
+  // Merge hooks — UserPromptSubmit injects full context on first prompt, diff on subsequent
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-  const contextCommand = 'npx brainclaw context 2>/dev/null';
-  const stopCommand = 'npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
+  const contextCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
+  const stopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
 
   const userPromptHooks = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit as unknown[]] : [];
   if (!containsCommandHook(userPromptHooks, contextCommand)) {
