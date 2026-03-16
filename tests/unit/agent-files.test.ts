@@ -7,6 +7,7 @@ import {
   BRAINCLAW_SECTION_START,
   BRAINCLAW_SECTION_END,
   buildBrainclawSection,
+  buildHygieneSection,
   upsertBrainclawSection,
   ensureAgentFiles,
   ensureGitignoreEntries,
@@ -22,6 +23,37 @@ describe('core/agent-files — buildBrainclawSection', () => {
     assert.ok(section.includes(BRAINCLAW_SECTION_START));
     assert.ok(section.includes(BRAINCLAW_SECTION_END));
     assert.ok(section.includes('.brainclaw'));
+  });
+
+  it('contains session-start behavioral contract', () => {
+    const section = buildBrainclawSection('.brainclaw');
+    assert.ok(section.includes('brainclaw context'), 'should mention brainclaw context');
+    assert.ok(section.includes('Session start'), 'should have session start section');
+    assert.ok(section.includes('list-claims'), 'should mention list-claims for checking other agents');
+  });
+
+  it('contains before-finishing behavioral contract', () => {
+    const section = buildBrainclawSection('.brainclaw');
+    assert.ok(section.includes('release-claim'), 'should mention release-claim');
+    assert.ok(section.includes('update-plan'), 'should mention update-plan');
+    assert.ok(section.includes('Before finishing'), 'should have before finishing section');
+  });
+
+  it('contains recording-work quick reference', () => {
+    const section = buildBrainclawSection('.brainclaw');
+    assert.ok(section.includes('brainclaw decision'), 'should mention decision command');
+    assert.ok(section.includes('brainclaw claim'), 'should mention claim command');
+    assert.ok(section.includes('brainclaw plan'), 'should mention plan command');
+  });
+});
+
+describe('core/agent-files — buildHygieneSection', () => {
+  it('contains before-starting and before-finishing rules', () => {
+    const section = buildHygieneSection();
+    assert.ok(section.includes('brainclaw context'));
+    assert.ok(section.includes('release-claim'));
+    assert.ok(section.includes('update-plan'));
+    assert.ok(section.includes('session-end'));
   });
 });
 

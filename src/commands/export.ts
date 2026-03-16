@@ -5,7 +5,7 @@ import { loadState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
-import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, type ExportFormat } from '../core/agent-files.js';
+import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, type ExportFormat } from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
 
 export type { ExportFormat };
@@ -134,18 +134,7 @@ function getTrapsSummary(cwd: string): string {
   }
 }
 
-function buildHygieneSection(): string {
-  return `## Brainclaw session hygiene
-
-Before starting work:
-1. Run \`brainclaw context\` (or \`brainclaw context --json\`) to load shared memory
-2. Check the **Your open work** section for active claims and in-progress plans
-
-Before finishing:
-1. Release active claims: \`brainclaw release-claim <id>\`
-2. Update plans: \`brainclaw update-plan <id> --status done\`
-3. Or use \`brainclaw session-end --auto-release\` to clean up automatically`;
-}
+// buildHygieneSection is imported from ../core/agent-files.js
 
 function generateCopilotInstructions(options: ExportOptions, cwd: string): string {
   const config = loadConfig(cwd);
