@@ -5,7 +5,7 @@ import { loadState } from '../core/state.js';
 import { loadConfig } from '../core/config.js';
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
-import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, type ExportFormat } from '../core/agent-files.js';
+import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, ensureMcpConfig, ensureCopilotSkill, ensureCursorMdc, type ExportFormat } from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
 
 export type { ExportFormat };
@@ -43,6 +43,24 @@ export function runExport(options: ExportOptions): void {
     const target = resolveExportTargetByFormat(options.format);
     const result = writeExportFile(content, target.relativePath, cwd);
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+    
+    // Attempt MCP config injection if appropriate
+    if (options.format === 'cline' || options.format === 'windsurf' || options.format === 'roo') {
+      const mcpResult = ensureMcpConfig(cwd);
+      if (mcpResult.clineUpdated) {
+        console.log('✔ Injected brainclaw MCP server into .vscode/cline_mcp_settings.json');
+      }
+    } else if (options.format === 'copilot-instructions') {
+      const { skillUpdated } = ensureCopilotSkill(cwd);
+      if (skillUpdated) {
+        console.log('✔ Created Copilot custom skill .github/copilot/brainclaw-context.prompt.md');
+      }
+    } else if (options.format === 'cursor-rules') {
+      const { cursorMdcUpdated } = ensureCursorMdc(cwd);
+      if (cursorMdcUpdated) {
+        console.log('✔ Created imperative Cursor rule .cursor/rules/brainclaw-mcp-shim.mdc');
+      }
+    }
   } else if (options.output) {
     const dir = path.dirname(options.output);
     if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -61,6 +79,23 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
   console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+
+  if (target.format === 'cline' || target.format === 'windsurf' || target.format === 'roo') {
+    const mcpResult = ensureMcpConfig(cwd);
+    if (mcpResult.clineUpdated) {
+      console.log('✔ Injected brainclaw MCP server into .vscode/cline_mcp_settings.json');
+    }
+  } else if (target.format === 'copilot-instructions') {
+    const { skillUpdated } = ensureCopilotSkill(cwd);
+    if (skillUpdated) {
+      console.log('✔ Created Copilot custom skill .github/copilot/brainclaw-context.prompt.md');
+    }
+  } else if (target.format === 'cursor-rules') {
+    const { cursorMdcUpdated } = ensureCursorMdc(cwd);
+    if (cursorMdcUpdated) {
+      console.log('✔ Created imperative Cursor rule .cursor/rules/brainclaw-mcp-shim.mdc');
+    }
+  }
 }
 export function writeDetectedAgentExport(detectedAgentName: string, cwd: string): { relativePath: string; created: boolean } | undefined {
   const target = resolveExportTarget(detectedAgentName);

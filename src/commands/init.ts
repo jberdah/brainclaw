@@ -120,6 +120,21 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       }
     : ensureAgentFiles(cwd, storageDir);
 
+  let mcpInjected = false;
+  let copilotSkillInjected = false;
+  let cursorMdcInjected = false;
+  if (!skipAgentBootstrap) {
+    const { ensureMcpConfig, ensureCopilotSkill, ensureCursorMdc } = await import('../core/agent-files.js');
+    const mcpResult = ensureMcpConfig(cwd);
+    mcpInjected = mcpResult.clineUpdated;
+    
+    const copilotResult = ensureCopilotSkill(cwd);
+    copilotSkillInjected = copilotResult.skillUpdated;
+    
+    const cursorResult = ensureCursorMdc(cwd);
+    cursorMdcInjected = cursorResult.cursorMdcUpdated;
+  }
+
   // Add agent instruction files to .gitignore (they are generated, not source)
   if (!skipAgentBootstrap) {
     ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md']);
@@ -155,7 +170,16 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('✔ Created .github/copilot-instructions.md with brainclaw bootstrap section');
   } else if (agentFiles.copilotInstructionsUpdated) {
     console.log('✔ Updated .github/copilot-instructions.md with brainclaw bootstrap section');
+  }  
+  if (mcpInjected) {
+    console.log('✔ Injected brainclaw MCP server into .vscode/cline_mcp_settings.json');
   }
+  if (copilotSkillInjected) {
+    console.log('✔ Created Copilot custom skill .github/copilot/brainclaw-context.prompt.md');
+  }
+  if (cursorMdcInjected) {
+    console.log('✔ Created imperative Cursor rule .cursor/rules/brainclaw-mcp-shim.mdc');
+  }  
   if (!skipAgentBootstrap) {
     console.log('✔ Added AGENTS.md and .github/copilot-instructions.md to .gitignore');
   }

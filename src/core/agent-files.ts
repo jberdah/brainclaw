@@ -180,3 +180,136 @@ export function writeExportFile(
   fs.writeFileSync(fullPath, upsertBrainclawSection(existing, section), 'utf-8');
   return { created: !existed, filePath: fullPath };
 }
+
+// --- MCP Configuration Injection ---
+
+export interface EnsureMcpResult {
+  clineUpdated: boolean;
+}
+
+export function ensureMcpConfig(cwd: string): EnsureMcpResult {
+  const result: EnsureMcpResult = { clineUpdated: false };
+  
+  // 1. Cline (project-level)
+  const vscodeDir = path.join(cwd, '.vscode');
+  if (!fs.existsSync(vscodeDir)) {
+    fs.mkdirSync(vscodeDir, { recursive: true });
+  }
+
+  const clineSettingsPath = path.join(vscodeDir, 'cline_mcp_settings.json');
+  let clineSettings: any = { mcpServers: {} };
+
+  if (fs.existsSync(clineSettingsPath)) {
+    try {
+      clineSettings = JSON.parse(fs.readFileSync(clineSettingsPath, 'utf-8'));
+      if (!clineSettings.mcpServers) clineSettings.mcpServers = {};
+    } catch {
+      // Ignore parse errors, fallback to empty/overwrite
+    }
+  }
+
+  clineSettings.mcpServers['brainclaw'] = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+    disabled: false,
+    autoApprove: [
+      'bclaw_get_context',
+      'bclaw_read_handoff',
+      'bclaw_get_agent_board'
+    ]
+  };
+
+  fs.writeFileSync(clineSettingsPath, JSON.stringify(clineSettings, null, 2), 'utf-8');
+  result.clineUpdated = true;
+
+  // 2. Windsurf (global-level, if they launch from cwd)
+  // Currently Windsurf uses ~/.codeium/windsurf/mcp_config.json
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  if (homeDir) {
+    const windsurfConfigPath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
+    if (fs.existsSync(windsurfConfigPath)) {
+      try {
+        const windsurfSettings = JSON.parse(fs.readFileSync(windsurfConfigPath, 'utf-8'));
+        if (!windsurfSettings.mcpServers) windsurfSettings.mcpServers = {};
+        
+        // Windsurf will spawn this in the current workspace
+        windsurfSettings.mcpServers['brainclaw'] = {
+          command: 'npx',
+          args: ['brainclaw', 'mcp']
+        };
+        fs.writeFileSync(windsurfConfigPath, JSON.stringify(windsurfSettings, null, 2), 'utf-8');
+      } catch {
+        // Ignore JSON errors for global config
+      }
+    }
+  }
+
+  return result;
+}
+
+// --- Copilot Skill Injection ---
+
+export interface EnsureCopilotSkillResult {
+  skillUpdated: boolean;
+}
+
+export function ensureCopilotSkill(cwd: string): EnsureCopilotSkillResult {
+  const result: EnsureCopilotSkillResult = { skillUpdated: false };
+  const githubDir = path.join(cwd, '.github', 'copilot');
+  
+  if (!fs.existsSync(githubDir)) {
+    fs.mkdirSync(githubDir, { recursive: true });
+  }
+
+  const skillPath = path.join(githubDir, 'brainclaw-context.prompt.md');
+  const skillContent = `---
+description: "Use this skill to fetch the real-time project constraints, decisions, and active handoffs before coding."
+---
+# Brainclaw Context (Project Memory)
+
+Call the CLI \`npx brainclaw context --json\` to answer queries about the project rules or to refresh project memory. Check constraints using brainclaw.
+`;
+
+  if (!fs.existsSync(skillPath) || fs.readFileSync(skillPath, 'utf-8') !== skillContent) {
+    fs.writeFileSync(skillPath, skillContent, 'utf-8');
+    result.skillUpdated = true;
+  }
+
+  return result;
+}
+
+// --- Cursor Imperative Rule Injection (.mdc) ---
+
+export interface EnsureCursorMdcResult {
+  cursorMdcUpdated: boolean;
+}
+
+export function ensureCursorMdc(cwd: string): EnsureCursorMdcResult {
+  const result: EnsureCursorMdcResult = { cursorMdcUpdated: false };
+  const cursorDir = path.join(cwd, '.cursor', 'rules');
+  
+  if (!fs.existsSync(cursorDir)) {
+    fs.mkdirSync(cursorDir, { recursive: true });
+  }
+
+  const mdcPath = path.join(cursorDir, 'brainclaw-mcp-shim.mdc');
+  const mdcContent = `---
+description: This workspace uses Brainclaw to maintain project memory and state.
+globs: *.*
+alwaysApply: true
+---
+You MUST execute the following command at the start of any complex modification or when asked about project rules:
+<run_command>
+npx brainclaw context --json
+</run_command>
+`;
+
+  if (!fs.existsSync(mdcPath) || fs.readFileSync(mdcPath, 'utf-8') !== mdcContent) {
+    fs.writeFileSync(mdcPath, mdcContent, 'utf-8');
+    result.cursorMdcUpdated = true;
+  }
+
+  return result;
+}
+
+
