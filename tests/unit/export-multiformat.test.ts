@@ -137,11 +137,21 @@ describe('export command formats', () => {
       if (format === 'copilot-instructions') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
       }
+      if (format === 'claude-md') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.mcp.json')), '.mcp.json should be created for claude-md');
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.claude', 'commands', 'brainclaw.md')), 'slash command should be created for claude-md');
+      }
       if (format === 'cursor-rules') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
       }
       if (format === 'cline') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.vscode', 'cline_mcp_settings.json')));
+      }
+      if (format === 'roo') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.roo', 'mcp.json')), '.roo/mcp.json should be created for roo');
+      }
+      if (format === 'continue') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.continue', 'config.json')), '.continue/config.json should be created for continue');
       }
 
       const declarationAgentName = format === 'agents-md'
