@@ -5,12 +5,16 @@ import { loadState } from '../core/state.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { listCandidates } from '../core/candidates.js';
 import { readAuditLog } from '../core/audit.js';
+import { listClaims, saveClaim, generateClaimId, ensureClaimsDir } from '../core/claims.js';
+import { resolveCurrentAgentName } from '../core/agent-registry.js';
+import type { Claim } from '../core/schema.js';
 
 export interface WatchOptions {
   agent?: string;
   project?: string;
   sections?: string[];
   interval?: number;
+  autoClaim?: boolean;
 }
 
 type WatchEvent = {
@@ -172,6 +176,50 @@ export function runWatch(options: WatchOptions = {}): void {
     });
   } catch {
     // fs.watch not available (e.g. some Docker environments) — poll only is fine
+  }
+
+  // Auto-claim mode: watch workspace for first write on each file
+  if (options.autoClaim) {
+    const cwd = process.cwd();
+    const agentName = options.agent ?? resolveCurrentAgentName();
+    const claimedFiles = new Set<string>();
+    const IGNORED = new Set(['.brainclaw', '.git', 'node_modules', 'dist', 'dist-test']);
+
+    ensureClaimsDir();
+
+    try {
+      fs.watch(cwd, { recursive: true }, (eventType: string, filename: string | null) => {
+        if (eventType !== 'change' || !filename) return;
+        const parts = filename.replace(/\\/g, '/').split('/');
+        if (IGNORED.has(parts[0])) return;
+        if (claimedFiles.has(filename)) return;
+
+        // Check if this agent already has an active claim covering this file
+        const existing = listClaims().filter((c) => c.status === 'active' && c.agent === agentName);
+        const alreadyClaimed = existing.some((c) =>
+          c.scope.split(/\s+/).some((s) => {
+            const sp = s.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+            const f = filename.replace(/\\/g, '/').replace(/^\.\//, '');
+            return f === sp || f.startsWith(sp + '/');
+          })
+        );
+        if (alreadyClaimed) { claimedFiles.add(filename); return; }
+
+        claimedFiles.add(filename);
+        const claim: Claim = {
+          id: generateClaimId(),
+          agent: agentName,
+          scope: filename,
+          description: `auto-claim: ${filename}`,
+          created_at: new Date().toISOString(),
+          status: 'active',
+        };
+        try {
+          saveClaim(claim);
+          emit({ event: 'auto_claim_created', section: 'claim', item_id: claim.id, text: filename, timestamp: new Date().toISOString() });
+        } catch { /* skip if concurrent write fails */ }
+      });
+    } catch { /* fs.watch unavailable */ }
   }
 
   process.on('SIGINT', () => {
