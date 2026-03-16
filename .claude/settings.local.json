@@ -1,0 +1,53 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx brainclaw:*)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -n \"writeDetectedAgentAutoConfig\\\\|case ''''claude-code''''\" src/core/agent-files.ts)",
+      "Bash(node dist/cli.js claim \"feat: ensureProjectDevDependency dans agent-files.ts\" --scope \"src/core/agent-files.ts\")",
+      "Bash(node --test dist-test/tests/unit/brainclaw-version.test.js)",
+      "Bash(node dist/cli.js release-claim clm_f673ef85)",
+      "Bash(node dist/cli.js context)",
+      "Bash(node dist/cli.js trap \"tests/unit/brainclaw-version.test.ts hardcode la version courante \\(ex: ''0.7.0''\\). Après chaque bump de version dans package.json, mettre à jour getInstalledBrainclawVersion\\(\\) et les latest_installable_version de test en conséquence — sinon 2 tests échouent silencieusement.\" --severity medium --tag \"testing\" --tag \"versioning\")",
+      "Bash(node -e \":*)",
+      "Bash(node dist/cli.js version --publish-local --release-notes \"fix: ensureProjectDevDependency — ajoute brainclaw en devDependency du projet cible pour résoudre npx PATH sur Windows WSL/Git Bash\")",
+      "Bash(wsl -- bash -c \"npm install -g ''/mnt/c/Users/jberdah/Documents/Projets/shared_agent_memory_mvp/.releases/brainclaw-0.7.1.tgz'' 2>&1\")",
+      "Bash(wsl -- bash -c \"sudo npm install -g ''/mnt/c/Users/jberdah/Documents/Projets/shared_agent_memory_mvp/.releases/brainclaw-0.7.1.tgz'' 2>&1\")",
+      "Bash(wsl -- bash -c \"which brainclaw && brainclaw context --json 2>&1 | head -5\")",
+      "Bash(where brainclaw:*)",
+      "Bash(brainclaw --version)",
+      "Bash(npm install:*)",
+      "Bash(bash -c \"which brainclaw && brainclaw --version && brainclaw context --json 2>/dev/null | head -5\")",
+      "Bash(bash -c \"npx brainclaw context --json 2>/dev/null | head -3\")",
+      "Bash(node dist/cli.js version --publish-local --release-notes \"fix: UserPromptSubmit hook — context plain text \\(sans --json\\) pour injection correcte dans Claude Code\")",
+      "Bash(wsl -- bash -c \"cd /mnt/c/Users/jberdah/Documents/Projets/shared_agent_memory_mvp && git push origin feat/7.2-hook-fix-cross-platform\")",
+      "Read(//mnt/c/Users/jberdah/**)",
+      "Read(//mnt/c/Users/jberdah/.claude/**)",
+      "Bash(node dist/cli.js enable-agent claude-code)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=.claude/.bclaw-session; if [ ! -f \"$f\" ]; then touch \"$f\"; npx brainclaw context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release --dry-run 2>/dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}
