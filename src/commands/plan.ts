@@ -17,6 +17,7 @@ export interface PlanOptions {
   path?: string[];
   author?: string;
   dependsOn?: string[];
+  estimate?: string;
 }
 
 // Known plan subcommands that should not be accepted as plan text
@@ -71,6 +72,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     tags: options.tag ?? [],
     related_paths: options.path,
     depends_on: options.dependsOn ?? [],
+    estimated_effort: options.estimate,
   };
 
   state.plan_items.push(entry);

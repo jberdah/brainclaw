@@ -11,6 +11,7 @@ import { runPlan } from './commands/plan.js';
 import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
 import { runAddStep } from './commands/add-step.js';
+import { runEstimationReport } from './commands/estimation-report.js';
 import { runCompleteStep } from './commands/complete-step.js';
 import { runUpdateHandoff } from './commands/update-handoff.js';
 import { runInstruction } from './commands/instruction.js';
@@ -176,6 +177,7 @@ program
   .option('--path <paths...>', 'Related file paths')
   .option('--depends-on <ids...>', 'Dependency IDs for this plan item')
   .option('--author <author>', 'Author name')
+  .option('--estimate <effort>', 'Estimated effort (e.g. "30min", "2h", "1d")')
   .action((text, options) => {
     runPlan(text, options);
   });
@@ -210,6 +212,16 @@ program
     runCompleteStep(planId, stepId);
   });
 
+// --- estimation-report ---
+program
+  .command('estimation-report')
+  .description('Show estimation accuracy report for completed plans')
+  .option('--agent <name>', 'Filter by agent/author name')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runEstimationReport(options);
+  });
+
 // --- update-plan ---
 program
   .command('update-plan <id>')
@@ -218,8 +230,9 @@ program
   .option('--assignee <assignee>', 'Assign a user or agent to this plan item')
   .option('--project <project>', 'Set or change project namespace')
   .option('--priority <priority>', 'Priority: low, medium, high')
+  .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
   .action((id, options) => {
-    runUpdatePlan(id, options);
+    runUpdatePlan(id, { ...options, actualEffort: options.actualEffort });
   });
 
 // --- update-handoff ---
