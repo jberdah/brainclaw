@@ -97,6 +97,16 @@ export type Handoff = z.infer<typeof HandoffSchema>;
 export const PlanStatusSchema = z.enum(['todo', 'in_progress', 'blocked', 'done', 'dropped']);
 export type PlanStatus = z.infer<typeof PlanStatusSchema>;
 
+export const PlanStepSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  status: z.enum(['todo', 'done']),
+  assignee: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type PlanStep = z.infer<typeof PlanStepSchema>;
+
 export const PlanItemSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -112,6 +122,7 @@ export const PlanItemSchema = z.object({
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),
   depends_on: z.array(z.string()).default([]),
+  steps: z.array(PlanStepSchema).optional(),
 });
 export type PlanItem = z.infer<typeof PlanItemSchema>;
 
