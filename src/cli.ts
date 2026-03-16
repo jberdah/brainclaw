@@ -39,6 +39,7 @@ import { runBootstrap } from './commands/bootstrap.js';
 import { runEnv } from './commands/env.js';
 import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js';
 import { runInstallHooks } from './commands/install-hooks.js';
+import { runCheckConstraints } from './commands/check-constraints.js';
 import { runRegisterAgent } from './commands/register-agent.js';
 import { runEnableAgent } from './commands/enable-agent.js';
 import { runVersion } from './commands/version.js';
@@ -593,10 +594,21 @@ program
     runSync({ ...options, remote: options.remote });
   });
 
+// --- check-constraints ---
+program
+  .command('check-constraints')
+  .description('Check if staged files (or given files) violate active constraints')
+  .option('--staged', 'Check git staged files (git diff --cached --name-only)')
+  .option('--files <files...>', 'Explicit list of files to check')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runCheckConstraints({ staged: options.staged, files: options.files, json: options.json });
+  });
+
 // --- install-hooks ---
 program
   .command('install-hooks')
-  .description('Install a Git pre-commit hook that blocks sensitive content in .brainclaw/')
+  .description('Install a Git pre-commit hook that blocks sensitive content in .brainclaw/ and checks active constraints')
   .option('--force', 'Overwrite existing pre-commit hook')
   .action((options) => {
     runInstallHooks(options);
