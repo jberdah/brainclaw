@@ -13,7 +13,7 @@ import {
 
 describe('core/brainclaw-version', () => {
   it('reads the installed CLI version from package metadata', () => {
-    assert.equal(getInstalledBrainclawVersion(), '0.6.0');
+    assert.equal(getInstalledBrainclawVersion(), '0.7.2');
   });
 
   it('reports an upgrade requirement when the minimum version is higher than the local CLI', () => {
@@ -46,8 +46,8 @@ describe('core/brainclaw-version', () => {
         version: 1,
         channel: 'local-pack',
         package_name: 'brainclaw',
-        latest_installable_version: '0.6.1',
-        artifact_path: './brainclaw-0.6.1.tgz',
+        latest_installable_version: '0.8.0',
+        artifact_path: './brainclaw-0.8.0.tgz',
         release_notes: 'Adds local installable update checks.',
       }, null, 2), 'utf-8');
 
@@ -61,8 +61,8 @@ describe('core/brainclaw-version', () => {
       }, dir);
 
       assert.equal(result.status, 'update_available');
-      assert.equal(result.latest_installable_version, '0.6.1');
-      assert.ok(result.install_command?.includes('brainclaw-0.6.1.tgz'));
+      assert.equal(result.latest_installable_version, '0.8.0');
+      assert.ok(result.install_command?.includes('brainclaw-0.8.0.tgz'));
       assert.equal(result.release_notes, 'Adds local installable update checks.');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

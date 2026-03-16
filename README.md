@@ -137,6 +137,27 @@ npm run test:coverage      # with coverage report
 
 ---
 
+## Changelog
+
+### v0.7.2
+
+- **UserPromptSubmit hook** : correction du format — `brainclaw context` (texte markdown) au lieu de `--json` pour injection correcte dans le contexte Claude Code
+
+### v0.7.1
+
+- **Cross-platform `npx` fix** : `brainclaw init` et `brainclaw export` ajoutent désormais brainclaw en `devDependency` du projet cible — `npx brainclaw` fonctionne dans les hooks Claude Code sans dépendre du PATH global (résout Windows WSL/Git Bash)
+
+### v0.7.0
+
+- **Claude Code** : intégration native complète — MCP (`.mcp.json`), slash command (`.claude/commands/brainclaw.md`), hooks de session (`UserPromptSubmit` + `Stop`) dans `.claude/settings.local.json`
+- **Cursor** : config MCP machine-level (`~/.cursor/mcp.json`) ajoutée à l'auto-config
+- **Roo Code** : config MCP workspace (`.roo/mcp.json`)
+- **Continue** : config MCP workspace (`.continue/config.json`, format array)
+- **Hygiene section** renforcée : workflow plan/claim/session-end inclus dans toutes les instructions générées
+- **Canal de mise à jour local** (`brainclaw version --publish-local`) : tarball + manifeste `.releases/`
+
+---
+
 ## License
 
 MIT
