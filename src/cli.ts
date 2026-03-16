@@ -30,6 +30,7 @@ import { runPruneCandidates } from './commands/prune-candidates.js';
 import { runClaim } from './commands/claim.js';
 import { runListClaims } from './commands/list-claims.js';
 import { runReleaseClaim } from './commands/release-claim.js';
+import { runReleaseClaims } from './commands/release-claims.js';
 import { runAgentBoard } from './commands/agent-board.js';
 import { runRuntimeNote } from './commands/runtime-note.js';
 import { runRuntimeStatus } from './commands/runtime-status.js';
@@ -531,6 +532,17 @@ program
   .option('--plan-status <status>', 'Optional linked plan status: todo, in_progress, blocked, done, dropped')
   .action((id, options) => {
     runReleaseClaim(id, options);
+  });
+
+// --- release-claims ---
+program
+  .command('release-claims')
+  .description('Bulk-release claims whose scope overlaps with git-changed files')
+  .option('--from-git-diff', 'Use ORIG_HEAD..HEAD diff to detect changed files (post-merge)')
+  .option('--ref1 <ref>', 'First git ref (default: ORIG_HEAD)')
+  .option('--ref2 <ref>', 'Second git ref (default: HEAD)')
+  .action((options) => {
+    runReleaseClaims({ fromGitDiff: options.fromGitDiff, ref1: options.ref1, ref2: options.ref2 });
   });
 
 // --- agent-board ---
