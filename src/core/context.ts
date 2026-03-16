@@ -10,7 +10,7 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type AgentResumeSummary } from './reputation.js';
 import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
-import { listClaims } from './claims.js';
+import { listClaims, isClaimExpired } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
 import { listOperationalTraps } from './traps.js';
 import { buildEstimationReport } from '../commands/estimation-report.js';
@@ -54,7 +54,7 @@ export interface ContextItem {
 }
 
 export interface OpenWorkSummary {
-  active_claims: Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id'>[];
+  active_claims: Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id' | 'expires_at'>[];
   in_progress_plans: Pick<PlanItem, 'id' | 'text' | 'assignee'>[];
 }
 
@@ -401,7 +401,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     );
     if (activeClaims.length > 0 || inProgressPlans.length > 0) {
       openWork = {
-        active_claims: activeClaims.map(({ id, scope, description, created_at, plan_id }) => ({ id, scope, description, created_at, plan_id })),
+        active_claims: activeClaims.map(({ id, scope, description, created_at, plan_id, expires_at }) => ({ id, scope, description, created_at, plan_id, expires_at })),
         in_progress_plans: inProgressPlans.map(({ id, text, assignee }) => ({ id, text, assignee })),
       };
     }
@@ -462,9 +462,12 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
     lines.push('');
     if (result.open_work.active_claims.length > 0) {
       lines.push('Active claims (release when done):');
+      const now = new Date().toISOString();
       for (const claim of result.open_work.active_claims) {
         const planRef = claim.plan_id ? ` [plan: ${claim.plan_id}]` : '';
-        lines.push(`- [${claim.id}] ${claim.description}${planRef}`);
+        const expired = claim.expires_at && claim.expires_at < now ? ' ⚠ EXPIRED — run brainclaw prune' : '';
+        const ttlInfo = claim.expires_at && !expired ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
+        lines.push(`- [${claim.id}] ${claim.description}${planRef}${ttlInfo}${expired}`);
         lines.push(`  scope: ${claim.scope}`);
       }
     }

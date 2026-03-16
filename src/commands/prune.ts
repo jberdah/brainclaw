@@ -1,6 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
+import { expireStaleActiveClaims } from '../core/claims.js';
 
 export interface PruneOptions {
   expired?: boolean;
@@ -33,6 +34,8 @@ export function runPrune(options: PruneOptions = {}): void {
 
   saveState(state, cwd);
 
+  const expiredClaimsCount = expireStaleActiveClaims(cwd);
+
   let expiredNotesCount = 0;
   if (options.expired) {
     // Prune expired runtime notes
@@ -49,8 +52,8 @@ export function runPrune(options: PruneOptions = {}): void {
   }
 
   if (options.expired) {
-    console.log(`✔ Pruned ${prunedCount} expired constraints and ${expiredNotesCount} expired runtime notes.`);
+    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredNotesCount} expired runtime notes, ${expiredClaimsCount} expired claims.`);
   } else {
-    console.log(`✔ Pruned ${prunedCount} expired constraints.`);
+    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredClaimsCount} expired claims.`);
   }
 }

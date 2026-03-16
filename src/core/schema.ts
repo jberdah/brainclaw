@@ -294,6 +294,7 @@ export const ClaimSchema = z.object({
   plan_id: z.string().optional(),
   status: ClaimStatusSchema,
   released_at: z.string().optional(),
+  expires_at: z.string().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 

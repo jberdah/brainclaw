@@ -521,6 +521,7 @@ program
   .requiredOption('--scope <scope>', 'Scope being claimed (e.g. file path, module)')
   .option('--project <project>', 'Optional project namespace for this claim')
   .option('--plan <id>', 'Optional linked plan item ID')
+  .option('--ttl <duration>', 'Auto-expire after duration: 30m, 2h, 8h, 1d')
   .action((description, options) => {
     runClaim(description, options);
   });
