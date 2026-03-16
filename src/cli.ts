@@ -47,6 +47,7 @@ import { runSessionEnd } from './commands/session-end.js';
 import { runWhoami } from './commands/whoami.js';
 import { runSearch } from './commands/search.js';
 import { runExport } from './commands/export.js';
+import { runHooks } from './commands/hooks.js';
 import { runWatch } from './commands/watch.js';
 import { runMetrics } from './commands/metrics.js';
 import { runRollback } from './commands/rollback.js';
@@ -651,6 +652,15 @@ program
   .option('--agent <agent>', 'Agent name for agent-layer instructions')
   .action((options) => {
     runExport(options);
+  });
+
+// --- hooks ---
+program
+  .command('hooks')
+  .description('Write deterministic session-trigger hooks for Cursor (.cursor/rules/brainclaw-session.mdc) and Windsurf (.windsurfrules)')
+  .option('--target <target>', 'Which hooks to write: cursor, windsurf, all (default: all)')
+  .action((options) => {
+    runHooks(options);
   });
 
 // --- watch ---

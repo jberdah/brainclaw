@@ -11,6 +11,7 @@ import { analyzeRepository } from '../core/repo-analysis.js';
 import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { writeDetectedAgentExport } from './export.js';
+import { writeDetectedAgentHooks } from './hooks.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
@@ -71,6 +72,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Write to the detected agent's native instruction file
   const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
 
+  // Write deterministic session-trigger hooks for Cursor / Windsurf
+  const detectedHooks = detectedAi ? writeDetectedAgentHooks(detectedAi.name, projectName, cwd) : [];
+
   const state = emptyState();
   saveState(state, cwd);
 
@@ -119,7 +123,11 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi!.detection_source}] (${registeredAiAgent.agent_id})`);
   }  if (detectedExport) {
     console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
-  }  console.log(`✔ Topology: ${topology}`);
+  }
+  for (const hook of detectedHooks) {
+    console.log(`\u2714 Session hook written to ${hook.relativePath} (${hook.created ? 'created' : 'updated'})`);
+  }
+  console.log(`\u2714 Topology: ${topology}`);
   console.log(`✔ Storage dir: ${storageDir}`);
   console.log(`✔ Project mode: ${projectMode}`);
   if (projectMode === 'multi-project') {
