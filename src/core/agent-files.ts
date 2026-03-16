@@ -380,6 +380,37 @@ function containsCommandHook(entries: unknown[], command: string): boolean {
   );
 }
 
+export function ensureProjectDevDependency(cwd: string): AutoConfigWriteResult | undefined {
+  const filePath = path.join(cwd, 'package.json');
+  if (!fs.existsSync(filePath)) return undefined;
+
+  let pkg: JsonObject;
+  try {
+    pkg = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as JsonObject;
+  } catch {
+    return undefined;
+  }
+
+  // Skip if this IS the brainclaw package itself
+  if (pkg.name === 'brainclaw') return undefined;
+
+  const devDeps = isJsonObject(pkg.devDependencies) ? { ...pkg.devDependencies } : {};
+  if (devDeps['brainclaw']) return undefined;
+
+  devDeps['brainclaw'] = 'latest';
+  const next = { ...pkg, devDependencies: devDeps };
+  fs.writeFileSync(filePath, JSON.stringify(next, null, 2) + '\n', 'utf-8');
+
+  return {
+    kind: 'rule',
+    label: 'brainclaw devDependency (enables npx brainclaw without global PATH)',
+    created: true,
+    updated: false,
+    filePath,
+    relativePath: 'package.json',
+  };
+}
+
 export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.mcp.json');
   const existing = readJsonObject(filePath);
@@ -440,7 +471,7 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
 
   // Merge hooks — UserPromptSubmit injects fresh context on every exchange
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-  const contextCommand = 'npx brainclaw context --json 2>/dev/null';
+  const contextCommand = 'npx brainclaw context 2>/dev/null';
   const stopCommand = 'npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
 
   const userPromptHooks = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit as unknown[]] : [];
@@ -558,11 +589,14 @@ export function writeDetectedAgentAutoConfig(
 ): AutoConfigWriteResult[] {
   switch (agentName) {
     case 'claude-code': {
-      return [
+      const results: AutoConfigWriteResult[] = [
         ensureClaudeCodeMcpConfig(cwd),
         ensureClaudeCodeCommand(cwd),
         ensureClaudeCodeSettings(cwd),
       ];
+      const dep = ensureProjectDevDependency(cwd);
+      if (dep) results.push(dep);
+      return results;
     }
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
@@ -594,11 +628,14 @@ export function writeExportCompanionFiles(
 ): AutoConfigWriteResult[] {
   switch (format) {
     case 'claude-md': {
-      return [
+      const results: AutoConfigWriteResult[] = [
         ensureClaudeCodeMcpConfig(cwd),
         ensureClaudeCodeCommand(cwd),
         ensureClaudeCodeSettings(cwd),
       ];
+      const dep = ensureProjectDevDependency(cwd);
+      if (dep) results.push(dep);
+      return results;
     }
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
