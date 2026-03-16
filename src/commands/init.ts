@@ -41,9 +41,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Derive project name from directory
   const projectName = path.basename(cwd);
 
-  const analysis = options.analyzeRepo === false
-    ? undefined
-    : analyzeRepository(cwd);
+  const shouldAnalyzeRepo = options.analyzeRepo !== false
+    && process.env.BRAINCLAW_SKIP_REPO_ANALYSIS !== '1';
+  const analysis = shouldAnalyzeRepo ? analyzeRepository(cwd) : undefined;
 
   const projectMode = await resolveProjectMode(options, analysis);
   const projectStrategy = await resolveProjectStrategy(options, projectMode);

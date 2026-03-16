@@ -23,7 +23,14 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser' },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      HOME: cwd,
+      USERPROFILE: cwd,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -37,7 +44,7 @@ describe('Shared plan', () => {
 
   beforeEach(() => {
     dir = tmpDir();
-    run(['init', '-y'], dir);
+    run(['init', '-y', '--no-analyze-repo'], dir);
   });
 
   afterEach(() => {

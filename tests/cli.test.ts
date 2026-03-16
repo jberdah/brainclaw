@@ -19,7 +19,16 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      // Isolate home directory so ~/.codex (and similar) don't trigger AI agent detection
+      HOME: cwd,
+      USERPROFILE: cwd,
+      ...envOverrides,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -97,7 +106,7 @@ describe('brainclaw CLI', () => {
     it('detects AGENTS.md', () => {
       fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agents');
       const res = run(['init', '-y'], dir);
-      assert.ok(res.stdout.includes('AGENTS.md detected'));
+      assert.ok(res.stdout.includes('AGENTS.md'), `expected AGENTS.md mention in init output, got: ${res.stdout}`);
     });
 
     it('defaults project mode to auto in non-interactive init', () => {
@@ -146,7 +155,7 @@ describe('brainclaw CLI', () => {
     it('prints repo analysis recommendation during init', () => {
       fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }, null, 2));
       fs.mkdirSync(path.join(dir, 'packages'));
-      const res = run(['init', '-y'], dir);
+      const res = run(['init', '-y'], dir, { BRAINCLAW_SKIP_REPO_ANALYSIS: '0' });
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Recommended project mode: multi-project'));
     });
@@ -537,6 +546,44 @@ describe('brainclaw CLI', () => {
       assert.ok(current);
       assert.ok(current.reputation);
       assert.equal(typeof current.reputation.internal_trust, 'number');
+    });
+  });
+
+  describe('plan subcommand guard (0.6.1)', () => {
+    it('"plan list" lists plans instead of creating a ghost plan', () => {
+      run(['init', '-y'], dir);
+      run(['plan', 'a real plan item'], dir);
+
+      const res = run(['plan', 'list'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('a real plan item'), `expected plan list output, got: ${res.stdout}`);
+      // must not have created a ghost plan with text "list"
+      const listRes = run(['list-plans'], dir);
+      const items: string[] = listRes.stdout.split('\n').filter((l) => l.includes('list'));
+      // The only "list" hit should be the plan text "list" if present — but there should be none
+      const ghostItems = items.filter((l) => /\[pln_[a-f0-9]+\] list/.test(l));
+      assert.equal(ghostItems.length, 0, `ghost plan with text "list" was created: ${ghostItems.join('\n')}`);
+    });
+
+    it('"plan ls" lists plans instead of creating a ghost plan', () => {
+      run(['init', '-y'], dir);
+
+      const res = run(['plan', 'ls'], dir);
+      assert.equal(res.exitCode, 0);
+      // must not have created a ghost plan
+      const listRes = run(['list-plans'], dir);
+      assert.ok(!listRes.stdout.includes('] ls'), `ghost plan "ls" was created: ${listRes.stdout}`);
+    });
+
+    it('"plan update" shows an actionable error instead of creating a ghost plan', () => {
+      run(['init', '-y'], dir);
+
+      const res = run(['plan', 'update'], dir);
+      assert.notEqual(res.exitCode, 0);
+      assert.ok(res.stderr.includes('update-plan'), `expected hint to use update-plan, got: ${res.stderr}`);
+      // must not have created a ghost plan
+      const listRes = run(['list-plans'], dir);
+      assert.ok(!listRes.stdout.includes('] update'), `ghost plan "update" was created: ${listRes.stdout}`);
     });
   });
 });
