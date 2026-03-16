@@ -10,6 +10,7 @@ const PREFIXES: Record<string, string> = {
   known_traps: 'trp',
   open_handoffs: 'hnd',
   plan_items: 'pln',
+  plan_steps: 'stp',
   instruction_entries: 'ins',
 };
 

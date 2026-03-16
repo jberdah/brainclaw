@@ -10,6 +10,8 @@ import { runHandoff } from './commands/handoff.js';
 import { runPlan } from './commands/plan.js';
 import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
+import { runAddStep } from './commands/add-step.js';
+import { runCompleteStep } from './commands/complete-step.js';
 import { runUpdateHandoff } from './commands/update-handoff.js';
 import { runInstruction } from './commands/instruction.js';
 import { runListAgents } from './commands/list-agents.js';
@@ -187,6 +189,23 @@ program
   .option('--all', 'Include done and dropped plan items')
   .action((options) => {
     runListPlans(options);
+  });
+
+// --- add-step ---
+program
+  .command('add-step <planId> <text>')
+  .description('Add an optional step to a plan item')
+  .option('--assign <assignee>', 'Assign this step to an agent or person')
+  .action((planId, text, options) => {
+    runAddStep(planId, text, { assignee: options.assign });
+  });
+
+// --- complete-step ---
+program
+  .command('complete-step <planId> <stepId>')
+  .description('Mark a plan step as done')
+  .action((planId, stepId) => {
+    runCompleteStep(planId, stepId);
   });
 
 // --- update-plan ---

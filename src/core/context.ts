@@ -127,6 +127,10 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     const meta: string[] = [plan.status, plan.priority];
     if (plan.assignee) meta.push(`assignee:${plan.assignee}`);
     if (plan.project) meta.push(`project:${plan.project}`);
+    if (plan.steps && plan.steps.length > 0) {
+      const done = plan.steps.filter((s) => s.status === 'done').length;
+      meta.push(`${done}/${plan.steps.length}`);
+    }
     items.push({
       id: plan.id,
       section: 'plan',

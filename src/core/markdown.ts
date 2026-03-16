@@ -41,9 +41,20 @@ export function generateMarkdown(state: State, cwd?: string): string {
       const meta: string[] = [plan.status, plan.priority];
       if (plan.assignee) meta.push(`assignee: ${plan.assignee}`);
       if (plan.project) meta.push(`project: ${plan.project}`);
+      if (plan.steps && plan.steps.length > 0) {
+        const done = plan.steps.filter((s) => s.status === 'done').length;
+        meta.push(`${done}/${plan.steps.length} steps`);
+      }
       const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
       const paths = plan.related_paths?.length ? ` → ${plan.related_paths.join(', ')}` : '';
       lines.push(`- **[${plan.id}]** ${plan.text} _(${meta.join(', ')})_${paths}${tags}`);
+      if (plan.steps && plan.steps.length > 0) {
+        for (const step of plan.steps) {
+          const check = step.status === 'done' ? 'x' : ' ';
+          const assign = step.assignee ? ` _(${step.assignee})_` : '';
+          lines.push(`  - [${check}] [${step.id}] ${step.text}${assign}`);
+        }
+      }
     }
   }
   lines.push('');
