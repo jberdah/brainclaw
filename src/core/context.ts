@@ -13,6 +13,7 @@ import { listCandidates } from './candidates.js';
 import { listClaims } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
 import { listOperationalTraps } from './traps.js';
+import { buildEstimationReport } from '../commands/estimation-report.js';
 import type { Claim, InstructionEntry, PlanItem, ProjectMode, ProjectStrategy } from './schema.js';
 
 export const CONTEXT_SCHEMA_VERSION = '1.2';
@@ -82,6 +83,7 @@ export interface ContextResult {
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
   open_work?: OpenWorkSummary;
+  estimation_calibration?: string;
   selected: ContextItem[];
 }
 
@@ -435,6 +437,12 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     open_work: openWork,
+    estimation_calibration: (() => {
+      try {
+        const report = buildEstimationReport({ agent, cwd: options.cwd });
+        return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
+      } catch { return undefined; }
+    })(),
     selected,
   };
 
@@ -466,6 +474,10 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
         lines.push(`- [${plan.id}] ${plan.text}`);
       }
     }
+    lines.push('');
+  }
+  if (result.estimation_calibration) {
+    lines.push(`Estimation calibration: ${result.estimation_calibration}`);
     lines.push('');
   }
   lines.push(`Context schema: ${result.context_schema}`);

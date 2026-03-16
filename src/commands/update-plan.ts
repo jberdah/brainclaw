@@ -9,6 +9,7 @@ export interface UpdatePlanOptions {
   assignee?: string;
   project?: string;
   priority?: Priority;
+  actualEffort?: string;
 }
 
 export function runUpdatePlan(id: string, options: UpdatePlanOptions = {}): void {
@@ -24,11 +25,17 @@ export function runUpdatePlan(id: string, options: UpdatePlanOptions = {}): void
     process.exit(1);
   }
 
-  if (options.status) plan.status = options.status;
+  const timestamp = nowISO();
+  if (options.status) {
+    plan.status = options.status;
+    if (options.status === 'in_progress' && !plan.started_at) plan.started_at = timestamp;
+    if (options.status === 'done' && !plan.completed_at) plan.completed_at = timestamp;
+  }
   if (options.assignee !== undefined) plan.assignee = options.assignee;
   if (options.project !== undefined) plan.project = options.project;
   if (options.priority) plan.priority = options.priority;
-  plan.updated_at = nowISO();
+  if (options.actualEffort) plan.actual_effort = options.actualEffort;
+  plan.updated_at = timestamp;
 
   saveState(state);
   writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));

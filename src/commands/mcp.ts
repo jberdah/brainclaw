@@ -26,6 +26,7 @@ import { nowISO } from '../core/ids.js';
 import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
+import { buildEstimationReport } from './estimation-report.js';
 import type { CandidateType, MemoryVisibility } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -181,6 +182,16 @@ export const MCP_READ_TOOLS = [
         limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'bclaw_estimation_report',
+    description: 'Show estimation accuracy report for completed plans. Returns ratio of estimated vs actual effort per agent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Filter by agent/author name.' },
+      },
     },
   },
 ] as const;
@@ -1034,6 +1045,25 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: results.length > 0 ? lines.join('\n') : 'No results found.' }],
       structuredContent: { results, total: results.length },
+    };
+  }
+
+  if (name === 'bclaw_estimation_report') {
+    const report = buildEstimationReport({ agent: args.agent as string | undefined, cwd });
+    const lines: string[] = [`Estimation Report — ${report.summary.total} completed plan(s)`];
+    if (report.summary.calibration_hint) {
+      lines.push(`Calibration: ${report.summary.calibration_hint}`);
+      lines.push(`Median ratio: ${report.summary.median_ratio}x · Mean: ${report.summary.mean_ratio}x`);
+    }
+    for (const e of report.entries) {
+      const est = e.estimated_effort ? `est:${e.estimated_effort}` : 'no estimate';
+      const act = e.elapsed_minutes !== undefined ? `actual:${e.elapsed_minutes}min` : 'no actual';
+      const ratio = e.ratio !== undefined ? ` ratio:${e.ratio}x` : '';
+      lines.push(`[${e.id.slice(0, 8)}] ${e.text.slice(0, 60)} — ${est} · ${act}${ratio}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: report as unknown as Record<string, unknown>,
     };
   }
 

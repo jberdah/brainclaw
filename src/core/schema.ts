@@ -123,6 +123,10 @@ export const PlanItemSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   depends_on: z.array(z.string()).default([]),
   steps: z.array(PlanStepSchema).optional(),
+  estimated_effort: z.string().optional(),
+  actual_effort: z.string().optional(),
+  started_at: z.string().optional(),
+  completed_at: z.string().optional(),
 });
 export type PlanItem = z.infer<typeof PlanItemSchema>;
 
