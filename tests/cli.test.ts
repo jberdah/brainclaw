@@ -22,6 +22,7 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     env: {
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
       // Isolate home directory so ~/.codex (and similar) don't trigger AI agent detection
@@ -105,7 +106,7 @@ describe('brainclaw CLI', () => {
 
     it('detects AGENTS.md', () => {
       fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agents');
-      const res = run(['init', '-y'], dir);
+      const res = run(['init', '-y'], dir, { BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0' });
       assert.ok(res.stdout.includes('AGENTS.md'), `expected AGENTS.md mention in init output, got: ${res.stdout}`);
     });
 

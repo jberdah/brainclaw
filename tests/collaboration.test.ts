@@ -33,6 +33,7 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     env: {
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
       HOME: cwd,

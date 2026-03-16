@@ -32,6 +32,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const storageDir = resolveStorageDir(options.storageDir);
   const topology = resolveTopology(options.topology);
   const ignoreStrategy: IgnoreStrategy = topology === 'embedded' ? 'none' : 'project-gitignore';
+  const skipAgentBootstrap = process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
 
   if (memoryExists(cwd) && !options.force) {
     console.error('Error: project memory already exists. Use --force to overwrite.');
@@ -58,7 +59,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   });
 
   // Auto-detect and register the AI coding agent running in this environment
-  const detectedAi = detectAiAgent();
+  const detectedAi = skipAgentBootstrap ? undefined : detectAiAgent();
   let registeredAiAgent = detectedAi
     ? registerAgentIdentity({
         agentName: detectedAi.name,
@@ -110,10 +111,19 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }
 
   // Create or update AGENTS.md and .github/copilot-instructions.md
-  const agentFiles = ensureAgentFiles(cwd, storageDir);
+  const agentFiles = skipAgentBootstrap
+    ? {
+        agentsMdCreated: false,
+        agentsMdUpdated: false,
+        copilotInstructionsCreated: false,
+        copilotInstructionsUpdated: false,
+      }
+    : ensureAgentFiles(cwd, storageDir);
 
   // Add agent instruction files to .gitignore (they are generated, not source)
-  ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md']);
+  if (!skipAgentBootstrap) {
+    ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md']);
+  }
 
   console.log(`✔ Initialized project memory in ${storageDir}/`);
   console.log('✔ Created project.md, config.yaml, and split state directories');
@@ -146,7 +156,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   } else if (agentFiles.copilotInstructionsUpdated) {
     console.log('✔ Updated .github/copilot-instructions.md with brainclaw bootstrap section');
   }
-  console.log('✔ Added AGENTS.md and .github/copilot-instructions.md to .gitignore');
+  if (!skipAgentBootstrap) {
+    console.log('✔ Added AGENTS.md and .github/copilot-instructions.md to .gitignore');
+  }
 
   if (analysis) {
     console.log('');
