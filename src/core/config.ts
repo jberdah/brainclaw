@@ -80,6 +80,9 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
       resume_weight: 0.35,
       mcp_exposure: false,
     },
+    agent_integrations: {
+      declarations: [],
+    },
     implicit_session_ttl: '4h',
     auto_reflect_notes: false,
   };

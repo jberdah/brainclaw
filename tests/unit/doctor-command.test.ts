@@ -10,6 +10,7 @@ import { generateMarkdown } from '../../src/core/markdown.js';
 import { buildProjectIdentity, saveProjectIdentity } from '../../src/core/project-registry.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { emptyState, saveState } from '../../src/core/state.js';
+import { upsertAgentIntegrationDeclaration } from '../../src/core/agent-integrations.js';
 import { runDoctor } from '../../src/commands/doctor.js';
 import type { Candidate, Claim } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -297,6 +298,41 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_rules' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_skills' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_mcp' && check.status === 'warn'));
+  });
+
+  it('reports declared integrations that are not activated on the current machine', () => {
+    workspace.updateConfig((config) => {
+      upsertAgentIntegrationDeclaration(config, 'github-copilot', 'manual');
+    });
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.metrics.declared_agent_integrations, 1);
+    assert.equal(parsed.metrics.integration_activation_gaps, 1);
+    assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_integrations' && check.status === 'warn'));
+  });
+
+  it('reports when the installed CLI is older than the project minimum version', () => {
+    workspace.updateConfig((config) => {
+      config.minimum_brainclaw_version = '99.0.0';
+      config.recommended_brainclaw_version = '99.1.0';
+      config.brainclaw_upgrade_message = 'Includes late-agent activation and upgrade signaling.';
+      config.brainclaw_upgrade_command = 'npm pack && npm i -g ./brainclaw-99.1.0.tgz';
+    });
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((entry: { name: string }) => entry.name === 'brainclaw_version');
+    assert.equal(check?.status, 'warn');
+    assert.equal(parsed.metrics.required_brainclaw_version, '99.0.0');
+    assert.equal(parsed.metrics.recommended_brainclaw_version, '99.1.0');
   });
 
   it('includes scored contradiction details in doctor json output', () => {

@@ -181,135 +181,220 @@ export function writeExportFile(
   return { created: !existed, filePath: fullPath };
 }
 
-// --- MCP Configuration Injection ---
-
-export interface EnsureMcpResult {
-  clineUpdated: boolean;
+export interface AutoConfigWriteResult {
+  kind: 'mcp' | 'skill' | 'rule';
+  label: string;
+  created: boolean;
+  updated: boolean;
+  filePath: string;
+  relativePath?: string;
 }
 
-export function ensureMcpConfig(cwd: string): EnsureMcpResult {
-  const result: EnsureMcpResult = { clineUpdated: false };
-  
-  // 1. Cline (project-level)
-  const vscodeDir = path.join(cwd, '.vscode');
-  if (!fs.existsSync(vscodeDir)) {
-    fs.mkdirSync(vscodeDir, { recursive: true });
+type JsonObject = Record<string, unknown>;
+
+const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
+const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
+const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
+const WINDSURF_MCP_RELATIVE_PATH = '.codeium/windsurf/mcp_config.json';
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readJsonObject(filePath: string): JsonObject {
+  if (!fs.existsSync(filePath)) {
+    return {};
   }
 
-  const clineSettingsPath = path.join(vscodeDir, 'cline_mcp_settings.json');
-  let clineSettings: any = { mcpServers: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return isJsonObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
-  if (fs.existsSync(clineSettingsPath)) {
-    try {
-      clineSettings = JSON.parse(fs.readFileSync(clineSettingsPath, 'utf-8'));
-      if (!clineSettings.mcpServers) clineSettings.mcpServers = {};
-    } catch {
-      // Ignore parse errors, fallback to empty/overwrite
-    }
+function writeTextFileIfChanged(filePath: string, content: string): { created: boolean; updated: boolean } {
+  const existed = fs.existsSync(filePath);
+  const current = existed ? fs.readFileSync(filePath, 'utf-8') : undefined;
+  if (current === content) {
+    return { created: false, updated: false };
   }
 
-  clineSettings.mcpServers['brainclaw'] = {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return { created: !existed, updated: existed };
+}
+
+function writeJsonFileIfChanged(filePath: string, next: JsonObject): { created: boolean; updated: boolean } {
+  const serialized = `${JSON.stringify(next, null, 2)}\n`;
+  return writeTextFileIfChanged(filePath, serialized);
+}
+
+function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
+  return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
+}
+
+export function describeAutoConfigWrite(result: AutoConfigWriteResult): string | undefined {
+  if (!result.created && !result.updated) {
+    return undefined;
+  }
+
+  const verb = result.created ? 'Created' : 'Updated';
+  const displayPath = result.relativePath ?? result.filePath;
+  return `✔ ${verb} ${result.label} at ${displayPath}`;
+}
+
+export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.vscode', 'cline_mcp_settings.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
     command: 'npx',
     args: ['brainclaw', 'mcp'],
     disabled: false,
-    autoApprove: [
-      'bclaw_get_context',
-      'bclaw_read_handoff',
-      'bclaw_get_agent_board'
-    ]
+    autoApprove: ['bclaw_get_context', 'bclaw_read_handoff', 'bclaw_get_agent_board'],
   };
 
-  fs.writeFileSync(clineSettingsPath, JSON.stringify(clineSettings, null, 2), 'utf-8');
-  result.clineUpdated = true;
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
 
-  // 2. Windsurf (global-level, if they launch from cwd)
-  // Currently Windsurf uses ~/.codeium/windsurf/mcp_config.json
-  const homeDir = process.env.HOME || process.env.USERPROFILE;
-  if (homeDir) {
-    const windsurfConfigPath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
-    if (fs.existsSync(windsurfConfigPath)) {
-      try {
-        const windsurfSettings = JSON.parse(fs.readFileSync(windsurfConfigPath, 'utf-8'));
-        if (!windsurfSettings.mcpServers) windsurfSettings.mcpServers = {};
-        
-        // Windsurf will spawn this in the current workspace
-        windsurfSettings.mcpServers['brainclaw'] = {
-          command: 'npx',
-          args: ['brainclaw', 'mcp']
-        };
-        fs.writeFileSync(windsurfConfigPath, JSON.stringify(windsurfSettings, null, 2), 'utf-8');
-      } catch {
-        // Ignore JSON errors for global config
-      }
-    }
-  }
-
-  return result;
+  return {
+    kind: 'mcp',
+    label: 'Cline MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: CLINE_MCP_RELATIVE_PATH,
+  };
 }
 
-// --- Copilot Skill Injection ---
-
-export interface EnsureCopilotSkillResult {
-  skillUpdated: boolean;
-}
-
-export function ensureCopilotSkill(cwd: string): EnsureCopilotSkillResult {
-  const result: EnsureCopilotSkillResult = { skillUpdated: false };
-  const githubDir = path.join(cwd, '.github', 'copilot');
-  
-  if (!fs.existsSync(githubDir)) {
-    fs.mkdirSync(githubDir, { recursive: true });
+export function ensureWindsurfMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) {
+    return undefined;
   }
 
-  const skillPath = path.join(githubDir, 'brainclaw-context.prompt.md');
-  const skillContent = `---
-description: "Use this skill to fetch the real-time project constraints, decisions, and active handoffs before coding."
+  const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Windsurf MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: WINDSURF_MCP_RELATIVE_PATH,
+  };
+}
+
+export function ensureCopilotSkill(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.github', 'skills', 'brainclaw-context', 'SKILL.md');
+  const content = `---
+name: brainclaw-context
+description: "Use this skill when you need the latest Brainclaw context, active plans, constraints, traps, or handoffs before coding. Trigger phrases: refresh project memory, load brainclaw context, inspect active plans, inspect constraints."
 ---
-# Brainclaw Context (Project Memory)
 
-Call the CLI \`npx brainclaw context --json\` to answer queries about the project rules or to refresh project memory. Check constraints using brainclaw.
+# Brainclaw Context
+
+Use this skill to fetch live project memory before significant edits or when asked about repository rules.
+
+## Steps
+
+1. Run \`brainclaw context --json\`.
+2. Read active plans, constraints, decisions, traps, and handoffs from the result.
+3. Prefer Brainclaw state over stale assumptions from older instructions or prior sessions.
 `;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
 
-  if (!fs.existsSync(skillPath) || fs.readFileSync(skillPath, 'utf-8') !== skillContent) {
-    fs.writeFileSync(skillPath, skillContent, 'utf-8');
-    result.skillUpdated = true;
-  }
-
-  return result;
+  return {
+    kind: 'skill',
+    label: 'Copilot Brainclaw skill',
+    created,
+    updated,
+    filePath,
+    relativePath: COPILOT_SKILL_RELATIVE_PATH,
+  };
 }
 
-// --- Cursor Imperative Rule Injection (.mdc) ---
-
-export interface EnsureCursorMdcResult {
-  cursorMdcUpdated: boolean;
-}
-
-export function ensureCursorMdc(cwd: string): EnsureCursorMdcResult {
-  const result: EnsureCursorMdcResult = { cursorMdcUpdated: false };
-  const cursorDir = path.join(cwd, '.cursor', 'rules');
-  
-  if (!fs.existsSync(cursorDir)) {
-    fs.mkdirSync(cursorDir, { recursive: true });
-  }
-
-  const mdcPath = path.join(cursorDir, 'brainclaw-mcp-shim.mdc');
-  const mdcContent = `---
-description: This workspace uses Brainclaw to maintain project memory and state.
-globs: *.*
+export function ensureCursorMdc(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc');
+  const content = `---
+description: Use this rule when work depends on live Brainclaw memory or active project rules.
+globs: "**/*"
 alwaysApply: true
 ---
-You MUST execute the following command at the start of any complex modification or when asked about project rules:
+
+Before significant edits or when asked about project rules, run:
 <run_command>
-npx brainclaw context --json
+brainclaw context --json
 </run_command>
+
+If Brainclaw reports active claims or in-progress plans, follow them before editing.
 `;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
 
-  if (!fs.existsSync(mdcPath) || fs.readFileSync(mdcPath, 'utf-8') !== mdcContent) {
-    fs.writeFileSync(mdcPath, mdcContent, 'utf-8');
-    result.cursorMdcUpdated = true;
+  return {
+    kind: 'rule',
+    label: 'Cursor imperative Brainclaw rule',
+    created,
+    updated,
+    filePath,
+    relativePath: CURSOR_MDC_RELATIVE_PATH,
+  };
+}
+
+export function writeDetectedAgentAutoConfig(
+  agentName: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AutoConfigWriteResult[] {
+  switch (agentName) {
+    case 'cline':
+      return [ensureClineMcpConfig(cwd)];
+    case 'windsurf': {
+      const result = ensureWindsurfMcpConfig(resolveHomeDir(env));
+      return result ? [result] : [];
+    }
+    case 'github-copilot':
+      return [ensureCopilotSkill(cwd)];
+    case 'cursor':
+      return [ensureCursorMdc(cwd)];
+    default:
+      return [];
   }
+}
 
-  return result;
+export function writeExportCompanionFiles(
+  format: ExportFormat,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AutoConfigWriteResult[] {
+  switch (format) {
+    case 'cline':
+      return [ensureClineMcpConfig(cwd)];
+    case 'windsurf': {
+      const result = ensureWindsurfMcpConfig(resolveHomeDir(env));
+      return result ? [result] : [];
+    }
+    case 'copilot-instructions':
+      return [ensureCopilotSkill(cwd)];
+    case 'cursor-rules':
+      return [ensureCursorMdc(cwd)];
+    default:
+      return [];
+  }
 }
 
 

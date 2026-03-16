@@ -38,6 +38,8 @@ import { runEnv } from './commands/env.js';
 import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js';
 import { runInstallHooks } from './commands/install-hooks.js';
 import { runRegisterAgent } from './commands/register-agent.js';
+import { runEnableAgent } from './commands/enable-agent.js';
+import { runVersion } from './commands/version.js';
 import { runDiff } from './commands/changes.js';
 import { runPrune } from './commands/prune.js';
 import { runMcp } from './commands/mcp.js';
@@ -56,6 +58,7 @@ import { runPush } from './commands/push.js';
 import { runAuditCommand } from './commands/audit.js';
 import { runHistory } from './commands/history.js';
 import { runContextDiff } from './commands/context-diff.js';
+import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
 import { cleanOrphanFiles, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 
@@ -68,7 +71,7 @@ function collect(value: string, previous: string[]): string[] {
 program
   .name('brainclaw')
   .description('Shared project memory for humans and coding agents.')
-  .version('0.3.0')
+  .version(getInstalledBrainclawVersion())
   .option('--verbose', 'Show info-level log messages on stderr')
   .option('--debug', 'Show debug-level log messages on stderr')
   .hook('preAction', (_thisCommand, actionCommand) => {
@@ -218,6 +221,18 @@ program
     runDoctor(options);
   });
 
+// --- version ---
+program
+  .command('version')
+  .description('Show the installed brainclaw version and the project version policy')
+  .option('--check', 'Check the configured installable update source')
+  .option('--publish-local', 'Create/update the local installable .releases channel via npm pack')
+  .option('--release-notes <text>', 'Attach release notes to the generated local-pack manifest')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runVersion(options);
+  });
+
 // --- rebuild ---
 program
   .command('rebuild')
@@ -351,6 +366,20 @@ program
   .option('--json', 'Output as JSON')
   .action((name, options) => {
     runRegisterAgent(name, options);
+  });
+
+// --- enable-agent ---
+program
+  .command('enable-agent <name>')
+  .description('Activate a supported coding agent on an already initialized project')
+  .option('--kind <kind>', 'Identity kind: agent, human, unknown', 'agent')
+  .option('--capability <value>', 'Declare a capability on the agent profile (repeatable)', collect, [])
+  .option('--replace-capabilities', 'Replace existing capabilities instead of merging')
+  .option('--generate-fingerprint', 'Generate or rotate a local public identity fingerprint for this agent')
+  .option('--set-current', 'Set this identity as the current agent in config')
+  .option('--json', 'Output as JSON')
+  .action((name, options) => {
+    runEnableAgent(name, options);
   });
 
 // --- list-agents ---

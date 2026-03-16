@@ -8,7 +8,8 @@ import { defaultConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { analyzeRepository } from '../core/repo-analysis.js';
-import { ensureAgentFiles, ensureGitignoreEntries } from '../core/agent-files.js';
+import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
+import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
@@ -76,6 +77,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Write deterministic session-trigger hooks for Cursor / Windsurf
   const detectedHooks = detectedAi ? writeDetectedAgentHooks(detectedAi.name, projectName, cwd) : [];
 
+  const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
+
   const state = emptyState();
   saveState(state, cwd);
 
@@ -99,6 +102,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if (options.compact) {
     config.markdown = { max_items_per_section: 20, compact_mode: true };
   }
+  if (detectedAi && isAgentIntegrationName(detectedAi.name)) {
+    upsertAgentIntegrationDeclaration(config, detectedAi.name, 'detected');
+  }
   saveConfig(config, cwd, storageDir);
   saveProjectIdentity(projectIdentity, cwd, storageDir);
 
@@ -120,24 +126,13 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       }
     : ensureAgentFiles(cwd, storageDir);
 
-  let mcpInjected = false;
-  let copilotSkillInjected = false;
-  let cursorMdcInjected = false;
-  if (!skipAgentBootstrap) {
-    const { ensureMcpConfig, ensureCopilotSkill, ensureCursorMdc } = await import('../core/agent-files.js');
-    const mcpResult = ensureMcpConfig(cwd);
-    mcpInjected = mcpResult.clineUpdated;
-    
-    const copilotResult = ensureCopilotSkill(cwd);
-    copilotSkillInjected = copilotResult.skillUpdated;
-    
-    const cursorResult = ensureCursorMdc(cwd);
-    cursorMdcInjected = cursorResult.cursorMdcUpdated;
-  }
-
   // Add agent instruction files to .gitignore (they are generated, not source)
   if (!skipAgentBootstrap) {
-    ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md']);
+    const generatedWorkspacePaths = detectedAutoConfig
+      .map((item) => item.relativePath)
+      .filter((item): item is string => item !== undefined)
+      .filter((item) => !item.startsWith('.codeium/'));
+    ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md', ...generatedWorkspacePaths]);
   }
 
   console.log(`✔ Initialized project memory in ${storageDir}/`);
@@ -170,18 +165,15 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('✔ Created .github/copilot-instructions.md with brainclaw bootstrap section');
   } else if (agentFiles.copilotInstructionsUpdated) {
     console.log('✔ Updated .github/copilot-instructions.md with brainclaw bootstrap section');
-  }  
-  if (mcpInjected) {
-    console.log('✔ Injected brainclaw MCP server into .vscode/cline_mcp_settings.json');
   }
-  if (copilotSkillInjected) {
-    console.log('✔ Created Copilot custom skill .github/copilot/brainclaw-context.prompt.md');
+  for (const autoConfig of detectedAutoConfig) {
+    const message = describeAutoConfigWrite(autoConfig);
+    if (message) {
+      console.log(message);
+    }
   }
-  if (cursorMdcInjected) {
-    console.log('✔ Created imperative Cursor rule .cursor/rules/brainclaw-mcp-shim.mdc');
-  }  
   if (!skipAgentBootstrap) {
-    console.log('✔ Added AGENTS.md and .github/copilot-instructions.md to .gitignore');
+    console.log('✔ Added generated agent files to .gitignore');
   }
 
   if (analysis) {

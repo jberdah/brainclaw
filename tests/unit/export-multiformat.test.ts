@@ -13,6 +13,7 @@ import {
   BRAINCLAW_SECTION_END,
 } from '../../src/core/agent-files.js';
 import { runExport } from '../../src/commands/export.js';
+import { loadConfig } from '../../src/core/config.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { afterEach, beforeEach } from 'node:test';
 
@@ -132,6 +133,28 @@ describe('export command formats', () => {
       assert.ok(content.includes('brainclaw'), 'should mention brainclaw');
       assert.ok(content.includes('brainclaw context'), 'should contain hygiene: brainclaw context');
       assert.ok(content.includes('release-claim'), 'should contain hygiene: release-claim');
+
+      if (format === 'copilot-instructions') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
+      }
+      if (format === 'cursor-rules') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+      }
+      if (format === 'cline') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.vscode', 'cline_mcp_settings.json')));
+      }
+
+      const declarationAgentName = format === 'agents-md'
+        ? 'codex'
+        : format === 'copilot-instructions'
+          ? 'github-copilot'
+          : format === 'claude-md'
+            ? 'claude-code'
+            : format === 'cursor-rules'
+              ? 'cursor'
+              : format;
+      const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === declarationAgentName);
+      assert.ok(declaration, `manifest should include declaration for ${format}`);
     });
   }
 
@@ -145,6 +168,8 @@ describe('export command formats', () => {
       runExport({ detect: true, cwd: workspace.dir });
       const claudeMd = path.join(workspace.dir, 'CLAUDE.md');
       assert.ok(fs.existsSync(claudeMd), 'CLAUDE.md should be created');
+      const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'claude-code');
+      assert.ok(declaration, 'manifest should include claude-code');
       assert.ok(logs.some((l) => l.includes('claude-code')), 'should log detected agent');
       assert.ok(logs.some((l) => l.includes('CLAUDE.md')), 'should log file written');
     } finally {
@@ -164,10 +189,28 @@ describe('export command formats', () => {
       runExport({ detect: true, cwd: workspace.dir });
       const cursorFile = path.join(workspace.dir, '.cursor', 'rules', 'brainclaw.md');
       assert.ok(fs.existsSync(cursorFile), '.cursor/rules/brainclaw.md should be created');
+      assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+      const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'cursor');
+      assert.ok(declaration, 'manifest should include cursor');
     } finally {
       console.log = orig;
       if (saved === undefined) delete process.env.CURSOR_TRACE_ID;
       else process.env.CURSOR_TRACE_ID = saved;
+    }
+  });
+
+  it('--detect with copilot env writes both instructions and the Copilot skill', () => {
+    const savedToken = process.env.GITHUB_COPILOT_TOKEN;
+    process.env.GITHUB_COPILOT_TOKEN = 'test-token';
+    try {
+      runExport({ detect: true, cwd: workspace.dir });
+      assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'copilot-instructions.md')));
+      assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
+      const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'github-copilot');
+      assert.ok(declaration, 'manifest should include github-copilot');
+    } finally {
+      if (savedToken === undefined) delete process.env.GITHUB_COPILOT_TOKEN;
+      else process.env.GITHUB_COPILOT_TOKEN = savedToken;
     }
   });
 });
