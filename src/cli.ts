@@ -740,8 +740,10 @@ program
   .command('watch')
   .description('Watch for memory changes and emit NDJSON events on stdout')
   .option('--interval <seconds>', 'Poll interval in seconds', parseInt)
+  .option('--auto-claim', 'Auto-create advisory claims on first write to workspace files')
+  .option('--agent <name>', 'Agent name for auto-claim')
   .action((options) => {
-    runWatch(options);
+    runWatch({ ...options, autoClaim: options.autoClaim });
   });
 
 // --- metrics ---
