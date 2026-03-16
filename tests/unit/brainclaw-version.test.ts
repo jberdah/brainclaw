@@ -46,8 +46,8 @@ describe('core/brainclaw-version', () => {
         version: 1,
         channel: 'local-pack',
         package_name: 'brainclaw',
-        latest_installable_version: '0.9.0',
-        artifact_path: './brainclaw-0.9.0.tgz',
+        latest_installable_version: '1.0.0',
+        artifact_path: './brainclaw-1.0.0.tgz',
         release_notes: 'Adds local installable update checks.',
       }, null, 2), 'utf-8');
 
@@ -61,8 +61,8 @@ describe('core/brainclaw-version', () => {
       }, dir);
 
       assert.equal(result.status, 'update_available');
-      assert.equal(result.latest_installable_version, '0.9.0');
-      assert.ok(result.install_command?.includes('brainclaw-0.9.0.tgz'));
+      assert.equal(result.latest_installable_version, '1.0.0');
+      assert.ok(result.install_command?.includes('brainclaw-1.0.0.tgz'));
       assert.equal(result.release_notes, 'Adds local installable update checks.');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
