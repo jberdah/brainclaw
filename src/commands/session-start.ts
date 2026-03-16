@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { memoryExists, memoryDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
@@ -80,6 +81,12 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     initialContextHash = createHash(JSON.stringify(ctx.selected));
   } catch { /* non-fatal */ }
 
+  // Capture git HEAD SHA for later handoff generation
+  let gitSha: string | undefined;
+  try {
+    gitSha = execSync('git rev-parse HEAD', { encoding: 'utf-8', cwd: options.cwd ?? process.cwd() }).trim();
+  } catch { /* non-fatal — not a git repo */ }
+
   const snapshot: SessionSnapshot = {
     schema_version: 2,
     session_id: actor.session_id ?? generateId('sessions'),
@@ -88,6 +95,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     started_at: nowISO(),
     context_target: options.context,
     initial_context_hash: initialContextHash,
+    git_sha: gitSha,
   };
 
   // Persist snapshot

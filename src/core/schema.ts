@@ -425,6 +425,7 @@ export const SessionSnapshotSchema = z.object({
   started_at: z.string(),
   context_target: z.string().optional(),
   initial_context_hash: z.string().optional(),
+  git_sha: z.string().optional(),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 

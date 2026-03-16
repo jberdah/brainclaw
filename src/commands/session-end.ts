@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContextDiff } from '../core/context-diff.js';
@@ -9,6 +10,7 @@ import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
+import { loadSessionSnapshot } from '../commands/session-start.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -17,6 +19,7 @@ export interface SessionEndOptions {
   agentId?: string;
   autoReflect?: boolean;
   autoRelease?: boolean;
+  reflectHandoff?: boolean;
   json?: boolean;
   cwd?: string;
 }
@@ -153,6 +156,43 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
 
   appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' }, options.cwd);
   clearCurrentSession(options.cwd, sessionId);
+
+  // Reflect-handoff: generate a handoff candidate from git commits since session start
+  if (options.reflectHandoff) {
+    try {
+      const snapshot = loadSessionSnapshot(sessionId, options.cwd);
+      const startSha = snapshot?.git_sha;
+      const ref = startSha ?? 'HEAD~10';
+      const cwd = options.cwd ?? process.cwd();
+
+      const commits = execSync(`git log --oneline ${ref}..HEAD`, { encoding: 'utf-8', cwd }).trim();
+      const diffStat = execSync(`git diff --stat ${ref}..HEAD`, { encoding: 'utf-8', cwd }).trim();
+
+      if (commits) {
+        const releasedScopes = listClaims(options.cwd)
+          .filter((c) => c.status === 'released' && c.agent === registered.agent_name)
+          .map((c) => c.scope)
+          .join(', ');
+
+        const handoffText = [
+          `Session ${sessionId} — auto-generated handoff`,
+          '',
+          `Commits:\n${commits}`,
+          diffStat ? `\nChanged files:\n${diffStat}` : '',
+          releasedScopes ? `\nReleased claims: ${releasedScopes}` : '',
+          summaryText !== `Session ended — ${sessionNotes.length} runtime note(s) created` ? `\nSummary: ${summaryText}` : '',
+        ].filter(Boolean).join('\n');
+
+        createCandidateFromInput(handoffText, 'handoff', {
+          author: actor.agent,
+          authorId: actor.agent_id,
+          sessionId,
+          source: `session-end:git-diff:${sessionId}`,
+          cwd: options.cwd,
+        }, false, false, true);
+      }
+    } catch { /* non-fatal — no git or no commits */ }
+  }
 
   // Auto-reflect: generate candidates from session notes
   let candidatesCreated = 0;
