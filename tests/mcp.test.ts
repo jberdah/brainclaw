@@ -18,7 +18,15 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      HOME: cwd,
+      USERPROFILE: cwd,
+      ...envOverrides,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -48,7 +56,15 @@ function startMcp(cwd: string, envOverrides: Record<string, string> = {}): Child
   return spawn(NODE, [CLI_PATH, 'mcp'], {
     cwd,
     stdio: 'pipe',
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      HOME: cwd,
+      USERPROFILE: cwd,
+      ...envOverrides,
+    },
   });
 }
 
@@ -196,7 +212,7 @@ describe('MCP server', () => {
 
   beforeEach(() => {
     dir = tmpDir();
-    run(['init', '-y'], dir);
+    run(['init', '-y', '--no-analyze-repo'], dir);
   });
 
   afterEach(() => {

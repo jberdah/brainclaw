@@ -17,7 +17,14 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser' },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      HOME: cwd,
+      USERPROFILE: cwd,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -31,7 +38,7 @@ describe('Layered instructions', () => {
 
   beforeEach(() => {
     dir = tmpDir();
-    run(['init', '-y', '--project-mode', 'multi-project', '--project-strategy', 'folder'], dir);
+    run(['init', '-y', '--no-analyze-repo', '--project-mode', 'multi-project', '--project-strategy', 'folder'], dir);
     const configPath = path.join(dir, '.brainclaw', 'config.yaml');
     const config = fs.readFileSync(configPath, 'utf-8').replace('known: []', 'known:\n  - auth');
     fs.writeFileSync(configPath, config, 'utf-8');

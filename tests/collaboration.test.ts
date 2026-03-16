@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import YAML from 'yaml';
+import { ensureMemoryDir, memoryPath, writeFileAtomic } from '../src/core/io.js';
+import { emptyState, saveState } from '../src/core/state.js';
+import { defaultConfig, saveConfig } from '../src/core/config.js';
+import { buildProjectIdentity, saveProjectIdentity } from '../src/core/project-registry.js';
+import { generateMarkdown } from '../src/core/markdown.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
 const NODE = process.execPath;
@@ -24,7 +30,15 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      HOME: cwd,
+      USERPROFILE: cwd,
+      ...envOverrides,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -43,12 +57,64 @@ function enableReputation(dir: string): void {
   fs.writeFileSync(configPath, YAML.stringify(config, { lineWidth: 0 }), 'utf-8');
 }
 
+function seedAgent(dir: string, agentName: string, kind: 'agent' | 'human' | 'service' | 'unknown' = 'agent'): { agent_id: string; agent_name: string } {
+  const agentsDir = path.join(dir, '.brainclaw', 'agents');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  const doc = {
+    schema_version: 2,
+    version: 1,
+    agent_id: `agt_${crypto.randomUUID().replace(/-/g, '')}`,
+    agent_name: agentName,
+    created_at: new Date().toISOString(),
+    kind,
+    trust_level: 'contributor',
+    capabilities: [],
+  };
+  fs.writeFileSync(path.join(agentsDir, `${doc.agent_id}.json`), `${JSON.stringify(doc, null, 2)}\n`, 'utf-8');
+  return {
+    agent_id: doc.agent_id,
+    agent_name: doc.agent_name,
+  };
+}
+
+function setupBrainclawFixture(dir: string): void {
+  ensureMemoryDir(dir);
+
+  const projectIdentity = buildProjectIdentity({
+    projectName: path.basename(dir),
+    storageDir: '.brainclaw',
+    topology: 'embedded',
+  });
+  saveProjectIdentity(projectIdentity, dir);
+
+  const currentAgent = seedAgent(dir, 'testuser', 'human');
+  for (const agentName of ['copilot', 'claude', 'codex', 'a', 'b']) {
+    seedAgent(dir, agentName);
+  }
+
+  const config = defaultConfig(path.basename(dir), {
+    projectId: projectIdentity.project_id,
+    currentAgent: currentAgent.agent_name,
+    currentAgentId: currentAgent.agent_id,
+    storageDir: '.brainclaw',
+    topology: 'embedded',
+    ignoreStrategy: 'none',
+    projectMode: 'auto',
+    projectStrategy: 'manual',
+  });
+  saveConfig(config, dir);
+
+  const state = emptyState();
+  saveState(state, dir);
+  writeFileAtomic(memoryPath('project.md', dir), generateMarkdown(state, dir));
+}
+
 describe('Git-backed Collaboration (Phase 2)', () => {
   let dir: string;
 
   beforeEach(() => {
     dir = tmpDir();
-    run(['init', '-y'], dir);
+    setupBrainclawFixture(dir);
   });
 
   afterEach(() => {
