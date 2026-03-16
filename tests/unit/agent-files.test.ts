@@ -9,8 +9,13 @@ import {
   buildBrainclawSection,
   buildHygieneSection,
   upsertBrainclawSection,
+  ensureClineMcpConfig,
+  ensureCopilotSkill,
+  ensureCursorMdc,
   ensureAgentFiles,
   ensureGitignoreEntries,
+  ensureWindsurfMcpConfig,
+  writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 
 function tmpDir(): string {
@@ -166,6 +171,85 @@ describe('core/agent-files — ensureGitignoreEntries', () => {
       const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
       const count = (content.match(/AGENTS\.md/g) ?? []).length;
       assert.equal(count, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('core/agent-files — auto-config writers', () => {
+  it('creates and reuses Cline MCP settings in the workspace', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureClineMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.vscode/cline_mcp_settings.json');
+
+      const filePath = path.join(dir, '.vscode', 'cline_mcp_settings.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP config should be present');
+
+      const second = ensureClineMcpConfig(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a Copilot skill as SKILL.md under .github/skills', () => {
+    const dir = tmpDir();
+    try {
+      const result = ensureCopilotSkill(dir);
+      assert.equal(result.created, true);
+      const filePath = path.join(dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.includes('name: brainclaw-context'));
+      assert.ok(content.includes('brainclaw context --json'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a Cursor MDC rule without sentinel wrapping', () => {
+    const dir = tmpDir();
+    try {
+      const result = ensureCursorMdc(dir);
+      assert.equal(result.created, true);
+      const filePath = path.join(dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.startsWith('---\n'));
+      assert.ok(content.includes('<run_command>'));
+      assert.ok(!content.includes(BRAINCLAW_SECTION_START));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Windsurf MCP config under the provided home directory', () => {
+    const homeDir = tmpDir();
+    try {
+      const result = ensureWindsurfMcpConfig(homeDir);
+      assert.ok(result, 'result should be defined when a home dir is provided');
+      assert.equal(result?.created, true);
+      const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP config should be present');
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes only the relevant detected auto-config companion files', () => {
+    const dir = tmpDir();
+    try {
+      const cursorResults = writeDetectedAgentAutoConfig('cursor', dir);
+      assert.equal(cursorResults.length, 1);
+      assert.equal(cursorResults[0]?.relativePath, '.cursor/rules/brainclaw-mcp-shim.mdc');
+
+      const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
+      assert.equal(copilotResults.length, 1);
+      assert.equal(copilotResults[0]?.relativePath, '.github/skills/brainclaw-context/SKILL.md');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

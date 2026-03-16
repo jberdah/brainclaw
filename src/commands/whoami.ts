@@ -3,6 +3,8 @@ import { resolveCurrentAgentIdentity, resolveExistingCurrentAgent } from '../cor
 import { loadConfig } from '../core/config.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { buildOperationalIdentity } from '../core/identity.js';
+import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
+import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 import { buildExecutionContext, compactExecutionContext } from '../core/execution-context.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
 
@@ -21,6 +23,8 @@ export function runWhoami(options: WhoamiOptions = {}): void {
   const config = loadConfig(cwd);
   const hostId = resolveCurrentHostId();
   const executionContext = compactExecutionContext(buildExecutionContext({ cwd }));
+  const integrationReadiness = assessAgentIntegrationReadiness(config, cwd);
+  const brainclawVersion = assessBrainclawVersion(config);
   const agentTooling = buildAgentToolingContext({ cwd });
 
   let identity;
@@ -47,6 +51,9 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     env_agent: process.env.BRAINCLAW_AGENT ?? null,
     env_session: process.env.BRAINCLAW_SESSION_ID ?? null,
     env_host: process.env.BRAINCLAW_HOST_ID ?? null,
+    brainclaw_version: brainclawVersion,
+    declared_agent_integrations: config.agent_integrations,
+    integration_readiness: integrationReadiness,
     execution_context: executionContext,
     agent_tooling: {
       agents_md_present: agentTooling.agents_md_present,
@@ -72,6 +79,15 @@ export function runWhoami(options: WhoamiOptions = {}): void {
   if (result.session_id) console.log(`  Session ID : ${result.session_id}`);
   console.log(`  Project    : ${result.project_name} (${result.project_id ?? 'n/a'})`);
   console.log(`  Storage    : ${result.storage_dir}`);
+  console.log(`  Brainclaw  : ${result.brainclaw_version.cli_version}`);
+  if (result.brainclaw_version.status !== 'ok') {
+    console.log(`  Version    : ${result.brainclaw_version.message}`);
+  }
+  console.log(`  Declared integrations: ${result.declared_agent_integrations.declarations.length}`);
+  const missingIntegrations = result.integration_readiness.filter((entry) => !entry.ready);
+  if (missingIntegrations.length > 0) {
+    console.log(`  Missing activation: ${missingIntegrations.length}`);
+  }
   console.log(`  Branch     : ${result.execution_context.branch ?? '(none)'}`);
   console.log(`  Git status : ${result.execution_context.git_status}`);
   if (result.execution_context.toolchains.length > 0) {

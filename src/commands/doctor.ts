@@ -20,6 +20,8 @@ import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
+import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
+import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -321,6 +323,73 @@ export function runDoctor(options: DoctorOptions = {}): void {
       status: 'ok',
       message: `${agentTooling.mcp_servers.length} MCP server(s) inventoried`,
     });
+  }
+
+  const integrationReadiness = assessAgentIntegrationReadiness(config, options.cwd ?? process.cwd());
+  const missingIntegrations = integrationReadiness.filter((entry) => !entry.ready);
+  if (missingIntegrations.length > 0) {
+    checks.push({
+      name: 'agent_integrations',
+      status: 'warn',
+      message: `${missingIntegrations.length} declared agent integration(s) are not fully activated on this machine/workspace.`,
+      details: missingIntegrations,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${missingIntegrations.length} declared agent integration(s) are not fully activated on this machine/workspace.`);
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'agent_integrations',
+      status: 'ok',
+      message: `${integrationReadiness.length} declared agent integration(s) are fully activated`,
+    });
+  }
+
+  const brainclawVersion = assessBrainclawVersion(config);
+  if (brainclawVersion.status === 'upgrade_required' || brainclawVersion.status === 'invalid_config') {
+    checks.push({
+      name: 'brainclaw_version',
+      status: 'warn',
+      message: brainclawVersion.message,
+      details: brainclawVersion,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${brainclawVersion.message}`);
+      if (brainclawVersion.upgrade_message) {
+        console.warn(`  Benefits: ${brainclawVersion.upgrade_message}`);
+      }
+      if (brainclawVersion.upgrade_command) {
+        console.warn(`  Upgrade: ${brainclawVersion.upgrade_command}`);
+      }
+    }
+    hasIssues = true;
+  } else if (brainclawVersion.status === 'update_available') {
+    checks.push({
+      name: 'brainclaw_version',
+      status: 'warn',
+      message: brainclawVersion.message,
+      details: brainclawVersion,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${brainclawVersion.message}`);
+      if (brainclawVersion.upgrade_message) {
+        console.warn(`  Benefits: ${brainclawVersion.upgrade_message}`);
+      }
+      if (brainclawVersion.upgrade_command) {
+        console.warn(`  Upgrade: ${brainclawVersion.upgrade_command}`);
+      }
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'brainclaw_version',
+      status: 'ok',
+      message: brainclawVersion.message,
+    });
+    if (!options.json) {
+      console.log(`✔ ${brainclawVersion.message}`);
+    }
   }
 
   // Check project.md consistency
@@ -732,6 +801,11 @@ export function runDoctor(options: DoctorOptions = {}): void {
     incomplete_skills: incompleteSkills.length,
     local_mcp_servers: agentTooling.mcp_servers.length,
     missing_mcp_commands: missingMcpCommands.length,
+    declared_agent_integrations: integrationReadiness.length,
+    integration_activation_gaps: missingIntegrations.length,
+    brainclaw_cli_version: brainclawVersion.cli_version,
+    required_brainclaw_version: brainclawVersion.minimum_brainclaw_version,
+    recommended_brainclaw_version: brainclawVersion.recommended_brainclaw_version,
   };
 
   const reputationSummary = buildReputationSummary(options.cwd);

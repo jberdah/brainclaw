@@ -148,10 +148,5 @@ export function writeDetectedAgentHooks(
     results.push(writeHook(content, '.cursor/rules/brainclaw-session.mdc', cwd));
   }
 
-  if (agentName === 'windsurf') {
-    const content = generateWindsurfHook(projectName);
-    results.push(writeHook(content, '.windsurfrules', cwd));
-  }
-
   return results;
 }

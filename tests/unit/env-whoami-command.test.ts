@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runEnv } from '../../src/commands/env.js';
 import { runWhoami } from '../../src/commands/whoami.js';
+import { upsertAgentIntegrationDeclaration } from '../../src/core/agent-integrations.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 function captureConsole(fn: () => void): { logs: string[]; errors: string[] } {
@@ -53,6 +54,11 @@ describe('commands/env + whoami', () => {
     );
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
+    workspace.updateConfig((config) => {
+      upsertAgentIntegrationDeclaration(config, 'github-copilot', 'manual');
+      config.recommended_brainclaw_version = '99.0.0';
+      config.brainclaw_upgrade_message = 'Includes improved doctor/env/whoami upgrade guidance.';
+    });
   });
 
   afterEach(() => {
@@ -73,6 +79,10 @@ describe('commands/env + whoami', () => {
     const parsed = JSON.parse(output.logs.at(-1) as string);
     assert.equal(parsed.agent_tooling.agents_md_present, true);
     assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read memory first']);
+    assert.equal(parsed.brainclaw_version.status, 'update_available');
+    assert.equal(parsed.brainclaw_version.recommended_brainclaw_version, '99.0.0');
+    assert.equal(parsed.declared_agent_integrations.declarations[0].agent_name, 'github-copilot');
+    assert.equal(parsed.integration_readiness[0].ready, false);
     assert.ok(Array.isArray(parsed.execution_context.toolchains));
     assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');
     assert.equal(parsed.agent_tooling.skills[0].references_present, false);
@@ -89,6 +99,10 @@ describe('commands/env + whoami', () => {
     const parsed = JSON.parse(output.logs.at(-1) as string);
     assert.equal(parsed.resolved_agent, 'copilot');
     assert.ok(parsed.execution_context);
+    assert.equal(parsed.brainclaw_version.status, 'update_available');
+    assert.equal(parsed.brainclaw_version.upgrade_message, 'Includes improved doctor/env/whoami upgrade guidance.');
+    assert.equal(parsed.declared_agent_integrations.declarations[0].agent_name, 'github-copilot');
+    assert.equal(parsed.integration_readiness[0].ready, false);
     assert.equal(parsed.agent_tooling.agents_md_present, true);
     assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read memory first']);
     assert.equal(parsed.agent_tooling.skills[0].name, 'openai-docs');

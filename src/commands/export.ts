@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists } from '../core/io.js';
 import { loadState } from '../core/state.js';
-import { loadConfig } from '../core/config.js';
+import { loadConfig, saveConfig } from '../core/config.js';
+import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
-import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, type ExportFormat } from '../core/agent-files.js';
+import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, describeAutoConfigWrite, writeExportCompanionFiles, type ExportFormat } from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
 
 export type { ExportFormat };
@@ -42,7 +43,14 @@ export function runExport(options: ExportOptions): void {
   if (options.write) {
     const target = resolveExportTargetByFormat(options.format);
     const result = writeExportFile(content, target.relativePath, cwd);
+    declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+    for (const autoConfig of writeExportCompanionFiles(options.format, cwd)) {
+      const message = describeAutoConfigWrite(autoConfig);
+      if (message) {
+        console.log(message);
+      }
+    }
   } else if (options.output) {
     const dir = path.dirname(options.output);
     if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -58,12 +66,39 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const target = detected ? resolveExportTarget(detected.name) : resolveExportTarget('unknown');
   const content = generateExport(target.format, options, cwd);
   const result = writeExportFile(content, target.relativePath, cwd);
+  declareAgentIntegrationFromTarget(cwd, target.agentName, detected ? 'detected' : 'manual');
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
   console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+
+  for (const autoConfig of writeExportCompanionFiles(target.format, cwd)) {
+    const message = describeAutoConfigWrite(autoConfig);
+    if (message) {
+      console.log(message);
+    }
+  }
 }
+
+export function writeAgentExportForAgent(
+  agentName: string,
+  cwd: string,
+): { relativePath: string; created: boolean } | undefined {
+  const target = resolveExportTarget(agentName);
+  if (target.agentName === 'unknown') {
+    return undefined;
+  }
+
+  const content = generateExport(target.format, {}, cwd);
+  const result = writeExportFile(content, target.relativePath, cwd);
+  declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
+  return { relativePath: target.relativePath, created: result.created };
+}
+
 export function writeDetectedAgentExport(detectedAgentName: string, cwd: string): { relativePath: string; created: boolean } | undefined {
   const target = resolveExportTarget(detectedAgentName);
+  if (target.agentName === 'unknown') {
+    return undefined;
+  }
   // Skip if this is the fallback and AGENTS.md is already handled by ensureAgentFiles
   if (target.relativePath === 'AGENTS.md' || target.relativePath === '.github/copilot-instructions.md') {
     return undefined;
@@ -72,6 +107,22 @@ export function writeDetectedAgentExport(detectedAgentName: string, cwd: string)
   const result = writeExportFile(content, target.relativePath, cwd);
   return { relativePath: target.relativePath, created: result.created };
 }
+
+function declareAgentIntegrationFromTarget(
+  cwd: string,
+  agentName: string,
+  declarationSource: 'manual' | 'detected',
+): void {
+  if (!isAgentIntegrationName(agentName)) {
+    return;
+  }
+
+  const config = loadConfig(cwd);
+  if (upsertAgentIntegrationDeclaration(config, agentName, declarationSource)) {
+    saveConfig(config, cwd);
+  }
+}
+
 function generateExport(format: ExportFormat, options: ExportOptions, cwd: string): string {
   switch (format) {
     case 'copilot-instructions': return generateCopilotInstructions(options, cwd);

@@ -13,6 +13,7 @@ describe('core/config + project identity', () => {
     assert.equal(config.projects.strategy, 'manual');
     assert.ok(config.reputation);
     assert.equal(config.reputation.enabled, false);
+    assert.deepEqual(config.agent_integrations.declarations, []);
   });
 
   it('preserves an existing project identity when rebuilding it', () => {

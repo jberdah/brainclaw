@@ -484,11 +484,89 @@ export const BootstrapProfileDocumentSchema = z.object({
 });
 export type BootstrapProfileDocument = z.infer<typeof BootstrapProfileDocumentSchema>;
 
+export const AgentIntegrationNameSchema = z.enum([
+  'github-copilot',
+  'claude-code',
+  'cursor',
+  'windsurf',
+  'cline',
+  'codex',
+  'continue',
+  'roo',
+]);
+export type AgentIntegrationName = z.infer<typeof AgentIntegrationNameSchema>;
+
+export const AgentIntegrationSurfaceKindSchema = z.enum(['instructions', 'mcp', 'skill', 'rule', 'hook']);
+export type AgentIntegrationSurfaceKind = z.infer<typeof AgentIntegrationSurfaceKindSchema>;
+
+export const AgentIntegrationLocationSchema = z.enum(['workspace', 'machine']);
+export type AgentIntegrationLocation = z.infer<typeof AgentIntegrationLocationSchema>;
+
+export const AgentIntegrationDeclarationSourceSchema = z.enum(['manual', 'detected']);
+export type AgentIntegrationDeclarationSource = z.infer<typeof AgentIntegrationDeclarationSourceSchema>;
+
+export const AgentIntegrationSurfaceSchema = z.object({
+  kind: AgentIntegrationSurfaceKindSchema,
+  location: AgentIntegrationLocationSchema,
+  path: z.string().optional(),
+});
+export type AgentIntegrationSurface = z.infer<typeof AgentIntegrationSurfaceSchema>;
+
+export const AgentIntegrationDeclarationSchema = z.object({
+  agent_name: AgentIntegrationNameSchema,
+  declaration_source: AgentIntegrationDeclarationSourceSchema.default('manual'),
+  surfaces: z.array(AgentIntegrationSurfaceSchema).default([]),
+  notes: z.string().optional(),
+});
+export type AgentIntegrationDeclaration = z.infer<typeof AgentIntegrationDeclarationSchema>;
+
+export const AgentIntegrationsConfigSchema = z.object({
+  declarations: z.array(AgentIntegrationDeclarationSchema).default([]),
+});
+export type AgentIntegrationsConfig = z.infer<typeof AgentIntegrationsConfigSchema>;
+
+export const BrainclawUpdateSourceLocalPackSchema = z.object({
+  type: z.literal('local-pack'),
+  manifest_path: z.string(),
+});
+export type BrainclawUpdateSourceLocalPack = z.infer<typeof BrainclawUpdateSourceLocalPackSchema>;
+
+export const BrainclawUpdateSourceNpmSchema = z.object({
+  type: z.literal('npm'),
+  package_name: z.string().default('brainclaw'),
+  dist_tag: z.string().default('latest'),
+});
+export type BrainclawUpdateSourceNpm = z.infer<typeof BrainclawUpdateSourceNpmSchema>;
+
+export const BrainclawUpdateSourceSchema = z.discriminatedUnion('type', [
+  BrainclawUpdateSourceLocalPackSchema,
+  BrainclawUpdateSourceNpmSchema,
+]);
+export type BrainclawUpdateSource = z.infer<typeof BrainclawUpdateSourceSchema>;
+
+export const BrainclawLocalReleaseManifestSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  version: z.literal(1),
+  channel: z.literal('local-pack').default('local-pack'),
+  package_name: z.string().default('brainclaw'),
+  latest_installable_version: z.string(),
+  published_at: z.string().optional(),
+  artifact_path: z.string().optional(),
+  install_command: z.string().optional(),
+  release_notes: z.string().optional(),
+});
+export type BrainclawLocalReleaseManifest = z.infer<typeof BrainclawLocalReleaseManifestSchema>;
+
 export const ConfigSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
   project_name: z.string(),
   project_id: z.string().optional(),
+  minimum_brainclaw_version: z.string().optional(),
+  recommended_brainclaw_version: z.string().optional(),
+  brainclaw_upgrade_message: z.string().optional(),
+  brainclaw_upgrade_command: z.string().optional(),
+  brainclaw_update_source: BrainclawUpdateSourceSchema.optional(),
   current_agent: z.string().optional(),
   current_agent_id: z.string().optional(),
   storage_dir: z.string().default('.brainclaw'),
@@ -509,6 +587,7 @@ export const ConfigSchema = z.object({
   reflective_memory: ReflectiveMemoryConfigSchema.optional(),
   governance: GovernanceConfigSchema.optional(),
   reputation: ReputationConfigSchema.optional(),
+  agent_integrations: AgentIntegrationsConfigSchema.default({ declarations: [] }),
   implicit_session_ttl: z.string().default('4h'),
   auto_reflect_notes: z.boolean().default(false),
 });

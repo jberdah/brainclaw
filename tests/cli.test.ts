@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
+import { getInstalledBrainclawVersion } from '../src/core/brainclaw-version.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
 const NODE = process.execPath;
@@ -14,11 +15,16 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tm-test-'));
 }
 
-function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
+function run(
+  args: string[],
+  cwd: string,
+  envOverrides: Record<string, string> = {},
+  timeoutMs: number = 20000,
+): { stdout: string; stderr: string; exitCode: number } {
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 20000,
+    timeout: timeoutMs,
     env: {
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
@@ -79,6 +85,12 @@ describe('brainclaw CLI', () => {
   });
 
   describe('init', () => {
+    it('reports the installed CLI version from package metadata', () => {
+      const res = run(['--version'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.equal(res.stdout.trim(), getInstalledBrainclawVersion());
+    });
+
     it('creates .brainclaw/ directory with expected files', () => {
       const res = run(['init', '-y'], dir);
       assert.equal(res.exitCode, 0);
@@ -108,6 +120,19 @@ describe('brainclaw CLI', () => {
       fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agents');
       const res = run(['init', '-y'], dir, { BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0' });
       assert.ok(res.stdout.includes('AGENTS.md'), `expected AGENTS.md mention in init output, got: ${res.stdout}`);
+    });
+
+    it('records the detected agent in the project integration manifest', () => {
+      const res = run(['init', '-y'], dir, {
+        BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
+        CURSOR_TRACE_ID: 'cursor-session',
+      });
+      assert.equal(res.exitCode, 0);
+      const config = readConfig(dir);
+      const declaration = config.agent_integrations.declarations.find((item: any) => item.agent_name === 'cursor');
+      assert.ok(declaration);
+      assert.equal(declaration.declaration_source, 'detected');
+      assert.ok(declaration.surfaces.some((surface: any) => surface.kind === 'rule'));
     });
 
     it('defaults project mode to auto in non-interactive init', () => {
@@ -547,6 +572,112 @@ describe('brainclaw CLI', () => {
       assert.ok(current);
       assert.ok(current.reputation);
       assert.equal(typeof current.reputation.internal_trust, 'number');
+    });
+
+    it('enable-agent activates a late-arriving cursor agent and can set it current', () => {
+      run(['init', '-y'], dir);
+
+      const res = run(['enable-agent', 'cursor', '--set-current'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('Agent enabled: cursor'));
+      assert.ok(fs.existsSync(path.join(dir, '.cursor', 'rules', 'brainclaw.md')));
+      assert.ok(fs.existsSync(path.join(dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+
+      const config = readConfig(dir);
+      assert.equal(config.current_agent, 'cursor');
+      const declaration = config.agent_integrations.declarations.find((item: any) => item.agent_name === 'cursor');
+      assert.ok(declaration);
+      assert.equal(declaration.declaration_source, 'manual');
+    });
+
+    it('enable-agent activates a late-arriving windsurf agent with machine-local MCP config', () => {
+      run(['init', '-y'], dir);
+
+      const res = run(['enable-agent', 'windsurf'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(fs.existsSync(path.join(dir, '.windsurfrules')));
+      assert.ok(fs.existsSync(path.join(dir, '.codeium', 'windsurf', 'mcp_config.json')));
+      assert.ok(fs.readFileSync(path.join(dir, '.windsurfrules'), 'utf-8').includes('## Brainclaw session hygiene'));
+      assert.ok(!res.stdout.includes('Session hook written to .windsurfrules'));
+    });
+
+    it('version command reports project upgrade policy when configured', () => {
+      run(['init', '-y'], dir);
+      const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+      const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as any;
+      config.minimum_brainclaw_version = '99.0.0';
+      config.brainclaw_upgrade_message = 'Includes auto-agent bootstrap fixes.';
+      fs.writeFileSync(configPath, YAML.stringify(config), 'utf-8');
+
+      const res = run(['version'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes(`brainclaw ${getInstalledBrainclawVersion()}`));
+      assert.ok(res.stdout.includes('Minimum required: 99.0.0'));
+      assert.ok(res.stdout.includes('Includes auto-agent bootstrap fixes.'));
+    });
+
+    it('version --check reads a configured local-pack manifest', () => {
+      run(['init', '-y'], dir);
+      const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+      const manifestPath = path.join(dir, '.releases', 'brainclaw-local.json');
+      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+      fs.writeFileSync(manifestPath, JSON.stringify({
+        version: 1,
+        channel: 'local-pack',
+        package_name: 'brainclaw',
+        latest_installable_version: '0.6.1',
+        artifact_path: './brainclaw-0.6.1.tgz',
+        release_notes: 'Local tarball ready for self-upgrade.',
+      }, null, 2), 'utf-8');
+
+      const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as any;
+      config.brainclaw_update_source = {
+        type: 'local-pack',
+        manifest_path: '.releases/brainclaw-local.json',
+      };
+      fs.writeFileSync(configPath, YAML.stringify(config), 'utf-8');
+
+      const res = run(['version', '--check'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('A newer installable brainclaw build is available: 0.6.1'));
+      assert.ok(res.stdout.includes('Latest installable: 0.6.1'));
+      assert.ok(res.stdout.includes('Install command:'));
+    });
+
+    it('version --publish-local creates the .releases channel and wires config', () => {
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+        name: 'brainclaw',
+        version: '0.6.1',
+        type: 'module',
+        files: ['index.js'],
+      }, null, 2), 'utf-8');
+      fs.writeFileSync(path.join(dir, 'index.js'), 'export const ready = true;\n', 'utf-8');
+      run(['init', '-y'], dir);
+
+      const res = run(['version', '--publish-local', '--release-notes', 'Local self-update candidate.'], dir, {
+        BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      }, 60000);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('Local release published: 0.6.1'));
+      assert.ok(fs.existsSync(path.join(dir, '.releases', 'brainclaw-local.json')));
+
+      const releaseFiles = fs.readdirSync(path.join(dir, '.releases'));
+      assert.ok(releaseFiles.some((file) => /^brainclaw-0\.6\.1.*\.tgz$/.test(file)));
+
+      const config = readConfig(dir);
+      assert.deepEqual(config.brainclaw_update_source, {
+        type: 'local-pack',
+        manifest_path: '.releases/brainclaw-local.json',
+      });
+
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.releases', 'brainclaw-local.json'), 'utf-8'));
+      assert.equal(manifest.latest_installable_version, '0.6.1');
+      assert.equal(manifest.release_notes, 'Local self-update candidate.');
+      assert.ok(manifest.install_command.includes('.releases/'));
+      assert.ok(manifest.install_command.endsWith('.tgz"'));
+
+      const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes('.releases/'));
     });
   });
 
