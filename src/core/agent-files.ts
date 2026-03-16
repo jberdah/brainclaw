@@ -6,20 +6,46 @@ export const BRAINCLAW_SECTION_END = '<!-- brainclaw:end -->';
 
 export function buildBrainclawSection(storageDir: string): string {
   return `${BRAINCLAW_SECTION_START}
-## Shared project memory (brainclaw)
+## Brainclaw — shared project memory
 
-Before working on this project, read the shared memory context:
+This project uses brainclaw for shared coordination between humans and agents.
+
+### Session start (required)
+
+1. Run \`brainclaw context\` to load shared state (constraints, decisions, traps, plans, handoffs)
+2. Check **Your open work** for active claims and in-progress plans assigned to you
+3. Respect active claims from other agents — check \`brainclaw list-claims\` before editing a claimed scope
+
+### Before finishing (required)
+
+1. Release claims you opened: \`brainclaw release-claim <id>\` — or \`brainclaw session-end --auto-release\`
+2. Update completed plan items: \`brainclaw update-plan <id> --status done\`
+
+### Recording work
 
 \`\`\`bash
-brainclaw context --json
-brainclaw agent-board
+brainclaw decision "<text>"          # record a decision
+brainclaw constraint "<text>"        # record an active constraint
+brainclaw trap "<text>"              # record a known trap
+brainclaw claim "<text>" --scope <path>   # claim a scope before editing
+brainclaw plan "<text>"              # add a shared work item
 \`\`\`
-
-This gives you active constraints, recent decisions, known traps, in-progress plans,
-and the latest session handoff.
 
 Memory is stored in \`${storageDir}/\`. Run \`brainclaw doctor\` to verify health.
 ${BRAINCLAW_SECTION_END}`;
+}
+
+export function buildHygieneSection(): string {
+  return `## Brainclaw session hygiene
+
+Before starting work:
+1. Run \`brainclaw context\` (or \`brainclaw context --json\`) to load shared memory
+2. Check the **Your open work** section for active claims and in-progress plans
+
+Before finishing:
+1. Release active claims: \`brainclaw release-claim <id>\`
+2. Update plans: \`brainclaw update-plan <id> --status done\`
+3. Or use \`brainclaw session-end --auto-release\` to clean up automatically`;
 }
 
 export function upsertBrainclawSection(existingContent: string, section: string): string {
