@@ -27,10 +27,13 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   ],
   'claude-code': [
     { kind: 'instructions', location: 'workspace', path: 'CLAUDE.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.mcp.json' },
+    { kind: 'skill',        location: 'workspace', path: '.claude/commands/brainclaw.md' },
   ],
   'cursor': [
     { kind: 'instructions', location: 'workspace', path: '.cursor/rules/brainclaw.md' },
-    { kind: 'rule', location: 'workspace', path: '.cursor/rules/brainclaw-mcp-shim.mdc' },
+    { kind: 'rule',         location: 'workspace', path: '.cursor/rules/brainclaw-mcp-shim.mdc' },
+    { kind: 'mcp',          location: 'machine',   path: '.cursor/mcp.json' },
   ],
   'windsurf': [
     { kind: 'instructions', location: 'workspace', path: '.windsurfrules' },
@@ -46,9 +49,11 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   ],
   'continue': [
     { kind: 'instructions', location: 'workspace', path: '.continue/rules/brainclaw.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.continue/config.json' },
   ],
   'roo': [
     { kind: 'instructions', location: 'workspace', path: '.roo/rules/brainclaw.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.roo/mcp.json' },
   ],
 };
 

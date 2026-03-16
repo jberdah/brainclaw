@@ -16,6 +16,28 @@ describe('core/agent-integrations', () => {
     assert.ok(declaration.surfaces.some((surface) => surface.kind === 'mcp' && surface.location === 'machine'));
   });
 
+  it('claude-code declaration includes mcp and skill surfaces', () => {
+    const declaration = buildAgentIntegrationDeclaration('claude-code', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'instructions' && s.path === 'CLAUDE.md'));
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.mcp.json'));
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'skill' && s.path === '.claude/commands/brainclaw.md'));
+  });
+
+  it('cursor declaration now includes mcp surface', () => {
+    const declaration = buildAgentIntegrationDeclaration('cursor', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.location === 'machine'));
+  });
+
+  it('roo declaration includes mcp surface', () => {
+    const declaration = buildAgentIntegrationDeclaration('roo', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.roo/mcp.json'));
+  });
+
+  it('continue declaration includes mcp surface', () => {
+    const declaration = buildAgentIntegrationDeclaration('continue', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.continue/config.json'));
+  });
+
   it('upserts declarations idempotently and upgrades source to manual when needed', () => {
     const config = defaultConfig('brainclaw');
 

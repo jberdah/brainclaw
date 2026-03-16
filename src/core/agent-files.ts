@@ -36,16 +36,17 @@ ${BRAINCLAW_SECTION_END}`;
 }
 
 export function buildHygieneSection(): string {
-  return `## Brainclaw session hygiene
+  return `## Brainclaw — required coordination
 
 Before starting work:
 1. Run \`brainclaw context\` (or \`brainclaw context --json\`) to load shared memory
-2. Check the **Your open work** section for active claims and in-progress plans
+2. Run \`brainclaw list-claims\` — do not edit a file claimed by another agent
+3. Create a plan for significant work: \`brainclaw plan "<description>"\`
+4. Claim files you will modify: \`brainclaw claim "<description>" --scope <path>\`
 
 Before finishing:
-1. Release active claims: \`brainclaw release-claim <id>\`
-2. Update plans: \`brainclaw update-plan <id> --status done\`
-3. Or use \`brainclaw session-end --auto-release\` to clean up automatically`;
+1. Run \`brainclaw session-end --auto-release\` — releases claims and updates plans
+2. Or manually: \`brainclaw release-claim <id>\` and \`brainclaw update-plan <id> --status done\``;
 }
 
 export function upsertBrainclawSection(existingContent: string, section: string): string {
@@ -196,6 +197,12 @@ const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
 const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
 const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
 const WINDSURF_MCP_RELATIVE_PATH = '.codeium/windsurf/mcp_config.json';
+const CLAUDE_CODE_MCP_RELATIVE_PATH = '.mcp.json';
+const CLAUDE_CODE_COMMAND_RELATIVE_PATH = '.claude/commands/brainclaw.md';
+const CLAUDE_CODE_SETTINGS_RELATIVE_PATH = '.claude/settings.local.json';
+const CURSOR_MCP_RELATIVE_PATH = '.cursor/mcp.json';
+const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
+const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -355,12 +362,208 @@ If Brainclaw reports active claims or in-progress plans, follow them before edit
   };
 }
 
+function buildCommandHookEntry(command: string): JsonObject {
+  return {
+    matcher: '',
+    hooks: [{ type: 'command', command }],
+  };
+}
+
+function containsCommandHook(entries: unknown[], command: string): boolean {
+  return entries.some(
+    (entry) =>
+      isJsonObject(entry) &&
+      Array.isArray(entry.hooks) &&
+      (entry.hooks as unknown[]).some(
+        (h) => isJsonObject(h) && h.command === command,
+      ),
+  );
+}
+
+export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.mcp.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Claude Code MCP server',
+    created,
+    updated,
+    filePath,
+    relativePath: CLAUDE_CODE_MCP_RELATIVE_PATH,
+  };
+}
+
+export function ensureClaudeCodeCommand(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.claude', 'commands', 'brainclaw.md');
+  const content = `Load brainclaw project memory and prepare for coordinated work.
+
+Steps:
+1. Run \`brainclaw context --json\` — load constraints, decisions, traps, plans, handoffs
+2. Run \`brainclaw list-claims\` — check what files other agents have claimed
+3. Before editing any file, run \`brainclaw claim "<description>" --scope <path>\`
+4. Before finishing, run \`brainclaw session-end --auto-release\`
+`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'skill',
+    label: 'Claude Code brainclaw command',
+    created,
+    updated,
+    filePath,
+    relativePath: CLAUDE_CODE_COMMAND_RELATIVE_PATH,
+  };
+}
+
+export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.claude', 'settings.local.json');
+  const existing = readJsonObject(filePath);
+
+  // Merge permissions.allow
+  const permissions = isJsonObject(existing.permissions) ? { ...existing.permissions } : {};
+  const allow = Array.isArray(permissions.allow) ? [...permissions.allow as string[]] : [];
+  if (!allow.includes('Bash(npx brainclaw:*)')) {
+    allow.push('Bash(npx brainclaw:*)');
+  }
+  permissions.allow = allow;
+
+  // Merge hooks — UserPromptSubmit injects fresh context on every exchange
+  const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
+  const contextCommand = 'npx brainclaw context --json 2>/dev/null';
+  const stopCommand = 'npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
+
+  const userPromptHooks = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit as unknown[]] : [];
+  if (!containsCommandHook(userPromptHooks, contextCommand)) {
+    userPromptHooks.push(buildCommandHookEntry(contextCommand));
+  }
+  hooks.UserPromptSubmit = userPromptHooks;
+
+  const stopHooks = Array.isArray(hooks.Stop) ? [...hooks.Stop as unknown[]] : [];
+  if (!containsCommandHook(stopHooks, stopCommand)) {
+    stopHooks.push(buildCommandHookEntry(stopCommand));
+  }
+  hooks.Stop = stopHooks;
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    permissions,
+    hooks,
+  });
+
+  return {
+    kind: 'rule',
+    label: 'Claude Code settings (permissions + session hooks)',
+    created,
+    updated,
+    filePath,
+    relativePath: CLAUDE_CODE_SETTINGS_RELATIVE_PATH,
+  };
+}
+
+export function ensureCursorMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) {
+    return undefined;
+  }
+
+  const filePath = path.join(homeDir, '.cursor', 'mcp.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Cursor MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: CURSOR_MCP_RELATIVE_PATH,
+  };
+}
+
+export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.roo', 'mcp.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Roo Code MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: ROO_MCP_RELATIVE_PATH,
+  };
+}
+
+export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.continue', 'config.json');
+  const existing = readJsonObject(filePath);
+
+  // Continue uses an array for mcpServers, not a keyed object
+  const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers as unknown[]] : [];
+  const alreadyPresent = mcpServers.some(
+    (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
+  );
+  if (!alreadyPresent) {
+    mcpServers.push({ name: 'brainclaw', command: 'npx', args: ['brainclaw', 'mcp'] });
+  }
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Continue MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: CONTINUE_CONFIG_RELATIVE_PATH,
+  };
+}
+
 export function writeDetectedAgentAutoConfig(
   agentName: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
   switch (agentName) {
+    case 'claude-code': {
+      return [
+        ensureClaudeCodeMcpConfig(cwd),
+        ensureClaudeCodeCommand(cwd),
+        ensureClaudeCodeSettings(cwd),
+      ];
+    }
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
     case 'windsurf': {
@@ -369,8 +572,16 @@ export function writeDetectedAgentAutoConfig(
     }
     case 'github-copilot':
       return [ensureCopilotSkill(cwd)];
-    case 'cursor':
-      return [ensureCursorMdc(cwd)];
+    case 'cursor': {
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
+      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
+      if (mcp) results.push(mcp);
+      return results;
+    }
+    case 'roo':
+      return [ensureRooMcpConfig(cwd)];
+    case 'continue':
+      return [ensureContinueMcpConfig(cwd)];
     default:
       return [];
   }
@@ -382,6 +593,13 @@ export function writeExportCompanionFiles(
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
   switch (format) {
+    case 'claude-md': {
+      return [
+        ensureClaudeCodeMcpConfig(cwd),
+        ensureClaudeCodeCommand(cwd),
+        ensureClaudeCodeSettings(cwd),
+      ];
+    }
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
     case 'windsurf': {
@@ -390,8 +608,16 @@ export function writeExportCompanionFiles(
     }
     case 'copilot-instructions':
       return [ensureCopilotSkill(cwd)];
-    case 'cursor-rules':
-      return [ensureCursorMdc(cwd)];
+    case 'cursor-rules': {
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
+      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
+      if (mcp) results.push(mcp);
+      return results;
+    }
+    case 'roo':
+      return [ensureRooMcpConfig(cwd)];
+    case 'continue':
+      return [ensureContinueMcpConfig(cwd)];
     default:
       return [];
   }

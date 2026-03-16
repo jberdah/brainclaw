@@ -15,6 +15,12 @@ import {
   ensureAgentFiles,
   ensureGitignoreEntries,
   ensureWindsurfMcpConfig,
+  ensureClaudeCodeMcpConfig,
+  ensureClaudeCodeCommand,
+  ensureClaudeCodeSettings,
+  ensureCursorMcpConfig,
+  ensureRooMcpConfig,
+  ensureContinueMcpConfig,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 
@@ -57,8 +63,14 @@ describe('core/agent-files — buildHygieneSection', () => {
     const section = buildHygieneSection();
     assert.ok(section.includes('brainclaw context'));
     assert.ok(section.includes('release-claim'));
-    assert.ok(section.includes('update-plan'));
     assert.ok(section.includes('session-end'));
+  });
+
+  it('includes plan and claim workflow instructions', () => {
+    const section = buildHygieneSection();
+    assert.ok(section.includes('list-claims'), 'should mention list-claims to check other agents');
+    assert.ok(section.includes('brainclaw plan'), 'should mention creating plans');
+    assert.ok(section.includes('brainclaw claim'), 'should mention claiming files');
   });
 });
 
@@ -243,13 +255,213 @@ describe('core/agent-files — auto-config writers', () => {
   it('writes only the relevant detected auto-config companion files', () => {
     const dir = tmpDir();
     try {
-      const cursorResults = writeDetectedAgentAutoConfig('cursor', dir);
+      // cursor without homeDir → only MDC
+      const cursorResults = writeDetectedAgentAutoConfig('cursor', dir, {});
       assert.equal(cursorResults.length, 1);
       assert.equal(cursorResults[0]?.relativePath, '.cursor/rules/brainclaw-mcp-shim.mdc');
 
       const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
       assert.equal(copilotResults.length, 1);
       assert.equal(copilotResults[0]?.relativePath, '.github/skills/brainclaw-context/SKILL.md');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Claude Code MCP config at .mcp.json', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureClaudeCodeMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.mcp.json');
+
+      const filePath = path.join(dir, '.mcp.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP entry should be present');
+
+      const second = ensureClaudeCodeMcpConfig(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Claude Code slash command with workflow content', () => {
+    const dir = tmpDir();
+    try {
+      const result = ensureClaudeCodeCommand(dir);
+      assert.equal(result.created, true);
+      assert.equal(result.relativePath, '.claude/commands/brainclaw.md');
+
+      const filePath = path.join(dir, '.claude', 'commands', 'brainclaw.md');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.includes('brainclaw context --json'));
+      assert.ok(content.includes('brainclaw list-claims'));
+      assert.ok(content.includes('brainclaw claim'));
+      assert.ok(content.includes('session-end'));
+
+      const second = ensureClaudeCodeCommand(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Claude Code settings with permissions and session hooks', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureClaudeCodeSettings(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.claude/settings.local.json');
+
+      const filePath = path.join(dir, '.claude', 'settings.local.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        permissions?: { allow?: string[] };
+        hooks?: { UserPromptSubmit?: unknown[]; Stop?: unknown[] };
+      };
+      assert.ok(content.permissions?.allow?.includes('Bash(npx brainclaw:*)'));
+      assert.ok(Array.isArray(content.hooks?.UserPromptSubmit) && content.hooks.UserPromptSubmit.length > 0);
+      assert.ok(Array.isArray(content.hooks?.Stop) && content.hooks.Stop.length > 0);
+
+      const second = ensureClaudeCodeSettings(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('merges Claude Code settings without overwriting existing keys', () => {
+    const dir = tmpDir();
+    try {
+      const settingsPath = path.join(dir, '.claude', 'settings.local.json');
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(settingsPath, JSON.stringify({ permissions: { allow: ['Bash(git:*)'] }, customKey: 'value' }), 'utf-8');
+
+      ensureClaudeCodeSettings(dir);
+
+      const content = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as {
+        permissions?: { allow?: string[] };
+        customKey?: string;
+      };
+      assert.ok(content.permissions?.allow?.includes('Bash(npx brainclaw:*)'), 'brainclaw permission should be added');
+      assert.ok(content.permissions?.allow?.includes('Bash(git:*)'), 'existing permission should be preserved');
+      assert.equal(content.customKey, 'value', 'unrelated keys should be preserved');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Cursor MCP config under the provided home directory', () => {
+    const homeDir = tmpDir();
+    try {
+      const result = ensureCursorMcpConfig(homeDir);
+      assert.ok(result, 'result should be defined when a home dir is provided');
+      assert.equal(result?.created, true);
+      assert.equal(result?.relativePath, '.cursor/mcp.json');
+      const filePath = path.join(homeDir, '.cursor', 'mcp.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP entry should be present');
+
+      const second = ensureCursorMcpConfig(homeDir);
+      assert.equal(second?.updated, false);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined for Cursor MCP config when no homeDir provided', () => {
+    const result = ensureCursorMcpConfig(undefined);
+    assert.equal(result, undefined);
+  });
+
+  it('creates Roo Code MCP config at .roo/mcp.json', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureRooMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.roo/mcp.json');
+
+      const filePath = path.join(dir, '.roo', 'mcp.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP entry should be present');
+
+      const second = ensureRooMcpConfig(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Continue MCP config as array entry in .continue/config.json', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureContinueMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.continue/config.json');
+
+      const filePath = path.join(dir, '.continue', 'config.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: unknown[] };
+      assert.ok(Array.isArray(content.mcpServers));
+      assert.ok(content.mcpServers?.some((e: unknown) => typeof e === 'object' && e !== null && (e as Record<string, unknown>).name === 'brainclaw'));
+
+      // idempotent — no duplicate
+      ensureContinueMcpConfig(dir);
+      const content2 = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: unknown[] };
+      const brainclawEntries = content2.mcpServers?.filter((e: unknown) => typeof e === 'object' && e !== null && (e as Record<string, unknown>).name === 'brainclaw');
+      assert.equal(brainclawEntries?.length, 1, 'should not create duplicate entries');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig claude-code returns 3 results', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('claude-code', dir);
+      assert.equal(results.length, 3);
+      assert.ok(results.some((r) => r.relativePath === '.mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === '.claude/commands/brainclaw.md'));
+      assert.ok(results.some((r) => r.relativePath === '.claude/settings.local.json'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig cursor with homeDir returns 2 results', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('cursor', dir, { HOME: homeDir });
+      assert.equal(results.length, 2);
+      assert.ok(results.some((r) => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
+      assert.ok(results.some((r) => r.relativePath === '.cursor/mcp.json'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig roo returns 1 result', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('roo', dir);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.relativePath, '.roo/mcp.json');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig continue returns 1 result', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('continue', dir);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.relativePath, '.continue/config.json');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
