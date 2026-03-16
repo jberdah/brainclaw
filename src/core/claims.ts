@@ -53,3 +53,25 @@ export function generateClaimId(): string {
   const rand = crypto.randomBytes(4).toString('hex');
   return `clm_${rand}`;
 }
+
+export function isClaimExpired(claim: Claim): boolean {
+  if (!claim.expires_at) return false;
+  return new Date(claim.expires_at) < new Date();
+}
+
+/** Mark active claims past their expires_at as released. Returns count of expired claims. */
+export function expireStaleActiveClaims(cwd?: string): number {
+  const store = claimStore(cwd);
+  const all = store.list();
+  let count = 0;
+  const now = nowISO();
+  for (const claim of all) {
+    if (claim.status === 'active' && isClaimExpired(claim)) {
+      claim.status = 'released';
+      claim.released_at = now;
+      store.save(claim);
+      count++;
+    }
+  }
+  return count;
+}

@@ -5,6 +5,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
+import { validateCliTtl } from '../core/input-validation.js';
 import type { OperationalIdentity } from '../core/identity.js';
 import type { Claim } from '../core/schema.js';
 
@@ -14,7 +15,17 @@ export interface ClaimOptions {
   scope: string;
   project?: string;
   plan?: string;
+  ttl?: string;
   cwd?: string;
+}
+
+function parseTtl(ttl: string): string {
+  const match = /^(\d+)([mhd])$/.exec(ttl.trim().toLowerCase());
+  if (!match) return new Date(Date.now() + 8 * 3_600_000).toISOString();
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2]!;
+  const ms = unit === 'm' ? value * 60_000 : unit === 'h' ? value * 3_600_000 : value * 86_400_000;
+  return new Date(Date.now() + ms).toISOString();
 }
 
 export function runClaim(description: string, options: ClaimOptions): void {
@@ -22,6 +33,8 @@ export function runClaim(description: string, options: ClaimOptions): void {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
+
+  if (options.ttl) validateCliTtl(options.ttl);
 
   let actor: OperationalIdentity;
   try {
@@ -70,6 +83,7 @@ export function runClaim(description: string, options: ClaimOptions): void {
     project: options.project ?? plan?.project,
     plan_id: options.plan,
     status: 'active',
+    expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
   };
 
   if (plan) {
@@ -86,5 +100,6 @@ export function runClaim(description: string, options: ClaimOptions): void {
   saveClaim(claim, options.cwd);
   writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(plan ? state : loadState(options.cwd), options.cwd));
   const planInfo = claim.plan_id ? ` [plan ${claim.plan_id}]` : '';
-  console.log(`✔ Claim created: [${id}] ${actor.agent} → ${options.scope}: ${description}${planInfo}`);
+  const ttlInfo = claim.expires_at ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
+  console.log(`✔ Claim created: [${id}] ${actor.agent} → ${options.scope}: ${description}${planInfo}${ttlInfo}`);
 }
