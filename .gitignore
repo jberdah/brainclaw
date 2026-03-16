@@ -20,6 +20,14 @@ Desktop.ini
 *~
 .idea/
 
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+crop_logo.py
+ci-test-out.txt
+
 # Test artifacts
 test_output.txt
 test_spawn_out.txt
