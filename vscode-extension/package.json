@@ -1,0 +1,36 @@
+{
+  "name": "brainclaw-vscode",
+  "displayName": "Brainclaw",
+  "description": "Real-time agent coordination board for brainclaw",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["workspaceContains:.brainclaw/**"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "brainclaw.showBoard",
+        "title": "Brainclaw: Show Agent Board"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "brainclaw.agentBoard",
+          "name": "Brainclaw Board",
+          "when": "brainclaw.active"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
