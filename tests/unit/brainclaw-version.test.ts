@@ -13,7 +13,7 @@ import {
 
 describe('core/brainclaw-version', () => {
   it('reads the installed CLI version from package metadata', () => {
-    assert.equal(getInstalledBrainclawVersion(), '0.8.4');
+    assert.equal(getInstalledBrainclawVersion(), '0.8.6');
   });
 
   it('reports an upgrade requirement when the minimum version is higher than the local CLI', () => {
