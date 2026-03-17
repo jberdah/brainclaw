@@ -193,6 +193,14 @@ export interface AutoConfigWriteResult {
 
 type JsonObject = Record<string, unknown>;
 
+const ALL_BCLAW_TOOLS = [
+  'bclaw_get_context', 'bclaw_bootstrap', 'bclaw_get_execution_context',
+  'bclaw_read_handoff', 'bclaw_get_agent_board', 'bclaw_search', 'bclaw_estimation_report',
+  'bclaw_write_note', 'bclaw_create_candidate', 'bclaw_accept', 'bclaw_reject',
+  'bclaw_claim', 'bclaw_release_claim', 'bclaw_session_start', 'bclaw_session_end',
+  'bclaw_create_plan', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',
+];
+
 const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
 const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
 const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
@@ -260,7 +268,7 @@ export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
     command: 'npx',
     args: ['brainclaw', 'mcp'],
     disabled: false,
-    autoApprove: ['bclaw_get_context', 'bclaw_read_handoff', 'bclaw_get_agent_board'],
+    autoApprove: ALL_BCLAW_TOOLS,
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -540,6 +548,7 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   mcpServers.brainclaw = {
     command: 'npx',
     args: ['brainclaw', 'mcp'],
+    alwaysAllow: ALL_BCLAW_TOOLS,
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -554,6 +563,43 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
     updated,
     filePath,
     relativePath: ROO_MCP_RELATIVE_PATH,
+  };
+}
+
+export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | null {
+  const codexHome = env.CODEX_HOME?.trim() || (homeDir ? path.join(homeDir, '.codex') : null);
+  if (!codexHome) return null;
+
+  const filePath = path.join(codexHome, 'config.toml');
+  const brainclawBlock = [
+    '\n[mcp_servers.brainclaw]',
+    'command = "npx"',
+    'args = ["brainclaw", "mcp"]',
+  ].join('\n');
+
+  let existing = '';
+  let fileExisted = false;
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, 'utf-8');
+    fileExisted = true;
+  }
+
+  if (existing.includes('[mcp_servers.brainclaw]')) {
+    return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
+  }
+
+  const newContent = existing + brainclawBlock + '\n';
+  if (!fs.existsSync(path.dirname(filePath))) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  }
+  fs.writeFileSync(filePath, newContent, 'utf-8');
+
+  return {
+    kind: 'mcp',
+    label: 'Codex MCP config',
+    created: !fileExisted,
+    updated: fileExisted,
+    filePath,
   };
 }
 
@@ -617,6 +663,10 @@ export function writeDetectedAgentAutoConfig(
     }
     case 'roo':
       return [ensureRooMcpConfig(cwd)];
+    case 'codex': {
+      const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
+      return result ? [result] : [];
+    }
     case 'continue':
       return [ensureContinueMcpConfig(cwd)];
     default:
