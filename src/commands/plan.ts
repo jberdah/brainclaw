@@ -7,6 +7,7 @@ import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { runListPlans } from './list-plans.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { PlanItem, Priority } from '../core/schema.js';
 
 export interface PlanOptions {
@@ -18,6 +19,8 @@ export interface PlanOptions {
   author?: string;
   dependsOn?: string[];
   estimate?: string;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 // Known plan subcommands that should not be accepted as plan text
@@ -25,14 +28,15 @@ const PLAN_SUBCOMMAND_ALIASES = new Set(['list', 'ls']);
 const PLAN_SUBCOMMAND_ERRORS = new Set(['update']);
 
 export function runPlan(text: string, options: PlanOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   const normalized = text.trim().toLowerCase();
   if (PLAN_SUBCOMMAND_ALIASES.has(normalized)) {
-    // 'brainclaw plan list' → forward to list-plans
     runListPlans({});
     return;
   }
@@ -44,7 +48,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
 
   validateCliInput(text, options.tag);
 
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -54,7 +58,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     }
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
   const { id, short_label } = generateIdWithLabel('plan_items');
   const timestamp = nowISO();
 
@@ -64,7 +68,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     text,
     created_at: timestamp,
     updated_at: timestamp,
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     status: 'todo',
     priority: options.priority ?? 'medium',
     assignee: options.assignee,
@@ -76,9 +80,10 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   };
 
   state.plan_items.push(entry);
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  saveState(state, cwd);
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
 
-  console.log(`✔ Plan item added: [${id}] ${text}`);
+  const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
+  console.log(`✔ Plan item added: [${id}] ${text}${storeLabel}`);
 }
 

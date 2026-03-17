@@ -8,6 +8,7 @@ import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { generateTrapIdWithLabel, saveOperationalTrap } from '../core/traps.js';
 import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { Trap, Severity, MemoryVisibility } from '../core/schema.js';
 
 export interface TrapOptions {
@@ -18,10 +19,14 @@ export interface TrapOptions {
   visibility?: MemoryVisibility;
   host?: string;
   ttl?: string;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 export function runTrap(text: string, options: TrapOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -31,7 +36,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     validateCliTtl(options.ttl);
   }
 
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -41,7 +46,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     }
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
   const { id, short_label } = generateTrapIdWithLabel();
   const visibility = options.visibility ?? 'shared';
   const hostId = visibility === 'shared' ? undefined : resolveCurrentHostId(options.host);
@@ -62,14 +67,15 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
 
   if (visibility === 'shared') {
     state.known_traps.push(entry);
-    saveState(state);
-    writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+    saveState(state, cwd);
+    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
   } else {
-    saveOperationalTrap(entry);
+    saveOperationalTrap(entry, cwd);
   }
 
   const scopeInfo = visibility === 'shared' ? 'shared' : `${visibility}:${hostId}`;
-  console.log(`✔ Trap added: [${id}] (${scopeInfo}) ${text}`);
+  const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
+  console.log(`✔ Trap added: [${id}] (${scopeInfo}) ${text}${storeLabel}`);
 }
 
 
