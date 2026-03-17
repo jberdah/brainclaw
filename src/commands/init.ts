@@ -55,6 +55,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const currentAgent = registerAgentIdentity({
     agentName: existingCurrentAgent?.agent_name ?? resolveDefaultAgentName(),
     kind: existingCurrentAgent?.kind ?? 'human',
+    trustLevel: 'curator',
     cwd,
     preferredDirName: storageDir,
   });

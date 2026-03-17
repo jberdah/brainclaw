@@ -266,6 +266,22 @@ export function runDoctor(options: DoctorOptions = {}): void {
     hasIssues = true;
   }
 
+  // Warn if no curator is registered
+  try {
+    const allAgents = listAgentIdentities(options.cwd);
+    const hasCurator = allAgents.some((a) => a.trust_level === 'curator');
+    if (!hasCurator && allAgents.length > 0) {
+      checks.push({
+        name: 'no_curator',
+        status: 'warn',
+        message: 'No curator registered. Run `brainclaw set-trust <agent> --level curator` or `brainclaw register-agent <name> --curator` to designate a project owner.',
+      });
+      if (!options.json) {
+        console.warn('⚠ No curator registered — run `brainclaw set-trust <agent> --level curator` to designate a project owner.');
+      }
+    }
+  } catch { /* non-fatal */ }
+
   const agentTooling = buildAgentToolingContext({ cwd: options.cwd });
   if (agentTooling.agents_md_present && agentTooling.agents_rules.length === 0) {
     checks.push({

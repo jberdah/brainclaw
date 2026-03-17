@@ -215,7 +215,10 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
       updated = { ...updated, kind: input.kind };
     }
     if (input.trustLevel && existing.trust_level !== input.trustLevel) {
-      updated = { ...updated, trust_level: input.trustLevel };
+      // Never downgrade trust — only upgrade
+      if (hasMinimumTrustLevel(input.trustLevel, existing.trust_level ?? 'contributor')) {
+        updated = { ...updated, trust_level: input.trustLevel };
+      }
     }
     if (input.replaceCapabilities) {
       updated = { ...updated, capabilities: normalizedCapabilities };

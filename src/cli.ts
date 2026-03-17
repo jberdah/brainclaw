@@ -397,6 +397,7 @@ program
   .option('--replace-capabilities', 'Replace existing capabilities instead of merging')
   .option('--generate-fingerprint', 'Generate or rotate a local public identity fingerprint for this agent')
   .option('--set-current', 'Set this identity as the current agent in config')
+  .option('--curator', 'Register this agent as a curator (project owner with direct-write access)')
   .option('--json', 'Output as JSON')
   .action((name, options) => {
     runRegisterAgent(name, options);

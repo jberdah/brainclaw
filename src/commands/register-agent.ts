@@ -1,6 +1,6 @@
 import { registerAgentIdentity, setCurrentAgentIdentity } from '../core/agent-registry.js';
 import { memoryExists } from '../core/io.js';
-import type { AgentKind } from '../core/schema.js';
+import type { AgentKind, AgentTrustLevel } from '../core/schema.js';
 
 export interface RegisterAgentOptions {
   kind?: AgentKind;
@@ -8,6 +8,8 @@ export interface RegisterAgentOptions {
   replaceCapabilities?: boolean;
   generateFingerprint?: boolean;
   setCurrent?: boolean;
+  curator?: boolean;
+  trustLevel?: AgentTrustLevel;
   json?: boolean;
 }
 
@@ -17,12 +19,16 @@ export function runRegisterAgent(agentName: string, options: RegisterAgentOption
     process.exit(1);
   }
 
+  const resolvedTrust: AgentTrustLevel | undefined =
+    options.curator ? 'curator' : options.trustLevel;
+
   const agent = registerAgentIdentity({
     agentName,
     kind: options.kind ?? 'unknown',
     capabilities: options.capability,
     replaceCapabilities: options.replaceCapabilities,
     generateFingerprint: options.generateFingerprint,
+    trustLevel: resolvedTrust,
   });
 
   if (options.setCurrent) {
