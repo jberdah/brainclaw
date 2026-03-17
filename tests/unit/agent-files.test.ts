@@ -322,6 +322,7 @@ describe('core/agent-files — auto-config writers', () => {
         hooks?: { UserPromptSubmit?: unknown[]; Stop?: unknown[] };
       };
       assert.ok(content.permissions?.allow?.includes('Bash(npx brainclaw:*)'));
+      assert.ok(content.permissions?.allow?.includes('mcp__brainclaw__*'), 'MCP tool whitelist should be present');
       assert.ok(Array.isArray(content.hooks?.UserPromptSubmit) && content.hooks.UserPromptSubmit.length > 0);
       assert.ok(Array.isArray(content.hooks?.Stop) && content.hooks.Stop.length > 0);
 
@@ -347,6 +348,7 @@ describe('core/agent-files — auto-config writers', () => {
         customKey?: string;
       };
       assert.ok(content.permissions?.allow?.includes('Bash(npx brainclaw:*)'), 'brainclaw permission should be added');
+      assert.ok(content.permissions?.allow?.includes('mcp__brainclaw__*'), 'MCP whitelist should be added');
       assert.ok(content.permissions?.allow?.includes('Bash(git:*)'), 'existing permission should be preserved');
       assert.equal(content.customKey, 'value', 'unrelated keys should be preserved');
     } finally {
