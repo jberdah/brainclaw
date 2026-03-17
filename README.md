@@ -166,4 +166,8 @@ npm run test:coverage      # with coverage report
 
 ## License
 
-MIT
+[Business Source License 1.1](LICENSE) — © 2024-2026 Juan Berdah
+
+Free for non-production and internal use. Production use is permitted provided you do not build or offer a competing product or service (shared agent memory / coordination / context management for coding agents or development teams). Each version converts to MIT four years after its release date.
+
+For commercial licensing inquiries, contact the licensor.

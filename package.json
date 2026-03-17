@@ -28,7 +28,7 @@
     "handoff",
     "local-first"
   ],
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "dependencies": {
     "commander": "^13.1.0",
     "yaml": "^2.7.1",
