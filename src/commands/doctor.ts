@@ -734,6 +734,29 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'claim_collisions', status: 'ok', message: 'No overlapping active claims detected' });
   }
 
+  // Warn if active claims have no linked plan
+  const unlinkedClaims = activeClaims.filter((c) => !c.plan_id);
+  if (unlinkedClaims.length > 0) {
+    const ids = unlinkedClaims.map((c) => c.id).join(', ');
+    checks.push({
+      name: 'claim_plan_link',
+      status: 'warn',
+      message: `${unlinkedClaims.length} active claim(s) have no linked plan item: ${ids}. Pass planId when calling bclaw_claim to trace work to the backlog.`,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${unlinkedClaims.length} active claim(s) have no linked plan item: ${ids}`);
+      console.warn('  Pass planId when calling bclaw_claim to trace work to the backlog.');
+    }
+    hasIssues = true;
+  } else if (activeClaims.length > 0) {
+    checks.push({ name: 'claim_plan_link', status: 'ok', message: `All ${activeClaims.length} active claim(s) are linked to a plan item` });
+    if (!options.json) {
+      console.log(`✔ Claim plan links: all ${activeClaims.length} claim(s) linked`);
+    }
+  } else {
+    checks.push({ name: 'claim_plan_link', status: 'ok', message: 'No active claims to check' });
+  }
+
   // --- Runtime notes checks ---
   const notes = listRuntimeNotes(undefined, options.cwd);
   const localTraps = listOperationalTraps({}, options.cwd);

@@ -231,6 +231,7 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered author agent id.' },
         tags: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
+        planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
       },
       required: ['text', 'type'],
     },
@@ -1246,6 +1247,7 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       const candId = generateCandidateIdWithLabel(cwd);
       const type = String(args.type ?? 'decision') as CandidateType;
       const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
+      const candidatePlanId = args.planId as string | undefined;
       const candidate = {
         id: candId.id,
         short_label: candId.short_label,
@@ -1260,18 +1262,22 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         tags: candidateTags,
         status: 'pending' as const,
         severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
+        plan_id: candidatePlanId,
         star_count: 0,
         starred_by: [],
         usage_count: 0,
         usage_events: [],
       };
+      const planPrompt = (type === 'decision' || type === 'trap') && !candidatePlanId
+        ? `\n💡 Does this ${type} relate to an active plan item? If so, re-run with planId: 'pln_xxx' to link it.`
+        : '';
       if (writeThrough) {
         saveCandidate(candidate, cwd);
         const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
         appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, cwd);
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)` }],
+            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${planPrompt}` }],
             candidate_id: candId.id,
             promoted_item_id: accepted.promoted_item_id,
             write_through: true,
@@ -1283,7 +1289,7 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)` }],
+          content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)${planPrompt}` }],
           candidate_id: candId.id,
           write_through: false,
         }),
@@ -1377,9 +1383,10 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
       const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
       const postClaimText = renderTriggeredItems(postClaimItems);
-      const claimText = postClaimText
-        ? `✔ Claimed scope [${claimId}]\n${postClaimText}`
-        : `✔ Claimed scope [${claimId}]`;
+      const noPlanWarn = !(args.planId as string | undefined)
+        ? '\n⚠ No plan item linked to this claim. Run bclaw_create_plan first and pass planId to track this work formally.'
+        : '';
+      const claimText = `✔ Claimed scope [${claimId}]${noPlanWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({

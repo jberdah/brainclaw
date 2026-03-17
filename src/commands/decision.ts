@@ -12,6 +12,7 @@ export interface DecisionOptions {
   tag?: string[];
   path?: string[];
   author?: string;
+  plan?: string;
 }
 
 export function runDecision(text: string, options: DecisionOptions = {}): void {
@@ -43,6 +44,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
     author: options.author ?? resolveCurrentAgentName(),
     tags: options.tag ?? [],
     related_paths: options.path,
+    plan_id: options.plan,
   };
 
   state.recent_decisions.push(entry);

@@ -86,6 +86,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
         host_id: candidate.host_id,
         session_id: candidate.session_id,
         related_paths: candidate.related_paths,
+        plan_id: candidate.plan_id,
         tags: candidate.tags,
       };
       state.recent_decisions.push(entry);
@@ -106,6 +107,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
         session_id: candidate.session_id,
         severity: candidate.severity ?? 'medium',
         tags: candidate.tags,
+        plan_id: candidate.plan_id,
         visibility: 'shared',
       };
       state.known_traps.push(entry);
