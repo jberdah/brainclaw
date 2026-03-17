@@ -289,13 +289,17 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_session_start',
-    description: 'Start a session and capture initial context.',
+    description: 'Start a session and capture initial context. Pass includeContext and/or includeBoard to get full context + agent board in a single call, eliminating the need for separate bclaw_get_context and bclaw_get_agent_board calls.',
     inputSchema: {
       type: 'object',
       properties: {
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         context: { type: 'string', description: 'Context target path.' },
+        includeContext: { type: 'boolean', description: 'Include project memory context in the response (equivalent to bclaw_get_context).' },
+        includeBoard: { type: 'boolean', description: 'Include agent board (plans, claims, handoffs) in the response (equivalent to bclaw_get_agent_board).' },
+        contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev, openclaw, ops, research.' },
+        contextFormat: { type: 'string', description: 'Context format when includeContext is true: markdown, json, or template.' },
       },
     },
   },
@@ -1390,12 +1394,54 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         context: args.context as string | undefined,
         cwd,
       });
+
+      const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: '✔ Session started' }];
+      const structured: Record<string, unknown> = {
+        session_id: result.session_id,
+        agent: result.agent,
+        context_target: result.context_target,
+      };
+
+      if (args.includeContext) {
+        const ctxResult = buildContext({
+          target: args.context as string | undefined,
+          agent: resolved.identity?.agent_name,
+          profile: args.contextProfile as 'dev' | 'openclaw' | 'ops' | 'research' | undefined,
+          cwd,
+        });
+        const format = normaliseFormat(args.contextFormat);
+        const ctxText = renderContextForMcp(ctxResult, format, {});
+        contentParts.push({ type: 'text', text: ctxText || 'No relevant memory found.' });
+        structured.context = ctxResult;
+      }
+
+      if (args.includeBoard) {
+        const board = buildCoordinationSnapshot({
+          agent: resolved.identity?.agent_name,
+          cwd,
+        });
+        const boardLines: string[] = [];
+        boardLines.push(`Active plans: ${board.active_plans.length}`);
+        for (const plan of board.active_plans.slice(0, 10)) {
+          const claims = plan.claims.length ? ` claims=${plan.claims.map((c) => c.agent).join(',')}` : '';
+          boardLines.push(`- [${plan.id}] ${plan.text} (${plan.status}, ${plan.priority})${claims}`);
+        }
+        boardLines.push(`Active claims: ${board.active_claims.length}`);
+        for (const claim of board.active_claims.slice(0, 10)) {
+          boardLines.push(`- [${claim.id}] ${claim.agent} -> ${claim.scope}`);
+        }
+        boardLines.push(`Open handoffs: ${board.open_handoffs.length}`);
+        for (const handoff of board.open_handoffs.slice(0, 5)) {
+          boardLines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}`);
+        }
+        contentParts.push({ type: 'text', text: boardLines.join('\n') });
+        structured.board = board;
+      }
+
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: '✔ Session started' }],
-          session_id: result.session_id,
-          agent: result.agent,
-          context_target: result.context_target,
+          content: contentParts,
+          ...structured,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.session_id,
       };
