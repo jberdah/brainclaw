@@ -7,7 +7,7 @@ import { emptyState, loadState, saveState } from '../core/state.js';
 import { defaultConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
-import { analyzeRepository } from '../core/repo-analysis.js';
+import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
@@ -24,10 +24,34 @@ export interface InitOptions {
   storageDir?: string;
   topology?: TopologyMode;
   analyzeRepo?: boolean;
+  scan?: boolean;
 }
 
 export async function runInit(options: InitOptions = {}): Promise<void> {
   const cwd = process.cwd();
+
+  // --scan: detect service boundaries and suggest init targets, then exit
+  if (options.scan) {
+    const { suggestions, alreadyInitialised } = scanWorkspaceBoundaries(cwd);
+    if (alreadyInitialised.length > 0) {
+      console.log(`Already initialised (${alreadyInitialised.length}):`);
+      for (const { relativePath } of alreadyInitialised) {
+        console.log(`  ✔ ./${relativePath}`);
+      }
+      console.log('');
+    }
+    if (suggestions.length === 0) {
+      console.log('No service boundaries detected in subdirectories.');
+    } else {
+      console.log(`Detected ${suggestions.length} service boundary candidate(s):`);
+      for (const { relativePath, markers } of suggestions) {
+        console.log(`  → ./${relativePath}  [${markers.join(', ')}]`);
+        console.log(`    cd ${relativePath} && brainclaw init -y`);
+      }
+    }
+    return;
+  }
+
   const existingIdentity = resolveExistingProjectIdentity(cwd);
   const existingCurrentAgent = resolveExistingCurrentAgent(cwd);
   const storageDir = resolveStorageDir(options.storageDir);

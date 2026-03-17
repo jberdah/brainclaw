@@ -27,6 +27,7 @@ import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { buildEstimationReport } from './estimation-report.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { CandidateType, MemoryVisibility } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -268,6 +269,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent or person name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         planId: { type: 'string', description: 'Optional linked plan item ID.' },
+        store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
       },
       required: ['scope', 'description'],
     },
@@ -1229,7 +1231,9 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
     }
 
     if (name === 'bclaw_claim') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const storeTarget = (args.store as StoreTarget | undefined) ?? 'local';
+      const claimCwd = resolveTargetStore(cwd, storeTarget);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -1244,7 +1248,7 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         return { response: createToolErrorResponse('validation_error', descCheck.message) };
       }
       const resolvedIdentity = resolved.identity!;
-      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
+      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, claimCwd, {
         agentId: resolvedIdentity.agent_id,
         sessionId: connectionSessionId,
       });
@@ -1261,8 +1265,8 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         created_at: nowISO(),
         status: 'active',
         plan_id: args.planId as string | undefined,
-      }, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, cwd);
+      }, claimCwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Claimed scope [${claimId}]` }],
