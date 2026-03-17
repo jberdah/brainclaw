@@ -427,6 +427,47 @@ describe('MCP server', () => {
     }
   });
 
+  it('bclaw_session_start returns context and board inline when requested', async () => {
+    run(['decision', 'Auth gateway routes OAuth', '--tag', 'auth'], dir);
+    run(['plan', 'Fix auth expiry bug'], dir);
+
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 50,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_start',
+          arguments: {
+            agent: 'testuser',
+            context: 'auth',
+            includeContext: true,
+            includeBoard: true,
+          },
+        },
+      });
+
+      assert.equal(response.result.isError, false);
+      assert.ok(response.result.session_id);
+
+      // context embedded
+      assert.ok(response.result.context, 'context should be present in structured output');
+      assert.equal(response.result.context.context_schema, '1.2');
+
+      // board embedded
+      assert.ok(response.result.board, 'board should be present in structured output');
+      assert.ok(Array.isArray(response.result.board.active_plans));
+      assert.ok(response.result.board.active_plans.length > 0);
+
+      // content should include at least 3 parts (session + context + board)
+      assert.ok(response.result.content.length >= 3);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('returns execution context and local agent tooling through MCP', async () => {
     const codexHome = path.join(dir, '.codex-home');
     fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
