@@ -569,6 +569,13 @@ export const AgentIntegrationsConfigSchema = z.object({
 });
 export type AgentIntegrationsConfig = z.infer<typeof AgentIntegrationsConfigSchema>;
 
+export const CrossProjectLinkSchema = z.object({
+  path: z.string(),
+  name: z.string().optional(),
+  role: z.enum(['subscriber', 'publisher']).default('subscriber'),
+});
+export type CrossProjectLink = z.infer<typeof CrossProjectLinkSchema>;
+
 export const BrainclawUpdateSourceLocalPackSchema = z.object({
   type: z.literal('local-pack'),
   manifest_path: z.string(),
@@ -632,6 +639,7 @@ export const ConfigSchema = z.object({
   governance: GovernanceConfigSchema.optional(),
   reputation: ReputationConfigSchema.optional(),
   agent_integrations: AgentIntegrationsConfigSchema.default({ declarations: [] }),
+  cross_project_links: z.array(CrossProjectLinkSchema).optional().default([]),
   implicit_session_ttl: z.string().default('4h'),
   auto_reflect_notes: z.boolean().default(false),
 });

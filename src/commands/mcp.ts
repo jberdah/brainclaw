@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
+import { resolveCrossProjectTarget, writeCrossProjectNote } from '../core/cross-project.js';
 import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
@@ -202,7 +203,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_write_note',
-    description: 'Add a runtime note. Requires contributor trust level or above.',
+    description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a notification note to a linked project (requires role: publisher in cross_project_links config).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -213,6 +214,7 @@ const MCP_WRITE_TOOLS = [
         visibility: { type: 'string', description: 'Visibility: shared, machine, private.' },
         ttl: { type: 'string', description: 'Optional TTL: 30m, 2h, 7d.' },
         autoReflect: { type: 'boolean', description: 'Attempt to reflect the runtime note into durable memory immediately.' },
+        crossProject: { type: 'string', description: 'Push note to a linked project (name or path). Requires role: publisher in cross_project_links config.' },
       },
       required: ['text'],
     },
@@ -1163,6 +1165,43 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
       }
       const identity = resolved.identity!;
+
+      // Cross-project push
+      if (args.crossProject) {
+        try {
+          const link = resolveCrossProjectTarget(String(args.crossProject), cwd);
+          const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
+            agentId: identity.agent_id,
+            sessionId: connectionSessionId,
+          });
+          const noteId = generateId('rtn');
+          writeCrossProjectNote(link.absolutePath, {
+            schema_version: 2,
+            id: noteId,
+            agent: opIdentity.agent,
+            agent_id: opIdentity.agent_id,
+            project_id: opIdentity.project_id ?? '',
+            session_id: opIdentity.session_id,
+            text,
+            created_at: nowISO(),
+            tags,
+            visibility: 'shared',
+            host_id: opIdentity.host_id ?? '',
+            note_type: 'observation',
+          }, cwd);
+          return {
+            response: toolResponse({
+              content: [{ type: 'text', text: `✔ Cross-project note pushed to '${link.projectName}' [${noteId}]` }],
+              note_id: noteId,
+              target_project: link.projectName,
+              target_path: link.absolutePath,
+            }),
+          };
+        } catch (e: unknown) {
+          return { response: createToolErrorResponse('validation_error', e instanceof Error ? e.message : String(e)) };
+        }
+      }
+
       const result = createRuntimeNote(text, {
         agent: identity.agent_name,
         agentId: identity.agent_id,

@@ -23,6 +23,7 @@ import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
+import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -904,6 +905,31 @@ export function runDoctor(options: DoctorOptions = {}): void {
         status: 'ok',
         message: 'Single store — no parent stores found in hierarchy',
       });
+    }
+  } catch {
+    // non-fatal
+  }
+
+  // Cross-project links validation
+  try {
+    const links = resolveCrossProjectLinks(options.cwd);
+    if (links.length > 0) {
+      const unavailable = links.filter((l) => !l.available);
+      if (unavailable.length > 0) {
+        hasIssues = true;
+        const paths = unavailable.map((l) => l.path).join(', ');
+        checks.push({ name: 'cross_project_links', status: 'error', message: `cross_project_links: ${unavailable.length} unreachable path(s): ${paths}` });
+        if (!options.json) console.error(`✗ cross_project_links: ${unavailable.length} unreachable path(s): ${paths}`);
+      } else {
+        checks.push({ name: 'cross_project_links', status: 'ok', message: `cross_project_links: ${links.length} link(s) OK` });
+        if (!options.json) console.log(`✔ cross_project_links: ${links.length} link(s) OK`);
+      }
+      const cycles = detectCrossProjectCycles(options.cwd);
+      if (cycles.length > 0) {
+        hasIssues = true;
+        checks.push({ name: 'cross_project_cycles', status: 'error', message: `cross_project_links cycle detected: ${cycles[0].join(' → ')}` });
+        if (!options.json) console.error(`✗ cross_project_links cycle: ${cycles[0].join(' → ')}`);
+      }
     }
   } catch {
     // non-fatal
