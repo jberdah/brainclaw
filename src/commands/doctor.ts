@@ -22,6 +22,7 @@ import { scanMigrationStatus } from '../core/migration.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion } from '../core/brainclaw-version.js';
+import { resolveStoreChain } from '../core/store-resolution.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -856,6 +857,56 @@ export function runDoctor(options: DoctorOptions = {}): void {
     if (!options.json) {
       console.log('✔ Circuit-breaker: no agents suspended');
     }
+  }
+
+  // --- Store hierarchy check ---
+  try {
+    const storeChain = resolveStoreChain(options.cwd ?? process.cwd());
+    if (storeChain.length > 1) {
+      const chainDesc = storeChain
+        .map((s) => `${s.role}(d=${s.depth})`)
+        .join(' → ');
+      // Warn if multiple stores declare the same non-unknown role
+      const roleCounts = new Map<string, number>();
+      for (const s of storeChain) {
+        if (s.role !== 'unknown') {
+          roleCounts.set(s.role, (roleCounts.get(s.role) ?? 0) + 1);
+        }
+      }
+      const duplicateRoles = [...roleCounts.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([role]) => role);
+      if (duplicateRoles.length > 0) {
+        checks.push({
+          name: 'store_hierarchy',
+          status: 'warn',
+          message: `Store hierarchy has duplicate roles: ${duplicateRoles.join(', ')}. Chain: ${chainDesc}`,
+          details: storeChain,
+        });
+        if (!options.json) {
+          console.warn(`⚠ Store hierarchy has duplicate roles (${duplicateRoles.join(', ')}): ${chainDesc}`);
+        }
+        hasIssues = true;
+      } else {
+        checks.push({
+          name: 'store_hierarchy',
+          status: 'ok',
+          message: `Store chain (${storeChain.length} stores): ${chainDesc}`,
+          details: storeChain,
+        });
+        if (!options.json) {
+          console.log(`✔ Store chain (${storeChain.length}): ${chainDesc}`);
+        }
+      }
+    } else {
+      checks.push({
+        name: 'store_hierarchy',
+        status: 'ok',
+        message: 'Single store — no parent stores found in hierarchy',
+      });
+    }
+  } catch {
+    // non-fatal
   }
 
   if (options.json) {
