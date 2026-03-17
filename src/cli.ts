@@ -136,6 +136,7 @@ program
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')
   .option('--ttl <duration>', 'Time-to-live: 30m, 2h, 7d (trap auto-expires after this duration)')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace')
   .action((text, options) => {
     runTrap(text, options);
   });
@@ -178,6 +179,7 @@ program
   .option('--depends-on <ids...>', 'Dependency IDs for this plan item')
   .option('--author <author>', 'Author name')
   .option('--estimate <effort>', 'Estimated effort (e.g. "30min", "2h", "1d")')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace')
   .action((text, options) => {
     runPlan(text, options);
   });
@@ -523,6 +525,7 @@ program
   .option('--project <project>', 'Optional project namespace for this claim')
   .option('--plan <id>', 'Optional linked plan item ID')
   .option('--ttl <duration>', 'Auto-expire after duration: 30m, 2h, 8h, 1d')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace')
   .action((description, options) => {
     runClaim(description, options);
   });

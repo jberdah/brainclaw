@@ -6,6 +6,7 @@ import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { validateCliTtl } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { OperationalIdentity } from '../core/identity.js';
 import type { Claim } from '../core/schema.js';
 
@@ -17,6 +18,7 @@ export interface ClaimOptions {
   plan?: string;
   ttl?: string;
   cwd?: string;
+  store?: StoreTarget;
 }
 
 function parseTtl(ttl: string): string {
@@ -29,6 +31,8 @@ function parseTtl(ttl: string): string {
 }
 
 export function runClaim(description: string, options: ClaimOptions): void {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+  options = { ...options, cwd };
   if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
@@ -101,5 +105,6 @@ export function runClaim(description: string, options: ClaimOptions): void {
   writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(plan ? state : loadState(options.cwd), options.cwd));
   const planInfo = claim.plan_id ? ` [plan ${claim.plan_id}]` : '';
   const ttlInfo = claim.expires_at ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
-  console.log(`✔ Claim created: [${id}] ${actor.agent} → ${options.scope}: ${description}${planInfo}${ttlInfo}`);
+  const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
+  console.log(`✔ Claim created: [${id}] ${actor.agent} → ${options.scope}: ${description}${planInfo}${ttlInfo}${storeLabel}`);
 }

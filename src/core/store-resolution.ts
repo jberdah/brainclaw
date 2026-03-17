@@ -94,6 +94,34 @@ export function resolvePrimaryStore(
   return resolveStoreChain(cwd, options)[0];
 }
 
+export type StoreTarget = 'local' | 'repo' | 'workspace';
+
+/**
+ * Resolve the effective cwd for a write operation targeting a specific store level.
+ *
+ * - `local`     → the closest store (default, current behaviour)
+ * - `repo`      → the first store with role='repo' in the chain; falls back to closest
+ * - `workspace` → the first store with role='workspace', or the farthest store found
+ *
+ * Returns the original cwd unchanged when no chain exists or when target='local'.
+ */
+export function resolveTargetStore(
+  cwd: string = process.cwd(),
+  target: StoreTarget = 'local',
+  options: ResolveStoreChainOptions = {},
+): string {
+  if (target === 'local') return cwd;
+  const chain = resolveStoreChain(cwd, options);
+  if (chain.length === 0) return cwd;
+  if (target === 'repo') {
+    const match = chain.find((s) => s.role === 'repo');
+    return match?.cwd ?? chain[0]!.cwd;
+  }
+  // workspace: prefer declared role, otherwise take farthest
+  const match = chain.find((s) => s.role === 'workspace');
+  return match?.cwd ?? chain[chain.length - 1]!.cwd;
+}
+
 /**
  * Return true if `dir` is at or below `ancestor` in the filesystem hierarchy.
  */
