@@ -5,8 +5,9 @@ import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/age
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
-import { loadState } from '../core/state.js';
-import { memoryExists } from '../core/io.js';
+import { loadState, saveState } from '../core/state.js';
+import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { generateMarkdown } from '../core/markdown.js';
 import { saveCandidate, generateCandidateIdWithLabel } from '../core/candidates.js';
 import { loadClaim, saveClaim, generateClaimId } from '../core/claims.js';
 import { createRuntimeNote } from './runtime-note.js';
@@ -22,13 +23,13 @@ import {
   requireRegisteredAgentIdentity,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
-import { nowISO } from '../core/ids.js';
+import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
 import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { buildEstimationReport } from './estimation-report.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { CandidateType, MemoryVisibility } from '../core/schema.js';
+import type { CandidateType, MemoryVisibility, PlanItem, PlanStep, PlanStatus, Priority } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -310,6 +311,69 @@ const MCP_WRITE_TOOLS = [
         summary: { type: 'string', description: 'Session summary text.' },
         autoReflect: { type: 'boolean', description: 'Auto-reflect session notes as candidates.' },
       },
+    },
+  },
+  {
+    name: 'bclaw_create_plan',
+    description: 'Create a new plan item. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Plan item description.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+        priority: { type: 'string', description: 'Priority: low, medium, high, critical.' },
+        estimate: { type: 'number', description: 'Estimated effort in minutes (positive integer).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for the plan item.' },
+        assignee: { type: 'string', description: 'Assignee agent or person name.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'bclaw_update_plan',
+    description: 'Update the status, effort, or other fields of a plan item. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Plan item ID.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+        status: { type: 'string', description: 'New status: todo, in_progress, done, blocked, cancelled.' },
+        actualEffort: { type: 'string', description: 'Actual effort (e.g. "45min", "2h").' },
+        priority: { type: 'string', description: 'New priority: low, medium, high, critical.' },
+        assignee: { type: 'string', description: 'New assignee.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'bclaw_add_step',
+    description: 'Add a sub-step to a plan item. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Plan item ID.' },
+        text: { type: 'string', description: 'Step description.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+        assignee: { type: 'string', description: 'Optional assignee.' },
+      },
+      required: ['planId', 'text'],
+    },
+  },
+  {
+    name: 'bclaw_complete_step',
+    description: 'Mark a plan sub-step as done. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Plan item ID.' },
+        stepId: { type: 'string', description: 'Step ID to complete.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['planId', 'stepId'],
     },
   },
 ] as const;
@@ -1290,10 +1354,27 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       }
       saveClaim({ ...claimObj, status: 'released' as const, released_at: nowISO() }, cwd);
       appendAuditEntry({ actor: claimObj.agent, action: 'release_claim', item_id: claimId, item_type: 'claim' }, cwd);
+      const releasePlanStatus = args.planStatus as string | undefined;
+      let releasePlanUpdated = false;
+      if (releasePlanStatus && claimObj.plan_id) {
+        const releaseState = loadState(cwd);
+        const releasePlan = releaseState.plan_items.find((item) => item.id === claimObj.plan_id);
+        if (releasePlan) {
+          const ts = nowISO();
+          releasePlan.status = releasePlanStatus as PlanStatus;
+          if (releasePlanStatus === 'in_progress' && !releasePlan.started_at) releasePlan.started_at = ts;
+          if (releasePlanStatus === 'done' && !releasePlan.completed_at) releasePlan.completed_at = ts;
+          releasePlan.updated_at = ts;
+          saveState(releaseState, cwd);
+          writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(releaseState, cwd));
+          releasePlanUpdated = true;
+        }
+      }
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Released claim [${claimId}]` }],
+          content: [{ type: 'text', text: `✔ Released claim [${claimId}]${releasePlanUpdated ? ` — plan ${claimObj.plan_id} → ${releasePlanStatus}` : ''}` }],
           claim_id: claimId,
+          ...(releasePlanUpdated ? { plan_id: claimObj.plan_id, plan_status: releasePlanStatus } : {}),
         }),
       };
     }
@@ -1342,6 +1423,160 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
           context_diff: result.context_diff,
         }),
         nextConnectionSessionId: undefined,
+      };
+    }
+
+    if (name === 'bclaw_create_plan') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const planText = String(args.text ?? '').trim();
+      if (!planText) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      }
+      const textCheck = validateMcpField(planText, 'text');
+      if (!textCheck.ok) {
+        return { response: createToolErrorResponse('validation_error', textCheck.message) };
+      }
+      let estimatedEffort: number | undefined;
+      if (args.estimate !== undefined) {
+        const n = Number(args.estimate);
+        if (!Number.isInteger(n) || n <= 0) {
+          return { response: createToolErrorResponse('validation_error', 'estimate must be a positive integer (minutes)') };
+        }
+        estimatedEffort = n;
+      }
+      const state = loadState(cwd);
+      const { id, short_label } = generateIdWithLabel('plan_items');
+      const timestamp = nowISO();
+      const entry: PlanItem = {
+        id,
+        short_label,
+        text: planText,
+        created_at: timestamp,
+        updated_at: timestamp,
+        author: resolved.identity!.agent_name,
+        status: 'todo',
+        priority: (args.priority as Priority) ?? 'medium',
+        assignee: args.assignee as string | undefined,
+        tags: (args.tags as string[]) ?? [],
+        depends_on: [],
+        estimated_effort: estimatedEffort,
+      };
+      state.plan_items.push(entry);
+      saveState(state, cwd);
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: id, item_type: 'plan' }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Plan item added: [${id}] ${planText}` }],
+          plan_id: id,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_update_plan') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const planId = String(args.id ?? '').trim();
+      if (!planId) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      }
+      const state = loadState(cwd);
+      const plan = state.plan_items.find((item) => item.id === planId || item.short_label === planId);
+      if (!plan) {
+        return { response: createToolErrorResponse('not_found', `Plan item '${planId}' not found`) };
+      }
+      const timestamp = nowISO();
+      if (args.status) {
+        plan.status = args.status as PlanStatus;
+        if (args.status === 'in_progress' && !plan.started_at) plan.started_at = timestamp;
+        if (args.status === 'done' && !plan.completed_at) plan.completed_at = timestamp;
+      }
+      if (args.assignee !== undefined) plan.assignee = args.assignee as string;
+      if (args.priority) plan.priority = args.priority as Priority;
+      if (args.actualEffort) plan.actual_effort = args.actualEffort as string;
+      plan.updated_at = timestamp;
+      saveState(state, cwd);
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: plan.id, item_type: 'plan' }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Plan item updated: [${plan.id}] ${plan.text}` }],
+          plan_id: plan.id,
+          status: plan.status,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_add_step') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const stepPlanId = String(args.planId ?? '').trim();
+      const stepText = String(args.text ?? '').trim();
+      if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
+      if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      const state = loadState(cwd);
+      const plan = state.plan_items.find((p) => p.id === stepPlanId || p.short_label === stepPlanId);
+      if (!plan) return { response: createToolErrorResponse('not_found', `Plan '${stepPlanId}' not found`) };
+      const step: PlanStep = {
+        id: generateId('plan_steps'),
+        text: stepText,
+        status: 'todo',
+        assignee: args.assignee as string | undefined,
+        created_at: nowISO(),
+        updated_at: nowISO(),
+      };
+      plan.steps = [...(plan.steps ?? []), step];
+      plan.updated_at = nowISO();
+      saveState(state, cwd);
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      const total = plan.steps.length;
+      const done = plan.steps.filter((s) => s.status === 'done').length;
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Step added: [${step.id}] ${stepText} (${done}/${total} done)` }],
+          step_id: step.id,
+          plan_id: plan.id,
+          progress: { done, total },
+        }),
+      };
+    }
+
+    if (name === 'bclaw_complete_step') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const csPlanId = String(args.planId ?? '').trim();
+      const csStepId = String(args.stepId ?? '').trim();
+      if (!csPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
+      if (!csStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
+      const state = loadState(cwd);
+      const plan = state.plan_items.find((p) => p.id === csPlanId || p.short_label === csPlanId);
+      if (!plan) return { response: createToolErrorResponse('not_found', `Plan '${csPlanId}' not found`) };
+      const step = (plan.steps ?? []).find((s) => s.id === csStepId);
+      if (!step) return { response: createToolErrorResponse('not_found', `Step '${csStepId}' not found in plan '${csPlanId}'`) };
+      step.status = 'done';
+      step.updated_at = nowISO();
+      plan.updated_at = nowISO();
+      saveState(state, cwd);
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      const total = plan.steps!.length;
+      const done = plan.steps!.filter((s) => s.status === 'done').length;
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Step completed: [${step.id}] ${step.text} (${done}/${total} done)` }],
+          step_id: step.id,
+          plan_id: plan.id,
+          progress: { done, total },
+          all_done: done === total,
+        }),
       };
     }
 
