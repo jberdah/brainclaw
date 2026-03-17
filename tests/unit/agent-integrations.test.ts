@@ -38,6 +38,16 @@ describe('core/agent-integrations', () => {
     assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.continue/config.json'));
   });
 
+  it('opencode declaration includes mcp surface at opencode.json', () => {
+    const declaration = buildAgentIntegrationDeclaration('opencode', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === 'opencode.json' && s.location === 'workspace'));
+  });
+
+  it('antigravity declaration includes machine-level mcp surface', () => {
+    const declaration = buildAgentIntegrationDeclaration('antigravity', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.location === 'machine' && s.path === '.gemini/antigravity/mcp_config.json'));
+  });
+
   it('upserts declarations idempotently and upgrades source to manual when needed', () => {
     const config = defaultConfig('brainclaw');
 

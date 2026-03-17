@@ -533,6 +533,8 @@ export const AgentIntegrationNameSchema = z.enum([
   'windsurf',
   'cline',
   'codex',
+  'opencode',
+  'antigravity',
   'continue',
   'roo',
 ]);

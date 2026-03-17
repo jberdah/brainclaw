@@ -133,7 +133,8 @@ export type ExportFormat =
   | 'windsurf'
   | 'cline'
   | 'roo'
-  | 'continue';
+  | 'continue'
+  | 'gemini-md';
 
 export interface AgentExportTarget {
   agentName: string;
@@ -151,6 +152,8 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'codex',          format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'continue',       format: 'continue',             relativePath: '.continue/rules/brainclaw.md' },
   { agentName: 'roo',            format: 'roo',                  relativePath: '.roo/rules/brainclaw.md' },
+  { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
+  { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
 ];
 
 export const FALLBACK_EXPORT_TARGET: AgentExportTarget = {
@@ -211,6 +214,8 @@ const CLAUDE_CODE_SETTINGS_RELATIVE_PATH = '.claude/settings.local.json';
 const CURSOR_MCP_RELATIVE_PATH = '.cursor/mcp.json';
 const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
+const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
+const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -631,6 +636,58 @@ export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
+export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, 'opencode.json');
+  const existing = readJsonObject(filePath);
+  const mcp = isJsonObject(existing.mcp) ? { ...existing.mcp } : {};
+  mcp.brainclaw = {
+    type: 'local',
+    command: ['npx', 'brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcp,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'OpenCode MCP config',
+    created,
+    updated,
+    filePath,
+    relativePath: OPENCODE_CONFIG_RELATIVE_PATH,
+  };
+}
+
+export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) {
+    return undefined;
+  }
+
+  const filePath = path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Antigravity MCP config',
+    created,
+    updated,
+    filePath,
+    relativePath: ANTIGRAVITY_MCP_RELATIVE_PATH,
+  };
+}
+
 export function writeDetectedAgentAutoConfig(
   agentName: string,
   cwd: string,
@@ -669,6 +726,12 @@ export function writeDetectedAgentAutoConfig(
     }
     case 'continue':
       return [ensureContinueMcpConfig(cwd)];
+    case 'opencode':
+      return [ensureOpenCodeMcpConfig(cwd)];
+    case 'antigravity': {
+      const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
+      return result ? [result] : [];
+    }
     default:
       return [];
   }
@@ -708,9 +771,11 @@ export function writeExportCompanionFiles(
       return [ensureRooMcpConfig(cwd)];
     case 'continue':
       return [ensureContinueMcpConfig(cwd)];
+    case 'gemini-md': {
+      const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
+      return result ? [result] : [];
+    }
     default:
       return [];
   }
 }
-
-
