@@ -1,4 +1,5 @@
 import { loadConfig } from './config.js';
+import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
 import { resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
@@ -38,13 +39,14 @@ export interface ContextOptions {
 
 export interface ContextItem {
   id: string;
-  section: 'plan' | 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate' | 'runtime';
+  section: 'plan' | 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate' | 'runtime' | 'cross_project';
   text: string;
   tags: string[];
   score: number;
   reasons: string[];
   related_paths?: string[];
   extra?: string;
+  from_project?: string;
   provenance?: {
     actor?: string;
     actor_id?: string;
@@ -86,6 +88,7 @@ export interface ContextResult {
   open_work?: OpenWorkSummary;
   estimation_calibration?: string;
   stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
+  cross_project_items?: ContextItem[];
   selected: ContextItem[];
 }
 
@@ -487,6 +490,33 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     }
   }
 
+  // Cross-project items (subscriber links — read-only, always injected, bypass scoring)
+  const crossProjectItems: ContextItem[] = [];
+  for (const link of resolveCrossProjectLinks(options.cwd)) {
+    if (!link.available) continue;
+    try {
+      const linkedState = loadCrossProjectState(link.absolutePath);
+      for (const d of linkedState.recent_decisions) {
+        crossProjectItems.push({
+          id: d.id, section: 'cross_project', text: d.text,
+          tags: d.tags, score: 0, reasons: [], from_project: link.projectName,
+        });
+      }
+      for (const c of linkedState.active_constraints) {
+        crossProjectItems.push({
+          id: c.id, section: 'cross_project', text: c.text,
+          tags: c.tags, score: 0, reasons: [], from_project: link.projectName,
+        });
+      }
+      for (const t of linkedState.known_traps) {
+        crossProjectItems.push({
+          id: t.id, section: 'cross_project', text: t.text,
+          tags: t.tags, score: 0, reasons: [], from_project: link.projectName,
+        });
+      }
+    } catch { /* skip unavailable linked project */ }
+  }
+
   const result: ContextResult = {
     context_schema: CONTEXT_SCHEMA_VERSION,
     profile,
@@ -526,6 +556,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
       } catch { return undefined; }
     })(),
+    cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
     selected,
   };
 

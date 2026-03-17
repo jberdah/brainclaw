@@ -83,6 +83,7 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
     agent_integrations: {
       declarations: [],
     },
+    cross_project_links: [],
     implicit_session_ttl: '4h',
     auto_reflect_notes: false,
   };
