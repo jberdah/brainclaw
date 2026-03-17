@@ -21,6 +21,8 @@ import {
   ensureCursorMcpConfig,
   ensureRooMcpConfig,
   ensureContinueMcpConfig,
+  ensureOpenCodeMcpConfig,
+  ensureAntigravityMcpConfig,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 
@@ -466,6 +468,73 @@ describe('core/agent-files — auto-config writers', () => {
       assert.equal(results[0]?.relativePath, '.continue/config.json');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates OpenCode MCP config in opencode.json with mcp.brainclaw entry', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureOpenCodeMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, 'opencode.json');
+
+      const filePath = path.join(dir, 'opencode.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcp?: Record<string, unknown> };
+      assert.ok(content.mcp?.brainclaw, 'brainclaw MCP entry should be present');
+
+      const second = ensureOpenCodeMcpConfig(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Antigravity MCP config under the provided home directory', () => {
+    const homeDir = tmpDir();
+    try {
+      const result = ensureAntigravityMcpConfig(homeDir);
+      assert.ok(result, 'result should be defined when a home dir is provided');
+      assert.equal(result?.created, true);
+      assert.equal(result?.relativePath, '.gemini/antigravity/mcp_config.json');
+
+      const filePath = path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { mcpServers?: Record<string, unknown> };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP entry should be present');
+
+      const second = ensureAntigravityMcpConfig(homeDir);
+      assert.equal(second?.updated, false);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined for Antigravity MCP config when no homeDir provided', () => {
+    const result = ensureAntigravityMcpConfig(undefined);
+    assert.equal(result, undefined);
+  });
+
+  it('writeDetectedAgentAutoConfig opencode returns 1 result', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('opencode', dir);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.relativePath, 'opencode.json');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig antigravity with homeDir returns 1 result', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('antigravity', dir, { HOME: homeDir });
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.relativePath, '.gemini/antigravity/mcp_config.json');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 });

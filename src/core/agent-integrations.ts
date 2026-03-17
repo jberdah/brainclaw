@@ -16,6 +16,8 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set<AgentIntegrationName>([
   'windsurf',
   'cline',
   'codex',
+  'opencode',
+  'antigravity',
   'continue',
   'roo',
 ]);
@@ -46,6 +48,15 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   ],
   'codex': [
     { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
+    { kind: 'mcp',          location: 'machine',   path: '.codex/config.toml' },
+  ],
+  'opencode': [
+    { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
+    { kind: 'mcp',          location: 'workspace', path: 'opencode.json' },
+  ],
+  'antigravity': [
+    { kind: 'instructions', location: 'workspace', path: 'GEMINI.md' },
+    { kind: 'mcp',          location: 'machine',   path: '.gemini/antigravity/mcp_config.json' },
   ],
   'continue': [
     { kind: 'instructions', location: 'workspace', path: '.continue/rules/brainclaw.md' },

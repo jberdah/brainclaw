@@ -23,8 +23,10 @@ export interface DetectedAiAgent {
  * 5. Windsurf (WINDSURF_*)
  * 6. Cline (CLINE_*)
  * 7. Codex CLI (~/.codex/ directory exists)
- * 8. Continue (CONTINUE_*)
- * 9. Roo Code (ROO_*)
+ * 8. OpenCode (OPENCODE_* env or ~/.config/opencode/)
+ * 9. Antigravity / Gemini CLI (ANTIGRAVITY_* env or ~/.gemini/antigravity/)
+ * 10. Continue (CONTINUE_*)
+ * 11. Roo Code (ROO_*)
  */
 export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): DetectedAiAgent | undefined {
   // Explicit override
@@ -98,6 +100,26 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
       kind: 'agent',
       trust_level: 'trusted',
       detection_source: '~/.codex directory',
+    };
+  }
+
+  // OpenCode
+  if (env.OPENCODE_SESSION_ID || env.OPENCODE_AGENT || fs.existsSync(path.join(homeDir, '.config', 'opencode'))) {
+    return {
+      name: 'opencode',
+      kind: 'agent',
+      trust_level: 'trusted',
+      detection_source: env.OPENCODE_SESSION_ID || env.OPENCODE_AGENT ? 'OPENCODE_* env var' : '~/.config/opencode directory',
+    };
+  }
+
+  // Antigravity (Google Gemini CLI)
+  if (env.ANTIGRAVITY_SESSION_ID || env.ANTIGRAVITY_AGENT || fs.existsSync(path.join(homeDir, '.gemini', 'antigravity'))) {
+    return {
+      name: 'antigravity',
+      kind: 'agent',
+      trust_level: 'trusted',
+      detection_source: env.ANTIGRAVITY_SESSION_ID || env.ANTIGRAVITY_AGENT ? 'ANTIGRAVITY_* env var' : '~/.gemini/antigravity directory',
     };
   }
 
