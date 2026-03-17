@@ -422,16 +422,34 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig claude-code returns 3 results', () => {
+  it('writeDetectedAgentAutoConfig claude-code without homeDir returns 3 results', () => {
     const dir = tmpDir();
     try {
-      const results = writeDetectedAgentAutoConfig('claude-code', dir);
+      const results = writeDetectedAgentAutoConfig('claude-code', dir, {});
       assert.equal(results.length, 3);
       assert.ok(results.some((r) => r.relativePath === '.mcp.json'));
       assert.ok(results.some((r) => r.relativePath === '.claude/commands/brainclaw.md'));
       assert.ok(results.some((r) => r.relativePath === '.claude/settings.local.json'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig claude-code with homeDir returns 5 results including global', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('claude-code', dir, { HOME: homeDir });
+      assert.equal(results.length, 5);
+      assert.ok(results.some((r) => r.relativePath === '.mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === '.claude/commands/brainclaw.md'));
+      assert.ok(results.some((r) => r.relativePath === '.claude/settings.local.json'));
+      // global registrations (no relativePath set, filePath is absolute)
+      assert.ok(results.some((r) => r.filePath.includes('.claude') && r.filePath.includes('settings.json') && !r.filePath.includes('settings.local.json')));
+      assert.ok(results.some((r) => r.filePath.includes('.claude') && r.filePath.includes('commands') && r.filePath.includes('brainclaw.md')));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
@@ -460,14 +478,28 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig continue returns 1 result', () => {
+  it('writeDetectedAgentAutoConfig continue without homeDir returns 1 result', () => {
     const dir = tmpDir();
     try {
-      const results = writeDetectedAgentAutoConfig('continue', dir);
+      const results = writeDetectedAgentAutoConfig('continue', dir, {});
       assert.equal(results.length, 1);
       assert.equal(results[0]?.relativePath, '.continue/config.json');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig continue with homeDir returns 2 results including global', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('continue', dir, { HOME: homeDir });
+      assert.equal(results.length, 2);
+      assert.ok(results.some((r) => r.relativePath === '.continue/config.json'));
+      assert.ok(results.some((r) => r.filePath.includes('.continue') && r.filePath.includes('config.json') && !r.filePath.startsWith(dir)));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
