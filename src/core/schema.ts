@@ -67,6 +67,7 @@ export const DecisionSchema = z.object({
   host_id: z.string().optional(),
   session_id: z.string().optional(),
   related_paths: z.array(z.string()).optional(),
+  plan_id: z.string().optional(),
   tags: z.array(z.string()),
 });
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -85,6 +86,7 @@ export const TrapSchema = z.object({
   severity: SeveritySchema,
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),
+  plan_id: z.string().optional(),
   visibility: MemoryVisibilitySchema.default('shared'),
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
@@ -259,6 +261,7 @@ export const CandidateSchema = z.object({
   usage_count: z.number().default(0),
   usage_events: z.array(CandidateUseSchema).default([]),
   last_used_at: z.string().optional(),
+  plan_id: z.string().optional(),
   contradictions_detected: z.array(CandidateContradictionSchema).optional(),
   contradiction_summary: z.string().optional(),
   promotion_blocked_reason: z.string().optional(),

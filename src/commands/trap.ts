@@ -21,6 +21,7 @@ export interface TrapOptions {
   ttl?: string;
   cwd?: string;
   store?: StoreTarget;
+  plan?: string;
 }
 
 export function runTrap(text: string, options: TrapOptions = {}): void {
@@ -60,6 +61,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     severity: options.severity ?? 'medium',
     tags: options.tag ?? [],
     related_paths: options.path,
+    plan_id: options.plan,
     visibility,
     host_id: hostId,
     expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
