@@ -179,7 +179,7 @@ program
   .option('--path <paths...>', 'Related file paths')
   .option('--depends-on <ids...>', 'Dependency IDs for this plan item')
   .option('--author <author>', 'Author name')
-  .option('--estimate <effort>', 'Estimated effort (e.g. "30min", "2h", "1d")')
+  .option('--estimate <minutes>', 'Estimated effort in minutes (positive integer, e.g. --estimate 30)')
   .option('--store <target>', 'Target store level: local (default), repo, workspace')
   .action((text, options) => {
     runPlan(text, options);

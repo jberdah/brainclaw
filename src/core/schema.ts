@@ -1,5 +1,23 @@
 import { z } from 'zod';
 
+// --- Helpers ---
+
+/** Coerce legacy effort strings ("30min", "2h", "1d") to integer minutes for migration.
+ *  Already-numeric values pass through unchanged. Unparseable strings → undefined. */
+function coerceEffortToMinutes(val: unknown): unknown {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const s = val.trim().toLowerCase();
+    let total = 0, matched = false;
+    const d = s.match(/(\d+(?:\.\d+)?)\s*d/); if (d) { total += parseFloat(d[1]!) * 8 * 60; matched = true; }
+    const h = s.match(/(\d+(?:\.\d+)?)\s*h/); if (h) { total += parseFloat(h[1]!) * 60; matched = true; }
+    const m = s.match(/(\d+(?:\.\d+)?)\s*m(?:in)?/); if (m) { total += parseFloat(m[1]!); matched = true; }
+    if (!matched) { const bare = parseFloat(s); if (!isNaN(bare) && bare > 0 && /^\d+(\.\d+)?$/.test(s)) return Math.round(bare); return undefined; }
+    return total > 0 ? Math.round(total) : undefined;
+  }
+  return undefined;
+}
+
 // --- Entry schemas ---
 
 export const ConstraintStatusSchema = z.enum(['active', 'resolved', 'expired']);
@@ -128,7 +146,7 @@ export const PlanItemSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   depends_on: z.array(z.string()).default([]),
   steps: z.array(PlanStepSchema).optional(),
-  estimated_effort: z.string().optional(),
+  estimated_effort: z.preprocess(coerceEffortToMinutes, z.number().int().positive().optional()),
   actual_effort: z.string().optional(),
   started_at: z.string().optional(),
   completed_at: z.string().optional(),

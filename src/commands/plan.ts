@@ -18,7 +18,7 @@ export interface PlanOptions {
   path?: string[];
   author?: string;
   dependsOn?: string[];
-  estimate?: string;
+  estimate?: string | number;
   cwd?: string;
   store?: StoreTarget;
 }
@@ -58,6 +58,17 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     }
   }
 
+  // Validate and normalise --estimate: must be a positive integer (minutes)
+  let estimatedEffort: number | undefined;
+  if (options.estimate !== undefined) {
+    const n = typeof options.estimate === 'number' ? options.estimate : parseInt(String(options.estimate), 10);
+    if (!Number.isInteger(n) || n <= 0) {
+      console.error('Error: --estimate must be a positive integer representing minutes (e.g. --estimate 30)');
+      process.exit(1);
+    }
+    estimatedEffort = n;
+  }
+
   const state = loadState(cwd);
   const { id, short_label } = generateIdWithLabel('plan_items');
   const timestamp = nowISO();
@@ -76,7 +87,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     tags: options.tag ?? [],
     related_paths: options.path,
     depends_on: options.dependsOn ?? [],
-    estimated_effort: options.estimate,
+    estimated_effort: estimatedEffort,
   };
 
   state.plan_items.push(entry);

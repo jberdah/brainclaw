@@ -1058,7 +1058,7 @@ export function handleMcpReadToolCall(
       lines.push(`Median ratio: ${report.summary.median_ratio}x · Mean: ${report.summary.mean_ratio}x`);
     }
     for (const e of report.entries) {
-      const est = e.estimated_effort ? `est:${e.estimated_effort}` : 'no estimate';
+      const est = e.estimated_minutes !== undefined ? `est:${e.estimated_minutes}min` : 'no estimate';
       const act = e.elapsed_minutes !== undefined ? `actual:${e.elapsed_minutes}min` : 'no actual';
       const ratio = e.ratio !== undefined ? ` ratio:${e.ratio}x` : '';
       lines.push(`[${e.id.slice(0, 8)}] ${e.text.slice(0, 60)} — ${est} · ${act}${ratio}`);
