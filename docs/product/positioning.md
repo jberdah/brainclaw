@@ -65,6 +65,33 @@ Local-first gives teams:
 - Git history for shared project state
 - compatibility with enterprise or offline environments
 
+## Licensing
+
+brainclaw is published under the **Business Source License 1.1 (BSL 1.1)**.
+
+### What this means in practice
+
+| Use case | Status |
+|----------|--------|
+| Personal use, open-source projects | Free |
+| Internal team or company use | Free |
+| Embedding brainclaw in a product or service you sell | Requires a commercial license |
+| Competitive products that replicate brainclaw's core value | Requires a commercial license |
+
+### Why BSL instead of MIT
+
+MIT gives users complete freedom, including the freedom to take the source, wrap it, and resell it as a competing product without contributing back. For a small independent project, that means large vendors can capture the market before the original author can sustain the work.
+
+BSL 1.1 preserves all the practical freedoms of open source (inspect, use, modify, contribute) while protecting the economic viability of the project. It is used by projects like MariaDB, HashiCorp Vault, and Sentry.
+
+### Conversion to MIT
+
+The BSL includes an automatic conversion clause: the license converts to **MIT** after 4 years from each release date. Every version of brainclaw will eventually become fully open source.
+
+### Commercial licensing
+
+If your use case requires a commercial license, contact the project author. The intent is not to restrict legitimate internal use — it is to prevent competitive product embedding without a fair contribution back to the project.
+
 ## Positioning summary
 
 > A local-first coordination layer for humans and coding agents.
