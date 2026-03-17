@@ -1,6 +1,6 @@
 import readline from 'node:readline';
-import { execSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
+import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
@@ -1336,20 +1336,18 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         plan_id: args.planId as string | undefined,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
-      let gitBranchReminder = '';
-      try {
-        const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', cwd: claimCwd }).trim();
-        if (branch === 'master' || branch === 'main') {
-          gitBranchReminder = `\n⚠ Git branch check: you are on '${branch}'. Create a dedicated branch before editing:\n  git checkout -b feat/<your-feature-name>`;
-        }
-      } catch { /* not a git repo — skip */ }
+      const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
+      const postClaimText = renderTriggeredItems(postClaimItems);
+      const claimText = postClaimText
+        ? `✔ Claimed scope [${claimId}]\n${postClaimText}`
+        : `✔ Claimed scope [${claimId}]`;
 
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Claimed scope [${claimId}]${gitBranchReminder}` }],
+          content: [{ type: 'text', text: claimText }],
           claim_id: claimId,
           session_id: identity.session_id,
-          on_main_branch: gitBranchReminder !== '',
+          triggered_items: postClaimItems,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
       };
@@ -1405,7 +1403,13 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         cwd,
       });
 
-      const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: '✔ Session started' }];
+      const postSessionStartItems = getTriggeredItems('trigger:post-session-start', cwd);
+      const postSessionStartText = renderTriggeredItems(postSessionStartItems);
+      const sessionStartMsg = postSessionStartText
+        ? `✔ Session started\n${postSessionStartText}`
+        : '✔ Session started';
+
+      const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: sessionStartMsg }];
       const structured: Record<string, unknown> = {
         session_id: result.session_id,
         agent: result.agent,
@@ -1470,13 +1474,20 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         autoReflect: args.autoReflect as boolean | undefined,
         cwd,
       });
+      const preSessionEndItems = getTriggeredItems('trigger:pre-session-end', cwd);
+      const preSessionEndText = renderTriggeredItems(preSessionEndItems);
+      const sessionEndMsg = preSessionEndText
+        ? `✔ Session ended\n${preSessionEndText}`
+        : '✔ Session ended';
+
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: '✔ Session ended' }],
+          content: [{ type: 'text', text: sessionEndMsg }],
           session_id: result.session_id,
           notes_in_session: result.notes_in_session,
           candidates_created: result.candidates_created,
           context_diff: result.context_diff,
+          triggered_items: preSessionEndItems,
         }),
         nextConnectionSessionId: undefined,
       };
