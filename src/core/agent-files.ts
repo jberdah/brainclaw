@@ -467,6 +467,9 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   if (!allow.includes('Bash(npx brainclaw:*)')) {
     allow.push('Bash(npx brainclaw:*)');
   }
+  if (!allow.includes('mcp__brainclaw__*')) {
+    allow.push('mcp__brainclaw__*');
+  }
   permissions.allow = allow;
 
   // Merge hooks — UserPromptSubmit injects full context on first prompt, diff on subsequent
