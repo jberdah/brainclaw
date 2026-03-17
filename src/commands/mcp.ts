@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { execSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
@@ -1335,11 +1336,20 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
         plan_id: args.planId as string | undefined,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
+      let gitBranchReminder = '';
+      try {
+        const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', cwd: claimCwd }).trim();
+        if (branch === 'master' || branch === 'main') {
+          gitBranchReminder = `\n⚠ Git branch check: you are on '${branch}'. Create a dedicated branch before editing:\n  git checkout -b feat/<your-feature-name>`;
+        }
+      } catch { /* not a git repo — skip */ }
+
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Claimed scope [${claimId}]` }],
+          content: [{ type: 'text', text: `✔ Claimed scope [${claimId}]${gitBranchReminder}` }],
           claim_id: claimId,
           session_id: identity.session_id,
+          on_main_branch: gitBranchReminder !== '',
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
       };
