@@ -382,3 +382,96 @@ describe('commands/doctor', () => {
     assert.ok(contradictionCheck.details[0].score >= 10);
   });
 });
+
+describe('doctor — handoff backlog check', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-doctor-backlog-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  it('reports ok when no open handoffs exist', () => {
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((c: { name: string }) => c.name === 'handoff_backlog');
+    assert.ok(check);
+    assert.equal(check.status, 'ok');
+  });
+
+  it('warns when an open handoff without plan_id contains bullet-list backlog', () => {
+    const state = emptyState();
+    state.open_handoffs.push({
+      id: 'hnd_test01', short_label: 'test', from: 'alice', to: 'bob',
+      text: 'Session done.\n- Add auth endpoint\n- Write tests\n- Deploy staging',
+      created_at: new Date().toISOString(), author: 'alice', status: 'open', tags: [],
+    });
+    saveState(state, workspace.dir);
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((c: { name: string }) => c.name === 'handoff_backlog');
+    assert.ok(check);
+    assert.equal(check.status, 'warn');
+    assert.ok(check.message.includes('hnd_test01'));
+  });
+
+  it('warns when an open handoff without plan_id contains TODO keyword', () => {
+    const state = emptyState();
+    state.open_handoffs.push({
+      id: 'hnd_test02', short_label: 'test', from: 'alice', to: 'bob',
+      text: 'TODO: finish the migration before release',
+      created_at: new Date().toISOString(), author: 'alice', status: 'open', tags: [],
+    });
+    saveState(state, workspace.dir);
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((c: { name: string }) => c.name === 'handoff_backlog');
+    assert.equal(check.status, 'warn');
+  });
+
+  it('reports ok when open handoff with backlog patterns has a plan_id', () => {
+    const state = emptyState();
+    state.open_handoffs.push({
+      id: 'hnd_test03', short_label: 'test', from: 'alice', to: 'bob',
+      text: '- Add auth endpoint\n- Write tests',
+      plan_id: 'pln_covered',
+      created_at: new Date().toISOString(), author: 'alice', status: 'open', tags: [],
+    });
+    saveState(state, workspace.dir);
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((c: { name: string }) => c.name === 'handoff_backlog');
+    assert.equal(check.status, 'ok');
+  });
+
+  it('reports ok when open handoff is plain prose with no backlog patterns', () => {
+    const state = emptyState();
+    state.open_handoffs.push({
+      id: 'hnd_test04', short_label: 'test', from: 'alice', to: 'bob',
+      text: 'Session ended cleanly. Auth is done and deployed.',
+      created_at: new Date().toISOString(), author: 'alice', status: 'open', tags: [],
+    });
+    saveState(state, workspace.dir);
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((c: { name: string }) => c.name === 'handoff_backlog');
+    assert.equal(check.status, 'ok');
+  });
+});

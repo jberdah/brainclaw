@@ -25,6 +25,16 @@ import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 
+const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
+
+function hasBacklogPatterns(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  const bulletOrNumbered = lines.some(
+    (l) => /^\s*[-*•]\s+\w/.test(l) || /^\s*\d+\.\s+\w/.test(l),
+  );
+  return bulletOrNumbered || BACKLOG_KEYWORDS.test(text) || /\[[ x]\]/.test(text);
+}
+
 export interface DoctorOptions {
   json?: boolean;
   cwd?: string;
@@ -934,6 +944,37 @@ export function runDoctor(options: DoctorOptions = {}): void {
   } catch {
     // non-fatal
   }
+
+  // --- Backlog patterns in open handoffs ---
+  try {
+    const openHandoffs = state.open_handoffs.filter((h) => h.status === 'open');
+    const handoffsWithBacklog = openHandoffs.filter((h) => !h.plan_id && hasBacklogPatterns(h.text));
+    if (handoffsWithBacklog.length > 0) {
+      const ids = handoffsWithBacklog.map((h) => h.id).join(', ');
+      checks.push({
+        name: 'handoff_backlog',
+        status: 'warn',
+        message: `${handoffsWithBacklog.length} open handoff(s) contain backlog patterns without a linked plan: ${ids}. Run \`brainclaw plan "<text>"\` to formalize.`,
+        details: handoffsWithBacklog.map((h) => ({ id: h.id, from: h.from, to: h.to })),
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${handoffsWithBacklog.length} open handoff(s) contain unformalized backlog (no plan linked): ${ids}`);
+        console.warn('  Run `brainclaw plan "<description>"` to create formal plan items.');
+      }
+      hasIssues = true;
+    } else {
+      checks.push({
+        name: 'handoff_backlog',
+        status: 'ok',
+        message: openHandoffs.length > 0
+          ? `${openHandoffs.length} open handoff(s) checked — no unformalized backlog detected`
+          : 'No open handoffs to check',
+      });
+      if (!options.json && openHandoffs.length > 0) {
+        console.log(`✔ Handoff backlog: ${openHandoffs.length} open handoff(s) checked, all covered`);
+      }
+    }
+  } catch { /* non-fatal */ }
 
   if (options.json) {
     console.log(JSON.stringify({
