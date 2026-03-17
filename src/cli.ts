@@ -737,7 +737,7 @@ program
 program
   .command('export')
   .description('Export memory as instructions for IDE/AI tools')
-  .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, windsurf, cline, roo, continue')
+  .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, gemini-md, windsurf, cline, roo, continue')
   .option('--detect', 'Auto-detect agent environment and write to its native file')
   .option('--write', 'Write to canonical file path instead of stdout (when --format is given)')
   .option('--output <file>', 'Write to a specific file path instead of stdout')

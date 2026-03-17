@@ -14,7 +14,7 @@
 
 brainclaw gives a workspace a shared coordination layer: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context — stored locally, versioned in Git, readable in plain text.
 
-It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf and any other coding agent. It does not replace them. It helps them work together.
+It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and any other coding agent. It does not replace them. It helps them work together.
 
 ---
 
@@ -34,7 +34,7 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 | **Project memory** | constraints, decisions, traps, handoffs, layered instructions |
 | **Coordination state** | shared plans, file claims, handoffs, runtime notes, board views |
 | **Agent-ready context** | compact, prompt-sized context generated from real workspace state |
-| **Native agent files** | auto-writes `CLAUDE.md`, `.cursor/rules/`, `.windsurfrules`, etc. |
+| **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, etc. |
 | **Local-first storage** | plain text + JSON, Git-friendly, no cloud, no telemetry |
 
 ---
@@ -90,7 +90,7 @@ brainclaw context --json
 
 ## How it fits into agent workflows
 
-brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline, Roo, and Continue.
+brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Continue, OpenCode, and Antigravity/Gemini CLI.
 
 Typical flow:
 
@@ -138,6 +138,12 @@ npm run test:coverage      # with coverage report
 ---
 
 ## Changelog
+
+### v0.9.10
+
+- **OpenCode** : détection et auto-config MCP workspace via `opencode.json`; l'export réutilise `AGENTS.md`
+- **Antigravity / Gemini CLI** : détection et export `gemini-md` vers `GEMINI.md`, avec MCP machine-level sous `.gemini/antigravity/mcp_config.json`
+- **Workflow export** : la doc export couvre désormais explicitement les nouveaux formats et fichiers générés
 
 ### v0.7.2
 

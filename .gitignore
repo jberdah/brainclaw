@@ -58,5 +58,10 @@ CLAUDE.md
 .continue/rules/brainclaw*.md
 .windsurfrules
 
+# Local Claude / MCP integration files
+.claude/settings.local.json
+.claude/commands/brainclaw.md
+.mcp.json
+
 # Local installable Brainclaw releases
 .releases/

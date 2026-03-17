@@ -685,6 +685,7 @@ brainclaw register-agent my-bot --capability code-review --capability testing --
 ### `brainclaw enable-agent <name>`
 
 Enable an existing agent and optionally update its capabilities.
+Built-in integration names include `claude-code`, `cursor`, `windsurf`, `cline`, `codex`, `opencode`, `antigravity`, `continue`, `roo`, and `github-copilot`.
 
 | Option | Description |
 |---|---|
@@ -695,7 +696,9 @@ Enable an existing agent and optionally update its capabilities.
 | `--json` | Output as JSON |
 
 ```bash
-brainclaw enable-agent copilot --set-current
+brainclaw enable-agent github-copilot --set-current
+brainclaw enable-agent opencode
+brainclaw enable-agent antigravity
 brainclaw enable-agent my-bot --capability refactor --json
 ```
 
@@ -776,7 +779,7 @@ Export memory as a native agent instruction file.
 
 | Option | Description |
 |---|---|
-| `--format <format>` | Target format: `copilot-instructions`, `cursor-rules`, `agents-md`, `claude-md`, `windsurf`, `cline`, `roo`, or `continue` |
+| `--format <format>` | Target format: `copilot-instructions`, `cursor-rules`, `agents-md`, `claude-md`, `gemini-md`, `windsurf`, `cline`, `roo`, or `continue` |
 | `--detect` | Auto-detect the running agent and write to its native file |
 | `--write` | Write output to the native file path (instead of stdout) |
 | `--output <path>` | Write to a custom output path |
@@ -787,14 +790,17 @@ Export memory as a native agent instruction file.
 brainclaw export --detect
 brainclaw export --format copilot-instructions --write   # .github/copilot-instructions.md
 brainclaw export --format claude-md --write              # CLAUDE.md
+brainclaw export --format gemini-md --write             # GEMINI.md
 brainclaw export --format cursor-rules --write           # .cursor/rules/brainclaw.md
 brainclaw export --format windsurf --write               # .windsurfrules
 brainclaw export --format cline --write                  # .clinerules/brainclaw.md
-brainclaw export --format agents-md --write              # AGENTS.md
+brainclaw export --format agents-md --write              # AGENTS.md (Codex, OpenCode)
 brainclaw export --format roo --write                    # .roo/rules/brainclaw.md
 brainclaw export --format continue --write               # .continue/rules/brainclaw.md
 brainclaw export --format claude-md                      # stdout
 ```
+
+`brainclaw export --detect --write` also writes companion MCP config where relevant, including `opencode.json` for OpenCode and `.gemini/antigravity/mcp_config.json` for Antigravity/Gemini when the local environment is available.
 
 ### `brainclaw adapter-openclaw-import [file]`
 

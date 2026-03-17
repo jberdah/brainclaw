@@ -6,8 +6,8 @@ brainclaw is designed to work with existing coding agents, not replace them.
 
 brainclaw can integrate through several surfaces:
 
-- **Readable files** — `.brainclaw/project.md`, `AGENTS.md`, `.github/copilot-instructions.md`
-- **Native agent files** — `CLAUDE.md`, `.cursor/rules/brainclaw.md`, `.windsurfrules`, etc. (via `brainclaw export`)
+- **Readable files** — `.brainclaw/project.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`
+- **Native agent files** — `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/brainclaw.md`, `.windsurfrules`, etc. (via `brainclaw export`)
 - **CLI commands** — direct operational entry point
 - **MCP tools** — dynamic access path for capable agents
 - **System or project instructions** — static guidance for how to use brainclaw
@@ -37,6 +37,7 @@ The strongest integrations combine:
 ## Getting the native file written automatically
 
 Run `brainclaw init` — it detects the running agent and writes to its native file automatically.
+That includes OpenCode (`AGENTS.md` + `opencode.json`) and Antigravity/Gemini CLI (`GEMINI.md` + machine-local MCP config) when those environments are present.
 
 Or at any time:
 

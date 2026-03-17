@@ -26,6 +26,8 @@ describe('agent export registry', () => {
       ['windsurf',       'windsurf',             '.windsurfrules'],
       ['cline',          'cline',                '.clinerules/brainclaw.md'],
       ['codex',          'agents-md',            'AGENTS.md'],
+      ['opencode',       'agents-md',            'AGENTS.md'],
+      ['antigravity',    'gemini-md',            'GEMINI.md'],
       ['continue',       'continue',             '.continue/rules/brainclaw.md'],
       ['roo',            'roo',                  '.roo/rules/brainclaw.md'],
     ];
@@ -44,7 +46,7 @@ describe('agent export registry', () => {
 
   it('AGENT_EXPORT_REGISTRY covers all known agents', () => {
     const names = AGENT_EXPORT_REGISTRY.map((t) => t.agentName);
-    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'continue', 'roo']) {
+    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'codex', 'opencode', 'antigravity', 'continue', 'roo']) {
       assert.ok(names.includes(expected), `registry should contain ${expected}`);
     }
   });
@@ -109,6 +111,7 @@ describe('export command formats', () => {
   const formats = [
     { format: 'copilot-instructions' as const, expectedFile: '.github/copilot-instructions.md' },
     { format: 'claude-md' as const,            expectedFile: 'CLAUDE.md' },
+    { format: 'gemini-md' as const,            expectedFile: 'GEMINI.md' },
     { format: 'cursor-rules' as const,         expectedFile: '.cursor/rules/brainclaw.md' },
     { format: 'windsurf' as const,             expectedFile: '.windsurfrules' },
     { format: 'cline' as const,                expectedFile: '.clinerules/brainclaw.md' },
@@ -160,6 +163,8 @@ describe('export command formats', () => {
           ? 'github-copilot'
           : format === 'claude-md'
             ? 'claude-code'
+            : format === 'gemini-md'
+              ? 'antigravity'
             : format === 'cursor-rules'
               ? 'cursor'
               : format;
