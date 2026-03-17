@@ -46,6 +46,7 @@ export function runListClaims(options: ListClaimsOptions = {}): void {
   for (const c of claims) {
     const status = c.status !== 'active' ? ` (${c.status})` : '';
     const extras: string[] = [];
+    if (c.session_id) extras.push(`session ${c.session_id.slice(-8)}`);
     if (c.plan_id) extras.push(`plan ${c.plan_id}`);
     if (c.project) extras.push(`project ${c.project}`);
     const suffix = extras.length ? ` [${extras.join(', ')}]` : '';

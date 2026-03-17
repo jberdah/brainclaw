@@ -1,5 +1,5 @@
 import { memoryExists } from '../core/io.js';
-import { resolveCurrentAgentIdentity, resolveExistingCurrentAgent } from '../core/agent-registry.js';
+import { resolveCurrentAgentIdentity, resolveExistingCurrentAgent, resolveCurrentModel } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { buildOperationalIdentity } from '../core/identity.js';
@@ -36,9 +36,12 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     ? resolveCurrentAgentIdentity(cwd)
     : undefined;
 
+  const model = resolveCurrentModel(cwd);
+
   const result = {
     resolved_agent: identity?.agent ?? null,
     agent_id: identity?.agent_id ?? null,
+    model: model ?? null,
     host_id: hostId,
     session_id: identity?.session_id ?? null,
     project_id: identity?.project_id ?? null,
@@ -71,6 +74,7 @@ export function runWhoami(options: WhoamiOptions = {}): void {
 
   console.log(`Identity resolved for: ${result.resolved_agent ?? '(no agent)'}`);
   if (result.agent_id) console.log(`  Agent ID   : ${result.agent_id}`);
+  if (result.model) console.log(`  Model      : ${result.model}`);
   console.log(`  Trust level: ${result.trust_level}`);
   if (result.capabilities.length > 0) console.log(`  Capabilities: ${result.capabilities.join(', ')}`);
   if (result.identity_key?.fingerprint) console.log(`  Fingerprint: ${result.identity_key.fingerprint}`);

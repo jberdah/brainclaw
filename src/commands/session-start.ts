@@ -4,7 +4,7 @@ import { execSync } from 'node:child_process';
 import { memoryExists, memoryDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
-import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
 import { buildContext } from '../core/context.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
@@ -35,6 +35,7 @@ export interface SessionStartOptions {
   agent?: string;
   agentId?: string;
   context?: string;
+  model?: string;
   json?: boolean;
   cwd?: string;
 }
@@ -87,6 +88,8 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     gitSha = execSync('git rev-parse HEAD', { encoding: 'utf-8', cwd: options.cwd ?? process.cwd() }).trim();
   } catch { /* non-fatal — not a git repo */ }
 
+  const model = options.model ?? resolveCurrentModel(options.cwd);
+
   const snapshot: SessionSnapshot = {
     schema_version: 2,
     session_id: actor.session_id ?? generateId('sessions'),
@@ -96,6 +99,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     context_target: options.context,
     initial_context_hash: initialContextHash,
     git_sha: gitSha,
+    ...(model ? { model } : {}),
   };
 
   // Persist snapshot

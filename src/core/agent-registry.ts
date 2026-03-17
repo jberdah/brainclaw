@@ -252,6 +252,18 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
 }
 
 export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined {
+  // env var takes priority over config — allows AI agent to self-identify
+  const envAgentId = (process.env.BRAINCLAW_AGENT_ID ?? '').trim();
+  const envAgentName = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT ?? '').trim();
+  if (envAgentId) {
+    const byEnvId = findAgentIdentityById(envAgentId, cwd, preferredDirName);
+    if (byEnvId) return byEnvId;
+  }
+  if (envAgentName) {
+    const byEnvName = findAgentIdentityByName(envAgentName, cwd, preferredDirName);
+    if (byEnvName) return byEnvName;
+  }
+
   const config = loadConfig(cwd, preferredDirName);
   if (config.current_agent_id) {
     const byId = findAgentIdentityById(config.current_agent_id, cwd, preferredDirName);
@@ -386,10 +398,28 @@ export function resolveAgentScope(agentName?: string, cwd?: string, preferredDir
 }
 
 /**
- * Returns the name of the current agent from config, falling back to the OS user.
- * Use in place of local `getDefaultAuthor()` copies.
+ * Returns the current model identifier if declared, from:
+ *  1. $BRAINCLAW_MODEL env var  (explicit per-session declaration)
+ *  2. registered agent document model field
+ *  3. undefined (not tracked)
+ */
+export function resolveCurrentModel(cwd?: string): string | undefined {
+  const fromEnv = process.env.BRAINCLAW_MODEL?.trim();
+  if (fromEnv) return fromEnv;
+  const identity = resolveCurrentAgentIdentity(cwd);
+  return identity?.model;
+}
+
+/**
+ * Returns the name of the current agent, with priority:
+ *  1. $BRAINCLAW_AGENT_NAME env var  (AI agent self-declaration)
+ *  2. $BRAINCLAW_AGENT      env var  (legacy alias)
+ *  3. config.current_agent           (project owner / human default)
+ *  4. OS user                        (last-resort fallback)
  */
 export function resolveCurrentAgentName(cwd?: string): string {
+  const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
+  if (fromEnv) return fromEnv;
   const fromConfig = loadConfig(cwd).current_agent?.trim();
   if (fromConfig) return fromConfig;
   return process.env.USER ?? process.env.USERNAME ?? 'unknown';
