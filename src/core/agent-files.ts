@@ -470,6 +470,64 @@ Steps:
   };
 }
 
+export function ensureClaudeCodeUserSettings(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, '.claude', 'settings.json');
+  const existing = readJsonObject(filePath);
+
+  // MCP server
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    command: 'npx',
+    args: ['brainclaw', 'mcp'],
+  };
+
+  // Permissions
+  const permissions = isJsonObject(existing.permissions) ? { ...existing.permissions } : {};
+  const allow = Array.isArray(permissions.allow) ? [...permissions.allow as string[]] : [];
+  if (!allow.includes('Bash(npx brainclaw:*)')) allow.push('Bash(npx brainclaw:*)');
+  if (!allow.includes('mcp__brainclaw__*')) allow.push('mcp__brainclaw__*');
+  permissions.allow = allow;
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+    permissions,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Claude Code user settings — MCP + permissions (global, all projects)',
+    created,
+    updated,
+    filePath,
+  };
+}
+
+export function ensureClaudeCodeUserCommand(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, '.claude', 'commands', 'brainclaw.md');
+  const content = `Load brainclaw project memory and prepare for coordinated work.
+
+Steps:
+1. Run \`brainclaw context --json\` — load constraints, decisions, traps, plans, handoffs
+2. Run \`brainclaw list-claims\` — check what files other agents have claimed
+3. Before editing any file, run \`brainclaw claim "<description>" --scope <path>\`
+4. Before finishing, run \`brainclaw session-end --auto-release\`
+`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'skill',
+    label: 'Claude Code brainclaw command (global, all projects)',
+    created,
+    updated,
+    filePath,
+  };
+}
+
 export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.claude', 'settings.local.json');
   const existing = readJsonObject(filePath);
@@ -636,6 +694,33 @@ export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
+export function ensureContinueUserMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, '.continue', 'config.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers as unknown[]] : [];
+  const alreadyPresent = mcpServers.some(
+    (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
+  );
+  if (!alreadyPresent) {
+    mcpServers.push({ name: 'brainclaw', command: 'npx', args: ['brainclaw', 'mcp'] });
+  }
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Continue MCP settings (global, all projects)',
+    created,
+    updated,
+    filePath,
+  };
+}
+
 export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, 'opencode.json');
   const existing = readJsonObject(filePath);
@@ -700,6 +785,10 @@ export function writeDetectedAgentAutoConfig(
         ensureClaudeCodeCommand(cwd),
         ensureClaudeCodeSettings(cwd),
       ];
+      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
+      if (userSettings) results.push(userSettings);
+      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
+      if (userCmd) results.push(userCmd);
       const dep = ensureProjectDevDependency(cwd);
       if (dep) results.push(dep);
       return results;
@@ -724,8 +813,12 @@ export function writeDetectedAgentAutoConfig(
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
       return result ? [result] : [];
     }
-    case 'continue':
-      return [ensureContinueMcpConfig(cwd)];
+    case 'continue': {
+      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
+      const userMcp = ensureContinueUserMcpConfig(resolveHomeDir(env));
+      if (userMcp) results.push(userMcp);
+      return results;
+    }
     case 'opencode':
       return [ensureOpenCodeMcpConfig(cwd)];
     case 'antigravity': {
@@ -749,6 +842,10 @@ export function writeExportCompanionFiles(
         ensureClaudeCodeCommand(cwd),
         ensureClaudeCodeSettings(cwd),
       ];
+      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
+      if (userSettings) results.push(userSettings);
+      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
+      if (userCmd) results.push(userCmd);
       const dep = ensureProjectDevDependency(cwd);
       if (dep) results.push(dep);
       return results;
@@ -769,8 +866,12 @@ export function writeExportCompanionFiles(
     }
     case 'roo':
       return [ensureRooMcpConfig(cwd)];
-    case 'continue':
-      return [ensureContinueMcpConfig(cwd)];
+    case 'continue': {
+      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
+      const userMcp = ensureContinueUserMcpConfig(resolveHomeDir(env));
+      if (userMcp) results.push(userMcp);
+      return results;
+    }
     case 'gemini-md': {
       const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
       return result ? [result] : [];
