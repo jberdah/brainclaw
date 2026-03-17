@@ -5,7 +5,7 @@
 
 ## Project Instructions
 
-- Après chaque merge dans master : mettre à jour les fichiers docs/ concernés par les changements — docs/cli.md si nouvelles commandes ou options, docs/mcp-schema-changelog.md si les outils MCP ont changé, docs/context-format-changelog.md si le format de contexte a évolué, docs/concepts/ si les concepts ou schémas ont changé. Puis régénérer CLAUDE.md via : brainclaw export --format claude-md --write
+- Après chaque merge dans master : (1) mettre à jour les fichiers docs/ concernés — docs/cli.md si nouvelles commandes/options, docs/mcp-schema-changelog.md si MCP, docs/context-format-changelog.md si format contexte, docs/concepts/ si schémas ou concepts. (2) Régénérer les fichiers d'instructions pour TOUS les agents configurés dans le projet : brainclaw export --format claude-md --write && brainclaw export --format agents-md --write && brainclaw export --format cursor-rules --write && brainclaw export --format copilot-instructions --write. Adapter selon les agents déclarés dans config.yaml (agent_integrations.declarations).
 
 ## Active Constraints
 
