@@ -1024,6 +1024,37 @@ Start the MCP (Model Context Protocol) server over stdio. Used by AI agents that
 brainclaw mcp
 ```
 
+#### Available MCP tools
+
+**Read tools** (no trust requirement):
+
+| Tool | Description |
+|---|---|
+| `bclaw_get_context` | Full workspace context (constraints, decisions, traps, plans, handoffs) |
+| `bclaw_bootstrap` | Derive brownfield bootstrap signals from repo docs and git history |
+| `bclaw_get_execution_context` | Inspect local execution environment and agent tooling signals |
+| `bclaw_read_handoff` | Read an open handoff ticket with git diff and state snapshot |
+| `bclaw_get_agent_board` | Live plan + claim board with active sessions |
+| `bclaw_search` | Full-text BM25 search across all memory items |
+| `bclaw_estimation_report` | Estimation accuracy report for completed plans |
+
+**Write tools** (contributor trust or above):
+
+| Tool | Description |
+|---|---|
+| `bclaw_write_note` | Add a runtime note (supports TTL and auto-reflect) |
+| `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
+| `bclaw_accept` | Accept a pending candidate into canonical memory |
+| `bclaw_reject` | Reject a pending candidate |
+| `bclaw_claim` | Claim a work scope (advisory lock) |
+| `bclaw_release_claim` | Release a claim, optionally updating the linked plan status |
+| `bclaw_session_start` | Start an agent session and register identity |
+| `bclaw_session_end` | End session, optionally auto-reflect notes as candidates |
+| `bclaw_create_plan` | Create a new plan item |
+| `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
+| `bclaw_add_step` | Add a sub-step to a plan item |
+| `bclaw_complete_step` | Mark a plan sub-step as done |
+
 ---
 
 ## Version Management

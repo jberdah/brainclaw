@@ -4,7 +4,21 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
 
 ---
 
-## 0.3.0 (current)
+## 0.4.0 (current)
+
+**Added**
+- `bclaw_create_plan` — create a plan item from an agent (contributor trust required)
+- `bclaw_update_plan` — update status, actual effort, priority, or assignee of a plan item
+- `bclaw_add_step` — add a sub-step to a plan item
+- `bclaw_complete_step` — mark a plan sub-step as done
+- All plan management tools return structured `plan_id`, `step_id`, `status`, `progress` fields
+
+**Fixed**
+- `bclaw_release_claim`: `planStatus` parameter was declared in the schema but not applied — now correctly updates the linked plan's status when provided
+
+---
+
+## 0.3.0
 
 **Added**
 - `initialize` handshake support (MCP protocol conformance)
