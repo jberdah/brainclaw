@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
+import { resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
 import { buildAgentToolingContext, type AgentToolingSnapshot } from './agent-context.js';
@@ -84,6 +85,7 @@ export interface ContextResult {
   resume_summary?: AgentResumeSummary;
   open_work?: OpenWorkSummary;
   estimation_calibration?: string;
+  stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
   selected: ContextItem[];
 }
 
@@ -106,6 +108,8 @@ export interface ScopedActivitySummary {
 export function buildContext(options: ContextOptions = {}): ContextResult {
   const state = loadState(options.cwd);
   const config = loadConfig(options.cwd);
+  // Resolve parent stores for multi-store merge (walk-up from cwd)
+  const storeChain = resolveStoreChain(options.cwd ?? process.cwd());
 
   const profile = options.profile ?? config.profile ?? 'dev';
   const projectMode = config.project_mode ?? 'auto';
@@ -306,6 +310,82 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     }
   }
 
+  // Merge items from parent stores (multi-store hierarchy)
+  // Primary store is storeChain[0]; parents are storeChain[1+]
+  const seenIds = new Set(items.map((i) => i.id));
+  for (const parentStore of storeChain.slice(1)) {
+    try {
+      const parentState = loadState(parentStore.cwd);
+      const storeLabel = parentStore.role !== 'unknown' ? parentStore.role : `depth:${parentStore.depth}`;
+
+      for (const c of parentState.active_constraints) {
+        if (seenIds.has(c.id)) continue;
+        seenIds.add(c.id);
+        items.push({
+          id: c.id, section: 'constraint', text: c.text, tags: c.tags,
+          related_paths: c.related_paths, score: 0, reasons: [],
+          extra: `${c.status} [from:${storeLabel}]`,
+          provenance: { actor: c.author, actor_id: c.author_id, project_id: c.project_id },
+        });
+      }
+
+      for (const d of parentState.recent_decisions) {
+        if (seenIds.has(d.id)) continue;
+        seenIds.add(d.id);
+        items.push({
+          id: d.id, section: 'decision', text: d.text, tags: d.tags,
+          related_paths: d.related_paths, score: 0, reasons: [],
+          extra: `[from:${storeLabel}]`,
+          provenance: { actor: d.author, actor_id: d.author_id, project_id: d.project_id },
+        });
+      }
+
+      for (const t of parentState.known_traps) {
+        if (seenIds.has(t.id)) continue;
+        seenIds.add(t.id);
+        items.push({
+          id: t.id, section: 'trap', text: t.text, tags: t.tags,
+          related_paths: t.related_paths, score: 0, reasons: [],
+          extra: `${t.severity} [from:${storeLabel}]`,
+          provenance: { actor: t.author, actor_id: t.author_id, project_id: t.project_id },
+        });
+      }
+
+      for (const plan of parentState.plan_items.filter((p) => p.status !== 'done' && p.status !== 'dropped')) {
+        if (seenIds.has(plan.id)) continue;
+        seenIds.add(plan.id);
+        const meta = [plan.status, plan.priority, `from:${storeLabel}`];
+        if (plan.assignee) meta.push(`assignee:${plan.assignee}`);
+        items.push({
+          id: plan.id, section: 'plan', text: plan.text, tags: plan.tags,
+          related_paths: plan.related_paths, score: 0, reasons: [],
+          extra: meta.join(', '),
+        });
+      }
+
+      for (const h of parentState.open_handoffs.filter((x) => x.status === 'open')) {
+        if (seenIds.has(h.id)) continue;
+        seenIds.add(h.id);
+        items.push({
+          id: h.id, section: 'handoff', text: h.text, tags: h.tags,
+          related_paths: h.related_paths, score: 0, reasons: [],
+          extra: `${h.from} -> ${h.to} [from:${storeLabel}]`,
+          provenance: { actor: h.author, actor_id: h.author_id, project_id: h.project_id },
+        });
+      }
+    } catch {
+      // Non-fatal: skip unreadable parent store
+    }
+  }
+
+  // Merge active claims from all parent stores for open_work visibility
+  const parentStoreClaims: ReturnType<typeof listClaims> = [];
+  for (const parentStore of storeChain.slice(1)) {
+    try {
+      parentStoreClaims.push(...listClaims(parentStore.cwd));
+    } catch { /* non-fatal */ }
+  }
+
   // Apply profile section filter before scoring
   if (allowedSections) {
     const allowed = allowedSections;
@@ -389,7 +469,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   if (currentAgentIdentity || agent) {
     const agentName = agent;
     const agentId = currentAgentIdentity?.agent_id;
-    const allClaims = listClaims(options.cwd);
+    const allClaims = [...listClaims(options.cwd), ...parentStoreClaims];
     const activeClaims = allClaims.filter(
       (c) => c.status === 'active' && (agentId ? c.agent_id === agentId : c.agent === agentName)
     );
@@ -437,6 +517,9 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     open_work: openWork,
+    stores: storeChain.length > 1
+      ? storeChain.map(({ cwd, depth, role }) => ({ cwd, depth, role }))
+      : undefined,
     estimation_calibration: (() => {
       try {
         const report = buildEstimationReport({ agent, cwd: options.cwd });
@@ -495,6 +578,9 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   lines.push(`Memory version: ${result.memory_version}`);
   lines.push(`Memory density: ${result.memory_density}`);
   lines.push(`Bootstrap available: ${result.bootstrap_available ? 'yes' : 'no'}`);
+  if (result.stores && result.stores.length > 1) {
+    lines.push(`Store chain: ${result.stores.map((s) => `${s.role}(d=${s.depth})`).join(' → ')}`);
+  }
   if (result.all_hosts) {
     lines.push('Runtime host filter: all-hosts');
   } else if (result.host_filter) {
