@@ -689,6 +689,7 @@ program
   .description('Start a memory session and capture initial context')
   .option('--agent <agent>', 'Agent name (defaults to current configured agent)')
   .option('--context <path>', 'Context target path for initial hash capture')
+  .option('--model <id>', 'Model identifier (e.g. claude-sonnet-4-6)')
   .option('--json', 'Output as JSON')
   .action((options) => {
     runSessionStart(options);
