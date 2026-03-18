@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
+import { runSetup } from './commands/setup.js';
 import { runStatus } from './commands/status.js';
 import { runDecision } from './commands/decision.js';
 import { runConstraint } from './commands/constraint.js';
@@ -102,6 +103,18 @@ program
   .option('--scan', 'Scan subdirectories for service boundaries and suggest init targets')
   .action(async (options) => {
     await runInit(options);
+  });
+
+// --- setup ---
+program
+  .command('setup')
+  .description('Interactive onboarding wizard — global agent install + multi-repo init')
+  .option('--roots <paths>', 'Comma-separated root directories to scan (skips interactive prompt)')
+  .option('--agents <agents>', 'Agents to configure: all, detected, or comma-separated names')
+  .option('--repos <mode>', 'Repo selection: all, current, or comma-separated numbers')
+  .option('-y, --yes', 'Accept all defaults non-interactively')
+  .action(async (options) => {
+    await runSetup(options);
   });
 
 // --- decision ---

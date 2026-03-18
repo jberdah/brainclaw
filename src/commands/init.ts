@@ -25,10 +25,12 @@ export interface InitOptions {
   topology?: TopologyMode;
   analyzeRepo?: boolean;
   scan?: boolean;
+  cwd?: string;
+  skipAgentBootstrap?: boolean;
 }
 
 export async function runInit(options: InitOptions = {}): Promise<void> {
-  const cwd = process.cwd();
+  const cwd = options.cwd ?? process.cwd();
 
   // --scan: detect service boundaries and suggest init targets, then exit
   if (options.scan) {
@@ -57,7 +59,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const storageDir = resolveStorageDir(options.storageDir);
   const topology = resolveTopology(options.topology);
   const ignoreStrategy: IgnoreStrategy = topology === 'embedded' ? 'none' : 'project-gitignore';
-  const skipAgentBootstrap = process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
+  const skipAgentBootstrap = options.skipAgentBootstrap === true || process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
 
   if (memoryExists(cwd) && !options.force) {
     console.error('Error: project memory already exists. Use --force to overwrite.');

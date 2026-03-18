@@ -172,11 +172,11 @@ describe('commands/mcp protocol core', () => {
     assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32602);
   });
 
-  it('maps tool command failures to MCP tool errors without breaking the session', () => {
+  it('maps tool command failures to MCP tool errors without breaking the session', async () => {
     const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
     try {
       setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
-      const result = executeMcpToolCall({
+      const result = await executeMcpToolCall({
         name: 'bclaw_accept',
         args: { id: 'cnd_missing', by: workspace.currentAgent.agent_name },
         cwd: workspace.dir,
@@ -189,10 +189,10 @@ describe('commands/mcp protocol core', () => {
     }
   });
 
-  it('rejects unregistered identities and mismatched id/name pairs on write tools', () => {
+  it('rejects unregistered identities and mismatched id/name pairs on write tools', async () => {
     const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
     try {
-      const missingIdentity = executeMcpToolCall({
+      const missingIdentity = await executeMcpToolCall({
         name: 'bclaw_write_note',
         args: { agent: 'ghost', text: 'hello' },
         cwd: workspace.dir,
@@ -200,7 +200,7 @@ describe('commands/mcp protocol core', () => {
       assert.equal(missingIdentity.response.isError, true);
       assert.equal((missingIdentity.response.structuredContent as { error: { kind: string } }).error.kind, 'identity_error');
 
-      const mismatch = executeMcpToolCall({
+      const mismatch = await executeMcpToolCall({
         name: 'bclaw_write_note',
         args: { agent: 'ghost', agentId: workspace.currentAgent.agent_id, text: 'hello' },
         cwd: workspace.dir,
@@ -212,10 +212,10 @@ describe('commands/mcp protocol core', () => {
     }
   });
 
-  it('enforces trusted review rights and supports explicit byId parameters', () => {
+  it('enforces trusted review rights and supports explicit byId parameters', async () => {
     const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-' });
     try {
-      const rejectBlocked = executeMcpToolCall({
+      const rejectBlocked = await executeMcpToolCall({
         name: 'bclaw_reject',
         args: { id: 'cnd_missing', by: workspace.currentAgent.agent_name },
         cwd: workspace.dir,
@@ -223,7 +223,7 @@ describe('commands/mcp protocol core', () => {
       assert.equal(rejectBlocked.response.isError, true);
       assert.equal((rejectBlocked.response.structuredContent as { error: { kind: string } }).error.kind, 'trust_error');
 
-      const mismatch = executeMcpToolCall({
+      const mismatch = await executeMcpToolCall({
         name: 'bclaw_accept',
         args: { id: 'cnd_missing', by: 'ghost', byId: workspace.currentAgent.agent_id },
         cwd: workspace.dir,
@@ -232,7 +232,7 @@ describe('commands/mcp protocol core', () => {
       assert.equal((mismatch.response.structuredContent as { error: { kind: string } }).error.kind, 'identity_error');
 
       setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
-      const trusted = executeMcpToolCall({
+      const trusted = await executeMcpToolCall({
         name: 'bclaw_accept',
         args: { id: 'cnd_missing', byId: workspace.currentAgent.agent_id },
         cwd: workspace.dir,

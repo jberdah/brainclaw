@@ -30,6 +30,18 @@ import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { buildEstimationReport } from './estimation-report.js';
+import { detectAiAgent } from '../core/ai-agent-detection.js';
+import {
+  checkGitPresence,
+  scanGitRepos,
+  parseRoots,
+  parseRepoSelection,
+  parseAgentSelection,
+  runGlobalInstall,
+  initReposAndConfigureAgents,
+  readSetupState,
+  ALL_KNOWN_AGENTS,
+} from './setup.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { CandidateType, MemoryVisibility, PlanItem, PlanStep, PlanStatus, Priority } from '../core/schema.js';
 
@@ -201,6 +213,19 @@ export const MCP_READ_TOOLS = [
 ] as const;
 
 const MCP_WRITE_TOOLS = [
+  {
+    name: 'bclaw_setup',
+    description: 'Interactive onboarding wizard — global agent install + multi-repo brainclaw init. Use the resume pattern: call without step to start, then pass step+choice to advance through each stage.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        step: { type: 'string', description: 'Current step to resume: "project_roots", "repo_selection", or "agent_selection". Omit to start from the beginning.' },
+        choice: { type: 'string', description: 'User choice for the current step (e.g. path list, "all", "detected", or comma-separated numbers).' },
+        roots: { type: 'string', description: 'Comma-separated root paths (required from step "repo_selection" onward to re-scan).' },
+        repo_selection: { type: 'string', description: 'Repo selection choice from previous step (required for "agent_selection" step).' },
+      },
+    },
+  },
   {
     name: 'bclaw_write_note',
     description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a notification note to a linked project (requires role: publisher in cross_project_links config).',
@@ -1144,7 +1169,7 @@ export function handleMcpReadToolCall(
   throw new Error(`Unknown read tool: ${name}`);
 }
 
-export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExecutionOutcome {
+export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const { name, args, cwd, connectionSessionId } = payload;
 
   try {
@@ -1152,6 +1177,70 @@ export function executeMcpToolCall(payload: McpToolExecutionPayload): McpToolExe
       return {
         response: toolResponse(handleMcpReadToolCall(name, args, { cwd })),
       };
+    }
+
+    if (name === 'bclaw_setup') {
+      const step = args.step as string | undefined;
+      const choice = (args.choice as string | undefined) ?? '';
+      const rootsArg = args.roots as string | undefined;
+      const repoSelectionArg = args.repo_selection as string | undefined;
+      const env = process.env;
+
+      if (!checkGitPresence()) {
+        return { response: toolResponse({ content: [{ type: 'text', text: 'Git is not installed or not found in PATH. Install git from https://git-scm.com before running brainclaw setup.' }], structuredContent: { error: 'git_not_found' } }, true) };
+      }
+
+      if (!step) {
+        const existingState = readSetupState(env);
+        const alreadyRun = existingState ? `Setup was previously run on ${new Date(existingState.completed_at).toLocaleDateString()}. You can re-run it.` : undefined;
+        return { response: toolResponse({ content: [{ type: 'text', text: [alreadyRun, "Where are the user's project directories? Please ask the user to provide one or more root paths where their git repositories are located (e.g. ~/Projects, C:\\Users\\user\\code)."].filter(Boolean).join('\n\n') }], structuredContent: { pending_question: 'project_roots', prompt: 'Please ask the user: "Where are your projects? Enter one or more root directories (comma-separated):"', ...(alreadyRun ? { already_run: alreadyRun } : {}) } }) };
+      }
+
+      if (step === 'project_roots') {
+        const roots = parseRoots(choice, env);
+        if (roots.length === 0) {
+          return { response: toolResponse({ content: [{ type: 'text', text: 'No valid directories found from the provided paths. Please ask the user for valid root directories.' }], structuredContent: { error: 'no_valid_roots', provided: choice } }, true) };
+        }
+        const repos = scanGitRepos(roots);
+        const repoList = repos.map((r, i) => `  ${i + 1}) ${r.alreadyInitialised ? '[✔ init]' : '[      ]'} ${r.name}  (${r.path})`).join('\n');
+        return { response: toolResponse({ content: [{ type: 'text', text: `Found ${repos.length} repository candidate(s):\n${repoList}\n\nAsk the user which repositories to initialise.` }], structuredContent: { pending_question: 'repo_selection', roots: roots.join(','), repos: repos.map((r) => ({ path: r.path, name: r.name, alreadyInitialised: r.alreadyInitialised })), prompt: 'Please ask the user: "Which repositories to initialise? Reply: (a)ll, (c)urrent, or numbers like 1,3"' } }) };
+      }
+
+      if (step === 'repo_selection') {
+        if (!rootsArg) {
+          return { response: toolResponse({ content: [{ type: 'text', text: 'Missing roots parameter. Pass the roots value from the previous step.' }], structuredContent: { error: 'missing_roots' } }, true) };
+        }
+        const roots = parseRoots(rootsArg, env);
+        const repos = scanGitRepos(roots);
+        const selectedRepos = parseRepoSelection(choice, repos, cwd);
+        const detected = detectAiAgent(env);
+        const agentList = ALL_KNOWN_AGENTS.map((a, i) => `  ${i + 1}) ${a}${a === detected?.name ? ' ← detected' : ''}`).join('\n');
+        return { response: toolResponse({ content: [{ type: 'text', text: `Selected ${selectedRepos.length} repo(s). Detected AI agent: ${detected?.name ?? 'none'}.\n\nAvailable agents:\n${agentList}\n\nAsk the user which agents to configure.` }], structuredContent: { pending_question: 'agent_selection', roots: rootsArg, repo_selection: choice, selected_repos: selectedRepos.map((r) => ({ path: r.path, name: r.name })), detected_agent: detected?.name ?? null, all_agents: ALL_KNOWN_AGENTS, prompt: 'Please ask the user: "Which agents to configure? Reply: (d)etected, (a)ll, or agent names like claude-code,cursor"' } }) };
+      }
+
+      if (step === 'agent_selection') {
+        if (!rootsArg || !repoSelectionArg) {
+          return { response: toolResponse({ content: [{ type: 'text', text: 'Missing roots or repo_selection parameter from previous steps.' }], structuredContent: { error: 'missing_params' } }, true) };
+        }
+        const roots = parseRoots(rootsArg, env);
+        const repos = scanGitRepos(roots);
+        const selectedRepos = parseRepoSelection(repoSelectionArg, repos, cwd);
+        const detected = detectAiAgent(env);
+        const selectedAgents = parseAgentSelection(choice, detected?.name);
+        const summary: string[] = [];
+        const written = runGlobalInstall(selectedAgents, env);
+        for (const f of written) summary.push(`✔ Global config: ${f}`);
+        const { initialisedRepos, configActions } = await initReposAndConfigureAgents(selectedRepos, selectedAgents, env);
+        for (const p of initialisedRepos) summary.push(`✔ Initialised repo: ${p}`);
+        for (const a of configActions) summary.push(a);
+        let reloadMsg = '✔ Setup complete! Reload your AI agent session to activate brainclaw MCP tools.';
+        if (detected?.name === 'claude-code') reloadMsg += '\n  → In VS Code: Cmd/Ctrl+Shift+P → "Claude: Reload MCP Servers"';
+        else if (detected?.name === 'cursor') reloadMsg += '\n  → In Cursor: restart the editor';
+        else if (detected?.name === 'windsurf') reloadMsg += '\n  → In Windsurf: restart the editor';
+        return { response: toolResponse({ content: [{ type: 'text', text: [reloadMsg, '', ...summary].join('\n') }], structuredContent: { setup_complete: true, initialised_repos: initialisedRepos, global_configs_written: written, agent_configs_written: configActions, detected_agent: detected?.name ?? null, summary } }) };
+      }
+
+      return { response: toolResponse({ content: [{ type: 'text', text: `Unknown step: "${step}". Valid steps: project_roots, repo_selection, agent_selection.` }], structuredContent: { error: 'unknown_step', step } }, true) };
     }
 
     if (name === 'bclaw_write_note') {

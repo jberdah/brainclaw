@@ -6,7 +6,7 @@ async function main(): Promise<void> {
   if (delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  const result = executeMcpToolCall(workerData as McpToolExecutionPayload);
+  const result = await executeMcpToolCall(workerData as McpToolExecutionPayload);
   parentPort?.postMessage(result satisfies McpToolExecutionOutcome);
 }
 
