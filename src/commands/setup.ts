@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { runInit } from './init.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile } from '../core/machine-profile.js';
+import { buildAgentInventory, saveAgentInventory, loadAgentInventory } from '../core/agent-inventory.js';
 import {
   ensureClaudeCodeUserSettings,
   ensureClaudeCodeUserCommand,
@@ -240,7 +241,7 @@ export function runGlobalInstall(
     written.push(...initUserStore(home, env));
   }
 
-  // Generate machine profile if missing or stale
+  // Generate machine profile if missing
   try {
     const existing = loadMachineProfile();
     if (!existing) {
@@ -250,6 +251,18 @@ export function runGlobalInstall(
     }
   } catch {
     // Non-fatal: machine profile is optional
+  }
+
+  // Generate agent inventory if missing
+  try {
+    const existingInv = loadAgentInventory();
+    if (!existingInv) {
+      const inventory = buildAgentInventory();
+      const inventoryPath = saveAgentInventory(inventory);
+      written.push(inventoryPath);
+    }
+  } catch {
+    // Non-fatal: agent inventory is optional
   }
 
   if (selectedAgents.includes('claude-code')) {

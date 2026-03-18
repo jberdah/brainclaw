@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
+import { buildAgentInventory, saveAgentInventory, loadAgentInventory, renderAgentInventorySummary } from './core/agent-inventory.js';
 import { runStatus } from './commands/status.js';
 import { runDecision } from './commands/decision.js';
 import { runConstraint } from './commands/constraint.js';
@@ -146,6 +147,34 @@ program
     } else {
       console.log(renderMachineProfileSummary(profile));
       console.log(`\n✔ Profile saved to ${filePath}`);
+    }
+  });
+
+// --- agent-inventory ---
+program
+  .command('agent-inventory')
+  .description('Detect all installed AI coding agents and their capabilities')
+  .option('--refresh', 'Force regeneration even if inventory exists')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const existing = loadAgentInventory();
+    if (existing && !options.refresh) {
+      if (options.json) {
+        console.log(JSON.stringify(existing, null, 2));
+      } else {
+        console.log(renderAgentInventorySummary(existing));
+        console.log('\nUse --refresh to regenerate.');
+      }
+      return;
+    }
+    console.log('Detecting installed agents...');
+    const inventory = buildAgentInventory();
+    const filePath = saveAgentInventory(inventory);
+    if (options.json) {
+      console.log(JSON.stringify(inventory, null, 2));
+    } else {
+      console.log(renderAgentInventorySummary(inventory));
+      console.log(`\n✔ Inventory saved to ${filePath}`);
     }
   });
 
