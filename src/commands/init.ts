@@ -7,6 +7,7 @@ import { emptyState, loadState, saveState } from '../core/state.js';
 import { defaultConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
+import { scanProject, upsertProject } from '../core/global-registry.js';
 import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
@@ -134,6 +135,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }
   saveConfig(config, cwd, storageDir);
   saveProjectIdentity(projectIdentity, cwd, storageDir);
+
+  // Register in global project registry
+  try {
+    const entry = scanProject(cwd);
+    if (entry) upsertProject(entry);
+  } catch {
+    // Non-fatal: global registry is optional
+  }
 
   // Create project.md
   const md = generateMarkdown(state);

@@ -5,6 +5,7 @@ import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
 import { buildAgentInventory, saveAgentInventory, loadAgentInventory, renderAgentInventorySummary } from './core/agent-inventory.js';
+import { scanAndRegister, scanProject, upsertProject, loadGlobalRegistry, renderGlobalRegistrySummary } from './core/global-registry.js';
 import { runStatus } from './commands/status.js';
 import { runDecision } from './commands/decision.js';
 import { runConstraint } from './commands/constraint.js';
@@ -175,6 +176,48 @@ program
     } else {
       console.log(renderAgentInventorySummary(inventory));
       console.log(`\n✔ Inventory saved to ${filePath}`);
+    }
+  });
+
+// --- projects ---
+program
+  .command('projects')
+  .description('List all brainclaw-initialized projects on this machine')
+  .option('--scan <roots>', 'Comma-separated directories to scan for projects')
+  .option('--register', 'Register the current project in the global registry')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    if (options.register) {
+      const entry = scanProject(process.cwd());
+      if (!entry) {
+        console.error('No brainclaw project found in current directory. Run brainclaw init first.');
+        process.exit(1);
+      }
+      upsertProject(entry);
+      console.log(`✔ Registered ${entry.project_name} (${entry.project_id})`);
+      return;
+    }
+    if (options.scan) {
+      const roots = (options.scan as string).split(',').map((r: string) => r.trim());
+      console.log(`Scanning ${roots.join(', ')}...`);
+      const registry = scanAndRegister(roots);
+      if (options.json) {
+        console.log(JSON.stringify(registry, null, 2));
+      } else {
+        console.log(renderGlobalRegistrySummary(registry));
+      }
+      return;
+    }
+    // Default: show existing registry
+    const registry = loadGlobalRegistry();
+    if (!registry || registry.projects.length === 0) {
+      console.log('No projects registered. Use --scan <roots> or --register to add projects.');
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(registry, null, 2));
+    } else {
+      console.log(renderGlobalRegistrySummary(registry));
     }
   });
 
