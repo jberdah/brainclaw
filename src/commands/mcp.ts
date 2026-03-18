@@ -211,6 +211,41 @@ export const MCP_READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'bclaw_get_capabilities',
+    description: 'List all registered project capabilities with full metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: 'Filter by capability category.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (any).' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_tools',
+    description: 'List all registered project tools with metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Filter by tool type (workflow, validator, generator, utility, explorer).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (any).' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_search_tools',
+    description: 'Search tools by query and tags.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query (matches tool name, description, tags).' },
+        type: { type: 'string', description: 'Filter by tool type.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (all must match).' },
+      },
+      required: ['query'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
@@ -1198,6 +1233,130 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  if (name === 'bclaw_get_capabilities') {
+    const state = loadState(cwd);
+    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
+
+    const filtered = capabilities.filter((cap) => {
+      const categoryFilter = args.category as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      if (categoryFilter) {
+        const capCategory = cap.tags.find((t) => t !== 'capability');
+        if (capCategory !== categoryFilter) return false;
+      }
+
+      if (tagsFilter && tagsFilter.length > 0) {
+        const hasAllTags = tagsFilter.every((tag) => cap.tags.includes(tag));
+        if (!hasAllTags) return false;
+      }
+
+      return true;
+    });
+
+    const lines: string[] = [`Capabilities (${filtered.length}):`];
+    filtered.forEach((cap) => {
+      const category = cap.tags.find((t) => t !== 'capability') || 'general';
+      const otherTags = cap.tags.filter((t) => t !== 'capability' && t !== category);
+      lines.push(`\n[${cap.id}] ${cap.text.split('\n')[0]}`);
+      lines.push(`    Category: ${category}`);
+      lines.push(`    Author: ${cap.author}`);
+      if (otherTags.length > 0) {
+        lines.push(`    Tags: ${otherTags.join(', ')}`);
+      }
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No capabilities found.' }],
+      structuredContent: { total: filtered.length, capabilities: filtered },
+    };
+  }
+
+  if (name === 'bclaw_list_tools') {
+    const state = loadState(cwd);
+    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+
+    const filtered = tools.filter((tool) => {
+      const typeFilter = args.type as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      if (typeFilter) {
+        const toolType = tool.tags.find((t) => t !== 'tool');
+        if (toolType !== typeFilter) return false;
+      }
+
+      if (tagsFilter && tagsFilter.length > 0) {
+        const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
+        if (!hasAllTags) return false;
+      }
+
+      return true;
+    });
+
+    const lines: string[] = [`Tools (${filtered.length}):`];
+    filtered.forEach((tool) => {
+      const type = tool.tags.find((t) => t !== 'tool') || 'utility';
+      const otherTags = tool.tags.filter((t) => t !== 'tool' && t !== type);
+      lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
+      lines.push(`    Type: ${type}`);
+      lines.push(`    Author: ${tool.author}`);
+      if (otherTags.length > 0) {
+        lines.push(`    Tags: ${otherTags.join(', ')}`);
+      }
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
+      structuredContent: { total: filtered.length, tools: filtered },
+    };
+  }
+
+  if (name === 'bclaw_search_tools') {
+    const query = String(args.query ?? '');
+    if (!query) {
+      throw new Error('Missing required argument: query');
+    }
+
+    const state = loadState(cwd);
+    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+
+    const filtered = tools.filter((tool) => {
+      const typeFilter = args.type as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      // Type filter
+      if (typeFilter) {
+        const toolType = tool.tags.find((t) => t !== 'tool');
+        if (toolType !== typeFilter) return false;
+      }
+
+      // Tags filter (all must match)
+      if (tagsFilter && tagsFilter.length > 0) {
+        const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
+        if (!hasAllTags) return false;
+      }
+
+      // Query search (name, description, tags)
+      const queryLower = query.toLowerCase();
+      return (
+        tool.text.toLowerCase().includes(queryLower) ||
+        tool.tags.some((tag) => tag.toLowerCase().includes(queryLower))
+      );
+    });
+
+    const lines: string[] = [`Search results for '${query}' (${filtered.length} tool(s)):`];
+    filtered.forEach((tool) => {
+      const type = tool.tags.find((t) => t !== 'tool') || 'utility';
+      lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
+      lines.push(`    Type: ${type}`);
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
+      structuredContent: { query, total: filtered.length, tools: filtered },
     };
   }
 
