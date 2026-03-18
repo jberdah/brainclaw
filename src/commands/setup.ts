@@ -4,6 +4,7 @@ import readline from 'node:readline/promises';
 import { spawnSync } from 'node:child_process';
 import { runInit } from './init.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { buildMachineProfile, saveMachineProfile, loadMachineProfile } from '../core/machine-profile.js';
 import {
   ensureClaudeCodeUserSettings,
   ensureClaudeCodeUserCommand,
@@ -237,6 +238,18 @@ export function runGlobalInstall(
   // Initialize user-global store first
   if (home) {
     written.push(...initUserStore(home, env));
+  }
+
+  // Generate machine profile if missing or stale
+  try {
+    const existing = loadMachineProfile();
+    if (!existing) {
+      const profile = buildMachineProfile();
+      const profilePath = saveMachineProfile(profile);
+      written.push(profilePath);
+    }
+  } catch {
+    // Non-fatal: machine profile is optional
   }
 
   if (selectedAgents.includes('claude-code')) {

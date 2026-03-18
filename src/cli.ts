@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
+import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
 import { runStatus } from './commands/status.js';
 import { runDecision } from './commands/decision.js';
 import { runConstraint } from './commands/constraint.js';
@@ -118,6 +119,34 @@ program
   .option('-y, --yes', 'Accept all defaults non-interactively')
   .action(async (options) => {
     await runSetup(options);
+  });
+
+// --- machine-profile ---
+program
+  .command('machine-profile')
+  .description('Detect and persist machine capabilities (OS, shells, git users, SSH keys, toolchains, WSL)')
+  .option('--refresh', 'Force regeneration even if profile exists')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const existing = loadMachineProfile();
+    if (existing && !options.refresh) {
+      if (options.json) {
+        console.log(JSON.stringify(existing, null, 2));
+      } else {
+        console.log(renderMachineProfileSummary(existing));
+        console.log('\nUse --refresh to regenerate.');
+      }
+      return;
+    }
+    console.log('Detecting machine capabilities...');
+    const profile = buildMachineProfile();
+    const filePath = saveMachineProfile(profile);
+    if (options.json) {
+      console.log(JSON.stringify(profile, null, 2));
+    } else {
+      console.log(renderMachineProfileSummary(profile));
+      console.log(`\n✔ Profile saved to ${filePath}`);
+    }
   });
 
 // --- decision ---
