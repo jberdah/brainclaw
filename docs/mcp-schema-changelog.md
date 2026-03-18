@@ -4,7 +4,25 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
 
 ---
 
-## 0.4.0 (current)
+## 0.5.0 (current)
+
+**Added**
+- `bclaw_delete_memory` — delete a constraint, decision, or trap by ID (trusted trust required)
+  - Searches across store chain to locate item
+  - Supports deletion from any store level (local, repo, workspace, user)
+  - Returns `deleted_id`, `item_type`, `store_level` in response
+- `bclaw_update_memory` — update text/tags or move an item to a different store level (trusted trust required)
+  - Supports updating constraint, decision, or trap in-place
+  - `moveToStore` parameter enables moving items between levels (local → repo → workspace → user)
+  - Returns `updated_id`, `item_type`, `previous_store`, `new_store` in response
+- Doctor checks `scope_hygiene` and `cross_level_duplicates` — warn about machine-level items at project scope and potential duplicates across store levels
+
+**Changed**
+- `bclaw_get_context` and related tools now properly merge instructions from parent stores in the chain
+
+---
+
+## 0.4.0
 
 **Added**
 - `bclaw_create_plan` — create a plan item from an agent (contributor trust required)

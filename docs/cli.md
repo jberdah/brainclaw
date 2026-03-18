@@ -132,6 +132,7 @@ Record a durable architectural or process decision.
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--path <path>` | Scope to a file or folder path |
 | `--author <name>` | Author name |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
 
 ```bash
 brainclaw decision "OAuth goes through auth-gateway" --tag auth
@@ -147,6 +148,7 @@ Record an active constraint.
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--path <path>` | Scope to a file or folder path |
 | `--author <name>` | Author name |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
 
 ```bash
 brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
@@ -206,6 +208,7 @@ Create a layered shared instruction.
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--author <name>` | Author name |
 | `--supersedes <id>` | ID of the instruction this replaces |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
 
 ```bash
 brainclaw instruction "Read project memory before edits"
