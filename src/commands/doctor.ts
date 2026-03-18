@@ -997,6 +997,138 @@ export function runDoctor(options: DoctorOptions = {}): void {
         console.log(`✔ Handoff backlog: ${openHandoffs.length} open handoff(s) checked, all covered`);
       }
     }
+
+    // Check scope hygiene - warn if machine-level items are at project level
+    try {
+      const MACHINE_TAGS = ['windows', 'wsl', 'powershell', 'ssh', 'linux', 'macos', 'env', 'path', 'node-path'];
+      const chain = resolveStoreChain(options.cwd);
+      const userStoreExists = chain.some((s) => s.role === 'user');
+
+      if (userStoreExists) {
+        const projectState = loadState(options.cwd);
+        const projectLevelItems: Array<{ id: string; type: string; text: string; tags: string[] }> = [];
+
+        // Collect project-level items with machine-generic tags
+        for (const constraint of projectState.active_constraints) {
+          const hasMachineTag = constraint.tags.some((t) => MACHINE_TAGS.includes(t.toLowerCase()));
+          if (hasMachineTag) projectLevelItems.push({ id: constraint.id, type: 'constraint', text: constraint.text, tags: constraint.tags });
+        }
+        for (const decision of projectState.recent_decisions) {
+          const hasMachineTag = decision.tags.some((t) => MACHINE_TAGS.includes(t.toLowerCase()));
+          if (hasMachineTag) projectLevelItems.push({ id: decision.id, type: 'decision', text: decision.text, tags: decision.tags });
+        }
+        for (const trap of projectState.known_traps) {
+          const hasMachineTag = trap.tags.some((t) => MACHINE_TAGS.includes(t.toLowerCase()));
+          if (hasMachineTag) projectLevelItems.push({ id: trap.id, type: 'trap', text: trap.text, tags: trap.tags });
+        }
+
+        if (projectLevelItems.length > 0) {
+          const itemDescr = projectLevelItems.map((i) => `${i.type}[${i.id.slice(0, 8)}]`).join(', ');
+          checks.push({
+            name: 'scope_hygiene',
+            status: 'warn',
+            message: `${projectLevelItems.length} project-level item(s) have machine-generic tags: ${itemDescr}. Consider moving to user store.`,
+            details: projectLevelItems,
+          });
+          if (!options.json) {
+            console.warn(`⚠ Scope hygiene: ${projectLevelItems.length} project-level item(s) with machine tags (windows, wsl, ssh, etc.) should be in user store`);
+            projectLevelItems.forEach((item) => {
+              console.warn(`  - [${item.id.slice(0, 8)}] ${item.type}: tags=[${item.tags.join(', ')}]`);
+            });
+          }
+        } else {
+          checks.push({ name: 'scope_hygiene', status: 'ok', message: 'No machine-level items detected at project scope' });
+          if (!options.json) {
+            console.log('✔ Scope hygiene: no machine-level items at project scope');
+          }
+        }
+      } else {
+        checks.push({ name: 'scope_hygiene', status: 'ok', message: 'User store not configured (scope hygiene skipped)' });
+      }
+    } catch { /* non-fatal */ }
+
+    // Check for cross-level duplicates
+    try {
+      const chain = resolveStoreChain(options.cwd);
+      const allConstraints: Map<string, Array<{ id: string; store: string; text: string }>> = new Map();
+      const allDecisions: Map<string, Array<{ id: string; store: string; text: string }>> = new Map();
+      const allTraps: Map<string, Array<{ id: string; store: string; text: string }>> = new Map();
+
+      // Collect items from all stores
+      for (const store of chain) {
+        try {
+          const storeState = loadState(store.cwd);
+          const storeName = store.role;
+
+          for (const constraint of storeState.active_constraints) {
+            const key = constraint.text.slice(0, 60).toLowerCase();
+            if (!allConstraints.has(key)) allConstraints.set(key, []);
+            allConstraints.get(key)!.push({ id: constraint.id, store: storeName, text: constraint.text });
+          }
+          for (const decision of storeState.recent_decisions) {
+            const key = decision.text.slice(0, 60).toLowerCase();
+            if (!allDecisions.has(key)) allDecisions.set(key, []);
+            allDecisions.get(key)!.push({ id: decision.id, store: storeName, text: decision.text });
+          }
+          for (const trap of storeState.known_traps) {
+            const key = trap.text.slice(0, 60).toLowerCase();
+            if (!allTraps.has(key)) allTraps.set(key, []);
+            allTraps.get(key)!.push({ id: trap.id, store: storeName, text: trap.text });
+          }
+        } catch { /* skip stores that can't be read */ }
+      }
+
+      // Find duplicates (same text at different levels)
+      const duplicates: Array<{ type: string; text: string; items: Array<{ id: string; store: string }> }> = [];
+
+      allConstraints.forEach((items, key) => {
+        if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
+          duplicates.push({
+            type: 'constraint',
+            text: items[0].text,
+            items: items.map((i) => ({ id: i.id, store: i.store })),
+          });
+        }
+      });
+      allDecisions.forEach((items, key) => {
+        if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
+          duplicates.push({
+            type: 'decision',
+            text: items[0].text,
+            items: items.map((i) => ({ id: i.id, store: i.store })),
+          });
+        }
+      });
+      allTraps.forEach((items, key) => {
+        if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
+          duplicates.push({
+            type: 'trap',
+            text: items[0].text,
+            items: items.map((i) => ({ id: i.id, store: i.store })),
+          });
+        }
+      });
+
+      if (duplicates.length > 0) {
+        checks.push({
+          name: 'cross_level_duplicates',
+          status: 'warn',
+          message: `${duplicates.length} potential duplicate(s) detected across store levels. Review and deduplicate if needed.`,
+          details: duplicates.slice(0, 10), // Limit to 10 for brevity
+        });
+        if (!options.json) {
+          console.warn(`⚠ Cross-level duplicates: ${duplicates.length} potential duplicate(s) across store levels`);
+          duplicates.slice(0, 10).forEach((dup) => {
+            console.warn(`  - ${dup.type}: "${dup.text.slice(0, 40)}..." at [${dup.items.map((i) => i.store).join(', ')}]`);
+          });
+        }
+      } else {
+        checks.push({ name: 'cross_level_duplicates', status: 'ok', message: 'No cross-level duplicates detected' });
+        if (!options.json) {
+          console.log('✔ Cross-level duplicates: no duplicates across store levels');
+        }
+      }
+    } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
 
   if (options.json) {
