@@ -130,16 +130,18 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     saveState(state, cwd);
   }
 
-  // Clean up empty legacy directories
+  // Clean up empty legacy directories (recursively removes empty subdirs first)
+  let removedDirs = 0;
   for (const { legacy } of ENTITY_DIRS) {
     const legacyDir = path.join(base, legacy);
-    if (fs.existsSync(legacyDir) && isEmptyDir(legacyDir)) {
-      // Don't remove — legacy dirs may still be used by older brainclaw versions
-      // Just note that they're empty
+    if (fs.existsSync(legacyDir)) {
+      removedDirs += removeEmptyDirsRecursive(legacyDir);
     }
   }
 
-  console.log(`✔ Upgrade complete: ${movedFiles} file(s) moved, ${outdated.length} schema(s) migrated.`);
+  const parts = [`${movedFiles} file(s) moved`, `${outdated.length} schema(s) migrated`];
+  if (removedDirs > 0) parts.push(`${removedDirs} empty legacy dir(s) removed`);
+  console.log(`✔ Upgrade complete: ${parts.join(', ')}.`);
 }
 
 function listJsonFiles(dir: string): string[] {
@@ -169,6 +171,25 @@ function isEmptyDir(dir: string): boolean {
   } catch {
     return true;
   }
+}
+
+/** Recursively remove empty directories bottom-up. Returns count of dirs removed. */
+function removeEmptyDirsRecursive(dir: string): number {
+  if (!fs.existsSync(dir)) return 0;
+  let removed = 0;
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      removed += removeEmptyDirsRecursive(path.join(dir, entry.name));
+    }
+  }
+
+  if (isEmptyDir(dir)) {
+    fs.rmdirSync(dir);
+    removed++;
+  }
+
+  return removed;
 }
 
 function outputJson(actions: MigrationAction[], dryRun: boolean): void {
