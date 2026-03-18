@@ -6,6 +6,7 @@ import { generateMarkdown } from '../core/markdown.js';
 import { loadState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { InstructionLayer } from '../core/schema.js';
 
 export interface InstructionOptions {
@@ -15,10 +16,14 @@ export interface InstructionOptions {
   tag?: string[];
   author?: string;
   supersedes?: string;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 export function runInstruction(text: string, options: InstructionOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
@@ -27,7 +32,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
 
   const layer = options.layer ?? 'global';
   const scope = resolveScope(layer, options);
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -43,9 +48,9 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
     tags: options.tag,
     author: options.author ?? resolveCurrentAgentName(),
     supersedes: options.supersedes,
-  });
+  }, cwd);
 
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(loadState()));
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
   console.log(`✔ Instruction added: [${entry.id}] <${entry.layer}${entry.scope ? `:${entry.scope}` : ''}> ${entry.text}`);
 }
 

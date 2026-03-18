@@ -6,23 +6,28 @@ import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { Constraint } from '../core/schema.js';
 
 export interface ConstraintOptions {
   tag?: string[];
   path?: string[];
   author?: string;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 export function runConstraint(text: string, options: ConstraintOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   validateCliInput(text, options.tag);
 
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -32,7 +37,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     }
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
   const { id, short_label } = generateIdWithLabel('active_constraints');
 
   const entry: Constraint = {
@@ -47,9 +52,9 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
   };
 
   state.active_constraints.push(entry);
-  saveState(state);
+  saveState(state, cwd);
 
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
 
   console.log(`✔ Constraint added: [${id}] ${text}`);
 }

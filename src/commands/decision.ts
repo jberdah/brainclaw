@@ -6,6 +6,7 @@ import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { Decision } from '../core/schema.js';
 
 export interface DecisionOptions {
@@ -13,17 +14,21 @@ export interface DecisionOptions {
   path?: string[];
   author?: string;
   plan?: string;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 export function runDecision(text: string, options: DecisionOptions = {}): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   validateCliInput(text, options.tag);
 
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -33,7 +38,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
     }
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
   const { id, short_label } = generateIdWithLabel('recent_decisions');
 
   const entry: Decision = {
@@ -48,10 +53,10 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
   };
 
   state.recent_decisions.push(entry);
-  saveState(state);
+  saveState(state, cwd);
 
   // Rebuild markdown
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
 
   console.log(`✔ Decision added: [${id}] ${text}`);
 }

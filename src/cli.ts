@@ -124,6 +124,7 @@ program
   .option('--tag <tags...>', 'Tags for this decision')
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runDecision(text, options);
   });
@@ -135,6 +136,7 @@ program
   .option('--tag <tags...>', 'Tags for this constraint')
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runConstraint(text, options);
   });
@@ -150,7 +152,7 @@ program
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')
   .option('--ttl <duration>', 'Time-to-live: 30m, 2h, 7d (trap auto-expires after this duration)')
-  .option('--store <target>', 'Target store level: local (default), repo, workspace')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runTrap(text, options);
   });
@@ -193,7 +195,7 @@ program
   .option('--depends-on <ids...>', 'Dependency IDs for this plan item')
   .option('--author <author>', 'Author name')
   .option('--estimate <minutes>', 'Estimated effort in minutes (positive integer, e.g. --estimate 30)')
-  .option('--store <target>', 'Target store level: local (default), repo, workspace')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runPlan(text, options);
   });
@@ -385,6 +387,7 @@ program
   .option('--tag <tags...>', 'Tags for this instruction')
   .option('--author <author>', 'Author name')
   .option('--supersedes <id>', 'Supersede an older instruction entry')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runInstruction(text, options);
   });
