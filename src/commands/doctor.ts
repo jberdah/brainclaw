@@ -1128,6 +1128,57 @@ export function runDoctor(options: DoctorOptions = {}): void {
           console.log('✔ Cross-level duplicates: no duplicates across store levels');
         }
       }
+
+      // Metadata consistency checks
+      const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
+      const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+      const metadataIssues: string[] = [];
+
+      // Check capabilities completeness
+      capabilities.forEach((cap) => {
+        const category = cap.tags.find((t) => t !== 'capability');
+        if (!category) {
+          metadataIssues.push(`Capability [${cap.id}] missing category`);
+        }
+        if (!cap.text || cap.text.trim().length === 0) {
+          metadataIssues.push(`Capability [${cap.id}] has empty description`);
+        }
+      });
+
+      // Check tools completeness
+      tools.forEach((tool) => {
+        const type = tool.tags.find((t) => t !== 'tool');
+        if (!type) {
+          metadataIssues.push(`Tool [${tool.id}] missing type`);
+        }
+        if (!tool.text || tool.text.trim().length === 0) {
+          metadataIssues.push(`Tool [${tool.id}] has empty description`);
+        }
+      });
+
+      if (metadataIssues.length > 0) {
+        checks.push({
+          name: 'metadata_consistency',
+          status: 'warn',
+          message: `${metadataIssues.length} metadata inconsistency(ies) found. Capabilities/tools may be incomplete.`,
+          details: metadataIssues.slice(0, 10),
+        });
+        if (!options.json) {
+          console.warn(`⚠ Metadata consistency: ${metadataIssues.length} issue(s) found`);
+          metadataIssues.slice(0, 10).forEach((issue) => {
+            console.warn(`  - ${issue}`);
+          });
+        }
+      } else {
+        checks.push({
+          name: 'metadata_consistency',
+          status: 'ok',
+          message: `Metadata consistency OK (${capabilities.length} capabilities, ${tools.length} tools)`,
+        });
+        if (!options.json) {
+          console.log(`✔ Metadata consistency: ${capabilities.length} capabilities, ${tools.length} tools registered`);
+        }
+      }
     } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
 
