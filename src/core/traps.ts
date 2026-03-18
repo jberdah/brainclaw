@@ -2,13 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
 import { generateId, generateIdWithLabel } from './ids.js';
-import { memoryDir } from './io.js';
+import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { TrapSchema, type MemoryVisibility, type Trap } from './schema.js';
 import { loadState } from './state.js';
-
-const TRAPS_MACHINE_DIR = 'traps-hosts';
-const TRAPS_PRIVATE_DIR = 'traps-private';
 
 export interface TrapListOptions {
   visibility?: Extract<MemoryVisibility, 'machine' | 'private'> | 'all';
@@ -17,11 +14,11 @@ export interface TrapListOptions {
 }
 
 function machineTrapsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), TRAPS_MACHINE_DIR);
+  return resolveEntityDir('traps-hosts', cwd ?? process.cwd(), 'read');
 }
 
 function privateTrapsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), TRAPS_PRIVATE_DIR);
+  return resolveEntityDir('traps-private', cwd ?? process.cwd(), 'read');
 }
 
 function hostTrapDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string): string {

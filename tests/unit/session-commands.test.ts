@@ -82,7 +82,7 @@ describe('session commands', () => {
       assert.ok(snapshot?.initial_context_hash);
       assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_start_test');
 
-      const sessionDir = path.join(workspace.dir, '.brainclaw', 'runtime', workspace.currentAgent.agent_name);
+      const sessionDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime', workspace.currentAgent.agent_name);
       const sessionNotes = fs.readdirSync(sessionDir)
         .filter((file) => file.endsWith('.json'))
         .map((file) => JSON.parse(fs.readFileSync(path.join(sessionDir, file), 'utf-8')));

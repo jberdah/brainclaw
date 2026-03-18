@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveEventSessionId } from './identity.js';
 import { RuntimeEventSchema, type RuntimeEvent } from './schema.js';
-import { memoryDir, readFileSync } from './io.js';
+import { readFileSync, resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
 
 function runtimeDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), 'runtime');
+  return resolveEntityDir('runtime', cwd ?? process.cwd(), 'read');
 }
 
 function collectJsonFiles(dir: string): string[] {

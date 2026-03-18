@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryPath } from './io.js';
+import { memoryPath, resolveEntityDir } from './io.js';
 import { generateId } from './ids.js';
 import { InstructionEntrySchema, type Config, type InstructionEntry, type InstructionLayer } from './schema.js';
 import { JsonStore } from './json-store.js';
@@ -18,9 +18,9 @@ export interface ResolveInstructionsOptions {
   agent?: string;
 }
 
-function instructionStore(cwd?: string): JsonStore<InstructionEntry> {
+function instructionStore(cwd?: string, mode: 'read' | 'write' = 'read'): JsonStore<InstructionEntry> {
   return new JsonStore<InstructionEntry>({
-    dirPath: memoryPath('instructions', cwd),
+    dirPath: resolveEntityDir('instructions', cwd ?? process.cwd(), mode),
     documentType: 'instruction',
     getId: (entry) => entry.id,
     sort: (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
@@ -28,7 +28,7 @@ function instructionStore(cwd?: string): JsonStore<InstructionEntry> {
 }
 
 export function loadInstructions(cwd?: string): InstructionEntry[] {
-  const dir = memoryPath('instructions', cwd);
+  const dir = resolveEntityDir('instructions', cwd ?? process.cwd(), 'read');
   if (!fs.existsSync(dir)) {
     return [];
   }
@@ -36,7 +36,7 @@ export function loadInstructions(cwd?: string): InstructionEntry[] {
 }
 
 export function saveInstruction(entry: InstructionEntry, cwd?: string): void {
-  instructionStore(cwd).save(InstructionEntrySchema.parse(entry));
+  instructionStore(cwd, 'write').save(InstructionEntrySchema.parse(entry));
 }
 
 export function createInstruction(text: string, options: CreateInstructionOptions, cwd?: string): InstructionEntry {

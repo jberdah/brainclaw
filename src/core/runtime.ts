@@ -2,13 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { memoryDir } from './io.js';
+import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
-
-const RUNTIME_SHARED_DIR = 'runtime';
-const RUNTIME_MACHINE_DIR = 'runtime-hosts';
-const RUNTIME_PRIVATE_DIR = 'runtime-private';
 
 export interface RuntimeListOptions {
   agent?: string;
@@ -19,35 +15,35 @@ export interface RuntimeListOptions {
 
 export interface RuntimeLookupOptions extends RuntimeListOptions {}
 
-function sharedRuntimeDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), RUNTIME_SHARED_DIR);
+function sharedRuntimeDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('runtime', cwd ?? process.cwd(), mode);
 }
 
-function machineRuntimeDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), RUNTIME_MACHINE_DIR);
+function machineRuntimeDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('runtime-hosts', cwd ?? process.cwd(), mode);
 }
 
-function privateRuntimeDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), RUNTIME_PRIVATE_DIR);
+function privateRuntimeDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('runtime-private', cwd ?? process.cwd(), mode);
 }
 
-function sharedAgentDir(agent: string, cwd?: string): string {
-  return path.join(sharedRuntimeDir(cwd), agent);
+function sharedAgentDir(agent: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return path.join(sharedRuntimeDir(cwd, mode), agent);
 }
 
-function hostRootDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string): string {
-  const baseDir = visibility === 'machine' ? machineRuntimeDir(cwd) : privateRuntimeDir(cwd);
+function hostRootDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  const baseDir = visibility === 'machine' ? machineRuntimeDir(cwd, mode) : privateRuntimeDir(cwd, mode);
   return path.join(baseDir, sanitizeHostId(hostId));
 }
 
-function hostAgentDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, agent: string, cwd?: string): string {
-  return path.join(hostRootDir(visibility, hostId, cwd), agent);
+function hostAgentDir(visibility: Extract<MemoryVisibility, 'machine' | 'private'>, hostId: string, agent: string, cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return path.join(hostRootDir(visibility, hostId, cwd, mode), agent);
 }
 
 export function ensureRuntimeDir(agent: string, cwd?: string, visibility: MemoryVisibility = 'shared', hostId?: string): void {
   const dir = visibility === 'shared'
-    ? sharedAgentDir(agent, cwd)
-    : hostAgentDir(visibility, hostId ?? resolveCurrentHostId(), agent, cwd);
+    ? sharedAgentDir(agent, cwd, 'write')
+    : hostAgentDir(visibility, hostId ?? resolveCurrentHostId(), agent, cwd, 'write');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -62,8 +58,8 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
 
   ensureRuntimeDir(note.agent, cwd, visibility, hostId);
   const filepath = visibility === 'shared'
-    ? path.join(sharedAgentDir(note.agent, cwd), `${note.id}.json`)
-    : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd), `${note.id}.json`);
+    ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
+    : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd, 'write'), `${note.id}.json`);
   saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
 }
 

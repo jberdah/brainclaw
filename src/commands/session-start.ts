@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { memoryExists, memoryDir } from '../core/io.js';
+import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
@@ -11,10 +11,8 @@ import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 
-const SESSIONS_DIR = 'sessions';
-
 function sessionsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), SESSIONS_DIR);
+  return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
 }
 
 function sessionSnapshotPath(sessionId: string, cwd?: string): string {

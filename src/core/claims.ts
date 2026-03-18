@@ -2,18 +2,16 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ClaimSchema, type Claim } from './schema.js';
-import { memoryDir } from './io.js';
+import { resolveEntityDir } from './io.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 
-const CLAIMS_DIR = 'claims';
-
-function claimsDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), CLAIMS_DIR);
+function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
 }
 
 export function ensureClaimsDir(cwd?: string): void {
-  const dir = claimsDir(cwd);
+  const dir = claimsDir(cwd, 'write');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -21,7 +19,7 @@ export function ensureClaimsDir(cwd?: string): void {
 
 function claimStore(cwd?: string): JsonStore<Claim> {
   return new JsonStore<Claim>({
-    dirPath: claimsDir(cwd),
+    dirPath: claimsDir(cwd, 'read'),
     documentType: 'claim',
     getId: (claim) => claim.id,
     sort: (a, b) => a.created_at.localeCompare(b.created_at),
@@ -30,7 +28,13 @@ function claimStore(cwd?: string): JsonStore<Claim> {
 
 export function saveClaim(claim: Claim, cwd?: string): void {
   ensureClaimsDir(cwd);
-  claimStore(cwd).save(ClaimSchema.parse(claim));
+  const writeStore = new JsonStore<Claim>({
+    dirPath: claimsDir(cwd, 'write'),
+    documentType: 'claim',
+    getId: (c) => c.id,
+    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  });
+  writeStore.save(ClaimSchema.parse(claim));
 }
 
 export function loadClaim(id: string, cwd?: string): Claim {

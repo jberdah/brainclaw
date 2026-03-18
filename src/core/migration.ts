@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ZodType, ZodTypeDef } from 'zod';
 import YAML from 'yaml';
-import { memoryDir, memoryPath, readFileSync, writeFileAtomic } from './io.js';
+import { memoryDir, memoryPath, readFileSync, writeFileAtomic, resolveEntityDir } from './io.js';
 import {
   AgentIdentityDocumentSchema,
   BootstrapProfileDocumentSchema,
@@ -250,24 +250,25 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectSingle(entries, memoryPath('.current-session', cwd), 'current_session');
   collectSingle(entries, memoryPath(path.join('bootstrap', 'profile.json'), cwd), 'bootstrap_profile');
 
-  collectDirectory(entries, path.join(baseDir, 'constraints'), 'constraint');
-  collectDirectory(entries, path.join(baseDir, 'decisions'), 'decision');
-  collectDirectory(entries, path.join(baseDir, 'traps'), 'trap');
-  collectDirectory(entries, path.join(baseDir, 'traps-hosts'), 'trap', true);
-  collectDirectory(entries, path.join(baseDir, 'traps-private'), 'trap', true);
-  collectDirectory(entries, path.join(baseDir, 'handoffs'), 'handoff');
-  collectDirectory(entries, path.join(baseDir, 'plans'), 'plan');
-  collectDirectory(entries, path.join(baseDir, 'inbox'), 'candidate');
-  collectDirectory(entries, path.join(baseDir, 'inbox', 'accepted'), 'candidate');
-  collectDirectory(entries, path.join(baseDir, 'inbox', 'rejected'), 'candidate');
-  collectDirectory(entries, path.join(baseDir, 'claims'), 'claim');
-  collectDirectory(entries, path.join(baseDir, 'runtime'), 'runtime_note', true);
-  collectDirectory(entries, path.join(baseDir, 'runtime-hosts'), 'runtime_note', true);
-  collectDirectory(entries, path.join(baseDir, 'runtime-private'), 'runtime_note', true);
-  collectDirectory(entries, path.join(baseDir, 'instructions'), 'instruction');
-  collectDirectory(entries, path.join(baseDir, 'bootstrap', 'seeds'), 'memory_seed');
-  collectDirectory(entries, path.join(baseDir, 'agents'), 'agent_identity');
-  collectDirectory(entries, path.join(baseDir, 'sessions'), 'session_snapshot');
+  const effectiveCwd = cwd ?? process.cwd();
+  collectDirectory(entries, resolveEntityDir('constraints', effectiveCwd, 'read'), 'constraint');
+  collectDirectory(entries, resolveEntityDir('decisions', effectiveCwd, 'read'), 'decision');
+  collectDirectory(entries, resolveEntityDir('traps', effectiveCwd, 'read'), 'trap');
+  collectDirectory(entries, resolveEntityDir('traps-hosts', effectiveCwd, 'read'), 'trap', true);
+  collectDirectory(entries, resolveEntityDir('traps-private', effectiveCwd, 'read'), 'trap', true);
+  collectDirectory(entries, resolveEntityDir('handoffs', effectiveCwd, 'read'), 'handoff');
+  collectDirectory(entries, resolveEntityDir('plans', effectiveCwd, 'read'), 'plan');
+  collectDirectory(entries, resolveEntityDir('inbox', effectiveCwd, 'read'), 'candidate');
+  collectDirectory(entries, resolveEntityDir('inbox/accepted', effectiveCwd, 'read'), 'candidate');
+  collectDirectory(entries, resolveEntityDir('inbox/rejected', effectiveCwd, 'read'), 'candidate');
+  collectDirectory(entries, resolveEntityDir('claims', effectiveCwd, 'read'), 'claim');
+  collectDirectory(entries, resolveEntityDir('runtime', effectiveCwd, 'read'), 'runtime_note', true);
+  collectDirectory(entries, resolveEntityDir('runtime-hosts', effectiveCwd, 'read'), 'runtime_note', true);
+  collectDirectory(entries, resolveEntityDir('runtime-private', effectiveCwd, 'read'), 'runtime_note', true);
+  collectDirectory(entries, resolveEntityDir('instructions', effectiveCwd, 'read'), 'instruction');
+  collectDirectory(entries, resolveEntityDir('bootstrap', effectiveCwd, 'read'), 'memory_seed');
+  collectDirectory(entries, resolveEntityDir('agents', effectiveCwd, 'read'), 'agent_identity');
+  collectDirectory(entries, resolveEntityDir('sessions', effectiveCwd, 'read'), 'session_snapshot');
 
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { JsonStore } from './json-store.js';
 import { generateId, nowISO } from './ids.js';
-import { memoryDir } from './io.js';
+import { resolveEntityDir } from './io.js';
 import {
   BootstrapProfileDocumentSchema,
   MemorySeedDocumentSchema,
@@ -600,7 +600,7 @@ function ensureBootstrapDirs(cwd?: string): void {
 }
 
 function bootstrapDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), 'bootstrap');
+  return resolveEntityDir('bootstrap', cwd ?? process.cwd(), 'read');
 }
 
 function bootstrapSeedsDir(cwd?: string): string {

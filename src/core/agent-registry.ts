@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
-import { MEMORY_DIR, memoryDir } from './io.js';
+import { MEMORY_DIR, resolveEntityDir } from './io.js';
 import { JsonStore } from './json-store.js';
 import {
   AgentIdentityDocumentSchema,
@@ -14,7 +14,7 @@ import {
 } from './schema.js';
 import { logger } from './logger.js';
 
-const AGENTS_DIR = 'agents';
+// agents/ stays at top level in entity model (already entity-aligned)
 const TRUST_ORDER: AgentTrustLevel[] = ['observer', 'contributor', 'trusted', 'curator'];
 
 export class AgentIdentityResolutionError extends Error {
@@ -72,7 +72,7 @@ export function resolveDefaultAgentName(env: NodeJS.ProcessEnv = process.env): s
 }
 
 function agentsDir(cwd?: string, preferredDirName?: string): string {
-  return path.join(memoryDir(cwd, preferredDirName), AGENTS_DIR);
+  return resolveEntityDir('agents', cwd ?? process.cwd(), 'read', preferredDirName);
 }
 
 function ensureAgentsDir(cwd?: string, preferredDirName?: string): void {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { readAuditLog } from './audit.js';
 import { listCandidates } from './candidates.js';
 import { readContextMarker } from './freshness.js';
-import { memoryDir } from './io.js';
+import { memoryDir, resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
 import { loadVersionedJsonFile } from './migration.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from './schema.js';
@@ -71,7 +71,7 @@ export function resolveContextDiffSince(options: Pick<BuildContextDiffOptions, '
 }
 
 function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {
-  const snapshotPath = path.join(memoryDir(cwd), 'sessions', `${sessionId}.json`);
+  const snapshotPath = path.join(resolveEntityDir('sessions', cwd ?? process.cwd(), 'read'), `${sessionId}.json`);
   if (!fs.existsSync(snapshotPath)) {
     return undefined;
   }

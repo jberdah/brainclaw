@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ZodType, type ZodTypeDef } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
-import { memoryDir, ensureMemoryDir } from './io.js';
+import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
 export function emptyState(): State {
   return {
@@ -35,15 +35,15 @@ function loadDirectoryItems<T>(
 }
 
 export function loadState(cwd?: string): State {
-  // Load from directories
-  const mDir = memoryDir(cwd);
+  // Load from entity-aligned directories (with legacy fallback)
+  const effectiveCwd = cwd ?? process.cwd();
   const state = emptyState();
-  
-  state.active_constraints = loadDirectoryItems(path.join(mDir, 'constraints'), ConstraintSchema, 'constraint');
-  state.recent_decisions = loadDirectoryItems(path.join(mDir, 'decisions'), DecisionSchema, 'decision');
-  state.known_traps = loadDirectoryItems(path.join(mDir, 'traps'), TrapSchema, 'trap');
-  state.open_handoffs = loadDirectoryItems(path.join(mDir, 'handoffs'), HandoffSchema, 'handoff');
-  state.plan_items = loadDirectoryItems(path.join(mDir, 'plans'), PlanItemSchema, 'plan');
+
+  state.active_constraints = loadDirectoryItems(resolveEntityDir('constraints', effectiveCwd, 'read'), ConstraintSchema, 'constraint');
+  state.recent_decisions = loadDirectoryItems(resolveEntityDir('decisions', effectiveCwd, 'read'), DecisionSchema, 'decision');
+  state.known_traps = loadDirectoryItems(resolveEntityDir('traps', effectiveCwd, 'read'), TrapSchema, 'trap');
+  state.open_handoffs = loadDirectoryItems(resolveEntityDir('handoffs', effectiveCwd, 'read'), HandoffSchema, 'handoff');
+  state.plan_items = loadDirectoryItems(resolveEntityDir('plans', effectiveCwd, 'read'), PlanItemSchema, 'plan');
   
   // Sort them by creation date for consistency
   state.active_constraints.sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -84,12 +84,12 @@ function syncDirectory<T extends { id: string }>(
 
 export function saveState(state: State, cwd?: string): void {
   ensureMemoryDir(cwd);
-  const mDir = memoryDir(cwd);
+  const effectiveCwd = cwd ?? process.cwd();
 
-  // Distribute entities to separate files
-  syncDirectory(path.join(mDir, 'constraints'), state.active_constraints, 'constraint');
-  syncDirectory(path.join(mDir, 'decisions'), state.recent_decisions, 'decision');
-  syncDirectory(path.join(mDir, 'traps'), state.known_traps, 'trap');
-  syncDirectory(path.join(mDir, 'handoffs'), state.open_handoffs, 'handoff');
-  syncDirectory(path.join(mDir, 'plans'), state.plan_items, 'plan');
+  // Write to entity-aligned directories
+  syncDirectory(resolveEntityDir('constraints', effectiveCwd, 'write'), state.active_constraints, 'constraint');
+  syncDirectory(resolveEntityDir('decisions', effectiveCwd, 'write'), state.recent_decisions, 'decision');
+  syncDirectory(resolveEntityDir('traps', effectiveCwd, 'write'), state.known_traps, 'trap');
+  syncDirectory(resolveEntityDir('handoffs', effectiveCwd, 'write'), state.open_handoffs, 'handoff');
+  syncDirectory(resolveEntityDir('plans', effectiveCwd, 'write'), state.plan_items, 'plan');
 }

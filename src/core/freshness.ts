@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId } from './host.js';
-import { memoryPath, readFileSync, writeFileAtomic } from './io.js';
+import { memoryPath, readFileSync, writeFileAtomic, resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
 
 export interface ContextMarker {
@@ -31,21 +31,24 @@ const SHARED_PATHS = [
 export function getVisibleMemoryVersion(options: { cwd?: string; hostId?: string; allHosts?: boolean } = {}): string {
   const entries: string[] = [];
 
+  const cwd = options.cwd ?? process.cwd();
+  // Scan entity-aligned paths (with legacy fallback via resolveEntityDir)
   for (const relativePath of SHARED_PATHS) {
-    collectFileStats(memoryPath(relativePath, options.cwd), relativePath, entries);
+    const resolved = relativePath.includes('.') ? memoryPath(relativePath, cwd) : resolveEntityDir(relativePath, cwd, 'read');
+    collectFileStats(resolved, relativePath, entries);
   }
 
   if (options.allHosts) {
-    collectFileStats(memoryPath('runtime-hosts', options.cwd), 'runtime-hosts', entries);
-    collectFileStats(memoryPath('runtime-private', options.cwd), 'runtime-private', entries);
-    collectFileStats(memoryPath('traps-hosts', options.cwd), 'traps-hosts', entries);
-    collectFileStats(memoryPath('traps-private', options.cwd), 'traps-private', entries);
+    collectFileStats(resolveEntityDir('runtime-hosts', cwd, 'read'), 'runtime-hosts', entries);
+    collectFileStats(resolveEntityDir('runtime-private', cwd, 'read'), 'runtime-private', entries);
+    collectFileStats(resolveEntityDir('traps-hosts', cwd, 'read'), 'traps-hosts', entries);
+    collectFileStats(resolveEntityDir('traps-private', cwd, 'read'), 'traps-private', entries);
   } else {
     const hostId = options.hostId ?? resolveCurrentHostId();
-    collectFileStats(memoryPath(path.join('runtime-hosts', hostId), options.cwd), path.join('runtime-hosts', hostId), entries);
-    collectFileStats(memoryPath(path.join('runtime-private', hostId), options.cwd), path.join('runtime-private', hostId), entries);
-    collectFileStats(memoryPath(path.join('traps-hosts', hostId), options.cwd), path.join('traps-hosts', hostId), entries);
-    collectFileStats(memoryPath(path.join('traps-private', hostId), options.cwd), path.join('traps-private', hostId), entries);
+    collectFileStats(path.join(resolveEntityDir('runtime-hosts', cwd, 'read'), hostId), path.join('runtime-hosts', hostId), entries);
+    collectFileStats(path.join(resolveEntityDir('runtime-private', cwd, 'read'), hostId), path.join('runtime-private', hostId), entries);
+    collectFileStats(path.join(resolveEntityDir('traps-hosts', cwd, 'read'), hostId), path.join('traps-hosts', hostId), entries);
+    collectFileStats(path.join(resolveEntityDir('traps-private', cwd, 'read'), hostId), path.join('traps-private', hostId), entries);
   }
 
   const hash = crypto.createHash('sha1');

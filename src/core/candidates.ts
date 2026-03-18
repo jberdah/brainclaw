@@ -2,28 +2,24 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CandidateSchema, type Candidate } from './schema.js';
-import { memoryDir } from './io.js';
+import { resolveEntityDir } from './io.js';
 import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 
-const INBOX_DIR = 'inbox';
-const ACCEPTED_DIR = 'inbox/accepted';
-const REJECTED_DIR = 'inbox/rejected';
-
-function inboxDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), INBOX_DIR);
+function inboxDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('inbox', cwd ?? process.cwd(), mode);
 }
 
-function acceptedDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), ACCEPTED_DIR);
+function acceptedDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('inbox/accepted', cwd ?? process.cwd(), mode);
 }
 
-function rejectedDir(cwd?: string): string {
-  return path.join(memoryDir(cwd), REJECTED_DIR);
+function rejectedDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
+  return resolveEntityDir('inbox/rejected', cwd ?? process.cwd(), mode);
 }
 
 export function ensureInboxDirs(cwd?: string): void {
-  for (const dir of [inboxDir(cwd), acceptedDir(cwd), rejectedDir(cwd)]) {
+  for (const dir of [inboxDir(cwd, 'write'), acceptedDir(cwd, 'write'), rejectedDir(cwd, 'write')]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
