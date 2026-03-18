@@ -6,6 +6,7 @@ import { buildCoordinationSnapshot } from '../../src/core/coordination.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
+import { loadState } from '../../src/core/state.js';
 import type { Candidate, Claim, RuntimeNote, State } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -259,6 +260,138 @@ describe('core/coordination', () => {
     assert.equal(board.reputation_summary?.enabled, true);
     assert.ok(board.agent_reputation);
     assert.equal(board.agent_reputation?.agent_name, copilot.agent_name);
+  });
+
+  it('perf.3: filters session_start/session_end notes by default', () => {
+    const copilot = workspace.currentAgent;
+
+    saveRuntimeNote({
+      id: 'rtn_obs',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      project_id: 'prj_coordination_test',
+      session_id: 'sess_a',
+      text: 'Real observation',
+      created_at: iso(5),
+      tags: [],
+      visibility: 'shared',
+      note_type: 'observation',
+    }, workspace.dir);
+    saveRuntimeNote({
+      id: 'rtn_start',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      project_id: 'prj_coordination_test',
+      session_id: 'sess_a',
+      text: 'Session started',
+      created_at: iso(6),
+      tags: ['session'],
+      visibility: 'shared',
+      note_type: 'session_start',
+    }, workspace.dir);
+    saveRuntimeNote({
+      id: 'rtn_end',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      project_id: 'prj_coordination_test',
+      session_id: 'sess_a',
+      text: 'Session ended',
+      created_at: iso(4),
+      tags: ['session'],
+      visibility: 'shared',
+      note_type: 'session_end',
+    }, workspace.dir);
+
+    const boardDefault = buildCoordinationSnapshot({ cwd: workspace.dir });
+    assert.equal(boardDefault.runtime_notes.length, 1);
+    assert.equal(boardDefault.runtime_notes[0].id, 'rtn_obs');
+    assert.equal(boardDefault.session_meta_hidden, 2);
+
+    const boardWithMeta = buildCoordinationSnapshot({ includeSessionMeta: true, cwd: workspace.dir });
+    assert.equal(boardWithMeta.runtime_notes.length, 3);
+    assert.equal(boardWithMeta.session_meta_hidden, 0);
+  });
+
+  it('perf.2: auto-acknowledges open handoffs when autoAcknowledge is true', () => {
+    const copilot = workspace.currentAgent;
+    const claude = workspace.registerAgent('claude');
+
+    const state: State = {
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [
+        {
+          id: 'hnd_ack_1',
+          from: copilot.agent_name,
+          to: claude.agent_name,
+          text: 'Review this',
+          created_at: iso(10),
+          author: copilot.agent_name,
+          status: 'open',
+          tags: [],
+        },
+        {
+          id: 'hnd_ack_2',
+          from: copilot.agent_name,
+          to: claude.agent_name,
+          text: 'Also review this',
+          created_at: iso(9),
+          author: copilot.agent_name,
+          status: 'open',
+          tags: [],
+        },
+      ],
+      plan_items: [],
+    };
+    saveState(state, workspace.dir);
+
+    const board = buildCoordinationSnapshot({
+      agent: claude.agent_name,
+      autoAcknowledge: true,
+      cwd: workspace.dir,
+    });
+
+    // Both handoffs were shown to the agent
+    assert.equal(board.open_handoffs.length, 2);
+
+    // After the call, both should be marked accepted in persisted state
+    const updated = loadState(workspace.dir);
+    const statuses = updated.open_handoffs.map((h) => h.status);
+    assert.ok(statuses.every((s) => s === 'accepted'), `Expected all accepted, got: ${statuses.join(', ')}`);
+  });
+
+  it('perf.2: without autoAcknowledge, handoffs remain open', () => {
+    const copilot = workspace.currentAgent;
+
+    const state: State = {
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [
+        {
+          id: 'hnd_noack',
+          from: copilot.agent_name,
+          to: copilot.agent_name,
+          text: 'Keep open',
+          created_at: iso(5),
+          author: copilot.agent_name,
+          status: 'open',
+          tags: [],
+        },
+      ],
+      plan_items: [],
+    };
+    saveState(state, workspace.dir);
+
+    buildCoordinationSnapshot({ cwd: workspace.dir });
+
+    const updated = loadState(workspace.dir);
+    assert.equal(updated.open_handoffs[0].status, 'open');
   });
 
   it('can inspect host-scoped runtime notes across all hosts explicitly', () => {

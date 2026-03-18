@@ -182,6 +182,7 @@ export const MCP_READ_TOOLS = [
         host: { type: 'string', description: 'Optional host identifier used to include machine-local runtime notes.' },
         allHosts: { type: 'boolean', description: 'Include machine-local runtime notes from all hosts.' },
         includeReputation: { type: 'boolean', description: 'Include bounded reputation summaries for board consumers.' },
+        includeSessionMeta: { type: 'boolean', description: 'Include session_start/session_end runtime notes (excluded by default to reduce noise).' },
       },
     },
   },
@@ -1081,6 +1082,8 @@ export function handleMcpReadToolCall(
       host: args.host as string | undefined,
       allHosts: args.allHosts as boolean | undefined,
       includeReputation: args.includeReputation as boolean | undefined,
+      includeSessionMeta: args.includeSessionMeta as boolean | undefined,
+      autoAcknowledge: true,
       cwd,
     });
     const lines: string[] = [];
@@ -1108,7 +1111,8 @@ export function handleMcpReadToolCall(
       const session = claim.session_id ? ` session=${claim.session_id}` : '';
       lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}`);
     }
-    lines.push(`Runtime notes: ${board.runtime_notes.length}`);
+    const sessionMetaHint = board.session_meta_hidden > 0 ? ` (+${board.session_meta_hidden} session lifecycle notes hidden — pass includeSessionMeta to show)` : '';
+    lines.push(`Runtime notes: ${board.runtime_notes.length}${sessionMetaHint}`);
     for (const note of board.runtime_notes.slice(-10)) {
       const scope = note.visibility === 'shared' ? 'shared' : `${note.visibility}:${note.host_id ?? 'unknown-host'}`;
       const identity = note.agent_id ? ` [${note.agent_id}]` : '';
@@ -1567,6 +1571,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (args.includeBoard) {
         const board = buildCoordinationSnapshot({
           agent: resolved.identity?.agent_name,
+          autoAcknowledge: true,
           cwd,
         });
         const boardLines: string[] = [];

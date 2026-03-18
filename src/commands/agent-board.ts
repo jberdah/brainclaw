@@ -12,6 +12,7 @@ export interface AgentBoardOptions {
   withReputation?: boolean;
   capabilities?: boolean;
   suggest?: string;
+  includeSessionMeta?: boolean;
 }
 
 export function runAgentBoard(options: AgentBoardOptions = {}): void {
@@ -27,6 +28,7 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
     host: options.host,
     allHosts: options.allHosts,
     includeReputation: options.withReputation,
+    includeSessionMeta: options.includeSessionMeta,
   });
 
   if (options.json) {
@@ -60,7 +62,8 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
     console.log(`  [${claim.id}] ${claim.agent} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}`);
   }
   console.log('');
-  console.log(`Runtime notes: ${board.runtime_notes.length}`);
+  const sessionMetaHint = board.session_meta_hidden > 0 ? ` (+${board.session_meta_hidden} session lifecycle notes hidden — use --include-session-meta to show)` : '';
+  console.log(`Runtime notes: ${board.runtime_notes.length}${sessionMetaHint}`);
   for (const note of board.runtime_notes.slice(-10)) {
     const scope = note.visibility === 'shared' ? 'shared' : `${note.visibility}:${note.host_id ?? 'unknown-host'}`;
     console.log(`  [${note.id}] ${note.agent}: ${note.text}${note.plan_id ? ` (plan ${note.plan_id})` : ''} [${scope}]`);

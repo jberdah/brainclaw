@@ -5,7 +5,7 @@ import { listClaims } from './claims.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
-import { loadState } from './state.js';
+import { loadState, saveState } from './state.js';
 
 export interface CoordinationOptions {
   agent?: string;
@@ -14,6 +14,10 @@ export interface CoordinationOptions {
   host?: string;
   allHosts?: boolean;
   includeReputation?: boolean;
+  /** If false (default), session_start and session_end runtime notes are excluded from the board. */
+  includeSessionMeta?: boolean;
+  /** If true, all open handoffs shown to the agent are auto-marked as 'accepted'. */
+  autoAcknowledge?: boolean;
   cwd?: string;
 }
 
@@ -47,6 +51,34 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     ? claims.filter((claim) => !claim.project || claim.project === project)
     : claims;
 
+  // perf.3: filter session lifecycle notes unless explicitly requested
+  const sessionMetaNoteTypes = new Set(['session_start', 'session_end']);
+  const visibleNotes = options.includeSessionMeta
+    ? runtimeNotes
+    : runtimeNotes.filter((note) => !sessionMetaNoteTypes.has(note.note_type ?? ''));
+  const sessionMetaHidden = runtimeNotes.length - visibleNotes.length;
+  const filteredNotes = project
+    ? visibleNotes.filter((note) => !note.project || note.project === project)
+    : visibleNotes;
+
+  // factor out handoff filter for reuse in auto-acknowledge
+  const filteredHandoffs = agent
+    ? openHandoffs.filter((h) => (!project || !h.project || h.project === project) && (h.to === agent || h.from === agent))
+    : (project ? openHandoffs.filter((h) => !h.project || h.project === project) : openHandoffs);
+
+  // perf.2: auto-acknowledge shown handoffs
+  if (options.autoAcknowledge && filteredHandoffs.length > 0) {
+    const toAckIds = new Set(filteredHandoffs.map((h) => h.id));
+    let changed = false;
+    for (const h of state.open_handoffs) {
+      if (toAckIds.has(h.id) && h.status === 'open') {
+        h.status = 'accepted';
+        changed = true;
+      }
+    }
+    if (changed) saveState(state, options.cwd);
+  }
+
   return {
     project_id: config.project_id,
     current_host: currentHost,
@@ -62,12 +94,9 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     active_claims: agent
       ? filteredClaims.filter((claim) => claim.agent === agent)
       : filteredClaims,
-    runtime_notes: project
-      ? runtimeNotes.filter((note) => !note.project || note.project === project)
-      : runtimeNotes,
-    open_handoffs: agent
-      ? openHandoffs.filter((handoff) => (!project || !handoff.project || handoff.project === project) && (handoff.to === agent || handoff.from === agent))
-      : (project ? openHandoffs.filter((handoff) => !handoff.project || handoff.project === project) : openHandoffs),
+    runtime_notes: filteredNotes,
+    session_meta_hidden: sessionMetaHidden,
+    open_handoffs: filteredHandoffs,
     resolved_instructions: instructions,
     reputation_summary: reputationSummary,
     agent_reputation: agentReputation,

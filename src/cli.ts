@@ -590,6 +590,7 @@ program
   .option('--with-reputation', 'Include bounded reputation summaries when available')
   .option('--capabilities', 'List all registered agents with their declared capabilities')
   .option('--suggest <query>', 'Suggest agents whose capabilities match a query string')
+  .option('--include-session-meta', 'Include session_start/session_end runtime notes (hidden by default)')
   .action((options) => {
     runAgentBoard(options);
   });
