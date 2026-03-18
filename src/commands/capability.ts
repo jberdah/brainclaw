@@ -82,21 +82,23 @@ function runCapabilityAdd(name: string, description: string, options: Capability
   }
 
   const state = loadState(cwd);
-  const { id } = generateIdWithLabel('recent_decisions');
+  const { id, short_label } = generateIdWithLabel('recent_decisions');
 
-  const entry: ProjectCapability = {
+  const entry: any = {
     id,
-    name,
-    description,
-    category: options.tag?.[0] ?? 'general',
-    tags: ['capability', ...(options.tag ?? [])],
-    status: 'stable',
+    short_label,
+    text: name,
     created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(),
+    tags: ['capability', ...(options.tag ?? [])],
   };
 
   // For now, store as decision to avoid schema migration
   // Will migrate to separate capability storage in v0.16
+  state.recent_decisions.push(entry);
+  saveState(state, cwd);
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
+
   console.log(`✔ Capability added: [${id}] ${name}`);
   console.log('  (Stored in decisions for now; will move to dedicated registry in v0.16)');
 }
