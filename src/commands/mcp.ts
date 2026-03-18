@@ -1082,14 +1082,61 @@ export function handleMcpReadToolCall(
       refreshBootstrap: args.refreshBootstrap as boolean | undefined,
       cwd,
     });
+
+    // Load available capabilities and tools
+    const state = loadState(cwd);
+    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
+    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+
     const format = normaliseFormat(args.format);
     const content = renderContextForMcp(result, format, {
       explain: args.explain as boolean | undefined,
       compactTemplate: args.compactTemplate as boolean | undefined,
     });
+
+    // Add metadata discovery section to content
+    let enrichedContent = content;
+    if (capabilities.length > 0 || tools.length > 0) {
+      const suggestions: string[] = [];
+      if (capabilities.length > 0) {
+        suggestions.push(`\n## Available Capabilities (${capabilities.length})`);
+        capabilities.slice(0, 5).forEach((cap) => {
+          const category = cap.tags.find((t) => t !== 'capability') || 'general';
+          suggestions.push(`- [${cap.id}] ${cap.text.split('\n')[0]} (${category})`);
+        });
+        if (capabilities.length > 5) {
+          suggestions.push(`- ... and ${capabilities.length - 5} more`);
+        }
+      }
+      if (tools.length > 0) {
+        suggestions.push(`\n## Available Tools (${tools.length})`);
+        tools.slice(0, 5).forEach((tool) => {
+          const type = tool.tags.find((t) => t !== 'tool') || 'utility';
+          suggestions.push(`- [${tool.id}] ${tool.text.split('\n')[0]} (${type})`);
+        });
+        if (tools.length > 5) {
+          suggestions.push(`- ... and ${tools.length - 5} more`);
+        }
+      }
+      suggestions.push('\n💡 Tip: Use bclaw_get_capabilities, bclaw_list_tools, or bclaw_search_tools for detailed discovery');
+      enrichedContent = content + suggestions.join('\n');
+    }
+
     return {
-      content: [{ type: 'text', text: content || 'No relevant memory found.' }],
-      structuredContent: { ...result },
+      content: [{ type: 'text', text: enrichedContent || 'No relevant memory found.' }],
+      structuredContent: {
+        ...result,
+        available_capabilities: capabilities.map((cap) => ({
+          id: cap.id,
+          name: cap.text.split('\n')[0],
+          category: cap.tags.find((t) => t !== 'capability') || 'general',
+        })),
+        available_tools: tools.map((tool) => ({
+          id: tool.id,
+          name: tool.text.split('\n')[0],
+          type: tool.tags.find((t) => t !== 'tool') || 'utility',
+        })),
+      },
     };
   }
 
