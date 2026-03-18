@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { MEMORY_DIR } from './io.js';
 
-export type StoreRole = 'service' | 'repo' | 'workspace' | 'unknown';
+export type StoreRole = 'service' | 'repo' | 'workspace' | 'user' | 'unknown';
 
 export interface StoreRef {
   /** Absolute path to the .brainclaw/ directory */
@@ -94,7 +94,7 @@ export function resolvePrimaryStore(
   return resolveStoreChain(cwd, options)[0];
 }
 
-export type StoreTarget = 'local' | 'repo' | 'workspace';
+export type StoreTarget = 'local' | 'repo' | 'workspace' | 'user';
 
 /**
  * Resolve the effective cwd for a write operation targeting a specific store level.
@@ -102,6 +102,7 @@ export type StoreTarget = 'local' | 'repo' | 'workspace';
  * - `local`     → the closest store (default, current behaviour)
  * - `repo`      → the first store with role='repo' in the chain; falls back to closest
  * - `workspace` → the first store with role='workspace', or the farthest store found
+ * - `user`      → the first store with role='user' in the chain; falls back to os.homedir()
  *
  * Returns the original cwd unchanged when no chain exists or when target='local'.
  */
@@ -117,9 +118,14 @@ export function resolveTargetStore(
     const match = chain.find((s) => s.role === 'repo');
     return match?.cwd ?? chain[0]!.cwd;
   }
-  // workspace: prefer declared role, otherwise take farthest
-  const match = chain.find((s) => s.role === 'workspace');
-  return match?.cwd ?? chain[chain.length - 1]!.cwd;
+  if (target === 'workspace') {
+    // workspace: prefer declared role, otherwise take farthest
+    const match = chain.find((s) => s.role === 'workspace');
+    return match?.cwd ?? chain[chain.length - 1]!.cwd;
+  }
+  // user: prefer declared role, otherwise os.homedir()
+  const match = chain.find((s) => s.role === 'user');
+  return match?.cwd ?? os.homedir();
 }
 
 /**
@@ -146,8 +152,8 @@ function inferRole(
       const match = raw.match(/store_type:\s*(\S+)/);
       if (match) {
         const val = match[1].trim();
-        if (val === 'workspace' || val === 'repo' || val === 'service') {
-          return val;
+        if (val === 'workspace' || val === 'repo' || val === 'service' || val === 'user') {
+          return val as StoreRole;
         }
       }
     } catch {

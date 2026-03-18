@@ -15,7 +15,8 @@ import {
   writeDetectedAgentAutoConfig,
   describeAutoConfigWrite,
 } from '../core/agent-files.js';
-import { memoryExists, writeFileAtomic } from '../core/io.js';
+import { memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
+import { loadConfig, saveConfig, defaultConfig } from '../core/config.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -193,12 +194,51 @@ export function parseAgentSelection(choice: string, detected: string | undefined
 
 // ─── Step 5: Global install ───────────────────────────────────────────────────
 
+export function initUserStore(
+  home: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (!home) return [];
+  const written: string[] = [];
+
+  // Ensure ~/.brainclaw/ directory and subdirs exist
+  const userStorePath = path.join(home, '.brainclaw');
+  ensureMemoryDir(home);
+
+  // Check if config.yaml already exists (idempotent)
+  const configPath = path.join(userStorePath, 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    return [];
+  }
+
+  try {
+    // Write a minimal config.yaml for the user store
+    const defaultCfg = defaultConfig('user-global');
+    saveConfig(defaultCfg, home);
+
+    // Append store_type: user to the config.yaml (pattern already used in tests)
+    fs.appendFileSync(configPath, 'store_type: user\n');
+    written.push(configPath);
+  } catch (err) {
+    // Non-fatal: if user store init fails, continue with agent setup
+    console.warn(`Warning: failed to initialize user store at ${configPath}:`, err instanceof Error ? err.message : String(err));
+  }
+
+  return written;
+}
+
 export function runGlobalInstall(
   selectedAgents: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const home = resolveHomeDir(env);
   const written: string[] = [];
+
+  // Initialize user-global store first
+  if (home) {
+    written.push(...initUserStore(home, env));
+  }
+
   if (selectedAgents.includes('claude-code')) {
     const s = ensureClaudeCodeUserSettings(home, env);
     if (s && (s.created || s.updated)) written.push(s.filePath);
