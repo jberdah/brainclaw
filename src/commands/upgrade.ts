@@ -1,0 +1,169 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir } from '../core/io.js';
+import { loadState, saveState } from '../core/state.js';
+import { scanMigrationStatus } from '../core/migration.js';
+
+export interface UpgradeOptions {
+  cwd?: string;
+  json?: boolean;
+  dryRun?: boolean;
+}
+
+interface MigrationAction {
+  type: 'create_dir' | 'move_file' | 'migrate_schema';
+  from?: string;
+  to?: string;
+  description: string;
+}
+
+/**
+ * Entity directory layout mapping: legacy flat name → entity-aligned path.
+ * Must match ENTITY_DIR_MAP in io.ts.
+ */
+const ENTITY_DIRS: Array<{ legacy: string; entity: string }> = [
+  { legacy: 'constraints', entity: 'memory/constraints' },
+  { legacy: 'decisions', entity: 'memory/decisions' },
+  { legacy: 'traps', entity: 'memory/traps' },
+  { legacy: 'instructions', entity: 'memory/instructions' },
+  { legacy: 'plans', entity: 'coordination/plans' },
+  { legacy: 'claims', entity: 'coordination/claims' },
+  { legacy: 'handoffs', entity: 'coordination/handoffs' },
+  { legacy: 'sessions', entity: 'coordination/sessions' },
+  { legacy: 'inbox', entity: 'coordination/inbox' },
+  { legacy: 'runtime', entity: 'coordination/runtime' },
+];
+
+export function runUpgrade(options: UpgradeOptions = {}): void {
+  const cwd = options.cwd ?? process.cwd();
+
+  if (!memoryExists(cwd)) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const base = memoryDir(cwd);
+  const actions: MigrationAction[] = [];
+  let movedFiles = 0;
+
+  // Phase 1: Ensure entity-aligned directories exist
+  ensureMemoryDir(cwd);
+
+  // Phase 2: Detect and plan file migrations (legacy → entity)
+  for (const { legacy, entity } of ENTITY_DIRS) {
+    const legacyDir = path.join(base, legacy);
+    const entityDir = path.join(base, entity);
+
+    if (!fs.existsSync(legacyDir)) continue;
+
+    const files = listJsonFiles(legacyDir);
+    if (files.length === 0) continue;
+
+    // Check if entity dir already has content (avoid clobbering)
+    const entityFiles = fs.existsSync(entityDir) ? listJsonFiles(entityDir) : [];
+    const entityIds = new Set(entityFiles.map(f => path.basename(f)));
+
+    for (const file of files) {
+      const basename = path.basename(file);
+      const target = path.join(entityDir, basename);
+
+      if (entityIds.has(basename)) {
+        // Entity dir already has this file — skip (entity takes precedence)
+        continue;
+      }
+
+      actions.push({
+        type: 'move_file',
+        from: path.relative(base, file),
+        to: path.relative(base, target),
+        description: `Move ${basename} from ${legacy}/ to ${entity}/`,
+      });
+    }
+  }
+
+  // Phase 3: Check schema migration status
+  const migrationStatus = scanMigrationStatus(cwd);
+  const outdated = migrationStatus.filter(e => e.status === 'outdated');
+  for (const entry of outdated) {
+    actions.push({
+      type: 'migrate_schema',
+      from: entry.path,
+      description: `Migrate ${entry.documentType} from v${entry.detectedVersion} to v${entry.currentVersion}`,
+    });
+  }
+
+  // Report
+  if (options.json) {
+    outputJson(actions, options.dryRun ?? false);
+    return;
+  }
+
+  if (actions.length === 0) {
+    console.log('✔ Project memory is up to date. No upgrade needed.');
+    return;
+  }
+
+  console.log(`Found ${actions.length} upgrade action(s):\n`);
+  for (const action of actions) {
+    const prefix = action.type === 'move_file' ? '→' : '↑';
+    console.log(`  ${prefix} ${action.description}`);
+  }
+
+  if (options.dryRun) {
+    console.log('\n(dry run — no changes made)');
+    return;
+  }
+
+  // Execute file moves
+  console.log('');
+  for (const action of actions) {
+    if (action.type === 'move_file' && action.from && action.to) {
+      const src = path.join(base, action.from);
+      const dst = path.join(base, action.to);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.renameSync(src, dst);
+      movedFiles++;
+    }
+  }
+
+  // Execute schema migrations by re-saving state (loadState auto-migrates via Zod parse)
+  if (outdated.length > 0) {
+    const state = loadState(cwd);
+    saveState(state, cwd);
+  }
+
+  // Clean up empty legacy directories
+  for (const { legacy } of ENTITY_DIRS) {
+    const legacyDir = path.join(base, legacy);
+    if (fs.existsSync(legacyDir) && isEmptyDir(legacyDir)) {
+      // Don't remove — legacy dirs may still be used by older brainclaw versions
+      // Just note that they're empty
+    }
+  }
+
+  console.log(`✔ Upgrade complete: ${movedFiles} file(s) moved, ${outdated.length} schema(s) migrated.`);
+}
+
+function listJsonFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => path.join(dir, f));
+}
+
+function isEmptyDir(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).length === 0;
+  } catch {
+    return true;
+  }
+}
+
+function outputJson(actions: MigrationAction[], dryRun: boolean): void {
+  console.log(JSON.stringify({
+    upgrade_needed: actions.length > 0,
+    dry_run: dryRun,
+    actions_count: actions.length,
+    actions,
+  }, null, 2));
+}

@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
+import { runUpgrade } from './commands/upgrade.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
 import { buildAgentInventory, saveAgentInventory, loadAgentInventory, renderAgentInventorySummary } from './core/agent-inventory.js';
 import { scanAndRegister, scanProject, upsertProject, loadGlobalRegistry, renderGlobalRegistrySummary } from './core/global-registry.js';
@@ -121,6 +122,19 @@ program
   .option('-y, --yes', 'Accept all defaults non-interactively')
   .action(async (options) => {
     await runSetup(options);
+  });
+
+// --- upgrade ---
+program
+  .command('upgrade')
+  .description('Upgrade project memory structure without losing data (entity dirs, schema migrations)')
+  .option('--json', 'Output as JSON')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .action((options) => {
+    runUpgrade({
+      json: options.json,
+      dryRun: options.dryRun,
+    });
   });
 
 // --- machine-profile ---

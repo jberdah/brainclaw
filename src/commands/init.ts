@@ -107,8 +107,20 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
 
-  const state = emptyState();
-  saveState(state, cwd);
+  // Only write empty state if no data exists yet.
+  // When --force is used on an existing project, preserve the data
+  // and only refresh config/agent registration/directory structure.
+  const existingState = loadState(cwd);
+  const hasExistingData =
+    existingState.active_constraints.length > 0 ||
+    existingState.recent_decisions.length > 0 ||
+    existingState.known_traps.length > 0 ||
+    existingState.open_handoffs.length > 0 ||
+    existingState.plan_items.length > 0;
+
+  if (!hasExistingData) {
+    saveState(emptyState(), cwd);
+  }
 
   // Create config
   const projectIdentity = buildProjectIdentity({
