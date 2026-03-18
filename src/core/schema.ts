@@ -173,6 +173,51 @@ export const InstructionEntrySchema = z.object({
 });
 export type InstructionEntry = z.infer<typeof InstructionEntrySchema>;
 
+export const CapabilityStatusSchema = z.enum(['stable', 'experimental', 'deprecated']);
+export type CapabilityStatus = z.infer<typeof CapabilityStatusSchema>;
+
+export const ProjectCapabilitySchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: z.string(), // e.g. "auth", "api", "storage", "testing"
+  provided_by: z.string().optional(), // path to implementation
+  requires: z.array(z.string()).optional(), // capability IDs this depends on
+  tags: z.array(z.string()),
+  example_usage: z.string().optional(),
+  status: CapabilityStatusSchema.default('stable'),
+  related_paths: z.array(z.string()).optional(),
+  created_at: z.string(),
+  author: z.string(),
+  author_id: z.string().optional(),
+});
+export type ProjectCapability = z.infer<typeof ProjectCapabilitySchema>;
+
+export const ToolTypeSchema = z.enum(['workflow', 'validator', 'generator', 'utility', 'explorer']);
+export type ToolType = z.infer<typeof ToolTypeSchema>;
+
+export const ProjectToolSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  type: ToolTypeSchema,
+  implementation: z.string(), // path or command
+  mcp_name: z.string().optional(), // if exposed as MCP tool
+  cli_command: z.string().optional(), // if exposed as CLI command
+  requires: z.array(z.string()).optional(), // tool IDs this depends on
+  suggests_for: z.array(z.string()).optional(), // agent types or domains
+  invocation_example: z.string().optional(),
+  tags: z.array(z.string()),
+  status: CapabilityStatusSchema.default('stable'),
+  related_paths: z.array(z.string()).optional(),
+  created_at: z.string(),
+  author: z.string(),
+  author_id: z.string().optional(),
+});
+export type ProjectTool = z.infer<typeof ProjectToolSchema>;
+
 // --- State schema ---
 
 export const StateSchema = z.object({
