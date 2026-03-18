@@ -7,11 +7,12 @@ import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Constraint } from '../core/schema.js';
+import type { Constraint, ConstraintCategory } from '../core/schema.js';
 
 export interface ConstraintOptions {
   tag?: string[];
   path?: string[];
+  category?: ConstraintCategory;
   author?: string;
   cwd?: string;
   store?: StoreTarget;
@@ -47,6 +48,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(),
     status: 'active',
+    category: options.category,
     tags: options.tag ?? [],
     related_paths: options.path,
   };

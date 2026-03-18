@@ -23,6 +23,9 @@ function coerceEffortToMinutes(val: unknown): unknown {
 export const ConstraintStatusSchema = z.enum(['active', 'resolved', 'expired']);
 export type ConstraintStatus = z.infer<typeof ConstraintStatusSchema>;
 
+export const ConstraintCategorySchema = z.enum(['architecture', 'performance', 'security', 'reliability', 'compatibility', 'process', 'other']);
+export type ConstraintCategory = z.infer<typeof ConstraintCategorySchema>;
+
 export const SeveritySchema = z.enum(['low', 'medium', 'high']);
 export type Severity = z.infer<typeof SeveritySchema>;
 
@@ -34,6 +37,9 @@ export type MemoryVisibility = z.infer<typeof MemoryVisibilitySchema>;
 
 export const HandoffStatusSchema = z.enum(['open', 'accepted', 'closed']);
 export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
+
+export const DecisionOutcomeSchema = z.enum(['approved', 'rejected', 'deferred', 'pending']);
+export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
 
 export const ConstraintSchema = z.object({
   schema_version: z.number().int().positive().optional(),
@@ -48,6 +54,7 @@ export const ConstraintSchema = z.object({
   host_id: z.string().optional(),
   session_id: z.string().optional(),
   status: ConstraintStatusSchema,
+  category: ConstraintCategorySchema.optional(),
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),
   expires_at: z.string().optional(),
@@ -66,6 +73,7 @@ export const DecisionSchema = z.object({
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),
+  outcome: DecisionOutcomeSchema.optional(),
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   tags: z.array(z.string()),

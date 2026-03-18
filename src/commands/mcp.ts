@@ -291,6 +291,8 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Author agent name.' },
         agentId: { type: 'string', description: 'Registered author agent id.' },
         tags: { type: 'array', items: { type: 'string' } },
+        category: { type: 'string', description: 'Category for constraints: architecture, performance, security, reliability, compatibility, process, other.' },
+        outcome: { type: 'string', description: 'Outcome for decisions: approved, rejected, deferred, pending.' },
         severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
         planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
       },
@@ -1531,7 +1533,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const type = String(args.type ?? 'decision') as CandidateType;
       const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const candidatePlanId = args.planId as string | undefined;
-      const candidate = {
+      const candidate: any = {
         id: candId.id,
         short_label: candId.short_label,
         type,
@@ -1545,6 +1547,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         tags: candidateTags,
         status: 'pending' as const,
         severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
+        category: type === 'constraint' ? (args.category as string | undefined) : undefined,
+        outcome: type === 'decision' ? (args.outcome as string | undefined) : undefined,
         plan_id: candidatePlanId,
         star_count: 0,
         starred_by: [],

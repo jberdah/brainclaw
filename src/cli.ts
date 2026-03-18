@@ -124,9 +124,11 @@ program
 program
   .command('decision <text>')
   .description('Add a recent decision')
+  .option('--outcome <outcome>', 'Outcome: approved, rejected, deferred, pending')
   .option('--tag <tags...>', 'Tags for this decision')
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')
+  .option('--plan <id>', 'Optional linked plan item ID')
   .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .action((text, options) => {
     runDecision(text, options);
@@ -136,6 +138,7 @@ program
 program
   .command('constraint <text>')
   .description('Add an active constraint')
+  .option('--category <category>', 'Category: architecture, performance, security, reliability, compatibility, process, other')
   .option('--tag <tags...>', 'Tags for this constraint')
   .option('--path <paths...>', 'Related file paths')
   .option('--author <author>', 'Author name')

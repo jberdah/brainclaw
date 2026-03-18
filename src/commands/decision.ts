@@ -7,11 +7,12 @@ import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Decision } from '../core/schema.js';
+import type { Decision, DecisionOutcome } from '../core/schema.js';
 
 export interface DecisionOptions {
   tag?: string[];
   path?: string[];
+  outcome?: DecisionOutcome;
   author?: string;
   plan?: string;
   cwd?: string;
@@ -47,6 +48,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
     text,
     created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(),
+    outcome: options.outcome,
     tags: options.tag ?? [],
     related_paths: options.path,
     plan_id: options.plan,
