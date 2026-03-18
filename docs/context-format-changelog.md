@@ -1,5 +1,13 @@
 # Context Format Changelog
 
+## 1.3
+
+- Added `available_capabilities` field to structured context containing registered project capabilities with metadata (id, name, category)
+- Added `available_tools` field to structured context containing registered project tools with metadata (id, name, type)
+- Enhanced text output to include "Available Capabilities" and "Available Tools" sections when metadata is present
+- Added discovery hints pointing users to `bclaw_get_capabilities`, `bclaw_list_tools`, and `bclaw_search_tools` MCP tools
+- Kept the contract additive and backward-compatible with `1.2`
+
 ## 1.2
 
 - Added `context_diff` to expose compact memory deltas since a session started.

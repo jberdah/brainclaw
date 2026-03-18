@@ -145,6 +145,7 @@ Record an active constraint.
 
 | Option | Description |
 |---|---|
+| `--category <category>` | Constraint category: `architecture`, `performance`, `security`, `reliability`, `compatibility`, `process`, `other` |
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--path <path>` | Scope to a file or folder path |
 | `--author <name>` | Author name |
@@ -152,7 +153,98 @@ Record an active constraint.
 
 ```bash
 brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw constraint "No new prod dependencies without approval" --tag architecture --author alice
+brainclaw constraint "No new prod dependencies without approval" --category architecture --author alice
+```
+
+### `brainclaw decision <text>` (enriched)
+
+Record a durable architectural or process decision. Now supports outcome tracking.
+
+| Option | Description |
+|---|---|
+| `--outcome <outcome>` | Decision outcome: `approved`, `rejected`, `deferred`, `pending` |
+| `--tag <tag>` | Tag for categorization (repeatable) |
+| `--path <path>` | Scope to a file or folder path |
+| `--plan <id>` | Link to a plan item ID |
+| `--author <name>` | Author name |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
+
+```bash
+brainclaw decision "Use async/await instead of callbacks" --outcome approved
+brainclaw decision "Migrate to TypeScript" --outcome pending --plan pln_001
+```
+
+---
+
+## Project Metadata
+
+### `brainclaw capability add <name> <description>`
+
+Register a project capability.
+
+| Option | Description |
+|---|---|
+| `--tag <tag>` | Tag for categorization as category (repeatable) |
+| `--author <name>` | Author name |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
+
+```bash
+brainclaw capability add "API Rate Limiting" "Manages request rate limiting for external APIs" --tag architecture
+brainclaw capability add "Database Migrations" "Handles schema migrations safely" --tag reliability
+```
+
+### `brainclaw capability list`
+
+List all registered project capabilities.
+
+### `brainclaw capability describe <id>`
+
+Show full details of a capability.
+
+---
+
+### `brainclaw tool add <name> <description>`
+
+Register a project tool.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Tool type: `workflow`, `validator`, `generator`, `utility`, `explorer` |
+| `--tag <tag>` | Tag for categorization (repeatable) |
+| `--author <name>` | Author name |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
+
+```bash
+brainclaw tool add "npm-test" "Runs npm test suite" --type validator
+brainclaw tool add "docker-build" "Builds Docker image" --type generator --tag containers
+```
+
+### `brainclaw tool list`
+
+List all registered project tools.
+
+### `brainclaw tool describe <id>`
+
+Show full details of a tool.
+
+### `brainclaw tool search <query>`
+
+Search tools by name, description, or tags.
+
+```bash
+brainclaw tool search "docker"
+brainclaw tool search "test" --type validator
+```
+
+---
+
+### `brainclaw explore`
+
+Browse all registered project capabilities and tools in a unified view.
+
+```bash
+brainclaw explore
+brainclaw explore --query "validation"
 ```
 
 ### `brainclaw trap <text>`

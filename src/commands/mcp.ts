@@ -50,7 +50,7 @@ export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
 export type McpConnectionState = 'pre_init' | 'awaiting_initialized' | 'ready' | 'closed';
 export type JsonRpcId = string | number | null;
 
-export const SCHEMA_VERSION = '0.3.0';
+export const SCHEMA_VERSION = '0.6.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
 

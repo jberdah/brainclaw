@@ -4,7 +4,33 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
 
 ---
 
-## 0.5.0 (current)
+## 0.6.0 (current)
+
+**Added**
+- `bclaw_get_capabilities` — list all registered project capabilities with optional filtering by category
+  - Returns array of capabilities with id, name, category, and tags
+  - Supports category filtering parameter
+- `bclaw_list_tools` — list all registered project tools with optional filtering by type
+  - Returns array of tools with id, name, type, and tags
+  - Supports type and tag filtering parameters
+- `bclaw_search_tools` — full-text search across project tools
+  - Filters by query string, type, and tags
+  - Returns matching tools with detailed metadata
+- Enhanced `bclaw_get_context` to include metadata discovery:
+  - New `available_capabilities` field in structured content (array of capability objects)
+  - New `available_tools` field in structured content (array of tool objects)
+  - Suggestions section in text output showing relevant capabilities and tools (up to 5 each)
+- Support for `category` and `outcome` fields in `bclaw_create_candidate`:
+  - Constraints can now have a category: architecture, performance, security, reliability, compatibility, process, other
+  - Decisions can now have an outcome: approved, rejected, deferred, pending
+- Doctor check `metadata_consistency` — validates capability and tool completeness
+
+**Changed**
+- MCP schema version bumped to 0.6.0 to reflect new metadata discovery capabilities
+
+---
+
+## 0.5.0
 
 **Added**
 - `bclaw_delete_memory` — delete a constraint, decision, or trap by ID (trusted trust required)
