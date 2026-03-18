@@ -42,8 +42,8 @@ import {
   readSetupState,
   ALL_KNOWN_AGENTS,
 } from './setup.js';
-import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { CandidateType, MemoryVisibility, PlanItem, PlanStep, PlanStatus, Priority } from '../core/schema.js';
+import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
+import type { CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, Priority, Trap } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -408,6 +408,37 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['planId', 'stepId'],
+    },
+  },
+  {
+    name: 'bclaw_delete_memory',
+    description: 'Delete a memory item (constraint, decision, or trap) by ID. Requires trusted or curator trust level.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'ID of the item to delete.' },
+        type: { type: 'string', description: 'Item type: constraint, decision, trap.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id', 'type'],
+    },
+  },
+  {
+    name: 'bclaw_update_memory',
+    description: 'Update text or tags of a constraint, decision, or trap by ID. Optionally move it to a different store level. Requires trusted or curator trust level.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'ID of the item to update.' },
+        type: { type: 'string', description: 'Item type: constraint, decision, trap.' },
+        text: { type: 'string', description: 'New text (optional).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'New tags (replaces existing).' },
+        moveToStore: { type: 'string', description: 'Move item to a different store level: local, repo, workspace, user.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id', 'type'],
     },
   },
 ] as const;
@@ -1783,6 +1814,184 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           plan_id: plan.id,
           progress: { done, total },
           all_done: done === total,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_delete_memory') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const itemId = String(args.id ?? '').trim();
+      const itemType = String(args.type ?? '').trim();
+      if (!itemId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      if (!itemType) return { response: createToolErrorResponse('validation_error', 'Missing required argument: type') };
+      if (!['constraint', 'decision', 'trap'].includes(itemType)) {
+        return { response: createToolErrorResponse('validation_error', `Invalid type: ${itemType}`) };
+      }
+
+      // Walk store chain to find the item
+      const chain = resolveStoreChain(cwd);
+      let foundStore: (typeof chain)[number] | undefined;
+
+      for (const store of chain) {
+        const state = loadState(store.cwd);
+        const found =
+          (itemType === 'constraint' && state.active_constraints.some((c) => c.id === itemId || c.short_label === itemId)) ||
+          (itemType === 'decision' && state.recent_decisions.some((d) => d.id === itemId || d.short_label === itemId)) ||
+          (itemType === 'trap' && state.known_traps.some((t) => t.id === itemId || t.short_label === itemId));
+        if (found) {
+          foundStore = store;
+          break;
+        }
+      }
+
+      if (!foundStore) {
+        return { response: createToolErrorResponse('not_found', `${itemType} with id '${itemId}' not found in any store`) };
+      }
+
+      // Delete from the found store
+      const state = loadState(foundStore.cwd);
+      const beforeCount =
+        itemType === 'constraint' ? state.active_constraints.length :
+        itemType === 'decision' ? state.recent_decisions.length :
+        state.known_traps.length;
+
+      if (itemType === 'constraint') {
+        state.active_constraints = state.active_constraints.filter((c) => c.id !== itemId && c.short_label !== itemId);
+      } else if (itemType === 'decision') {
+        state.recent_decisions = state.recent_decisions.filter((d) => d.id !== itemId && d.short_label !== itemId);
+      } else if (itemType === 'trap') {
+        state.known_traps = state.known_traps.filter((t) => t.id !== itemId && t.short_label !== itemId);
+      }
+
+      saveState(state, foundStore.cwd);
+      writeFileAtomic(memoryPath('project.md', foundStore.cwd), generateMarkdown(state, foundStore.cwd));
+      appendAuditEntry(
+        { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'delete', item_id: itemId, item_type: itemType as CandidateType },
+        foundStore.cwd,
+      );
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Deleted [${itemId}] (${itemType})` }],
+          deleted_id: itemId,
+          item_type: itemType,
+          store_level: foundStore.role,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_update_memory') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const itemId = String(args.id ?? '').trim();
+      const itemType = String(args.type ?? '').trim();
+      const newText = args.text ? String(args.text).trim() : undefined;
+      const newTags = Array.isArray(args.tags) ? args.tags.map((t) => String(t).trim()) : undefined;
+      const moveToStore = args.moveToStore ? String(args.moveToStore).trim() : undefined;
+
+      if (!itemId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      if (!itemType) return { response: createToolErrorResponse('validation_error', 'Missing required argument: type') };
+      if (!['constraint', 'decision', 'trap'].includes(itemType)) {
+        return { response: createToolErrorResponse('validation_error', `Invalid type for update: ${itemType}`) };
+      }
+      if (!newText && !newTags && !moveToStore) {
+        return { response: createToolErrorResponse('validation_error', 'At least one of text, tags, or moveToStore must be provided') };
+      }
+      if (moveToStore && !['local', 'repo', 'workspace', 'user'].includes(moveToStore)) {
+        return { response: createToolErrorResponse('validation_error', `Invalid moveToStore target: ${moveToStore}`) };
+      }
+
+      // Walk store chain to find the item
+      const chain = resolveStoreChain(cwd);
+      let sourceStore: (typeof chain)[number] | undefined;
+      let item: Constraint | Decision | Trap | undefined;
+
+      for (const store of chain) {
+        const state = loadState(store.cwd);
+        if (itemType === 'constraint') {
+          item = state.active_constraints.find((c) => c.id === itemId || c.short_label === itemId);
+        } else if (itemType === 'decision') {
+          item = state.recent_decisions.find((d) => d.id === itemId || d.short_label === itemId);
+        } else if (itemType === 'trap') {
+          item = state.known_traps.find((t) => t.id === itemId || t.short_label === itemId);
+        }
+        if (item) {
+          sourceStore = store;
+          break;
+        }
+      }
+
+      if (!sourceStore || !item) {
+        return { response: createToolErrorResponse('not_found', `${itemType} with id '${itemId}' not found in any store`) };
+      }
+
+      const previousStore = sourceStore.role;
+
+      // Update text and tags
+      if (newText) item.text = newText;
+      if (newTags) item.tags = newTags;
+
+      // Handle moveToStore
+      if (moveToStore) {
+        const targetCwd = resolveTargetStore(cwd, moveToStore as StoreTarget);
+
+        // Delete from source store
+        const sourceState = loadState(sourceStore.cwd);
+        if (itemType === 'constraint') {
+          sourceState.active_constraints = sourceState.active_constraints.filter((c) => c.id !== itemId);
+        } else if (itemType === 'decision') {
+          sourceState.recent_decisions = sourceState.recent_decisions.filter((d) => d.id !== itemId);
+        } else if (itemType === 'trap') {
+          sourceState.known_traps = sourceState.known_traps.filter((t) => t.id !== itemId);
+        }
+        saveState(sourceState, sourceStore.cwd);
+        writeFileAtomic(memoryPath('project.md', sourceStore.cwd), generateMarkdown(sourceState, sourceStore.cwd));
+
+        // Add to target store
+        const targetState = loadState(targetCwd);
+        if (itemType === 'constraint') {
+          targetState.active_constraints.push(item as Constraint);
+        } else if (itemType === 'decision') {
+          targetState.recent_decisions.push(item as Decision);
+        } else if (itemType === 'trap') {
+          targetState.known_traps.push(item as Trap);
+        }
+        saveState(targetState, targetCwd);
+        writeFileAtomic(memoryPath('project.md', targetCwd), generateMarkdown(targetState, targetCwd));
+      } else {
+        // Just update in place
+        const state = loadState(sourceStore.cwd);
+        if (itemType === 'constraint') {
+          const idx = state.active_constraints.findIndex((c) => c.id === itemId);
+          if (idx >= 0) state.active_constraints[idx] = item as Constraint;
+        } else if (itemType === 'decision') {
+          const idx = state.recent_decisions.findIndex((d) => d.id === itemId);
+          if (idx >= 0) state.recent_decisions[idx] = item as Decision;
+        } else if (itemType === 'trap') {
+          const idx = state.known_traps.findIndex((t) => t.id === itemId);
+          if (idx >= 0) state.known_traps[idx] = item as Trap;
+        }
+        saveState(state, sourceStore.cwd);
+        writeFileAtomic(memoryPath('project.md', sourceStore.cwd), generateMarkdown(state, sourceStore.cwd));
+      }
+
+      appendAuditEntry(
+        { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: itemId, item_type: itemType as CandidateType },
+        sourceStore.cwd,
+      );
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Updated [${itemId}] (${itemType})` }],
+          updated_id: itemId,
+          item_type: itemType,
+          previous_store: previousStore,
+          new_store: moveToStore,
         }),
       };
     }
