@@ -128,7 +128,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const profileMaxItems: Record<string, number> = { compact: 6, copilot: 5, quick: 3 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
-  const resolvedInstructions = resolveInstructions(loadInstructions(options.cwd), { project, agent });
+  // Instructions will be resolved after parent-store merge below (line ~460)
   const rankingLookup = buildReputationRankingLookup(options.cwd);
 
   // Profile-specific section allow-list (undefined = all sections allowed)
@@ -388,6 +388,20 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       parentStoreClaims.push(...listClaims(parentStore.cwd));
     } catch { /* non-fatal */ }
   }
+
+  // Merge instructions from all stores in the chain
+  const allInstructions: InstructionEntry[] = [...loadInstructions(options.cwd)];
+  for (const parentStore of storeChain.slice(1)) {
+    try {
+      const parentInstrs = loadInstructions(parentStore.cwd);
+      for (const instr of parentInstrs) {
+        if (!allInstructions.some((existing) => existing.id === instr.id)) {
+          allInstructions.push(instr);
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+  const resolvedInstructions = resolveInstructions(allInstructions, { project, agent });
 
   // Apply profile section filter before scoring
   if (allowedSections) {
