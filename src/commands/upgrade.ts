@@ -56,18 +56,16 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
 
     if (!fs.existsSync(legacyDir)) continue;
 
-    const files = listJsonFiles(legacyDir);
+    // Recursively collect all JSON files (handles subdirs like runtime/agent/, inbox/accepted/)
+    const files = listJsonFilesRecursive(legacyDir);
     if (files.length === 0) continue;
 
-    // Check if entity dir already has content (avoid clobbering)
-    const entityFiles = fs.existsSync(entityDir) ? listJsonFiles(entityDir) : [];
-    const entityIds = new Set(entityFiles.map(f => path.basename(f)));
-
     for (const file of files) {
-      const basename = path.basename(file);
-      const target = path.join(entityDir, basename);
+      // Preserve subdirectory structure: runtime/jberdah/rtn_xxx.json → coordination/runtime/jberdah/rtn_xxx.json
+      const relativeToLegacy = path.relative(legacyDir, file);
+      const target = path.join(entityDir, relativeToLegacy);
 
-      if (entityIds.has(basename)) {
+      if (fs.existsSync(target)) {
         // Entity dir already has this file — skip (entity takes precedence)
         continue;
       }
@@ -76,7 +74,7 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
         type: 'move_file',
         from: path.relative(base, file),
         to: path.relative(base, target),
-        description: `Move ${basename} from ${legacy}/ to ${entity}/`,
+        description: `Move ${relativeToLegacy} from ${legacy}/ to ${entity}/`,
       });
     }
   }
@@ -149,6 +147,20 @@ function listJsonFiles(dir: string): string[] {
   return fs.readdirSync(dir)
     .filter(f => f.endsWith('.json'))
     .map(f => path.join(dir, f));
+}
+
+function listJsonFilesRecursive(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listJsonFilesRecursive(full));
+    } else if (entry.isFile() && entry.name.endsWith('.json')) {
+      results.push(full);
+    }
+  }
+  return results;
 }
 
 function isEmptyDir(dir: string): boolean {
