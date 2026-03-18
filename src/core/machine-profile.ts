@@ -53,6 +53,10 @@ export interface MachineProfile {
   generated_at: string;
   /** Hostname */
   hostname: string;
+  /** OS username (who is running brainclaw on this machine) */
+  os_user: string;
+  /** Home directory */
+  home_dir: string;
   /** OS variant */
   os_variant: OsVariant;
   /** Platform from Node.js */
@@ -312,6 +316,8 @@ export function buildMachineProfile(): MachineProfile {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     hostname: os.hostname(),
+    os_user: os.userInfo().username,
+    home_dir: os.homedir(),
     os_variant: detectOsVariant(),
     platform: process.platform,
     os_release: os.release(),
@@ -366,7 +372,8 @@ export function loadMachineProfile(): MachineProfile | undefined {
 export function renderMachineProfileSummary(profile: MachineProfile): string {
   const lines: string[] = [];
 
-  lines.push(`Machine: ${profile.hostname}`);
+  lines.push(`Machine: ${profile.hostname} (user: ${profile.os_user})`);
+  lines.push(`Home: ${profile.home_dir}`);
   lines.push(`OS: ${profile.os_variant} (${profile.platform} ${profile.os_release}, ${profile.arch})`);
 
   // Shells
