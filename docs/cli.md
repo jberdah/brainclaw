@@ -6,6 +6,28 @@ Commands grouped by purpose. All commands are available as `brainclaw` or its al
 
 ## Initialize and Inspect
 
+### `brainclaw setup`
+
+Global onboarding wizard — detects AI agents, installs global MCP configs, and initialises multiple repositories in one pass. Designed to be run once per machine (or re-run to reconfigure).
+
+| Option | Description |
+|---|---|
+| `--roots <paths>` | Comma-separated root directories to scan for git repos (skips interactive prompt) |
+| `--agents <agents>` | Agents to configure: `all`, `detected`, or comma-separated names (e.g. `claude-code,cursor`) |
+| `--repos <mode>` | Repo selection: `all`, `current`, or comma-separated numbers (e.g. `1,3`) |
+| `-y, --yes` | Accept all defaults non-interactively |
+
+```bash
+brainclaw setup                                         # interactive wizard
+brainclaw setup --yes                                   # non-interactive, detected agent, current dir
+brainclaw setup --roots ~/Projects --agents detected    # scan ~/Projects, configure detected agent only
+brainclaw setup --roots ~/Projects,~/work --agents all  # all agents, multiple roots
+```
+
+**MCP usage (agent-driven):** Use `bclaw_setup` with the resume pattern — call without `step` to start, then pass `step` + `choice` to advance through each stage (`project_roots` → `repo_selection` → `agent_selection`).
+
+---
+
 ### `brainclaw init`
 
 Initialize workspace state. Detects the AI agent environment and writes to its native instruction file.
