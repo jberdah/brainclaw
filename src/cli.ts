@@ -64,6 +64,9 @@ import { runPush } from './commands/push.js';
 import { runAuditCommand } from './commands/audit.js';
 import { runHistory } from './commands/history.js';
 import { runContextDiff } from './commands/context-diff.js';
+import { runCapability } from './commands/capability.js';
+import { runTool } from './commands/tool.js';
+import { runExplore } from './commands/explore.js';
 import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
 import { cleanOrphanFiles, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
@@ -857,6 +860,44 @@ program
   .option('--json', 'Output as JSON')
   .action((options) => {
     runContextDiff({ since: options.since, session: options.session, json: options.json });
+  });
+
+program
+  .command('capability <subcommand> [args...]')
+  .description('Manage project capabilities (list, add, describe)')
+  .option('--tag <tag>', 'Tag for categorization (repeatable)', (val: string, prev: string[]) => [...(prev || []), val])
+  .option('--author <name>', 'Author name')
+  .option('--store <target>', 'Store level: local (default), repo, workspace, user')
+  .action((subcommand: string, args: string[], options) => {
+    runCapability(subcommand, args, {
+      tag: options.tag,
+      author: options.author,
+      store: options.store,
+    });
+  });
+
+program
+  .command('tool <subcommand> [args...]')
+  .description('Manage project tools (list, add, describe, search)')
+  .option('--tag <tag>', 'Tag for categorization (repeatable)', (val: string, prev: string[]) => [...(prev || []), val])
+  .option('--type <type>', 'Tool type: workflow, validator, generator, utility, explorer')
+  .option('--author <name>', 'Author name')
+  .option('--store <target>', 'Store level: local (default), repo, workspace, user')
+  .action((subcommand: string, args: string[], options) => {
+    runTool(subcommand, args, {
+      tag: options.tag,
+      type: options.type,
+      author: options.author,
+      store: options.store,
+    });
+  });
+
+program
+  .command('explore')
+  .description('Explore project capabilities and available tools')
+  .option('--query <q>', 'Search for specific capability or tool')
+  .action((options) => {
+    runExplore({ query: options.query });
   });
 
 program.parseAsync(process.argv).catch((err) => {
