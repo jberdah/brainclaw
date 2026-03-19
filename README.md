@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jberdah/brainclaw/master/docs/assets/logo.png" alt="brainclaw" width="140" />
+  <img src="docs/assets/logo.png" alt="brainclaw" width="140" />
 </p>
 
 <h1 align="center">brainclaw</h1>
@@ -36,6 +36,27 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 | **Agent-ready context** | compact, prompt-sized context generated from real workspace state |
 | **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, etc. |
 | **Local-first storage** | plain text + JSON, Git-friendly, no cloud, no telemetry |
+
+---
+
+## Works With
+
+brainclaw is designed to sit alongside the coding agents teams are already using.
+
+| Agent | Brainclaw fit | Best use today |
+|---|---|---|
+| **Claude Code** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
+| **Codex** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
+| **Cursor** | Strong fit | repo-native coordination with rules + MCP |
+| **OpenCode** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
+| **Windsurf** | Good fit | guided workflows with instructions, hooks, and MCP |
+| **Roo** | Good fit | workspace coordination with rules + MCP |
+| **Continue** | Good fit | context access and MCP-driven collaboration in editor workflows |
+| **Antigravity / Gemini CLI** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
+| **Cline** | Functional fit | lightweight Brainclaw usage through rules + MCP |
+| **GitHub Copilot** | Supported fit | project awareness and shared instructions, with lighter workflow control |
+
+brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
 
 ---
 
