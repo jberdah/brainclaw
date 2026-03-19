@@ -116,19 +116,6 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       })
     : undefined;
 
-  // Write to the detected agent's native instruction file
-  const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
-
-  // Write deterministic session-trigger hooks for Cursor / Windsurf
-  const detectedHooks = detectedAi
-    ? (detectedAi.name === 'windsurf'
-        ? []
-        : writeDetectedAgentHooks(detectedAi.name, projectName, cwd)
-          .filter((hook) => hook.relativePath !== detectedExport?.relativePath))
-    : [];
-
-  const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
-
   // Only write empty state if no data exists yet.
   // When --force is used on an existing project, preserve the data
   // and only refresh config/agent registration/directory structure.
@@ -169,6 +156,19 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }
   saveConfig(config, cwd, storageDir);
   saveProjectIdentity(projectIdentity, cwd, storageDir);
+
+  // Write to the detected agent's native instruction file after config exists.
+  const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
+
+  // Write deterministic session-trigger hooks for Cursor / Windsurf
+  const detectedHooks = detectedAi
+    ? (detectedAi.name === 'windsurf'
+        ? []
+        : writeDetectedAgentHooks(detectedAi.name, projectName, cwd)
+          .filter((hook) => hook.relativePath !== detectedExport?.relativePath))
+    : [];
+
+  const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
 
   // Register in global project registry
   try {
