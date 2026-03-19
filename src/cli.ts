@@ -443,6 +443,7 @@ program
   .description('Check memory health and security')
   .option('--json', 'Output as JSON dashboard')
   .option('--migration-check', 'Report versioned documents that need schema migration')
+  .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
   .action((options) => {
     runDoctor(options);
   });
@@ -959,7 +960,8 @@ program
   .description('Export memory as instructions for IDE/AI tools')
   .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, gemini-md, windsurf, cline, roo, continue')
   .option('--detect', 'Auto-detect agent environment and write to its native file')
-  .option('--write', 'Write to canonical file path instead of stdout (when --format is given)')
+  .option('--write', 'Write to canonical file path instead of stdout (when --format is given); local files are gitignored by default')
+  .option('--shared', 'Keep the main exported instruction file versionable instead of auto-ignoring it (companions remain local)')
   .option('--output <file>', 'Write to a specific file path instead of stdout')
   .option('--project <project>', 'Project namespace filter')
   .option('--agent <agent>', 'Agent name for agent-layer instructions')

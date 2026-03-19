@@ -10,6 +10,7 @@ import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
+import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 
 function sessionsDir(cwd?: string): string {
   return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
@@ -40,6 +41,10 @@ export interface SessionStartOptions {
 
 export interface SessionStartResult extends SessionSnapshot {
   context_target?: string;
+  agent_git_hygiene?: {
+    missing_gitignore_paths: string[];
+    tracked_paths: string[];
+  };
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -52,6 +57,17 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
 
     console.log(`✔ Session started: ${snapshot.session_id} (${snapshot.agent})`);
     if (options.context) console.log(`  Context target: ${options.context}`);
+    if (snapshot.agent_git_hygiene && (snapshot.agent_git_hygiene.missing_gitignore_paths.length > 0 || snapshot.agent_git_hygiene.tracked_paths.length > 0)) {
+      console.warn('⚠ Local Brainclaw agent files in this repo should stay unversioned.');
+      if (snapshot.agent_git_hygiene.missing_gitignore_paths.length > 0) {
+        console.warn(`  Missing .gitignore entries: ${snapshot.agent_git_hygiene.missing_gitignore_paths.join(', ')}`);
+        console.warn('  Fix: run `brainclaw doctor --fix-agent-ignore`');
+      }
+      if (snapshot.agent_git_hygiene.tracked_paths.length > 0) {
+        console.warn(`  Tracked local agent files: ${snapshot.agent_git_hygiene.tracked_paths.join(', ')}`);
+        console.warn('  After fixing .gitignore, untrack them with `git rm --cached <path>` as needed.');
+      }
+    }
   } catch (e: unknown) {
     console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
@@ -130,7 +146,18 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   }, options.cwd);
 
   appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' }, options.cwd);
-  return snapshot;
+  const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
+  return {
+    ...snapshot,
+    ...(agentGitHygiene.isGitRepo && (agentGitHygiene.missingGitignorePaths.length > 0 || agentGitHygiene.trackedPaths.length > 0)
+      ? {
+          agent_git_hygiene: {
+            missing_gitignore_paths: agentGitHygiene.missingGitignorePaths,
+            tracked_paths: agentGitHygiene.trackedPaths,
+          },
+        }
+      : {}),
+  };
 }
 
 export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {

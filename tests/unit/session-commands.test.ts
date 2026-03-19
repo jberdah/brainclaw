@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { clearCurrentSession, loadCurrentSession } from '../../src/core/identity.js';
 import { runSessionEnd } from '../../src/commands/session-end.js';
-import { loadSessionSnapshot, runSessionStart } from '../../src/commands/session-start.js';
+import { loadSessionSnapshot, runSessionStart, startSession } from '../../src/commands/session-start.js';
 import { listCandidates } from '../../src/core/candidates.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
@@ -29,6 +30,21 @@ function captureLogs(fn: () => void): string[] {
     console.log = originalLog;
     console.error = originalError;
   }
+}
+
+function git(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(' ')} failed`);
+  return result.stdout;
+}
+
+function initGitRepo(dir: string): void {
+  git(['init'], dir);
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test User'], dir);
 }
 
 describe('session commands', () => {
@@ -216,6 +232,15 @@ describe('session commands', () => {
         process.env.BRAINCLAW_SESSION_ID = previousSession;
       }
     }
+  });
+
+  it('includes local agent git hygiene warnings in session-start result when generated files are not ignored', () => {
+    initGitRepo(workspace.dir);
+    fs.writeFileSync(path.join(workspace.dir, '.mcp.json'), '{}\n', 'utf-8');
+
+    const result = startSession({ cwd: workspace.dir });
+    assert.deepEqual(result.agent_git_hygiene?.missing_gitignore_paths, ['.mcp.json']);
+    assert.deepEqual(result.agent_git_hygiene?.tracked_paths, []);
   });
 
   it('only clears the active implicit session when the ended session matches it', () => {

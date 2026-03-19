@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 export const BRAINCLAW_SECTION_START = '<!-- brainclaw:start -->';
 export const BRAINCLAW_SECTION_END = '<!-- brainclaw:end -->';
@@ -144,6 +145,25 @@ export function collectWorkspaceGitignoreEntries(
   return [...collected];
 }
 
+export function collectExportGitignoreEntries(
+  cwd: string,
+  targetRelativePath: string,
+  results: Array<Pick<AutoConfigWriteResult, 'filePath' | 'relativePath'>>,
+  options: { includeTarget?: boolean } = {},
+): string[] {
+  const collected = new Set<string>();
+
+  if (options.includeTarget !== false) {
+    collected.add(targetRelativePath.replace(/\\/g, '/'));
+  }
+
+  for (const entry of collectWorkspaceGitignoreEntries(cwd, results)) {
+    collected.add(entry);
+  }
+
+  return [...collected];
+}
+
 // --- Agent export target registry ---
 
 export type ExportFormat =
@@ -239,6 +259,28 @@ const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 
+export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
+  CLINE_MCP_RELATIVE_PATH,
+  CURSOR_MDC_RELATIVE_PATH,
+  COPILOT_SKILL_RELATIVE_PATH,
+  CLAUDE_CODE_MCP_RELATIVE_PATH,
+  CLAUDE_CODE_COMMAND_RELATIVE_PATH,
+  CLAUDE_CODE_SETTINGS_RELATIVE_PATH,
+  ROO_MCP_RELATIVE_PATH,
+  CONTINUE_CONFIG_RELATIVE_PATH,
+  OPENCODE_CONFIG_RELATIVE_PATH,
+] as const;
+
+export interface AgentGitHygieneAudit {
+  isGitRepo: boolean;
+  auditedPaths: string[];
+  presentPaths: string[];
+  ignoredPaths: string[];
+  missingGitignorePaths: string[];
+  trackedPaths: string[];
+  hasIssues: boolean;
+}
+
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -275,6 +317,81 @@ function writeJsonFileIfChanged(filePath: string, next: JsonObject): { created: 
 
 function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
+}
+
+function runGit(cwd: string, args: string[], input?: string): { ok: boolean; stdout: string } {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    input,
+  });
+
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      stdout: result.stdout ?? '',
+    };
+  }
+
+  return {
+    ok: true,
+    stdout: result.stdout ?? '',
+  };
+}
+
+export function auditLocalAgentWorkspaceFiles(cwd: string): AgentGitHygieneAudit {
+  const auditedPaths = [...LOCAL_ONLY_AGENT_WORKSPACE_FILES];
+  const presentPaths = auditedPaths
+    .filter((relativePath) => fs.existsSync(path.join(cwd, relativePath)))
+    .map((relativePath) => relativePath.replace(/\\/g, '/'));
+
+  const gitRepoCheck = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (!gitRepoCheck.ok || gitRepoCheck.stdout.trim() !== 'true') {
+    return {
+      isGitRepo: false,
+      auditedPaths,
+      presentPaths,
+      ignoredPaths: [],
+      missingGitignorePaths: [],
+      trackedPaths: [],
+      hasIssues: false,
+    };
+  }
+
+  if (presentPaths.length === 0) {
+    return {
+      isGitRepo: true,
+      auditedPaths,
+      presentPaths,
+      ignoredPaths: [],
+      missingGitignorePaths: [],
+      trackedPaths: [],
+      hasIssues: false,
+    };
+  }
+
+  const ignoredResult = runGit(cwd, ['check-ignore', '--no-index', '--stdin'], `${presentPaths.join('\n')}\n`);
+  const ignoredPaths = ignoredResult.ok
+    ? ignoredResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    : [];
+  const ignoredSet = new Set(ignoredPaths);
+
+  const trackedResult = runGit(cwd, ['ls-files', '--', ...presentPaths]);
+  const trackedPaths = trackedResult.ok
+    ? trackedResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => line.replace(/\\/g, '/'))
+    : [];
+
+  const missingGitignorePaths = presentPaths.filter((relativePath) => !ignoredSet.has(relativePath));
+
+  return {
+    isGitRepo: true,
+    auditedPaths,
+    presentPaths,
+    ignoredPaths,
+    missingGitignorePaths,
+    trackedPaths,
+    hasIssues: missingGitignorePaths.length > 0 || trackedPaths.length > 0,
+  };
 }
 
 export function describeAutoConfigWrite(result: AutoConfigWriteResult): string | undefined {

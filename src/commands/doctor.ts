@@ -24,6 +24,7 @@ import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
+import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
 
@@ -39,6 +40,7 @@ export interface DoctorOptions {
   json?: boolean;
   cwd?: string;
   migrationCheck?: boolean;
+  fixAgentIgnore?: boolean;
 }
 
 interface DoctorCheck {
@@ -57,6 +59,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   let hasIssues = false;
   const checks: DoctorCheck[] = [];
   let migrationEntries = [] as ReturnType<typeof scanMigrationStatus>;
+  let agentGitHygieneFixed: string[] = [];
 
   // Validate config
   let config;
@@ -75,6 +78,17 @@ export function runDoctor(options: DoctorOptions = {}): void {
       console.log(JSON.stringify({ ok: false, checks, metrics: {} }, null, 2));
     }
     return;
+  }
+
+  if (options.fixAgentIgnore) {
+    const initialAudit = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
+    if (initialAudit.missingGitignorePaths.length > 0) {
+      ensureGitignoreEntries(options.cwd ?? process.cwd(), initialAudit.missingGitignorePaths);
+      agentGitHygieneFixed = initialAudit.missingGitignorePaths;
+      if (!options.json) {
+        console.log(`✔ Added generated local agent files to .gitignore: ${agentGitHygieneFixed.join(', ')}`);
+      }
+    }
   }
 
   // Validate state
@@ -372,6 +386,60 @@ export function runDoctor(options: DoctorOptions = {}): void {
       status: 'ok',
       message: `${integrationReadiness.length} declared agent integration(s) are fully activated`,
     });
+  }
+
+  const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
+  if (!agentGitHygiene.isGitRepo) {
+    checks.push({
+      name: 'agent_git_hygiene',
+      status: 'ok',
+      message: 'No Git worktree detected; agent git hygiene audit skipped',
+    });
+  } else if (agentGitHygiene.presentPaths.length === 0) {
+    checks.push({
+      name: 'agent_git_hygiene',
+      status: 'ok',
+      message: 'No local-only Brainclaw agent files detected in the workspace',
+    });
+  } else if (agentGitHygiene.hasIssues) {
+    const parts: string[] = [];
+    if (agentGitHygiene.missingGitignorePaths.length > 0) {
+      parts.push(`${agentGitHygiene.missingGitignorePaths.length} file(s) should be added to .gitignore`);
+    }
+    if (agentGitHygiene.trackedPaths.length > 0) {
+      parts.push(`${agentGitHygiene.trackedPaths.length} file(s) are still tracked by Git`);
+    }
+    const fixHint = agentGitHygiene.missingGitignorePaths.length > 0
+      ? ' Run `brainclaw doctor --fix-agent-ignore` to add ignore entries.'
+      : '';
+    checks.push({
+      name: 'agent_git_hygiene',
+      status: 'warn',
+      message: `${parts.join('; ')}.${fixHint}`.trim(),
+      details: agentGitHygiene,
+    });
+    if (!options.json) {
+      console.warn(`⚠ Agent git hygiene: ${parts.join('; ')}.`);
+      if (agentGitHygiene.missingGitignorePaths.length > 0) {
+        console.warn(`  Missing .gitignore entries: ${agentGitHygiene.missingGitignorePaths.join(', ')}`);
+        console.warn('  Fix: run `brainclaw doctor --fix-agent-ignore`');
+      }
+      if (agentGitHygiene.trackedPaths.length > 0) {
+        console.warn(`  Tracked local agent files: ${agentGitHygiene.trackedPaths.join(', ')}`);
+        console.warn('  After updating .gitignore, untrack them with `git rm --cached <path>` as needed.');
+      }
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'agent_git_hygiene',
+      status: 'ok',
+      message: `${agentGitHygiene.presentPaths.length} local-only Brainclaw agent file(s) are ignored correctly`,
+      details: agentGitHygiene,
+    });
+    if (!options.json) {
+      console.log(`✔ Agent git hygiene: ${agentGitHygiene.presentPaths.length} local-only file(s) are ignored correctly`);
+    }
   }
 
   const brainclawVersion = assessBrainclawVersion(config);
@@ -852,6 +920,9 @@ export function runDoctor(options: DoctorOptions = {}): void {
     incomplete_skills: incompleteSkills.length,
     local_mcp_servers: agentTooling.mcp_servers.length,
     missing_mcp_commands: missingMcpCommands.length,
+    agent_git_hygiene_present: agentGitHygiene.presentPaths.length,
+    agent_git_hygiene_missing_ignore: agentGitHygiene.missingGitignorePaths.length,
+    agent_git_hygiene_tracked: agentGitHygiene.trackedPaths.length,
     declared_agent_integrations: integrationReadiness.length,
     integration_activation_gaps: missingIntegrations.length,
     brainclaw_cli_version: brainclawVersion.cli_version,
@@ -1197,6 +1268,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
         circuit_breaker_tripped_count: circuitSnapshot.tripped_agents.length,
         circuit_breaker_threshold: circuitSnapshot.threshold,
         circuit_breaker_window_days: circuitSnapshot.window_days,
+        agent_git_hygiene_fixed: agentGitHygieneFixed.length,
       },
       migration: options.migrationCheck
         ? {

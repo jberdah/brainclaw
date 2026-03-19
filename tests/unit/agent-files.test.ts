@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   BRAINCLAW_SECTION_START,
   BRAINCLAW_SECTION_END,
@@ -15,6 +16,8 @@ import {
   ensureAgentFiles,
   ensureGitignoreEntries,
   collectWorkspaceGitignoreEntries,
+  collectExportGitignoreEntries,
+  auditLocalAgentWorkspaceFiles,
   ensureWindsurfMcpConfig,
   ensureClaudeCodeMcpConfig,
   ensureClaudeCodeCommand,
@@ -29,6 +32,21 @@ import {
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-files-'));
+}
+
+function git(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(' ')} failed`);
+  return result.stdout;
+}
+
+function initGitRepo(dir: string): void {
+  git(['init'], dir);
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test User'], dir);
 }
 
 describe('core/agent-files — buildBrainclawSection', () => {
@@ -216,6 +234,91 @@ describe('core/agent-files — collectWorkspaceGitignoreEntries', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('core/agent-files — collectExportGitignoreEntries', () => {
+  it('includes the main export target and workspace-local companion files by default', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const entries = collectExportGitignoreEntries(dir, 'CLAUDE.md', [
+        {
+          filePath: path.join(dir, '.claude', 'settings.local.json'),
+          relativePath: '.claude/settings.local.json',
+        },
+        {
+          filePath: path.join(homeDir, '.claude', 'settings.json'),
+        },
+      ]);
+
+      assert.deepEqual(entries, ['CLAUDE.md', '.claude/settings.local.json']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('can skip the main export target for explicitly shared instructions', () => {
+    const dir = tmpDir();
+    try {
+      const entries = collectExportGitignoreEntries(dir, 'CLAUDE.md', [
+        {
+          filePath: path.join(dir, '.mcp.json'),
+          relativePath: '.mcp.json',
+        },
+      ], { includeTarget: false });
+
+      assert.deepEqual(entries, ['.mcp.json']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('core/agent-files — auditLocalAgentWorkspaceFiles', () => {
+  it('skips the audit when the workspace is not a git repo', () => {
+    const dir = tmpDir();
+    try {
+      fs.writeFileSync(path.join(dir, '.mcp.json'), '{}\n', 'utf-8');
+      const audit = auditLocalAgentWorkspaceFiles(dir);
+      assert.equal(audit.isGitRepo, false);
+      assert.equal(audit.hasIssues, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('flags local Brainclaw agent files that are missing from .gitignore', () => {
+    const dir = tmpDir();
+    try {
+      initGitRepo(dir);
+      fs.writeFileSync(path.join(dir, '.mcp.json'), '{}\n', 'utf-8');
+      const audit = auditLocalAgentWorkspaceFiles(dir);
+      assert.equal(audit.isGitRepo, true);
+      assert.deepEqual(audit.missingGitignorePaths, ['.mcp.json']);
+      assert.deepEqual(audit.trackedPaths, []);
+      assert.equal(audit.hasIssues, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports tracked local agent files even if they are now ignored', () => {
+    const dir = tmpDir();
+    try {
+      initGitRepo(dir);
+      fs.writeFileSync(path.join(dir, '.mcp.json'), '{}\n', 'utf-8');
+      git(['add', '.mcp.json'], dir);
+      fs.writeFileSync(path.join(dir, '.gitignore'), '.mcp.json\n', 'utf-8');
+
+      const audit = auditLocalAgentWorkspaceFiles(dir);
+      assert.deepEqual(audit.missingGitignorePaths, []);
+      assert.deepEqual(audit.trackedPaths, ['.mcp.json']);
+      assert.equal(audit.hasIssues, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

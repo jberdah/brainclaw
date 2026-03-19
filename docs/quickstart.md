@@ -57,8 +57,9 @@ Use this to prepare compact context before edits or reviews.
 
 ```bash
 brainclaw export --detect          # auto-detects running agent, writes to its file
-brainclaw export --format claude-md --write   # writes CLAUDE.md
-brainclaw export --format cursor-rules --write  # writes .cursor/rules/brainclaw.md
+brainclaw export --format claude-md --write   # writes CLAUDE.md and gitignores it by default
+brainclaw export --format cursor-rules --write  # writes .cursor/rules/brainclaw.md and gitignores it by default
+brainclaw export --format claude-md --write --shared  # only if you intentionally want to commit it
 ```
 
 ## 8. Inspect the current board

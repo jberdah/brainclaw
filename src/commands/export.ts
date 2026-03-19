@@ -6,7 +6,17 @@ import { loadConfig, saveConfig } from '../core/config.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
-import { resolveExportTarget, resolveExportTargetByFormat, writeExportFile, buildHygieneSection, describeAutoConfigWrite, writeExportCompanionFiles, type ExportFormat } from '../core/agent-files.js';
+import {
+  resolveExportTarget,
+  resolveExportTargetByFormat,
+  writeExportFile,
+  buildHygieneSection,
+  describeAutoConfigWrite,
+  writeExportCompanionFiles,
+  collectExportGitignoreEntries,
+  ensureGitignoreEntries,
+  type ExportFormat,
+} from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
 
 export type { ExportFormat };
@@ -18,6 +28,7 @@ export interface ExportOptions {
   agent?: string;
   detect?: boolean;
   write?: boolean;
+  shared?: boolean;
   cwd?: string;
 }
 
@@ -29,6 +40,10 @@ export function runExport(options: ExportOptions): void {
   }
 
   if (options.detect) {
+    if (options.shared) {
+      console.error('Error: --shared cannot be used with --detect. Use `brainclaw export --format <format> --write --shared` to publish a specific instruction file.');
+      process.exit(1);
+    }
     runExportDetect(cwd, options);
     return;
   }
@@ -43,9 +58,21 @@ export function runExport(options: ExportOptions): void {
   if (options.write) {
     const target = resolveExportTargetByFormat(options.format);
     const result = writeExportFile(content, target.relativePath, cwd);
+    const autoConfigs = writeExportCompanionFiles(options.format, cwd);
+    const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs, {
+      includeTarget: !options.shared,
+    });
+    if (gitignoreEntries.length > 0) {
+      ensureGitignoreEntries(cwd, gitignoreEntries);
+    }
     declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
-    for (const autoConfig of writeExportCompanionFiles(options.format, cwd)) {
+    if (options.shared) {
+      console.log(`✔ Left ${target.relativePath} versionable (--shared); local companion config remains gitignored`);
+    } else if (gitignoreEntries.length > 0) {
+      console.log('✔ Added generated local agent files to .gitignore');
+    }
+    for (const autoConfig of autoConfigs) {
       const message = describeAutoConfigWrite(autoConfig);
       if (message) {
         console.log(message);
@@ -66,12 +93,20 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const target = detected ? resolveExportTarget(detected.name) : resolveExportTarget('unknown');
   const content = generateExport(target.format, options, cwd);
   const result = writeExportFile(content, target.relativePath, cwd);
+  const autoConfigs = writeExportCompanionFiles(target.format, cwd);
+  const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
+  if (gitignoreEntries.length > 0) {
+    ensureGitignoreEntries(cwd, gitignoreEntries);
+  }
   declareAgentIntegrationFromTarget(cwd, target.agentName, detected ? 'detected' : 'manual');
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
   console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+  if (gitignoreEntries.length > 0) {
+    console.log('✔ Added generated local agent files to .gitignore');
+  }
 
-  for (const autoConfig of writeExportCompanionFiles(target.format, cwd)) {
+  for (const autoConfig of autoConfigs) {
     const message = describeAutoConfigWrite(autoConfig);
     if (message) {
       console.log(message);

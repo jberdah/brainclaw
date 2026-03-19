@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { loadConfig } from '../../src/core/config.js';
@@ -45,6 +46,21 @@ function captureConsole(fn: () => void): { logs: string[]; warns: string[]; erro
     console.warn = originalWarn;
     console.error = originalError;
   }
+}
+
+function git(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(' ')} failed`);
+  return result.stdout;
+}
+
+function initGitRepo(dir: string): void {
+  git(['init'], dir);
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test User'], dir);
 }
 
 function syncProjectArtifacts(workspace: TestWorkspace): void {
@@ -314,6 +330,40 @@ describe('commands/doctor', () => {
     assert.equal(parsed.metrics.declared_agent_integrations, 1);
     assert.equal(parsed.metrics.integration_activation_gaps, 1);
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'agent_integrations' && check.status === 'warn'));
+  });
+
+  it('warns when generated local agent files are present but not gitignored', () => {
+    initGitRepo(workspace.dir);
+    fs.writeFileSync(path.join(workspace.dir, '.mcp.json'), '{}\n', 'utf-8');
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((entry: { name: string }) => entry.name === 'agent_git_hygiene');
+    assert.equal(check?.status, 'warn');
+    assert.equal(parsed.metrics.agent_git_hygiene_present, 1);
+    assert.equal(parsed.metrics.agent_git_hygiene_missing_ignore, 1);
+    assert.equal(parsed.metrics.agent_git_hygiene_tracked, 0);
+  });
+
+  it('doctor --fix-agent-ignore repairs missing ignore entries for local agent files', () => {
+    initGitRepo(workspace.dir);
+    fs.writeFileSync(path.join(workspace.dir, '.mcp.json'), '{}\n', 'utf-8');
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir, fixAgentIgnore: true });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((entry: { name: string }) => entry.name === 'agent_git_hygiene');
+    assert.equal(check?.status, 'ok');
+    assert.equal(parsed.metrics.agent_git_hygiene_missing_ignore, 0);
+    assert.equal(parsed.metrics.agent_git_hygiene_fixed, 1);
+
+    const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+    assert.ok(gitignore.includes('.mcp.json'));
   });
 
   it('reports when the installed CLI is older than the project minimum version', () => {

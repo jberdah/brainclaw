@@ -74,12 +74,16 @@ Run health checks on config, state, and generated views.
 |---|---|
 | `--json` | Output as JSON |
 | `--migration-check` | Check for pending migrations |
+| `--fix-agent-ignore` | Add missing `.gitignore` entries for generated local Brainclaw agent files |
 
 ```bash
 brainclaw doctor
 brainclaw doctor --json
 brainclaw doctor --migration-check
+brainclaw doctor --fix-agent-ignore
 ```
+
+When Brainclaw detects generated local agent files such as `.mcp.json` or `.claude/settings.local.json` inside a Git repo, `doctor` warns if they are not ignored or are still tracked. `--fix-agent-ignore` only updates `.gitignore`; if a file is already tracked you still need to untrack it with `git rm --cached <path>`.
 
 ### `brainclaw rebuild`
 
@@ -884,6 +888,8 @@ brainclaw session-start --agent copilot
 brainclaw session-start --agent claude --model claude-sonnet-4-6 --json
 ```
 
+At session start, Brainclaw also warns when generated local agent files in the current Git repo are missing from `.gitignore` or are still tracked. Use `brainclaw doctor --fix-agent-ignore` to repair missing ignore entries.
+
 ### `brainclaw session-end`
 
 Mark the end of an agent work session.
@@ -915,7 +921,8 @@ Export memory as a native agent instruction file.
 |---|---|
 | `--format <format>` | Target format: `copilot-instructions`, `cursor-rules`, `agents-md`, `claude-md`, `gemini-md`, `windsurf`, `cline`, `roo`, or `continue` |
 | `--detect` | Auto-detect the running agent and write to its native file |
-| `--write` | Write output to the native file path (instead of stdout) |
+| `--write` | Write output to the native file path (instead of stdout); generated workspace files are treated as local and added to `.gitignore` |
+| `--shared` | Keep the main exported instruction file versionable when used with `--write`; companion MCP/settings files stay local |
 | `--output <path>` | Write to a custom output path |
 | `--project <name>` | Filter by project |
 | `--agent <name>` | Filter by agent |
@@ -931,10 +938,11 @@ brainclaw export --format cline --write                  # .clinerules/brainclaw
 brainclaw export --format agents-md --write              # AGENTS.md (Codex, OpenCode)
 brainclaw export --format roo --write                    # .roo/rules/brainclaw.md
 brainclaw export --format continue --write               # .continue/rules/brainclaw.md
+brainclaw export --format claude-md --write --shared     # publish CLAUDE.md intentionally
 brainclaw export --format claude-md                      # stdout
 ```
 
-`brainclaw export --detect --write` also writes companion MCP config where relevant, including `opencode.json` for OpenCode and `.gemini/antigravity/mcp_config.json` for Antigravity/Gemini when the local environment is available.
+`brainclaw export --write` is local-first by default: the generated workspace file and any companion MCP/settings files are added to `.gitignore`. Use `--shared` only when you intentionally want the main instruction file to be committed. `brainclaw export --detect` also writes companion MCP config where relevant, including `opencode.json` for OpenCode and `.gemini/antigravity/mcp_config.json` for Antigravity/Gemini when the local environment is available.
 
 ### `brainclaw adapter-openclaw-import [file]`
 

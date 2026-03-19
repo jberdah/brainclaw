@@ -136,25 +136,35 @@ describe('export command formats', () => {
       assert.ok(content.includes('brainclaw'), 'should mention brainclaw');
       assert.ok(content.includes('brainclaw context'), 'should contain hygiene: brainclaw context');
       assert.ok(content.includes('release-claim'), 'should contain hygiene: release-claim');
+      const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes(expectedFile), `${expectedFile} should be gitignored by default`);
 
       if (format === 'copilot-instructions') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
+        assert.ok(gitignore.includes('.github/skills/brainclaw-context/SKILL.md'));
       }
       if (format === 'claude-md') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.mcp.json')), '.mcp.json should be created for claude-md');
         assert.ok(fs.existsSync(path.join(workspace.dir, '.claude', 'commands', 'brainclaw.md')), 'slash command should be created for claude-md');
+        assert.ok(gitignore.includes('.mcp.json'));
+        assert.ok(gitignore.includes('.claude/commands/brainclaw.md'));
+        assert.ok(gitignore.includes('.claude/settings.local.json'));
       }
       if (format === 'cursor-rules') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+        assert.ok(gitignore.includes('.cursor/rules/brainclaw-mcp-shim.mdc'));
       }
       if (format === 'cline') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.vscode', 'cline_mcp_settings.json')));
+        assert.ok(gitignore.includes('.vscode/cline_mcp_settings.json'));
       }
       if (format === 'roo') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.roo', 'mcp.json')), '.roo/mcp.json should be created for roo');
+        assert.ok(gitignore.includes('.roo/mcp.json'));
       }
       if (format === 'continue') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.continue', 'config.json')), '.continue/config.json should be created for continue');
+        assert.ok(gitignore.includes('.continue/config.json'));
       }
 
       const declarationAgentName = format === 'agents-md'
@@ -173,6 +183,16 @@ describe('export command formats', () => {
     });
   }
 
+  it('--format claude-md --write --shared leaves CLAUDE.md versionable while keeping local companions gitignored', () => {
+    runExport({ format: 'claude-md', write: true, shared: true, cwd: workspace.dir });
+
+    const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+    assert.ok(!gitignore.includes('CLAUDE.md'));
+    assert.ok(gitignore.includes('.mcp.json'));
+    assert.ok(gitignore.includes('.claude/commands/brainclaw.md'));
+    assert.ok(gitignore.includes('.claude/settings.local.json'));
+  });
+
   it('--detect with BRAINCLAW_AGENT env writes to correct file', () => {
     const savedAgent = process.env.BRAINCLAW_AGENT;
     process.env.BRAINCLAW_AGENT = 'claude-code';
@@ -183,6 +203,9 @@ describe('export command formats', () => {
       runExport({ detect: true, cwd: workspace.dir });
       const claudeMd = path.join(workspace.dir, 'CLAUDE.md');
       assert.ok(fs.existsSync(claudeMd), 'CLAUDE.md should be created');
+      const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes('CLAUDE.md'));
+      assert.ok(gitignore.includes('.mcp.json'));
       const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'claude-code');
       assert.ok(declaration, 'manifest should include claude-code');
       assert.ok(logs.some((l) => l.includes('claude-code')), 'should log detected agent');
@@ -205,6 +228,9 @@ describe('export command formats', () => {
       const cursorFile = path.join(workspace.dir, '.cursor', 'rules', 'brainclaw.md');
       assert.ok(fs.existsSync(cursorFile), '.cursor/rules/brainclaw.md should be created');
       assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+      const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes('.cursor/rules/brainclaw.md'));
+      assert.ok(gitignore.includes('.cursor/rules/brainclaw-mcp-shim.mdc'));
       const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'cursor');
       assert.ok(declaration, 'manifest should include cursor');
     } finally {
@@ -221,6 +247,9 @@ describe('export command formats', () => {
       runExport({ detect: true, cwd: workspace.dir });
       assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'copilot-instructions.md')));
       assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
+      const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes('.github/copilot-instructions.md'));
+      assert.ok(gitignore.includes('.github/skills/brainclaw-context/SKILL.md'));
       const declaration = loadConfig(workspace.dir).agent_integrations.declarations.find((item) => item.agent_name === 'github-copilot');
       assert.ok(declaration, 'manifest should include github-copilot');
     } finally {
