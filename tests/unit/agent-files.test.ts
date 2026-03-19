@@ -295,9 +295,11 @@ describe('core/agent-files — auditLocalAgentWorkspaceFiles', () => {
     try {
       initGitRepo(dir);
       fs.writeFileSync(path.join(dir, '.mcp.json'), '{}\n', 'utf-8');
+      fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.claude', '.bclaw-session'), '', 'utf-8');
       const audit = auditLocalAgentWorkspaceFiles(dir);
       assert.equal(audit.isGitRepo, true);
-      assert.deepEqual(audit.missingGitignorePaths, ['.mcp.json']);
+      assert.deepEqual(audit.missingGitignorePaths, ['.mcp.json', '.claude/.bclaw-session']);
       assert.deepEqual(audit.trackedPaths, []);
       assert.equal(audit.hasIssues, true);
     } finally {

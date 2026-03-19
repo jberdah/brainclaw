@@ -63,6 +63,7 @@ CLAUDE.md
 .claude/settings.json
 .claude/settings.local.json
 .claude/commands/brainclaw.md
+.claude/.bclaw-session
 .continue/config.json
 .roo/mcp.json
 .vscode/cline_mcp_settings.json

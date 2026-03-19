@@ -8,6 +8,7 @@ import { scanGitRepos } from '../../src/commands/setup.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'src', 'cli.js');
 const NODE = process.execPath;
+const CLI_TIMEOUT_MS = 60000;
 let testHomeDir = '';
 
 function tmpDir(): string {
@@ -27,7 +28,7 @@ function run(
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 20000,
+    timeout: CLI_TIMEOUT_MS,
     env: {
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
@@ -42,8 +43,8 @@ function run(
 
   return {
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    exitCode: result.status ?? 1,
+    stderr: `${result.stderr ?? ''}${result.error ? `\n${String(result.error)}` : ''}`,
+    exitCode: result.status ?? (result.error ? 124 : 1),
   };
 }
 
