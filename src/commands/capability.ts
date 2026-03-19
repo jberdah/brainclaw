@@ -89,7 +89,7 @@ function runCapabilityAdd(name: string, description: string, options: Capability
     short_label,
     text: name,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     tags: ['capability', ...(options.tag ?? [])],
   };
 

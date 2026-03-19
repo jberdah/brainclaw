@@ -46,7 +46,7 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     short_label,
     text,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     status: 'active',
     category: options.category,
     tags: options.tag ?? [],

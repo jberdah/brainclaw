@@ -98,7 +98,7 @@ function runToolAdd(name: string, description: string, options: ToolOptions, cwd
     short_label,
     text: name,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     tags: ['tool', toolType, ...(options.tag ?? [])],
   };
 

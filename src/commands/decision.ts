@@ -47,7 +47,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
     short_label,
     text,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     outcome: options.outcome,
     tags: options.tag ?? [],
     related_paths: options.path,

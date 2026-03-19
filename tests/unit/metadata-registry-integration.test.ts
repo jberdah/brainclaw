@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runCapability } from '../../src/commands/capability.js';
@@ -30,16 +33,22 @@ function captureConsole(fn: () => void): { logs: string[]; errors: string[] } {
 }
 
 describe('metadata registry integration', () => {
+  const originalCwd = process.cwd();
   let workspace: TestWorkspace;
+  let outsideDir: string;
 
   beforeEach(() => {
     workspace = createTestWorkspace({
       prefix: 'bclaw-metadata-registry-',
       projectId: 'prj_metadata_test',
     });
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-metadata-outside-'));
+    process.chdir(outsideDir);
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(outsideDir, { recursive: true, force: true });
     workspace.cleanup();
   });
 

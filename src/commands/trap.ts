@@ -58,7 +58,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     short_label,
     text,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     status: options.status ?? 'active',
     severity: options.severity ?? 'medium',
     tags: options.tag ?? [],

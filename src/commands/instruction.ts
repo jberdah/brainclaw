@@ -31,7 +31,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
   validateCliInput(text, options.tag);
 
   const layer = options.layer ?? 'global';
-  const scope = resolveScope(layer, options);
+  const scope = resolveScope(layer, options, cwd);
   const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
@@ -46,7 +46,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
     layer,
     scope,
     tags: options.tag,
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     supersedes: options.supersedes,
   }, cwd);
 
@@ -54,7 +54,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
   console.log(`✔ Instruction added: [${entry.id}] <${entry.layer}${entry.scope ? `:${entry.scope}` : ''}> ${entry.text}`);
 }
 
-function resolveScope(layer: InstructionLayer, options: InstructionOptions): string | undefined {
+function resolveScope(layer: InstructionLayer, options: InstructionOptions, cwd: string): string | undefined {
   if (layer === 'global') {
     return undefined;
   }
@@ -65,7 +65,7 @@ function resolveScope(layer: InstructionLayer, options: InstructionOptions): str
     }
     return options.project;
   }
-  const agentScope = resolveAgentScope(options.agent);
+  const agentScope = resolveAgentScope(options.agent, cwd);
   if (!agentScope) {
     console.error('Error: no agent scope available. Use --agent or configure a current agent with `brainclaw register-agent <name> --set-current`.');
     process.exit(1);
