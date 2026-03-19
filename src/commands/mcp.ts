@@ -43,7 +43,7 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
-import type { CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, Priority, Trap } from '../core/schema.js';
+import type { CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -391,6 +391,7 @@ const MCP_WRITE_TOOLS = [
       type: 'object',
       properties: {
         text: { type: 'string', description: 'Plan item description.' },
+        type: { type: 'string', description: 'Plan type: feat, fix, chore, spike, doc.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         priority: { type: 'string', description: 'Priority: low, medium, high, critical.' },
@@ -1898,10 +1899,12 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const state = loadState(cwd);
       const { id, short_label } = generateIdWithLabel('plan_items');
       const timestamp = nowISO();
+      const planType = args.type as PlanType | undefined;
       const entry: PlanItem = {
         id,
         short_label,
         text: planText,
+        type: planType,
         created_at: timestamp,
         updated_at: timestamp,
         author: resolved.identity!.agent_name,

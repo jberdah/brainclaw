@@ -8,9 +8,10 @@ import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { runListPlans } from './list-plans.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { PlanItem, Priority } from '../core/schema.js';
+import type { PlanItem, PlanType, Priority } from '../core/schema.js';
 
 export interface PlanOptions {
+  type?: PlanType;
   priority?: Priority;
   assignee?: string;
   project?: string;
@@ -77,6 +78,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
     id,
     short_label,
     text,
+    type: options.type,
     created_at: timestamp,
     updated_at: timestamp,
     author: options.author ?? resolveCurrentAgentName(cwd),

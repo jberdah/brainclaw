@@ -139,11 +139,15 @@ export const PlanStepSchema = z.object({
 });
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
+export const PlanTypeSchema = z.enum(['feat', 'fix', 'chore', 'spike', 'doc']).default('feat');
+export type PlanType = z.infer<typeof PlanTypeSchema>;
+
 export const PlanItemSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
   short_label: z.string().optional(),
   text: z.string(),
+  type: PlanTypeSchema.optional(),
   created_at: z.string(),
   updated_at: z.string(),
   author: z.string(),

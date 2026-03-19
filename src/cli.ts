@@ -308,6 +308,7 @@ program
 program
   .command('plan <text>')
   .description('Add a shared plan item')
+  .option('--type <type>', 'Plan type: feat, fix, chore, spike, doc')
   .option('--priority <priority>', 'Priority: low, medium, high', 'medium')
   .option('--assignee <assignee>', 'Assignee for this plan item')
   .option('--project <project>', 'Optional project namespace')
@@ -327,6 +328,7 @@ program
   .description('List shared plan items')
   .option('--json', 'Output as JSON')
   .option('--status <status>', 'Status: todo, in_progress, blocked, done, dropped')
+  .option('--type <type>', 'Filter by type: feat, fix, chore, spike, doc')
   .option('--assignee <assignee>', 'Filter by assignee')
   .option('--project <project>', 'Filter by project namespace')
   .option('--all', 'Include done and dropped plan items')

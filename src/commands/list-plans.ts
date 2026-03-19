@@ -1,10 +1,11 @@
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import type { PlanStatus } from '../core/schema.js';
+import type { PlanStatus, PlanType } from '../core/schema.js';
 
 export interface ListPlansOptions {
   json?: boolean;
   status?: PlanStatus;
+  type?: PlanType;
   assignee?: string;
   project?: string;
   all?: boolean;
@@ -23,6 +24,9 @@ export function runListPlans(options: ListPlansOptions = {}): void {
   }
   if (options.status) {
     plans = plans.filter((plan) => plan.status === options.status);
+  }
+  if (options.type) {
+    plans = plans.filter((plan) => plan.type === options.type);
   }
   if (options.assignee) {
     const target = options.assignee.toLowerCase();
@@ -46,7 +50,7 @@ export function runListPlans(options: ListPlansOptions = {}): void {
   console.log(`${plans.length} plan item(s):`);
   console.log('');
   for (const plan of plans) {
-    const meta: string[] = [plan.status, plan.priority];
+    const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
     if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
     if (plan.project) meta.push(`project ${plan.project}`);
     if (plan.depends_on.length > 0) meta.push(`depends_on ${plan.depends_on.join(',')}`);
