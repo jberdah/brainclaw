@@ -13,6 +13,7 @@ import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysi
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
+import { hasCompletedSetup } from '../core/setup-state.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
@@ -29,10 +30,25 @@ export interface InitOptions {
   scan?: boolean;
   cwd?: string;
   skipAgentBootstrap?: boolean;
+  skipSetupRequirement?: boolean;
 }
 
 export async function runInit(options: InitOptions = {}): Promise<void> {
   const cwd = options.cwd ?? process.cwd();
+  const containingMemoryStore = resolveContainingMemoryStore(cwd);
+  const skipSetupRequirement = options.skipSetupRequirement === true || process.env.BRAINCLAW_SKIP_SETUP_REQUIREMENT === '1';
+
+  if (!skipSetupRequirement && !hasCompletedSetup()) {
+    console.error('Error: global brainclaw setup has not been completed on this machine.');
+    console.error('Run `brainclaw setup` first, then retry `brainclaw init` from your project root.');
+    process.exit(1);
+  }
+
+  if (containingMemoryStore) {
+    console.error(`Error: cannot run \`brainclaw init\` from inside an existing project memory store (${containingMemoryStore}).`);
+    console.error('Run `brainclaw init` from the project root directory instead.');
+    process.exit(1);
+  }
 
   // --scan: detect service boundaries and suggest init targets, then exit
   if (options.scan) {
@@ -257,6 +273,28 @@ function resolveStorageDir(storageDir?: string): string {
     process.exit(1);
   }
   return candidate;
+}
+
+function resolveContainingMemoryStore(cwd: string): string | undefined {
+  let current = path.resolve(cwd);
+
+  while (true) {
+    if (path.basename(current) === MEMORY_DIR && looksLikeBrainclawStore(current)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+}
+
+function looksLikeBrainclawStore(storePath: string): boolean {
+  return fs.existsSync(path.join(storePath, 'config.yaml'))
+    || fs.existsSync(path.join(storePath, 'project.identity.json'))
+    || fs.existsSync(path.join(storePath, '.git'));
 }
 
 function resolveTopology(topology?: TopologyMode): TopologyMode {

@@ -8,7 +8,7 @@ Commands grouped by purpose. All commands are available as `brainclaw` or its al
 
 ### `brainclaw setup`
 
-Global onboarding wizard — detects AI agents, installs global MCP configs, and initialises multiple repositories in one pass. Designed to be run once per machine (or re-run to reconfigure).
+Global onboarding wizard — detects AI agents, installs global Brainclaw prerequisites, installs agent/MCP config, and initialises multiple repositories in one pass. This is the required machine-level bootstrap before `brainclaw init`. It scans each root itself plus its direct child repositories, and ignores internal Brainclaw memory repos such as `.brainclaw/`.
 
 | Option | Description |
 |---|---|
@@ -30,7 +30,7 @@ brainclaw setup --roots ~/Projects,~/work --agents all  # all agents, multiple r
 
 ### `brainclaw init`
 
-Initialize workspace state. Detects the AI agent environment and writes to its native instruction file.
+Initialize workspace state for the current project root. Detects the AI agent environment and writes to its native instruction file. `brainclaw setup` must have been run first on this machine. Do not run `init` from inside `.brainclaw/`; that directory is Brainclaw's own memory store, not a project root.
 
 | Option | Description |
 |---|---|

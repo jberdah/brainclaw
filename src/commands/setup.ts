@@ -17,9 +17,12 @@ import {
   writeDetectedAgentAutoConfig,
   describeAutoConfigWrite,
 } from '../core/agent-files.js';
-import { memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
+import { MEMORY_DIR, memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
 import { loadConfig, saveConfig, defaultConfig } from '../core/config.js';
+import { readSetupState, resolveHomeDir, type SetupState, writeSetupState } from '../core/setup-state.js';
 import { writeDetectedAgentHooks } from './hooks.js';
+
+export { readSetupState } from '../core/setup-state.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,13 +37,6 @@ export interface RepoInfo {
   path: string;
   name: string;
   alreadyInitialised: boolean;
-}
-
-export interface SetupState {
-  completed_at: string;
-  roots: string[];
-  initialised_repos: string[];
-  global_configs_written: string[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -65,42 +61,6 @@ const BRAINCLAW_ASCII = [
   '    ╚═╝┴└─┴ ┴┴┘└┘╚═╝╩═╝╴ ╴╚╩╝',
   '',
 ].join('\n');
-
-// ─── Home dir resolution ──────────────────────────────────────────────────────
-
-function resolveHomeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;
-}
-
-// ─── Setup state ──────────────────────────────────────────────────────────────
-
-function setupStatePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const home = resolveHomeDir(env);
-  if (!home) return undefined;
-  return path.join(home, '.brainclaw', 'setup.json');
-}
-
-export function readSetupState(env: NodeJS.ProcessEnv = process.env): SetupState | undefined {
-  const statePath = setupStatePath(env);
-  if (!statePath) return undefined;
-  try {
-    if (!fs.existsSync(statePath)) return undefined;
-    const raw = fs.readFileSync(statePath, 'utf-8');
-    return JSON.parse(raw) as SetupState;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeSetupState(state: SetupState, env: NodeJS.ProcessEnv = process.env): void {
-  const statePath = setupStatePath(env);
-  if (!statePath) return;
-  const dir = path.dirname(statePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  writeFileAtomic(statePath, JSON.stringify(state, null, 2) + '\n');
-}
 
 // ─── Step 0: Git check ────────────────────────────────────────────────────────
 
@@ -144,24 +104,39 @@ export function parseRoots(input: string, env: NodeJS.ProcessEnv = process.env):
 
 export function scanGitRepos(roots: string[]): RepoInfo[] {
   const repos: RepoInfo[] = [];
+  const seen = new Set<string>();
   for (const root of roots) {
+    const candidates = [root];
     try {
       const entries = fs.readdirSync(root, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        const repoPath = path.join(root, entry.name);
-        if (!fs.existsSync(path.join(repoPath, '.git'))) continue;
-        repos.push({
-          path: repoPath,
-          name: entry.name,
-          alreadyInitialised: memoryExists(repoPath),
-        });
+        candidates.push(path.join(root, entry.name));
       }
     } catch {
       // skip unreadable dirs
     }
+
+    for (const candidate of candidates) {
+      const repoPath = path.resolve(candidate);
+      if (seen.has(repoPath)) continue;
+      if (isBrainclawInternalPath(repoPath)) continue;
+      if (!fs.existsSync(path.join(repoPath, '.git'))) continue;
+
+      seen.add(repoPath);
+      repos.push({
+        path: repoPath,
+        name: path.basename(repoPath) || repoPath,
+        alreadyInitialised: memoryExists(repoPath),
+      });
+    }
   }
   return repos;
+}
+
+function isBrainclawInternalPath(candidate: string): boolean {
+  const parts = path.resolve(candidate).split(path.sep).filter(Boolean);
+  return parts.includes(MEMORY_DIR);
 }
 
 // ─── Step 3: Repo selection ───────────────────────────────────────────────────
@@ -310,7 +285,7 @@ export async function initReposAndConfigureAgents(
       continue;
     }
     console.log(`  → Initialising ${repo.name}...`);
-    await runInit({ yes: true, skipAgentBootstrap: true, cwd: repo.path });
+    await runInit({ yes: true, skipAgentBootstrap: true, skipSetupRequirement: true, cwd: repo.path });
     initialisedRepos.push(repo.path);
   }
 
@@ -482,14 +457,12 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   console.log(`Selected agents: ${selectedAgents.length === 0 ? '(none)' : selectedAgents.join(', ')}`);
 
   // Step 5: Global install
-  if (selectedAgents.length > 0) {
-    console.log('\n→ Installing global agent configurations...');
-    const written = runGlobalInstall(selectedAgents, env);
-    if (written.length > 0) {
-      for (const f of written) console.log(`  ✔ ${f}`);
-    } else {
-      console.log('  (all global configs already up to date)');
-    }
+  console.log('\n→ Installing global brainclaw prerequisites...');
+  const written = runGlobalInstall(selectedAgents, env);
+  if (written.length > 0) {
+    for (const f of written) console.log(`  ✔ ${f}`);
+  } else {
+    console.log('  (all global prerequisites already up to date)');
   }
 
   // Step 6: Init repos + configure agents

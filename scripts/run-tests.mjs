@@ -86,7 +86,10 @@ for (const testFile of selected) {
     cwd: rootDir,
     stdio: 'inherit',
     timeout: timeoutMs,
-    env: process.env,
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: process.env.BRAINCLAW_SKIP_SETUP_REQUIREMENT ?? '1',
+    },
   });
 
   const durationMs = Date.now() - fileStartedAt;
