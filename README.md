@@ -43,18 +43,18 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 
 brainclaw is designed to sit alongside the coding agents teams are already using.
 
-| Agent | Brainclaw fit | Best use today |
-|---|---|---|
-| **Claude Code** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
-| **Codex** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
-| **Cursor** | Strong fit | repo-native coordination with rules + MCP |
-| **OpenCode** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
-| **Windsurf** | Good fit | guided workflows with instructions, hooks, and MCP |
-| **Roo** | Good fit | workspace coordination with rules + MCP |
-| **Continue** | Good fit | context access and MCP-driven collaboration in editor workflows |
-| **Antigravity / Gemini CLI** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
-| **Cline** | Functional fit | lightweight Brainclaw usage through rules + MCP |
-| **GitHub Copilot** | Supported fit | project awareness and shared instructions, with lighter workflow control |
+| Logo | Agent | Brainclaw fit | Best use today |
+|---|---|---|---|
+| ![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white) | **Claude Code** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
+| ![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white) | **Codex** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
+| ![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white) | **Cursor** | Strong fit | repo-native coordination with rules + MCP |
+| ![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white) | **OpenCode** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
+| ![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white) | **Windsurf** | Good fit | guided workflows with instructions, hooks, and MCP |
+| ![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white) | **Roo** | Good fit | workspace coordination with rules + MCP |
+| ![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white) | **Continue** | Good fit | context access and MCP-driven collaboration in editor workflows |
+| ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white) | **Antigravity / Gemini CLI** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
+| ![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white) | **Cline** | Functional fit | lightweight Brainclaw usage through rules + MCP |
+| ![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white) | **GitHub Copilot** | Supported fit | project awareness and shared instructions, with lighter workflow control |
 
 brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
 
