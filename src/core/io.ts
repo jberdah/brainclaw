@@ -3,6 +3,16 @@ import path from 'node:path';
 import { withLock, cleanStaleLocks } from './lock.js';
 
 export const MEMORY_DIR = '.brainclaw';
+const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const DEFAULT_RENAME_RETRY_ATTEMPTS = 6;
+const DEFAULT_RENAME_RETRY_DELAY_MS = 25;
+
+interface AtomicWriteOptions {
+  fsImpl?: Pick<typeof fs, 'writeFileSync' | 'renameSync'>;
+  maxRenameAttempts?: number;
+  retryDelayMs?: number;
+  sleep?: (ms: number) => void;
+}
 
 /**
  * Entity-aligned directory mapping.
@@ -127,12 +137,56 @@ export function readFileSync(filepath: string): string {
   return fs.readFileSync(filepath, 'utf-8');
 }
 
+function syncSleep(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function makeTempPath(filepath: string): string {
+  const dir = path.dirname(filepath);
+  const base = path.basename(filepath);
+  const unique = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
+  return path.join(dir, `.${base}.${unique}.tmp`);
+}
+
+function isRetryableRenameError(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code ? RETRYABLE_RENAME_ERROR_CODES.has(code) : false;
+}
+
+function renameWithRetry(
+  tmpPath: string,
+  targetPath: string,
+  options: Required<Pick<AtomicWriteOptions, 'fsImpl' | 'maxRenameAttempts' | 'retryDelayMs' | 'sleep'>>,
+): void {
+  const { fsImpl, maxRenameAttempts, retryDelayMs, sleep } = options;
+
+  for (let attempt = 0; attempt < maxRenameAttempts; attempt++) {
+    try {
+      fsImpl.renameSync(tmpPath, targetPath);
+      return;
+    } catch (error: unknown) {
+      if (!isRetryableRenameError(error) || attempt === maxRenameAttempts - 1) {
+        throw error;
+      }
+      sleep(retryDelayMs * (attempt + 1));
+    }
+  }
+}
+
 /** Atomic write with advisory file locking: acquire lock, write to a temp file, then rename. */
-export function writeFileAtomic(filepath: string, content: string): void {
+export function writeFileAtomic(filepath: string, content: string, options: AtomicWriteOptions = {}): void {
   withLock(filepath, () => {
-    const tmp = filepath + '.tmp';
-    fs.writeFileSync(tmp, content, 'utf-8');
-    fs.renameSync(tmp, filepath);
+    const fsImpl = options.fsImpl ?? fs;
+    const tmp = makeTempPath(filepath);
+    fsImpl.writeFileSync(tmp, content, 'utf-8');
+    renameWithRetry(tmp, filepath, {
+      fsImpl,
+      maxRenameAttempts: options.maxRenameAttempts ?? DEFAULT_RENAME_RETRY_ATTEMPTS,
+      retryDelayMs: options.retryDelayMs ?? DEFAULT_RENAME_RETRY_DELAY_MS,
+      sleep: options.sleep ?? syncSleep,
+    });
   });
 }
 
