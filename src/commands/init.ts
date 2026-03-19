@@ -158,7 +158,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }
 
   // Create project.md
-  const md = generateMarkdown(state);
+  const md = generateMarkdown(loadState(cwd));
   writeFileAtomic(memoryPath('project.md', cwd, storageDir), md);
 
   if (ignoreStrategy === 'project-gitignore') {
