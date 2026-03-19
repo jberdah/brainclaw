@@ -105,6 +105,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
         project_id: candidate.project_id,
         host_id: candidate.host_id,
         session_id: candidate.session_id,
+        status: 'active',
         severity: candidate.severity ?? 'medium',
         tags: candidate.tags,
         plan_id: candidate.plan_id,

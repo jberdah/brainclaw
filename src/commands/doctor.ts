@@ -13,7 +13,7 @@ import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { listClaims } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
-import { listOperationalTraps } from '../core/traps.js';
+import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
 import { listRuntimeEvents } from '../core/events.js';
 import { resolveEventSessionId } from '../core/identity.js';
@@ -696,7 +696,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   const nowIso = new Date().toISOString();
   const expiredNotes = listRuntimeNotes(undefined, options.cwd).filter(n => n.expires_at && n.expires_at < nowIso);
   const expiredConstraints = state.active_constraints.filter(c => c.expires_at && c.expires_at < nowIso && c.status === 'active');
-  const expiredTraps = state.known_traps.filter(t => t.expires_at && t.expires_at < nowIso);
+  const expiredTraps = state.known_traps.filter((t) => isTrapExpired(t, nowIso));
   const totalExpired = expiredNotes.length + expiredConstraints.length + expiredTraps.length;
   if (totalExpired > 0) {
     checks.push({ name: 'expired_items', status: 'warn', message: `${totalExpired} expired item(s): ${expiredConstraints.length} constraints, ${expiredNotes.length} notes, ${expiredTraps.length} traps. Run \`brainclaw prune --expired\` to clean up.` });

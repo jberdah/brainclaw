@@ -536,7 +536,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_update_memory',
-    description: 'Update text or tags of a constraint, decision, or trap by ID. Optionally move it to a different store level. Requires trusted or curator trust level.',
+    description: 'Update text, tags, or trap status of a constraint, decision, or trap by ID. Optionally move it to a different store level. Requires trusted or curator trust level.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -544,6 +544,7 @@ const MCP_WRITE_TOOLS = [
         type: { type: 'string', description: 'Item type: constraint, decision, trap.' },
         text: { type: 'string', description: 'New text (optional).' },
         tags: { type: 'array', items: { type: 'string' }, description: 'New tags (replaces existing).' },
+        status: { type: 'string', description: 'New status for traps: active, resolved, expired.' },
         moveToStore: { type: 'string', description: 'Move item to a different store level: local, repo, workspace, user.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
@@ -2397,6 +2398,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const itemType = String(args.type ?? '').trim();
       const newText = args.text ? String(args.text).trim() : undefined;
       const newTags = Array.isArray(args.tags) ? args.tags.map((t) => String(t).trim()) : undefined;
+      const newStatus = args.status ? String(args.status).trim() : undefined;
       const moveToStore = args.moveToStore ? String(args.moveToStore).trim() : undefined;
 
       if (!itemId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
@@ -2404,11 +2406,17 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!['constraint', 'decision', 'trap'].includes(itemType)) {
         return { response: createToolErrorResponse('validation_error', `Invalid type for update: ${itemType}`) };
       }
-      if (!newText && !newTags && !moveToStore) {
-        return { response: createToolErrorResponse('validation_error', 'At least one of text, tags, or moveToStore must be provided') };
+      if (!newText && !newTags && !newStatus && !moveToStore) {
+        return { response: createToolErrorResponse('validation_error', 'At least one of text, tags, status, or moveToStore must be provided') };
       }
       if (moveToStore && !['local', 'repo', 'workspace', 'user'].includes(moveToStore)) {
         return { response: createToolErrorResponse('validation_error', `Invalid moveToStore target: ${moveToStore}`) };
+      }
+      if (newStatus && itemType !== 'trap') {
+        return { response: createToolErrorResponse('validation_error', 'status updates are only supported for traps') };
+      }
+      if (newStatus && !['active', 'resolved', 'expired'].includes(newStatus)) {
+        return { response: createToolErrorResponse('validation_error', `Invalid trap status: ${newStatus}`) };
       }
 
       // Walk store chain to find the item
@@ -2440,6 +2448,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       // Update text and tags
       if (newText) item.text = newText;
       if (newTags) item.tags = newTags;
+      if (newStatus && itemType === 'trap') (item as Trap).status = newStatus as Trap['status'];
 
       // Handle moveToStore
       if (moveToStore) {

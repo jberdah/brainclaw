@@ -304,6 +304,7 @@ program
 program
   .command('trap <text>')
   .description('Add a known trap')
+  .option('--status <status>', 'Status: active, resolved, expired', 'active')
   .option('--severity <severity>', 'Severity: low, medium, high', 'medium')
   .option('--visibility <visibility>', 'Visibility: shared, machine, private', 'shared')
   .option('--host <host>', 'Optional host identifier override for machine/private traps')
@@ -562,7 +563,7 @@ program
   .option('--author <author>', 'Author name')
   .option('--outcome <outcome>', 'Decision outcome: approved, rejected, deferred, pending')
   .option('--category <category>', 'Constraint category: architecture, performance, security, reliability, compatibility, process, other')
-  .option('--status <status>', 'Constraint/handoff status')
+  .option('--status <status>', 'Constraint, trap, or handoff status')
   .option('--severity <severity>', 'Trap severity: low, medium, high')
   .option('--project <project>', 'Optional project namespace')
   .option('--plan <id>', 'Optional linked plan item ID')

@@ -308,7 +308,7 @@ function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
     }
     case 'trap': {
       const { id: tId, short_label } = generateTrapIdWithLabel(cwd);
-      const entry: Trap = { id: tId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
+      const entry: Trap = { id: tId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
       state.known_traps.push(entry);
       promotedItemId = entry.id;
       break;

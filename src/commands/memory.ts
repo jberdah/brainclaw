@@ -14,6 +14,7 @@ import type {
   Handoff,
   HandoffStatus,
   Trap,
+  TrapStatus,
   Severity,
 } from '../core/schema.js';
 import { runConstraint, type ConstraintOptions } from './constraint.js';
@@ -24,11 +25,11 @@ import { runTrap, type TrapOptions } from './trap.js';
 type MemoryKind = 'decision' | 'constraint' | 'trap' | 'handoff';
 type CanonicalMemoryItem = Decision | Constraint | Trap | Handoff;
 
-export interface MemoryCommandOptions extends DecisionOptions, ConstraintOptions, TrapOptions {
+export interface MemoryCommandOptions extends DecisionOptions, ConstraintOptions, Omit<TrapOptions, 'status'> {
   json?: boolean;
   type?: MemoryKind;
   text?: string;
-  status?: ConstraintStatus | HandoffStatus;
+  status?: ConstraintStatus | HandoffStatus | TrapStatus;
   project?: string;
   from?: string;
   to?: string;
@@ -99,7 +100,19 @@ function runMemoryCreate(kind: MemoryKind, text: string, options: MemoryCommandO
       runConstraint(text, options);
       return;
     case 'trap':
-      runTrap(text, options);
+      runTrap(text, {
+        status: options.status as TrapStatus | undefined,
+        severity: options.severity,
+        tag: options.tag,
+        path: options.path,
+        author: options.author,
+        visibility: options.visibility,
+        host: options.host,
+        ttl: options.ttl,
+        cwd: options.cwd,
+        store: options.store,
+        plan: options.plan,
+      });
       return;
     case 'handoff': {
       if (!options.from || !options.to) {
@@ -132,6 +145,14 @@ function runMemoryList(options: MemoryCommandOptions): void {
   let items = collectMemoryItems(state);
   if (options.type) {
     items = items.filter((entry) => entry.kind === options.type);
+  }
+  if (options.status) {
+    items = items.filter(({ kind, item }) => {
+      if (kind === 'constraint' || kind === 'handoff' || kind === 'trap') {
+        return 'status' in item && item.status === options.status;
+      }
+      return false;
+    });
   }
   items.sort((a, b) => a.item.created_at.localeCompare(b.item.created_at));
 
@@ -219,6 +240,9 @@ function runMemoryUpdate(id: string, options: MemoryCommandOptions): void {
     case 'trap':
       {
         const item = resolved.item as Trap;
+      if (options.status !== undefined) {
+          item.status = options.status as TrapStatus;
+      }
       if (options.severity !== undefined) {
           item.severity = options.severity as Severity;
       }
@@ -307,7 +331,7 @@ function renderMemoryMeta(kind: MemoryKind, item: CanonicalMemoryItem): string {
     case 'constraint':
       return ` (${(item as Constraint).status}${(item as Constraint).category ? ` · ${(item as Constraint).category}` : ''})`;
     case 'trap':
-      return ` (${(item as Trap).severity})`;
+      return ` (${(item as Trap).severity} · ${(item as Trap).status})`;
     case 'handoff':
       return ` (${(item as Handoff).from} -> ${(item as Handoff).to} · ${(item as Handoff).status})`;
   }

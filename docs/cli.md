@@ -134,6 +134,7 @@ Create a canonical memory item. Supported types are `decision`, `constraint`, `t
 | `--author <name>` | Author name |
 | `--outcome <outcome>` | Decision outcome: `approved`, `rejected`, `deferred`, `pending` |
 | `--category <category>` | Constraint category: `architecture`, `performance`, `security`, `reliability`, `compatibility`, `process`, `other` |
+| `--status <status>` | Trap status: `active`, `resolved`, `expired` |
 | `--severity <severity>` | Trap severity: `low`, `medium`, `high` |
 | `--visibility <visibility>` | Trap visibility: `shared`, `machine`, `private` |
 | `--host <host>` | Optional host identifier override for machine/private traps |
@@ -149,6 +150,7 @@ brainclaw memory create decision "OAuth goes through auth-gateway" --tag auth
 brainclaw memory create decision "Use async/await instead of callbacks" --outcome approved --plan pln_001
 brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
 brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
+brainclaw memory create trap "Windows SSH is misconfigured" --status resolved --severity medium --tag windows
 brainclaw memory create handoff "Validate new refund endpoint" --from backend --to qa --project payments
 ```
 
@@ -178,7 +180,7 @@ Update an existing canonical memory item by `id` or short label.
 | `--path <path>` | Replace related paths |
 | `--outcome <outcome>` | Decision outcome |
 | `--category <category>` | Constraint category |
-| `--status <status>` | Constraint or handoff status |
+| `--status <status>` | Constraint, trap, or handoff status |
 | `--severity <severity>` | Trap severity |
 | `--project <name>` | Handoff project namespace |
 | `--plan <id>` | Linked plan item ID |
@@ -188,6 +190,7 @@ Update an existing canonical memory item by `id` or short label.
 ```bash
 brainclaw memory update dec_001 --text "Use JWT everywhere" --outcome approved
 brainclaw memory update cnd_001 --status resolved --category process
+brainclaw memory update trp_001 --status resolved
 brainclaw memory update hnd_001 --status accepted --to alice
 ```
 

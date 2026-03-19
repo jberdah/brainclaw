@@ -1,6 +1,7 @@
 import type { State } from './schema.js';
 import { listClaims } from './claims.js';
 import { loadInstructions } from './instructions.js';
+import { isTrapActive } from './traps.js';
 
 export function generateMarkdown(state: State, cwd?: string): string {
   const lines: string[] = ['# Project Memory', ''];
@@ -84,10 +85,11 @@ export function generateMarkdown(state: State, cwd?: string): string {
   lines.push('');
 
   lines.push('## Known traps');
-  if (state.known_traps.length === 0) {
+  const activeTraps = state.known_traps.filter((trap) => isTrapActive(trap));
+  if (activeTraps.length === 0) {
     lines.push('- (none)');
   } else {
-    for (const t of state.known_traps) {
+    for (const t of activeTraps) {
       const tags = t.tags.length ? ` [${t.tags.join(', ')}]` : '';
       const paths = t.related_paths?.length ? ` → ${t.related_paths.join(', ')}` : '';
       lines.push(`- **[${t.id}]** ${t.text} _(${t.severity})_${paths}${tags}`);

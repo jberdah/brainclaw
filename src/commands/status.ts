@@ -6,7 +6,7 @@ import { loadInstructions } from '../core/instructions.js';
 import { buildReputationSnapshot } from '../core/reputation.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { loadState } from '../core/state.js';
-import { listOperationalTraps } from '../core/traps.js';
+import { isTrapActive, listOperationalTraps } from '../core/traps.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { memoryExists } from '../core/io.js';
 import type { Config, State } from '../core/schema.js';
@@ -25,6 +25,9 @@ function printHumanStatus(state: State, config: Config): void {
   const sharedRuntimeNotes = listRuntimeNotes({ visibility: 'shared' });
   const machineRuntimeNotes = listRuntimeNotes({ visibility: 'machine' });
   const machineTraps = listOperationalTraps({ visibility: 'machine' });
+  const activeSharedTraps = state.known_traps.filter((trap) => isTrapActive(trap));
+  const resolvedSharedTraps = state.known_traps.filter((trap) => trap.status === 'resolved');
+  const activeMachineTraps = machineTraps.filter((trap) => isTrapActive(trap));
   const counts = {
     instructions: activeInstructions.length,
     claims: activeClaims.length,
@@ -32,7 +35,7 @@ function printHumanStatus(state: State, config: Config): void {
     plans: activePlans.length,
     constraints: state.active_constraints.length,
     decisions: state.recent_decisions.length,
-    traps: state.known_traps.length + machineTraps.length,
+    traps: activeSharedTraps.length + activeMachineTraps.length,
     handoffs: state.open_handoffs.length,
   };
 
@@ -53,7 +56,7 @@ function printHumanStatus(state: State, config: Config): void {
   console.log(`  Plans       : ${counts.plans}`);
   console.log(`  Constraints : ${counts.constraints}`);
   console.log(`  Decisions   : ${counts.decisions}`);
-  console.log(`  Traps       : ${state.known_traps.length} shared, ${machineTraps.length} machine-local (${currentHost})`);
+  console.log(`  Traps       : ${activeSharedTraps.length} active shared, ${resolvedSharedTraps.length} resolved shared, ${activeMachineTraps.length} active machine-local (${currentHost})`);
   console.log(`  Handoffs    : ${counts.handoffs}`);
 
   if (config.project_mode === 'multi-project') {
@@ -67,7 +70,7 @@ function printHumanStatus(state: State, config: Config): void {
     { label: 'Shared plan', items: activePlans },
     { label: 'Active constraints', items: state.active_constraints },
     { label: 'Recent decisions', items: state.recent_decisions },
-    { label: 'Known traps', items: state.known_traps },
+    { label: 'Known traps', items: activeSharedTraps },
     { label: 'Open handoffs', items: state.open_handoffs },
   ] as const;
 
@@ -106,6 +109,9 @@ export function runStatus(options: StatusOptions = {}): void {
   const sharedRuntimeNotes = listRuntimeNotes({ visibility: 'shared' });
   const machineRuntimeNotes = listRuntimeNotes({ visibility: 'machine' });
   const machineTraps = listOperationalTraps({ visibility: 'machine' });
+  const activeSharedTraps = state.known_traps.filter((trap) => isTrapActive(trap));
+  const resolvedSharedTraps = state.known_traps.filter((trap) => trap.status === 'resolved');
+  const activeMachineTraps = machineTraps.filter((trap) => isTrapActive(trap));
   const registeredAgents = listAgentIdentities();
   const reputation = buildReputationSnapshot();
 
@@ -124,8 +130,11 @@ export function runStatus(options: StatusOptions = {}): void {
         machine_local: machineRuntimeNotes.length,
       },
       traps: {
-        shared: state.known_traps.length,
-        machine_local: machineTraps.length,
+        shared_active: activeSharedTraps.length,
+        shared_resolved: resolvedSharedTraps.length,
+        machine_local_active: activeMachineTraps.length,
+        total_shared: state.known_traps.length,
+        total_machine_local: machineTraps.length,
       },
       reputation,
     }, null, 2));

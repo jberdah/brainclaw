@@ -29,6 +29,9 @@ export type ConstraintCategory = z.infer<typeof ConstraintCategorySchema>;
 export const SeveritySchema = z.enum(['low', 'medium', 'high']);
 export type Severity = z.infer<typeof SeveritySchema>;
 
+export const TrapStatusSchema = z.enum(['active', 'resolved', 'expired']);
+export type TrapStatus = z.infer<typeof TrapStatusSchema>;
+
 export const PrioritySchema = z.enum(['low', 'medium', 'high']);
 export type Priority = z.infer<typeof PrioritySchema>;
 
@@ -91,6 +94,7 @@ export const TrapSchema = z.object({
   model: z.string().optional(),
   project_id: z.string().optional(),
   session_id: z.string().optional(),
+  status: TrapStatusSchema.default('active'),
   severity: SeveritySchema,
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),

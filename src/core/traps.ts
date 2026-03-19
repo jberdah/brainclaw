@@ -13,6 +13,14 @@ export interface TrapListOptions {
   includeAllHosts?: boolean;
 }
 
+export function isTrapExpired(trap: Trap, nowIso = new Date().toISOString()): boolean {
+  return trap.status === 'expired' || (!!trap.expires_at && trap.expires_at < nowIso);
+}
+
+export function isTrapActive(trap: Trap, nowIso = new Date().toISOString()): boolean {
+  return trap.status === 'active' && !isTrapExpired(trap, nowIso);
+}
+
 function machineTrapsDir(cwd?: string): string {
   return resolveEntityDir('traps-hosts', cwd ?? process.cwd(), 'read');
 }

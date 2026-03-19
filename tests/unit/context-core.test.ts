@@ -335,6 +335,7 @@ describe('core/context', () => {
         author: workspace.currentAgent.agent_name,
         author_id: workspace.currentAgent.agent_id,
         project_id: 'prj_ctx_test',
+        status: 'active',
         severity: 'medium',
         tags: ['windows'],
         visibility: 'machine',
@@ -423,6 +424,7 @@ describe('core/context', () => {
           author: workspace.currentAgent.agent_name,
           author_id: workspace.currentAgent.agent_id,
           project_id: 'prj_ctx_test',
+          status: 'active',
           severity: 'high',
           tags: ['auth'],
           related_paths: ['auth/**'],
@@ -488,6 +490,58 @@ describe('core/context', () => {
 
     const rebuiltDigest = buildContextDigest(result);
     assert.equal(rebuiltDigest, result.digest);
+  });
+
+  it('excludes resolved traps from active context and scoped activity', () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [
+        {
+          id: 'trp_active_01',
+          text: 'Active auth trap',
+          created_at: iso(10),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          status: 'active',
+          severity: 'high',
+          tags: ['auth'],
+          related_paths: ['auth/**'],
+          visibility: 'shared',
+        },
+        {
+          id: 'trp_resolved_01',
+          text: 'Resolved auth trap',
+          created_at: iso(5),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          status: 'resolved',
+          severity: 'high',
+          tags: ['auth'],
+          related_paths: ['auth/**'],
+          visibility: 'shared',
+        },
+      ],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const result = buildContext({
+      target: 'auth/routes.ts',
+      digest: true,
+      maxItems: 8,
+      cwd: workspace.dir,
+    });
+
+    assert.ok(result.selected.some((item) => item.id === 'trp_active_01'));
+    assert.ok(!result.selected.some((item) => item.id === 'trp_resolved_01'));
+    assert.equal(result.scoped_activity?.last_trap?.id, 'trp_active_01');
+    assert.ok(result.digest?.includes('High trap: Active auth trap'));
+    assert.ok(!result.digest?.includes('Resolved auth trap'));
   });
 
   it('auto-bootstraps derived signals when canonical memory is sparse', () => {

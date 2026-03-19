@@ -40,6 +40,7 @@ function addTrap(dir: string, id: string, text: string, severity: 'low' | 'mediu
   state.known_traps.push({
     id,
     text,
+    status: 'active',
     severity,
     visibility: 'shared' as const,
     author: 'test',

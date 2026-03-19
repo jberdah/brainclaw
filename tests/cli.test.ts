@@ -264,6 +264,7 @@ describe('brainclaw CLI', () => {
       const [trpFile1] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
       const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFile1), 'utf-8'));
       assert.equal(trap.severity, 'high');
+      assert.equal(trap.status, 'active');
     });
 
     it('defaults severity to medium', () => {
@@ -272,6 +273,7 @@ describe('brainclaw CLI', () => {
       const [trpFile2] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
       const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFile2), 'utf-8'));
       assert.equal(trap.severity, 'medium');
+      assert.equal(trap.status, 'active');
     });
   });
 
@@ -309,6 +311,7 @@ describe('brainclaw CLI', () => {
 
       const createTrap = run(['memory', 'create', 'trap', 'JWT refresh is flaky', '--severity', 'high'], dir);
       assert.equal(createTrap.exitCode, 0);
+      const trapId = extractId(createTrap.stdout);
 
       const createHandoff = run(['memory', 'create', 'handoff', 'Review auth patch', '--from', 'alice', '--to', 'bob'], dir);
       assert.equal(createHandoff.exitCode, 0);
@@ -321,11 +324,33 @@ describe('brainclaw CLI', () => {
 
       const update = run(['memory', 'update', decisionId, '--text', 'Use JWT everywhere', '--outcome', 'approved'], dir);
       assert.equal(update.exitCode, 0);
+      const updateTrap = run(['memory', 'update', trapId, '--status', 'resolved'], dir);
+      assert.equal(updateTrap.exitCode, 0);
 
       const [decisionFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
       const decision = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'decisions', decisionFile), 'utf-8'));
       assert.equal(decision.text, 'Use JWT everywhere');
       assert.equal(decision.outcome, 'approved');
+
+      const [trapFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
+      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trapFile), 'utf-8'));
+      assert.equal(trap.status, 'resolved');
+
+      const status = run(['status'], dir);
+      assert.equal(status.exitCode, 0);
+      assert.ok(status.stdout.includes('Traps       : 0 active shared, 1 resolved shared'));
+
+      const markdownStatus = run(['status', '--markdown'], dir);
+      assert.equal(markdownStatus.exitCode, 0);
+      assert.ok(markdownStatus.stdout.includes('## Known traps'));
+      assert.ok(markdownStatus.stdout.includes('- (none)'));
+      assert.ok(!markdownStatus.stdout.includes('JWT refresh is flaky'));
+
+      const filteredList = run(['memory', 'list', '--type', 'trap', '--status', 'resolved', '--json'], dir);
+      assert.equal(filteredList.exitCode, 0);
+      const parsedTrapList = JSON.parse(filteredList.stdout);
+      assert.equal(parsedTrapList.total, 1);
+      assert.equal(parsedTrapList.items[0].status, 'resolved');
 
       const deleteRes = run(['memory', 'delete', decisionId], dir);
       assert.equal(deleteRes.exitCode, 0);

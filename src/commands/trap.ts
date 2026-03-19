@@ -9,9 +9,10 @@ import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { generateTrapIdWithLabel, saveOperationalTrap } from '../core/traps.js';
 import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Trap, Severity, MemoryVisibility } from '../core/schema.js';
+import type { Trap, Severity, MemoryVisibility, TrapStatus } from '../core/schema.js';
 
 export interface TrapOptions {
+  status?: TrapStatus;
   severity?: Severity;
   tag?: string[];
   path?: string[];
@@ -58,6 +59,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     text,
     created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(),
+    status: options.status ?? 'active',
     severity: options.severity ?? 'medium',
     tags: options.tag ?? [],
     related_paths: options.path,

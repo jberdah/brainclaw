@@ -14,7 +14,7 @@ import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
 import { listClaims, isClaimExpired } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
-import { listOperationalTraps } from './traps.js';
+import { isTrapActive, listOperationalTraps } from './traps.js';
 import { buildEstimationReport } from '../commands/estimation-report.js';
 import type { Claim, InstructionEntry, PlanItem, ProjectMode, ProjectStrategy } from './schema.js';
 
@@ -202,7 +202,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     });
   }
 
-  for (const t of state.known_traps) {
+  for (const t of state.known_traps.filter((trap) => isTrapActive(trap))) {
     items.push({
       id: t.id,
       section: 'trap',
@@ -222,7 +222,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     });
   }
 
-  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts }, options.cwd)) {
+  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts }, options.cwd).filter((entry) => isTrapActive(entry))) {
     items.push({
       id: trap.id,
       section: 'trap',
@@ -343,7 +343,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         });
       }
 
-      for (const t of parentState.known_traps) {
+      for (const t of parentState.known_traps.filter((trap) => isTrapActive(trap))) {
         if (seenIds.has(t.id)) continue;
         seenIds.add(t.id);
         items.push({
@@ -522,7 +522,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
           tags: c.tags, score: 0, reasons: [], from_project: link.projectName,
         });
       }
-      for (const t of linkedState.known_traps) {
+      for (const t of linkedState.known_traps.filter((trap) => isTrapActive(trap))) {
         crossProjectItems.push({
           id: t.id, section: 'cross_project', text: t.text,
           tags: t.tags, score: 0, reasons: [], from_project: link.projectName,
@@ -1012,7 +1012,7 @@ export function buildScopedActivity(input: {
   const project = input.project?.trim();
   const matchingDecisions = input.state.recent_decisions.filter((item) => matchesScopeTarget(item, target, project));
   const matchingTraps = [
-    ...input.state.known_traps.filter((item) => matchesScopeTarget(item, target, project)),
+    ...input.state.known_traps.filter((item) => isTrapActive(item) && matchesScopeTarget(item, target, project)),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const matchingRuntime = input.runtimeNotes
     .filter((item) => matchesScopeTarget(item, target, project))

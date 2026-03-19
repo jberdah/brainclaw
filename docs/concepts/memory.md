@@ -30,6 +30,8 @@ Shared project knowledge worth keeping.
 
 Examples: constraints, decisions, traps, completed plans, handoffs.
 
+Shared traps now have a lifecycle too: `active`, `resolved`, or `expired`. Active views such as generated context, status, and `project.md` prioritize only active traps so old machine-setup issues stop polluting the current working set, while the canonical memory still keeps resolved traps for audit and search.
+
 These live in `.brainclaw/store.json` and are shared via Git (or by reading the same file).
 
 ### Runtime memory

@@ -148,6 +148,7 @@ describe('commands/sync', () => {
       author: workspace.currentAgent.agent_name,
       author_id: workspace.currentAgent.agent_id,
       project_id: 'prj_sync_test',
+      status: 'active',
       severity: 'medium',
       tags: ['sync'],
       visibility: 'machine',
