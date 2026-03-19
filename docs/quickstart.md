@@ -2,21 +2,22 @@
 
 This guide walks through the shortest path to getting value from brainclaw.
 
-## 1. Initialize the workspace
+## 1. Bootstrap and initialize the workspace
 
 ```bash
+brainclaw setup --yes
 brainclaw init
 ```
 
-This creates the workspace state, seeds stable identity, and prepares the project memory structure.
+`setup` installs the machine-level prerequisites and agent integrations. `init` then creates the workspace state, seeds stable identity, and prepares the project memory structure.
 If an AI coding agent is detected in the environment, brainclaw also writes to its native instruction file automatically.
 
 ## 2. Capture the first important facts
 
 ```bash
-brainclaw decision "OAuth migration now goes through auth-gateway" --tag auth
-brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
+brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
+brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
+brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
 ```
 
 These become part of the shared project memory.
@@ -24,15 +25,15 @@ These become part of the shared project memory.
 ## 3. Create a shared plan
 
 ```bash
-brainclaw plan "Coordinate auth rollout" --priority high
-brainclaw list-plans
+brainclaw plan create "Coordinate auth rollout" --priority high
+brainclaw plan list
 ```
 
 ## 4. Claim work before editing
 
 ```bash
-brainclaw claim "Taking auth rollout" --agent copilot --scope src/auth/ --plan pln_001
-brainclaw list-claims --plan pln_001
+brainclaw claim create "Taking auth rollout" --agent copilot --scope src/auth/ --plan pln_001
+brainclaw claim list --plan pln_001
 ```
 
 Claims reduce collisions when multiple agents or humans work in the same repo.
@@ -40,7 +41,7 @@ Claims reduce collisions when multiple agents or humans work in the same repo.
 ## 5. Create an explicit handoff
 
 ```bash
-brainclaw handoff --from copilot --to claude "Review auth patch" --plan pln_001
+brainclaw memory create handoff "Review auth patch" --from copilot --to claude --plan pln_001
 ```
 
 ## 6. Generate context for an agent

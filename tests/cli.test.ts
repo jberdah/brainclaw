@@ -296,6 +296,44 @@ describe('brainclaw CLI', () => {
     });
   });
 
+  describe('memory resource command', () => {
+    it('creates, lists, updates, and deletes memory items', () => {
+      run(['init', '-y'], dir);
+
+      const createDecision = run(['memory', 'create', 'decision', 'Use JWT', '--tag', 'auth'], dir);
+      assert.equal(createDecision.exitCode, 0);
+      const decisionId = extractId(createDecision.stdout);
+
+      const createConstraint = run(['memory', 'create', 'constraint', 'Auth gateway is frozen', '--category', 'architecture'], dir);
+      assert.equal(createConstraint.exitCode, 0);
+
+      const createTrap = run(['memory', 'create', 'trap', 'JWT refresh is flaky', '--severity', 'high'], dir);
+      assert.equal(createTrap.exitCode, 0);
+
+      const createHandoff = run(['memory', 'create', 'handoff', 'Review auth patch', '--from', 'alice', '--to', 'bob'], dir);
+      assert.equal(createHandoff.exitCode, 0);
+
+      const list = run(['memory', 'list', '--type', 'constraint', '--json'], dir);
+      assert.equal(list.exitCode, 0);
+      const parsedList = JSON.parse(list.stdout);
+      assert.equal(parsedList.total, 1);
+      assert.equal(parsedList.items[0].type, 'constraint');
+
+      const update = run(['memory', 'update', decisionId, '--text', 'Use JWT everywhere', '--outcome', 'approved'], dir);
+      assert.equal(update.exitCode, 0);
+
+      const [decisionFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
+      const decision = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'decisions', decisionFile), 'utf-8'));
+      assert.equal(decision.text, 'Use JWT everywhere');
+      assert.equal(decision.outcome, 'approved');
+
+      const deleteRes = run(['memory', 'delete', decisionId], dir);
+      assert.equal(deleteRes.exitCode, 0);
+      const remainingDecisions = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
+      assert.equal(remainingDecisions.length, 0);
+    });
+  });
+
   describe('status', () => {
     it('shows status summary', () => {
       run(['init', '-y'], dir);
@@ -688,6 +726,28 @@ describe('brainclaw CLI', () => {
   });
 
   describe('plan subcommand guard (0.6.1)', () => {
+    it('supports the explicit plan resource workflow', () => {
+      run(['init', '-y'], dir);
+
+      const created = run(['plan', 'create', 'Fix auth', '--status', 'todo', '--priority', 'high'], dir);
+      assert.equal(created.exitCode, 0);
+      const planId = extractId(created.stdout);
+
+      const listed = run(['plan', 'list', '--status', 'todo'], dir);
+      assert.equal(listed.exitCode, 0);
+      assert.ok(listed.stdout.includes('Fix auth'));
+
+      const updated = run(['plan', 'update', planId, '--status', 'done'], dir);
+      assert.equal(updated.exitCode, 0);
+
+      const deleted = run(['plan', 'delete', planId], dir);
+      assert.equal(deleted.exitCode, 0);
+
+      const afterDelete = run(['plan', 'list', '--all', '--json'], dir);
+      const parsed = JSON.parse(afterDelete.stdout);
+      assert.equal(parsed.length, 0);
+    });
+
     it('"plan list" lists plans instead of creating a ghost plan', () => {
       run(['init', '-y'], dir);
       run(['plan', 'a real plan item'], dir);
@@ -718,7 +778,7 @@ describe('brainclaw CLI', () => {
 
       const res = run(['plan', 'update'], dir);
       assert.notEqual(res.exitCode, 0);
-      assert.ok(res.stderr.includes('update-plan'), `expected hint to use update-plan, got: ${res.stderr}`);
+      assert.ok(res.stderr.includes('brainclaw plan update <id>'), `expected hint to use plan update, got: ${res.stderr}`);
       // must not have created a ghost plan
       const listRes = run(['list-plans'], dir);
       assert.ok(!listRes.stdout.includes('] update'), `ghost plan "update" was created: ${listRes.stdout}`);

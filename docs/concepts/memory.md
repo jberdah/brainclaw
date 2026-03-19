@@ -69,9 +69,9 @@ The generated files are **local-only** and should not be committed to Git — ea
 ```bash
 brainclaw context               # full context as text
 brainclaw context --json        # full context as JSON (for agents)
-brainclaw board                 # live plan + claim board
-brainclaw list-claims           # active claims
-brainclaw list-plans            # all plans
+brainclaw agent-board           # live plan + claim board
+brainclaw claim list            # active claims
+brainclaw plan list             # all plans
 brainclaw audit                 # audit log
 ```
 

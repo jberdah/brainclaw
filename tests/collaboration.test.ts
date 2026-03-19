@@ -125,6 +125,20 @@ describe('Git-backed Collaboration (Phase 2)', () => {
   });
 
   describe('claim', () => {
+    it('supports the explicit claim resource workflow', () => {
+      const created = run(['claim', 'create', 'Working on auth refactor', '--agent', 'copilot', '--scope', 'src/auth/'], dir);
+      assert.equal(created.exitCode, 0);
+      const claimId = extractId(created.stdout);
+
+      const listed = run(['claim', 'list', '--agent', 'copilot'], dir);
+      assert.equal(listed.exitCode, 0);
+      assert.ok(listed.stdout.includes('Working on auth refactor'));
+
+      const released = run(['claim', 'release', claimId], dir);
+      assert.equal(released.exitCode, 0);
+      assert.ok(released.stdout.includes('released'));
+    });
+
     it('creates a work claim', () => {
       const res = run(['claim', 'Working on auth refactor', '--agent', 'copilot', '--scope', 'src/auth/'], dir);
       assert.equal(res.exitCode, 0);

@@ -123,56 +123,84 @@ brainclaw env --agent-tooling
 
 ## Memory Management
 
-### `brainclaw decision <text>`
+### `brainclaw memory create <type> <text>`
 
-Record a durable architectural or process decision.
+Create a canonical memory item. Supported types are `decision`, `constraint`, `trap`, and `handoff`.
 
 | Option | Description |
 |---|---|
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--path <path>` | Scope to a file or folder path |
 | `--author <name>` | Author name |
-| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
-
-```bash
-brainclaw decision "OAuth goes through auth-gateway" --tag auth
-brainclaw decision "New tests must use fixture v3" --tag tests --path tests/fixtures --author alice
-```
-
-### `brainclaw constraint <text>`
-
-Record an active constraint.
-
-| Option | Description |
-|---|---|
-| `--category <category>` | Constraint category: `architecture`, `performance`, `security`, `reliability`, `compatibility`, `process`, `other` |
-| `--tag <tag>` | Tag for categorization (repeatable) |
-| `--path <path>` | Scope to a file or folder path |
-| `--author <name>` | Author name |
-| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
-
-```bash
-brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw constraint "No new prod dependencies without approval" --category architecture --author alice
-```
-
-### `brainclaw decision <text>` (enriched)
-
-Record a durable architectural or process decision. Now supports outcome tracking.
-
-| Option | Description |
-|---|---|
 | `--outcome <outcome>` | Decision outcome: `approved`, `rejected`, `deferred`, `pending` |
-| `--tag <tag>` | Tag for categorization (repeatable) |
-| `--path <path>` | Scope to a file or folder path |
-| `--plan <id>` | Link to a plan item ID |
-| `--author <name>` | Author name |
+| `--category <category>` | Constraint category: `architecture`, `performance`, `security`, `reliability`, `compatibility`, `process`, `other` |
+| `--severity <severity>` | Trap severity: `low`, `medium`, `high` |
+| `--visibility <visibility>` | Trap visibility: `shared`, `machine`, `private` |
+| `--host <host>` | Optional host identifier override for machine/private traps |
+| `--project <name>` | Optional project namespace |
+| `--plan <id>` | Optional linked plan item ID |
+| `--from <name>` | Required for `handoff` |
+| `--to <name>` | Required for `handoff` |
+| `--ttl <duration>` | Time-to-live for expiring traps |
 | `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
 
 ```bash
-brainclaw decision "Use async/await instead of callbacks" --outcome approved
-brainclaw decision "Migrate to TypeScript" --outcome pending --plan pln_001
+brainclaw memory create decision "OAuth goes through auth-gateway" --tag auth
+brainclaw memory create decision "Use async/await instead of callbacks" --outcome approved --plan pln_001
+brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
+brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
+brainclaw memory create handoff "Validate new refund endpoint" --from backend --to qa --project payments
 ```
+
+### `brainclaw memory list`
+
+List canonical memory items across decisions, constraints, traps, and handoffs.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Filter by `decision`, `constraint`, `trap`, or `handoff` |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw memory list
+brainclaw memory list --type constraint
+brainclaw memory list --type handoff --json
+```
+
+### `brainclaw memory update <id>`
+
+Update an existing canonical memory item by `id` or short label.
+
+| Option | Description |
+|---|---|
+| `--text <text>` | Replace the main text |
+| `--tag <tag>` | Replace tags |
+| `--path <path>` | Replace related paths |
+| `--outcome <outcome>` | Decision outcome |
+| `--category <category>` | Constraint category |
+| `--status <status>` | Constraint or handoff status |
+| `--severity <severity>` | Trap severity |
+| `--project <name>` | Handoff project namespace |
+| `--plan <id>` | Linked plan item ID |
+| `--from <name>` | Handoff source |
+| `--to <name>` | Handoff destination |
+
+```bash
+brainclaw memory update dec_001 --text "Use JWT everywhere" --outcome approved
+brainclaw memory update cnd_001 --status resolved --category process
+brainclaw memory update hnd_001 --status accepted --to alice
+```
+
+### `brainclaw memory delete <id>`
+
+Delete a canonical memory item by `id` or short label.
+
+```bash
+brainclaw memory delete dec_001
+brainclaw memory delete hnd_001
+```
+
+Legacy aliases `decision`, `constraint`, `trap`, and `handoff` remain available for compatibility, but `brainclaw memory ...` is now the primary CLI surface.
 
 ---
 
@@ -247,46 +275,9 @@ brainclaw explore
 brainclaw explore --query "validation"
 ```
 
-### `brainclaw trap <text>`
+### Legacy memory aliases
 
-Record a known trap or pitfall.
-
-| Option | Description |
-|---|---|
-| `--severity <level>` | Severity: `low`, `medium`, or `high` |
-| `--visibility <scope>` | Visibility scope (e.g. `machine`) |
-| `--host <name>` | Pin to a specific host |
-| `--tag <tag>` | Tag for categorization (repeatable) |
-| `--path <path>` | Scope to a file or folder path |
-| `--author <name>` | Author name |
-| `--ttl <duration>` | Time-to-live (e.g. `7d`, `24h`) |
-| `--store` | Immediately persist without review |
-
-```bash
-brainclaw trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
-brainclaw trap "Local dev requires VPN for auth service" --severity medium
-brainclaw trap "Node is not on PATH on this host" --visibility machine --host mypc --tag windows
-```
-
-### `brainclaw handoff <text>`
-
-Create an explicit handoff between humans or agents.
-
-| Option | Description |
-|---|---|
-| `--from <name>` | Sender agent or person |
-| `--to <name>` | Recipient agent or person |
-| `--tag <tag>` | Tag for categorization (repeatable) |
-| `--path <path>` | Scope to a file or folder path |
-| `--project <name>` | Associated project |
-| `--plan <id>` | Associated plan ID |
-| `--author <name>` | Author name |
-| `--capture-diff` | Capture the current Git diff and attach it to the handoff |
-
-```bash
-brainclaw handoff "Validate new refund endpoint" --from backend --to qa
-brainclaw handoff "Review auth patch" --from copilot --to claude --plan pln_001 --capture-diff
-```
+The legacy top-level commands `brainclaw decision`, `brainclaw constraint`, `brainclaw trap`, and `brainclaw handoff` are still available for compatibility. New scripts and docs should prefer `brainclaw memory create ...`.
 
 ### `brainclaw instruction <text>`
 
@@ -478,7 +469,7 @@ brainclaw prune-candidates --days 14 --dry-run
 
 ## Listing and Querying
 
-### `brainclaw list-plans`
+### `brainclaw plan list`
 
 List plan items.
 
@@ -486,17 +477,20 @@ List plan items.
 |---|---|
 | `--json` | Output as JSON |
 | `--status <status>` | Filter by status |
+| `--type <type>` | Filter by type: `feat`, `fix`, `chore`, `spike`, `doc` |
 | `--assignee <name>` | Filter by assignee |
 | `--project <name>` | Filter by project |
 | `--all` | Include completed and dropped plans |
 
 ```bash
-brainclaw list-plans
-brainclaw list-plans --status blocked --project auth
-brainclaw list-plans --json --all
+brainclaw plan list
+brainclaw plan list --status blocked --project auth
+brainclaw plan list --json --all
 ```
 
-### `brainclaw list-claims`
+Legacy alias: `brainclaw list-plans`
+
+### `brainclaw claim list`
 
 List active claims. Displays the short `session_id` to distinguish concurrent agent instances.
 
@@ -509,10 +503,12 @@ List active claims. Displays the short `session_id` to distinguish concurrent ag
 | `--agent <name>` | Filter by agent |
 
 ```bash
-brainclaw list-claims
-brainclaw list-claims --agent copilot --project auth
-brainclaw list-claims --all --json
+brainclaw claim list
+brainclaw claim list --agent copilot --project auth
+brainclaw claim list --all --json
 ```
+
+Legacy alias: `brainclaw list-claims`
 
 ### `brainclaw list-agents`
 
@@ -571,7 +567,7 @@ brainclaw search "rollout" --since 2026-01-01 --json
 
 ## Planning and Coordination
 
-### `brainclaw plan <text>`
+### `brainclaw plan create <text>`
 
 Create a shared work item.
 
@@ -585,12 +581,14 @@ Create a shared work item.
 | `--depends-on <id>` | ID of a plan this depends on |
 | `--author <name>` | Author name |
 | `--estimate <minutes>` | Estimated effort in integer minutes (e.g. `--estimate 30`) |
-| `--store` | Immediately persist without review |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace`, `user` |
 
 ```bash
-brainclaw plan "Coordinate auth rollout" --priority high --assignee copilot
-brainclaw plan "Refactor payments module" --project payments --estimate 90 --author alice
+brainclaw plan create "Coordinate auth rollout" --priority high --assignee copilot
+brainclaw plan create "Refactor payments module" --project payments --estimate 90 --author alice
 ```
+
+Legacy compatibility: `brainclaw plan "Coordinate auth rollout"`
 
 ### `brainclaw add-step <planId> <text>`
 
@@ -613,7 +611,7 @@ Mark a step in a plan as completed. No options.
 brainclaw complete-step pln_001 step_001
 ```
 
-### `brainclaw update-plan <id>`
+### `brainclaw plan update <id>`
 
 Update plan status or ownership.
 
@@ -623,12 +621,24 @@ Update plan status or ownership.
 | `--assignee <name>` | Reassign the plan |
 | `--project <name>` | Change associated project |
 | `--priority <level>` | Change priority |
-| `--actual-effort <minutes>` | Record actual effort in integer minutes |
+| `--actual-effort <effort>` | Record actual effort (e.g. `20min`, `1h30m`) |
 
 ```bash
-brainclaw update-plan pln_001 --status done
-brainclaw update-plan pln_001 --status in_progress --assignee alice --actual-effort 45
+brainclaw plan update pln_001 --status done
+brainclaw plan update pln_001 --status in_progress --assignee alice --actual-effort 45
 ```
+
+Legacy alias: `brainclaw update-plan <id>`
+
+### `brainclaw plan delete <id>`
+
+Delete a shared plan item by `id` or short label.
+
+```bash
+brainclaw plan delete pln_001
+```
+
+Legacy alias: `brainclaw delete-plan <id>`
 
 ### `brainclaw estimation-report`
 
@@ -662,7 +672,7 @@ brainclaw update-handoff hnd_001 --to alice
 
 ## Claims and Coordination
 
-### `brainclaw claim <description>`
+### `brainclaw claim create <description>`
 
 Claim ownership over a file, folder, or scope.
 
@@ -673,14 +683,16 @@ Claim ownership over a file, folder, or scope.
 | `--project <name>` | Associated project |
 | `--plan <id>` | Associated plan ID |
 | `--ttl <duration>` | Time-to-live for the claim |
-| `--store` | Immediately persist without review |
+| `--store <target>` | Store level: `local` (default), `repo`, `workspace` |
 
 ```bash
-brainclaw claim "Taking auth rollout" --agent copilot --scope src/auth/ --plan pln_001
-brainclaw claim "Editing payments module" --scope src/payments/ --ttl 2h
+brainclaw claim create "Taking auth rollout" --agent copilot --scope src/auth/ --plan pln_001
+brainclaw claim create "Editing payments module" --scope src/payments/ --ttl 2h
 ```
 
-### `brainclaw release-claim <id>`
+Legacy compatibility: `brainclaw claim "Taking auth rollout" --scope src/auth/`
+
+### `brainclaw claim release <id>`
 
 Release a claim and optionally advance the linked plan status.
 
@@ -689,9 +701,11 @@ Release a claim and optionally advance the linked plan status.
 | `--plan-status <status>` | Set the linked plan status on release |
 
 ```bash
-brainclaw release-claim clm_001
-brainclaw release-claim clm_001 --plan-status done
+brainclaw claim release clm_001
+brainclaw claim release clm_001 --plan-status done
 ```
+
+Legacy alias: `brainclaw release-claim <id>`
 
 ### `brainclaw release-claims`
 
@@ -1160,8 +1174,8 @@ brainclaw mcp
 | `bclaw_get_agent_board` | Live plan + claim board with active sessions |
 | `bclaw_search` | Full-text BM25 search across all memory items |
 | `bclaw_estimation_report` | Estimation accuracy report for completed plans |
-| `bclaw_list_plans` | List plan items with the same filters as `brainclaw list-plans` |
-| `bclaw_list_claims` | List claims with the same filters as `brainclaw list-claims` |
+| `bclaw_list_plans` | List plan items with the same filters as `brainclaw plan list` |
+| `bclaw_list_claims` | List claims with the same filters as `brainclaw claim list` |
 | `bclaw_list_agents` | List registered agents, optionally with bounded reputation summaries |
 | `bclaw_list_instructions` | List raw or resolved shared instructions |
 | `bclaw_list_candidates` | List pending or archived review candidates |

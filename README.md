@@ -45,11 +45,11 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 npx brainclaw setup --yes
 npx brainclaw init
 
-npx brainclaw decision "OAuth migration now goes through auth-gateway" --tag auth
-npx brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
-npx brainclaw trap "Checkout E2E tests are flaky on Windows" --severity high
-npx brainclaw plan "Coordinate auth rollout" --priority high
-npx brainclaw handoff --from backend --to qa "Validate refund endpoint"
+npx brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
+npx brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
+npx brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high
+npx brainclaw plan create "Coordinate auth rollout" --priority high
+npx brainclaw memory create handoff "Validate refund endpoint" --from backend --to qa
 
 npx brainclaw context --json
 npx brainclaw status
@@ -79,10 +79,10 @@ bclaw status
 ```bash
 brainclaw setup --yes
 brainclaw init
-brainclaw decision "OAuth migration now goes through auth-gateway" --tag auth
-brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw trap "Checkout E2E tests are flaky on Windows" --severity high
-brainclaw plan "Coordinate auth rollout" --priority high
+brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
+brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
+brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high
+brainclaw plan create "Coordinate auth rollout" --priority high
 brainclaw context --json
 ```
 
@@ -98,7 +98,7 @@ Typical flow:
 
 1. `brainclaw setup` — machine-level bootstrap for agent integrations and global prerequisites
 2. `brainclaw init` — seeds workspace memory, writes to the detected agent's native instruction file
-3. record constraints, decisions, traps, and plans
+3. record canonical memory with `brainclaw memory create ...` and work items with `brainclaw plan create ...`
 4. let agents read brainclaw context before editing
 5. use claims to reduce collisions
 6. hand work off explicitly when needed

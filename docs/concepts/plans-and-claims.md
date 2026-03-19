@@ -22,13 +22,13 @@ They help teams and agents answer questions like:
 | `in_progress` | Actively being worked on |
 | `done` | Completed |
 | `blocked` | Waiting on something external |
-| `cancelled` | Dropped |
+| `dropped` | Dropped |
 
 ### Creating plans
 
 ```bash
-brainclaw plan "implement login flow"
-brainclaw plan "refactor auth module" --priority high --estimate 120
+brainclaw plan create "implement login flow"
+brainclaw plan create "refactor auth module" --priority high --estimate 120
 ```
 
 The `--estimate` flag accepts a **positive integer in minutes**. Example: `--estimate 30` means 30 minutes, `--estimate 120` means 2 hours.
@@ -36,8 +36,8 @@ The `--estimate` flag accepts a **positive integer in minutes**. Example: `--est
 ### Updating plans
 
 ```bash
-brainclaw update-plan <id> --status in_progress
-brainclaw update-plan <id> --status done --actual-effort 45min
+brainclaw plan update <id> --status in_progress
+brainclaw plan update <id> --status done --actual-effort 45min
 ```
 
 When marking a plan `in_progress` for the first time, `started_at` is automatically recorded.
@@ -90,9 +90,9 @@ Claims help reduce collisions when multiple humans or agents work in parallel.
 ### Creating claims
 
 ```bash
-brainclaw claim "refactoring auth module" --scope src/auth/
-brainclaw claim "updating docs" --scope docs/ --ttl 4h
-brainclaw claim "fixing login bug" --plan <plan-id>
+brainclaw claim create "refactoring auth module" --scope src/auth/
+brainclaw claim create "updating docs" --scope docs/ --ttl 4h
+brainclaw claim create "fixing login bug" --scope src/auth/ --plan <plan-id>
 ```
 
 The `--ttl` flag sets a time-to-live for the claim. After expiry, the claim is no longer considered active by other agents. Valid formats: `30min`, `2h`, `1d`.
@@ -100,11 +100,11 @@ The `--ttl` flag sets a time-to-live for the claim. After expiry, the claim is n
 ### Listing and releasing claims
 
 ```bash
-brainclaw list-claims
-brainclaw release-claim <id>
+brainclaw claim list
+brainclaw claim release <id>
 ```
 
-`list-claims` shows who holds each claim and whether it is still active. If a claim has a `session_id`, the last 8 characters are shown so you can correlate with the agent session that created it.
+`claim list` shows who holds each claim and whether it is still active. If a claim has a `session_id`, the last 8 characters are shown so you can correlate with the agent session that created it.
 
 ## Why claims matter
 
@@ -125,8 +125,8 @@ They are a shared coordination signal.
 
 Before finishing a session, always:
 
-- release active claims: `brainclaw release-claim <id>`
-- update plan items: `brainclaw update-plan <id> --status done`
+- release active claims: `brainclaw claim release <id>`
+- update plan items: `brainclaw plan update <id> --status done`
 - or use `brainclaw session-end --auto-release` to clean up automatically
 
 `session-end --auto-release` releases all claims held by the current agent and marks any `in_progress` plans as needing attention.

@@ -10,15 +10,16 @@ export interface UpdatePlanOptions {
   project?: string;
   priority?: Priority;
   actualEffort?: string;
+  cwd?: string;
 }
 
 export function runUpdatePlan(id: string, options: UpdatePlanOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
-  const state = loadState();
+  const state = loadState(options.cwd);
   const plan = state.plan_items.find((item) => item.id === id);
   if (!plan) {
     console.error(`Error: Plan item '${id}' not found.`);
@@ -37,8 +38,8 @@ export function runUpdatePlan(id: string, options: UpdatePlanOptions = {}): void
   if (options.actualEffort) plan.actual_effort = options.actualEffort;
   plan.updated_at = timestamp;
 
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  saveState(state, options.cwd);
+  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
 
   console.log(`✔ Plan item updated: [${plan.id}] ${plan.text}`);
 }

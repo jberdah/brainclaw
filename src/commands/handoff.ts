@@ -7,6 +7,7 @@ import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
+import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { Handoff } from '../core/schema.js';
 
 export interface HandoffOptions {
@@ -18,17 +19,20 @@ export interface HandoffOptions {
   plan?: string;
   author?: string;
   captureDiff?: boolean;
+  cwd?: string;
+  store?: StoreTarget;
 }
 
 export function runHandoff(text: string, options: HandoffOptions): void {
-  if (!memoryExists()) {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+  if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   validateCliInput(text, options.tag);
 
-  const config = loadConfig();
+  const config = loadConfig(cwd);
   const warnings = scanText(text, config);
   for (const w of warnings) {
     console.warn(`⚠ ${w.message}`);
@@ -38,7 +42,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     }
   }
 
-  const state = loadState();
+  const state = loadState(cwd);
   const plan = options.plan ? state.plan_items.find((item) => item.id === options.plan) : undefined;
   if (options.plan && !plan) {
     console.error(`Error: Plan item '${options.plan}' not found.`);
@@ -62,7 +66,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     to: options.to,
     text,
     created_at: nowISO(),
-    author: options.author ?? resolveCurrentAgentName(),
+    author: options.author ?? resolveCurrentAgentName(cwd),
     status: 'open',
     project: options.project ?? plan?.project,
     plan_id: options.plan,
@@ -72,9 +76,9 @@ export function runHandoff(text: string, options: HandoffOptions): void {
   };
 
   state.open_handoffs.push(entry);
-  saveState(state);
+  saveState(state, cwd);
 
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
 
   console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
 }

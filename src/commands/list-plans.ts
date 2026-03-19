@@ -9,15 +9,16 @@ export interface ListPlansOptions {
   assignee?: string;
   project?: string;
   all?: boolean;
+  cwd?: string;
 }
 
 export function runListPlans(options: ListPlansOptions = {}): void {
-  if (!memoryExists()) {
+  if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
-  let plans = loadState().plan_items;
+  let plans = loadState(options.cwd).plan_items;
 
   if (!options.all) {
     plans = plans.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');

@@ -13,9 +13,10 @@ import { runDecision } from './commands/decision.js';
 import { runConstraint } from './commands/constraint.js';
 import { runTrap } from './commands/trap.js';
 import { runHandoff } from './commands/handoff.js';
-import { runPlan } from './commands/plan.js';
 import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
+import { runDeletePlan } from './commands/delete-plan.js';
+import { runPlanResource } from './commands/plan-resource.js';
 import { runAddStep } from './commands/add-step.js';
 import { runEstimationReport } from './commands/estimation-report.js';
 import { runCompleteStep } from './commands/complete-step.js';
@@ -34,9 +35,10 @@ import { runUseCandidate } from './commands/use-candidate.js';
 import { runAccept } from './commands/accept.js';
 import { runReject } from './commands/reject.js';
 import { runPruneCandidates } from './commands/prune-candidates.js';
-import { runClaim } from './commands/claim.js';
 import { runListClaims } from './commands/list-claims.js';
 import { runReleaseClaim } from './commands/release-claim.js';
+import { runClaimResource } from './commands/claim-resource.js';
+import { runMemoryCommand } from './commands/memory.js';
 import { runReleaseClaims } from './commands/release-claims.js';
 import { runAgentBoard } from './commands/agent-board.js';
 import { runRuntimeNote } from './commands/runtime-note.js';
@@ -342,9 +344,12 @@ program
 
 // --- plan ---
 program
-  .command('plan <text>')
-  .description('Add a shared plan item')
-  .option('--type <type>', 'Plan type: feat, fix, chore, spike, doc')
+  .command('plan <subcommand> [args...]')
+  .description('Manage shared plan items (create, list, update, delete)')
+  .option('--json', 'Output as JSON for list')
+  .option('--all', 'Include done and dropped plan items in list')
+  .option('--type <type>', 'Plan type or filter: feat, fix, chore, spike, doc')
+  .option('--status <status>', 'Status filter/update: todo, in_progress, blocked, done, dropped')
   .option('--priority <priority>', 'Priority: low, medium, high', 'medium')
   .option('--assignee <assignee>', 'Assignee for this plan item')
   .option('--project <project>', 'Optional project namespace')
@@ -353,9 +358,10 @@ program
   .option('--depends-on <ids...>', 'Dependency IDs for this plan item')
   .option('--author <author>', 'Author name')
   .option('--estimate <minutes>', 'Estimated effort in minutes (positive integer, e.g. --estimate 30)')
+  .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
   .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
-  .action((text, options) => {
-    runPlan(text, options);
+  .action((subcommand, args, options) => {
+    runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort });
   });
 
 // --- list-plans ---
@@ -410,6 +416,14 @@ program
   .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
   .action((id, options) => {
     runUpdatePlan(id, { ...options, actualEffort: options.actualEffort });
+  });
+
+// --- delete-plan ---
+program
+  .command('delete-plan <id>')
+  .description('Delete a shared plan item')
+  .action((id) => {
+    runDeletePlan(id);
   });
 
 // --- update-handoff ---
@@ -534,6 +548,32 @@ program
   .option('--agent-tooling', 'Include AGENTS.md, local skills, and local MCP inventory')
   .action((options) => {
     runEnv({ ...options, agentTooling: options.agentTooling });
+  });
+
+// --- memory ---
+program
+  .command('memory <subcommand> [args...]')
+  .description('Manage canonical memory items (create, list, update, delete)')
+  .option('--json', 'Output as JSON for list')
+  .option('--type <type>', 'Memory type/filter: decision, constraint, trap, handoff')
+  .option('--text <text>', 'Replacement text for memory update')
+  .option('--tag <tags...>', 'Tags')
+  .option('--path <paths...>', 'Related file paths')
+  .option('--author <author>', 'Author name')
+  .option('--outcome <outcome>', 'Decision outcome: approved, rejected, deferred, pending')
+  .option('--category <category>', 'Constraint category: architecture, performance, security, reliability, compatibility, process, other')
+  .option('--status <status>', 'Constraint/handoff status')
+  .option('--severity <severity>', 'Trap severity: low, medium, high')
+  .option('--project <project>', 'Optional project namespace')
+  .option('--plan <id>', 'Optional linked plan item ID')
+  .option('--from <from>', 'Handoff source')
+  .option('--to <to>', 'Handoff destination')
+  .option('--visibility <visibility>', 'Trap visibility: shared, machine, private', 'shared')
+  .option('--host <host>', 'Optional host identifier override for machine/private traps')
+  .option('--ttl <duration>', 'Time-to-live: 30m, 2h, 7d')
+  .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
+  .action((subcommand, args, options) => {
+    runMemoryCommand(subcommand, args, options);
   });
 
 // --- instruction ---
@@ -694,16 +734,19 @@ program
 
 // --- claim ---
 program
-  .command('claim <description>')
-  .description('Claim a work scope (advisory)')
+  .command('claim <subcommand> [args...]')
+  .description('Manage work claims (create, list, release)')
   .option('--agent <agent>', 'Agent or person name; defaults to the configured current agent')
-  .requiredOption('--scope <scope>', 'Scope being claimed (e.g. file path, module)')
+  .option('--scope <scope>', 'Scope being claimed (e.g. file path, module)')
   .option('--project <project>', 'Optional project namespace for this claim')
   .option('--plan <id>', 'Optional linked plan item ID')
   .option('--ttl <duration>', 'Auto-expire after duration: 30m, 2h, 8h, 1d')
+  .option('--all', 'Include released claims in list')
+  .option('--json', 'Output as JSON for list')
+  .option('--plan-status <status>', 'Optional linked plan status when releasing: todo, in_progress, blocked, done, dropped')
   .option('--store <target>', 'Target store level: local (default), repo, workspace')
-  .action((description, options) => {
-    runClaim(description, options);
+  .action((subcommand, args, options) => {
+    runClaimResource(subcommand, args, { ...options, planStatus: options.planStatus });
   });
 
 // --- list-claims ---
