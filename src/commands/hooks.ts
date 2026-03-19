@@ -42,8 +42,8 @@ open plan items, active claims, and the last handoff.
 **Before finishing any session:**
 
 \`\`\`bash
-brainclaw release-claim <id>          # release claims you opened
-brainclaw update-plan <id> --status done   # close plan items you completed
+brainclaw claim release <id>               # release claims you opened
+brainclaw plan update <id> --status done   # close plan items you completed
 # or in one shot:
 brainclaw session-end --auto-release
 \`\`\`
@@ -73,8 +73,8 @@ and the last handoff note. Do not skip this step.
 ## SESSION END (before finishing)
 
 \`\`\`bash
-brainclaw release-claim <id>               # for each claim you hold
-brainclaw update-plan <id> --status done   # for each plan item you completed
+brainclaw claim release <id>               # for each claim you hold
+brainclaw plan update <id> --status done   # for each plan item you completed
 # or:
 brainclaw session-end --auto-release
 \`\`\`

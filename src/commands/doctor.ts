@@ -1048,12 +1048,12 @@ export function runDoctor(options: DoctorOptions = {}): void {
       checks.push({
         name: 'handoff_backlog',
         status: 'warn',
-        message: `${handoffsWithBacklog.length} open handoff(s) contain backlog patterns without a linked plan: ${ids}. Run \`brainclaw plan "<text>"\` to formalize.`,
+        message: `${handoffsWithBacklog.length} open handoff(s) contain backlog patterns without a linked plan: ${ids}. Run \`brainclaw plan create "<text>"\` to formalize.`,
         details: handoffsWithBacklog.map((h) => ({ id: h.id, from: h.from, to: h.to })),
       });
       if (!options.json) {
         console.warn(`⚠ ${handoffsWithBacklog.length} open handoff(s) contain unformalized backlog (no plan linked): ${ids}`);
-        console.warn('  Run `brainclaw plan "<description>"` to create formal plan items.');
+        console.warn('  Run `brainclaw plan create "<description>"` to create formal plan items.');
       }
       hasIssues = true;
     } else {

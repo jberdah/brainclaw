@@ -15,21 +15,21 @@ This project uses brainclaw for shared coordination between humans and agents.
 
 1. Run \`brainclaw context\` to load shared state (constraints, decisions, traps, plans, handoffs)
 2. Check **Your open work** for active claims and in-progress plans assigned to you
-3. Respect active claims from other agents — check \`brainclaw list-claims\` before editing a claimed scope
+3. Respect active claims from other agents — check \`brainclaw claim list\` before editing a claimed scope
 
 ### Before finishing (required)
 
-1. Release claims you opened: \`brainclaw release-claim <id>\` — or \`brainclaw session-end --auto-release\`
-2. Update completed plan items: \`brainclaw update-plan <id> --status done\`
+1. Release claims you opened: \`brainclaw claim release <id>\` — or \`brainclaw session-end --auto-release\`
+2. Update completed plan items: \`brainclaw plan update <id> --status done\`
 
 ### Recording work
 
 \`\`\`bash
-brainclaw decision "<text>"          # record a decision
-brainclaw constraint "<text>"        # record an active constraint
-brainclaw trap "<text>"              # record a known trap
-brainclaw claim "<text>" --scope <path>   # claim a scope before editing
-brainclaw plan "<text>"              # add a shared work item
+brainclaw memory create decision "<text>"          # record a decision
+brainclaw memory create constraint "<text>"        # record an active constraint
+brainclaw memory create trap "<text>"              # record a known trap
+brainclaw claim create "<text>" --scope <path>     # claim a scope before editing
+brainclaw plan create "<text>"                     # add a shared work item
 \`\`\`
 
 Memory is stored in \`${storageDir}/\`. Run \`brainclaw doctor\` to verify health.
@@ -41,13 +41,17 @@ export function buildHygieneSection(): string {
 
 Before starting work:
 1. Run \`brainclaw context\` (or \`brainclaw context --json\`) to load shared memory
-2. Run \`brainclaw list-claims\` — do not edit a file claimed by another agent
-3. Create a plan for significant work: \`brainclaw plan "<description>"\`
-4. Claim files you will modify: \`brainclaw claim "<description>" --scope <path>\`
+2. Run \`brainclaw claim list\` — do not edit a file claimed by another agent
+3. Create a plan for significant work: \`brainclaw plan create "<description>"\`
+4. Claim files you will modify: \`brainclaw claim create "<description>" --scope <path>\`
 
 Before finishing:
 1. Run \`brainclaw session-end --auto-release\` — releases claims and updates plans
-2. Or manually: \`brainclaw release-claim <id>\` and \`brainclaw update-plan <id> --status done\``;
+2. Or manually: \`brainclaw claim release <id>\` and \`brainclaw plan update <id> --status done\``;
+}
+
+export function hasBrainclawSection(content: string): boolean {
+  return content.includes(BRAINCLAW_SECTION_START) && content.includes(BRAINCLAW_SECTION_END);
 }
 
 export function upsertBrainclawSection(existingContent: string, section: string): string {
@@ -69,7 +73,16 @@ export interface EnsureAgentFilesResult {
   copilotInstructionsUpdated: boolean;
 }
 
-export function ensureAgentFiles(cwd: string, storageDir: string): EnsureAgentFilesResult {
+export interface EnsureAgentFilesOptions {
+  onlyExisting?: boolean;
+  requireExistingSection?: boolean;
+}
+
+export function ensureAgentFiles(
+  cwd: string,
+  storageDir: string,
+  options: EnsureAgentFilesOptions = {},
+): EnsureAgentFilesResult {
   const section = buildBrainclawSection(storageDir);
   const result: EnsureAgentFilesResult = {
     agentsMdCreated: false,
@@ -81,33 +94,44 @@ export function ensureAgentFiles(cwd: string, storageDir: string): EnsureAgentFi
   // AGENTS.md
   const agentsMdPath = path.join(cwd, 'AGENTS.md');
   const agentsMdExists = fs.existsSync(agentsMdPath);
-  const agentsMdContent = agentsMdExists
-    ? fs.readFileSync(agentsMdPath, 'utf-8')
-    : '# AGENTS\n\nProject guidelines for AI coding agents.\n';
-  const newAgentsMd = upsertBrainclawSection(agentsMdContent, section);
-  fs.writeFileSync(agentsMdPath, newAgentsMd, 'utf-8');
-  if (agentsMdExists) {
-    result.agentsMdUpdated = true;
-  } else {
-    result.agentsMdCreated = true;
+  if (!options.onlyExisting || agentsMdExists) {
+    const agentsMdContent = agentsMdExists
+      ? fs.readFileSync(agentsMdPath, 'utf-8')
+      : '# AGENTS\n\nProject guidelines for AI coding agents.\n';
+    if (!options.requireExistingSection || !agentsMdExists || hasBrainclawSection(agentsMdContent)) {
+      const newAgentsMd = upsertBrainclawSection(agentsMdContent, section);
+      if (newAgentsMd !== agentsMdContent) {
+        fs.writeFileSync(agentsMdPath, newAgentsMd, 'utf-8');
+        if (agentsMdExists) {
+          result.agentsMdUpdated = true;
+        } else {
+          result.agentsMdCreated = true;
+        }
+      }
+    }
   }
 
   // .github/copilot-instructions.md
-  const githubDir = path.join(cwd, '.github');
-  if (!fs.existsSync(githubDir)) {
-    fs.mkdirSync(githubDir, { recursive: true });
-  }
-  const copilotPath = path.join(githubDir, 'copilot-instructions.md');
+  const copilotPath = path.join(cwd, '.github', 'copilot-instructions.md');
   const copilotExists = fs.existsSync(copilotPath);
-  const copilotContent = copilotExists
-    ? fs.readFileSync(copilotPath, 'utf-8')
-    : '# Copilot Instructions\n';
-  const newCopilot = upsertBrainclawSection(copilotContent, section);
-  fs.writeFileSync(copilotPath, newCopilot, 'utf-8');
-  if (copilotExists) {
-    result.copilotInstructionsUpdated = true;
-  } else {
-    result.copilotInstructionsCreated = true;
+  if (!options.onlyExisting || copilotExists) {
+    const copilotContent = copilotExists
+      ? fs.readFileSync(copilotPath, 'utf-8')
+      : '# Copilot Instructions\n';
+    if (!options.requireExistingSection || !copilotExists || hasBrainclawSection(copilotContent)) {
+      if (!copilotExists) {
+        fs.mkdirSync(path.dirname(copilotPath), { recursive: true });
+      }
+      const newCopilot = upsertBrainclawSection(copilotContent, section);
+      if (newCopilot !== copilotContent) {
+        fs.writeFileSync(copilotPath, newCopilot, 'utf-8');
+        if (copilotExists) {
+          result.copilotInstructionsUpdated = true;
+        } else {
+          result.copilotInstructionsCreated = true;
+        }
+      }
+    }
   }
 
   return result;
@@ -215,15 +239,19 @@ export function writeExportFile(
   content: string,
   relativePath: string,
   cwd: string,
-): { created: boolean; filePath: string } {
+): { created: boolean; updated: boolean; filePath: string } {
   const fullPath = path.join(cwd, relativePath);
   const dir = path.dirname(fullPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const existed = fs.existsSync(fullPath);
   const section = `${BRAINCLAW_SECTION_START}\n${content}\n${BRAINCLAW_SECTION_END}`;
   const existing = existed ? fs.readFileSync(fullPath, 'utf-8') : '';
-  fs.writeFileSync(fullPath, upsertBrainclawSection(existing, section), 'utf-8');
-  return { created: !existed, filePath: fullPath };
+  const next = upsertBrainclawSection(existing, section);
+  if (next === existing) {
+    return { created: false, updated: false, filePath: fullPath };
+  }
+  fs.writeFileSync(fullPath, next, 'utf-8');
+  return { created: !existed, updated: existed, filePath: fullPath };
 }
 
 export interface AutoConfigWriteResult {
@@ -404,6 +432,17 @@ export function describeAutoConfigWrite(result: AutoConfigWriteResult): string |
   const verb = result.created ? 'Created' : 'Updated';
   const displayPath = result.relativePath ?? result.filePath;
   return `✔ ${verb} ${result.label} at ${displayPath}`;
+}
+
+export function buildClaudeCodeCommandText(): string {
+  return `Load brainclaw project memory and prepare for coordinated work.
+
+Steps:
+1. Run \`brainclaw context --json\` — load constraints, decisions, traps, plans, handoffs
+2. Run \`brainclaw claim list\` — check what files other agents have claimed
+3. Before editing any file, run \`brainclaw claim create "<description>" --scope <path>\`
+4. Before finishing, run \`brainclaw session-end --auto-release\`
+`;
 }
 
 export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
@@ -591,14 +630,7 @@ export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
 
 export function ensureClaudeCodeCommand(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.claude', 'commands', 'brainclaw.md');
-  const content = `Load brainclaw project memory and prepare for coordinated work.
-
-Steps:
-1. Run \`brainclaw context --json\` — load constraints, decisions, traps, plans, handoffs
-2. Run \`brainclaw list-claims\` — check what files other agents have claimed
-3. Before editing any file, run \`brainclaw claim "<description>" --scope <path>\`
-4. Before finishing, run \`brainclaw session-end --auto-release\`
-`;
+  const content = buildClaudeCodeCommandText();
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
   return {
@@ -650,14 +682,7 @@ export function ensureClaudeCodeUserCommand(homeDir: string | undefined): AutoCo
   if (!homeDir) return undefined;
 
   const filePath = path.join(homeDir, '.claude', 'commands', 'brainclaw.md');
-  const content = `Load brainclaw project memory and prepare for coordinated work.
-
-Steps:
-1. Run \`brainclaw context --json\` — load constraints, decisions, traps, plans, handoffs
-2. Run \`brainclaw list-claims\` — check what files other agents have claimed
-3. Before editing any file, run \`brainclaw claim "<description>" --scope <path>\`
-4. Before finishing, run \`brainclaw session-end --auto-release\`
-`;
+  const content = buildClaudeCodeCommandText();
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
   return {

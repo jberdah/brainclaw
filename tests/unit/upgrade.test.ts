@@ -115,6 +115,55 @@ describe('upgrade command', () => {
 
     assert.ok(logs.some(l => l.includes('up to date')));
   });
+
+  it('refreshes managed bootstrap sections that still mention legacy CLI commands', () => {
+    const agentsPath = path.join(workspace.dir, 'AGENTS.md');
+    fs.writeFileSync(agentsPath, `# Notes
+
+<!-- brainclaw:start -->
+## Brainclaw — shared project memory
+
+1. Run \`brainclaw list-claims\`
+2. Finish with \`brainclaw release-claim <id>\`
+<!-- brainclaw:end -->
+`, 'utf-8');
+
+    const logs = captureLogs(() => {
+      runUpgrade({ cwd: workspace.dir });
+    });
+
+    const content = fs.readFileSync(agentsPath, 'utf-8');
+    assert.ok(content.includes('brainclaw claim list'));
+    assert.ok(content.includes('brainclaw claim release <id>'));
+    assert.ok(!content.includes('brainclaw list-claims'));
+    assert.ok(logs.some((line) => line.includes('managed agent file')));
+  });
+
+  it('refreshes generated export files and workspace-local helper commands without touching global config', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'CLAUDE.md'), `<!-- brainclaw:start -->
+# shared_agent_memory_mvp
+
+## Brainclaw — required coordination
+
+Run \`brainclaw list-claims\`
+<!-- brainclaw:end -->
+`, 'utf-8');
+
+    fs.mkdirSync(path.join(workspace.dir, '.claude', 'commands'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, '.claude', 'commands', 'brainclaw.md'), `Legacy
+1. brainclaw list-claims
+2. brainclaw claim "desc" --scope src/
+`, 'utf-8');
+
+    runUpgrade({ cwd: workspace.dir });
+
+    const claudeExport = fs.readFileSync(path.join(workspace.dir, 'CLAUDE.md'), 'utf-8');
+    const claudeCommand = fs.readFileSync(path.join(workspace.dir, '.claude', 'commands', 'brainclaw.md'), 'utf-8');
+    assert.ok(claudeExport.includes('brainclaw claim list'));
+    assert.ok(!claudeExport.includes('brainclaw list-claims'));
+    assert.ok(claudeCommand.includes('brainclaw claim create'));
+    assert.ok(!claudeCommand.includes('brainclaw claim "desc"'));
+  });
 });
 
 describe('init --force preserves existing data', () => {

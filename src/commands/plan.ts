@@ -43,7 +43,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   }
   if (PLAN_SUBCOMMAND_ERRORS.has(normalized)) {
     console.error(`Error: '${text}' looks like a subcommand, not a plan description.`);
-    console.error(`  To update a plan, use: brainclaw update-plan <id> --status <status>`);
+    console.error('  To update a plan, use: brainclaw plan update <id> --status <status>');
     process.exit(1);
   }
 

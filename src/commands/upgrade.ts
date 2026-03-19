@@ -4,6 +4,17 @@ import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir } from '../c
 import { loadState, saveState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
+import {
+  BRAINCLAW_SECTION_END,
+  BRAINCLAW_SECTION_START,
+  buildBrainclawSection,
+  buildClaudeCodeCommandText,
+  ensureClaudeCodeCommand,
+  hasBrainclawSection,
+} from '../core/agent-files.js';
+import { loadConfig } from '../core/config.js';
+import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
+import { generateCursorHook, writeHook } from './hooks.js';
 
 export interface UpgradeOptions {
   cwd?: string;
@@ -12,7 +23,7 @@ export interface UpgradeOptions {
 }
 
 interface MigrationAction {
-  type: 'create_dir' | 'move_file' | 'migrate_schema';
+  type: 'create_dir' | 'move_file' | 'migrate_schema' | 'refresh_agent_file';
   from?: string;
   to?: string;
   description: string;
@@ -34,6 +45,16 @@ const ENTITY_DIRS: Array<{ legacy: string; entity: string }> = [
   { legacy: 'inbox', entity: 'coordination/inbox' },
   { legacy: 'runtime', entity: 'coordination/runtime' },
 ];
+
+const WORKSPACE_EXPORT_REFRESH_AGENTS = [
+  { agentName: 'claude-code', relativePath: 'CLAUDE.md' },
+  { agentName: 'cursor', relativePath: '.cursor/rules/brainclaw.md' },
+  { agentName: 'windsurf', relativePath: '.windsurfrules' },
+  { agentName: 'cline', relativePath: '.clinerules/brainclaw.md' },
+  { agentName: 'roo', relativePath: '.roo/rules/brainclaw.md' },
+  { agentName: 'continue', relativePath: '.continue/rules/brainclaw.md' },
+  { agentName: 'antigravity', relativePath: 'GEMINI.md' },
+] as const;
 
 export function runUpgrade(options: UpgradeOptions = {}): void {
   const cwd = options.cwd ?? process.cwd();
@@ -91,6 +112,9 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     });
   }
 
+  const agentRefreshActions = scanManagedWorkspaceAgentFileRefreshes(cwd);
+  actions.push(...agentRefreshActions);
+
   // Report
   if (options.json) {
     outputJson(actions, options.dryRun ?? false);
@@ -131,6 +155,8 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     saveState(state, cwd);
   }
 
+  const refreshedAgentFiles = refreshManagedWorkspaceAgentFiles(cwd);
+
   // Clean up empty legacy directories (recursively removes empty subdirs first)
   let removedDirs = 0;
   for (const { legacy } of ENTITY_DIRS) {
@@ -144,9 +170,217 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   initMemoryRepo(cwd);
   commitMemoryChange(`upgrade: ${movedFiles} files moved, ${outdated.length} schemas migrated`, cwd);
 
-  const parts = [`${movedFiles} file(s) moved`, `${outdated.length} schema(s) migrated`];
+  const parts = [
+    `${movedFiles} file(s) moved`,
+    `${outdated.length} schema(s) migrated`,
+    `${refreshedAgentFiles.length} managed agent file(s) refreshed`,
+  ];
   if (removedDirs > 0) parts.push(`${removedDirs} empty legacy dir(s) removed`);
   console.log(`✔ Upgrade complete: ${parts.join(', ')}.`);
+}
+
+function scanManagedWorkspaceAgentFileRefreshes(cwd: string): MigrationAction[] {
+  const config = loadConfig(cwd);
+  const storageDir = config.storage_dir ?? '.brainclaw';
+  const actions: MigrationAction[] = [];
+
+  const agentsPath = path.join(cwd, 'AGENTS.md');
+  const agentsMode = getManagedInstructionMode(agentsPath);
+  if (agentsMode === 'bootstrap' && needsBootstrapSectionRefresh(agentsPath, buildBrainclawSection(storageDir))) {
+    actions.push({
+      type: 'refresh_agent_file',
+      to: 'AGENTS.md',
+      description: 'Refresh managed Brainclaw section in AGENTS.md',
+    });
+  } else if (agentsMode === 'export') {
+    const rendered = renderAgentExportForAgent('codex', cwd);
+    if (rendered && needsExportSectionRefresh(agentsPath, rendered.content)) {
+      actions.push({
+        type: 'refresh_agent_file',
+        to: 'AGENTS.md',
+        description: 'Refresh generated Brainclaw instructions in AGENTS.md',
+      });
+    }
+  }
+
+  const copilotPath = path.join(cwd, '.github', 'copilot-instructions.md');
+  const copilotMode = getManagedInstructionMode(copilotPath);
+  if (copilotMode === 'bootstrap' && needsBootstrapSectionRefresh(copilotPath, buildBrainclawSection(storageDir))) {
+    actions.push({
+      type: 'refresh_agent_file',
+      to: '.github/copilot-instructions.md',
+      description: 'Refresh managed Brainclaw section in .github/copilot-instructions.md',
+    });
+  } else if (copilotMode === 'export') {
+    const rendered = renderAgentExportForAgent('github-copilot', cwd);
+    if (rendered && needsExportSectionRefresh(copilotPath, rendered.content)) {
+      actions.push({
+        type: 'refresh_agent_file',
+        to: '.github/copilot-instructions.md',
+        description: 'Refresh generated Brainclaw instructions in .github/copilot-instructions.md',
+      });
+    }
+  }
+
+  for (const target of WORKSPACE_EXPORT_REFRESH_AGENTS) {
+    const filePath = path.join(cwd, target.relativePath);
+    const rendered = renderAgentExportForAgent(target.agentName, cwd);
+    if (rendered && needsExportSectionRefresh(filePath, rendered.content)) {
+      actions.push({
+        type: 'refresh_agent_file',
+        to: target.relativePath,
+        description: `Refresh generated Brainclaw instructions in ${target.relativePath}`,
+      });
+    }
+  }
+
+  const claudeCommandPath = path.join(cwd, '.claude', 'commands', 'brainclaw.md');
+  if (fs.existsSync(claudeCommandPath) && fs.readFileSync(claudeCommandPath, 'utf-8') !== buildClaudeCodeCommandText()) {
+    actions.push({
+      type: 'refresh_agent_file',
+      to: '.claude/commands/brainclaw.md',
+      description: 'Refresh Claude Code Brainclaw command instructions',
+    });
+  }
+
+  const cursorHookPath = path.join(cwd, '.cursor', 'rules', 'brainclaw-session.mdc');
+  const expectedCursorHook = generateCursorHook(config.project_name);
+  if (fs.existsSync(cursorHookPath) && fs.readFileSync(cursorHookPath, 'utf-8') !== expectedCursorHook) {
+    actions.push({
+      type: 'refresh_agent_file',
+      to: '.cursor/rules/brainclaw-session.mdc',
+      description: 'Refresh Cursor Brainclaw session hook',
+    });
+  }
+
+  return actions;
+}
+
+function refreshManagedWorkspaceAgentFiles(cwd: string): string[] {
+  const config = loadConfig(cwd);
+  const storageDir = config.storage_dir ?? '.brainclaw';
+  const refreshed = new Set<string>();
+
+  const agentsPath = path.join(cwd, 'AGENTS.md');
+  const agentsMode = getManagedInstructionMode(agentsPath);
+  if (agentsMode === 'bootstrap') {
+    if (writeBootstrapSectionFile(agentsPath, buildBrainclawSection(storageDir))) {
+      refreshed.add('AGENTS.md');
+    }
+  } else if (agentsMode === 'export') {
+    const result = writeAgentExportForAgent('codex', cwd);
+    if (result && (result.created || result.updated)) {
+      refreshed.add(result.relativePath);
+    }
+  }
+
+  const copilotPath = path.join(cwd, '.github', 'copilot-instructions.md');
+  const copilotMode = getManagedInstructionMode(copilotPath);
+  if (copilotMode === 'bootstrap') {
+    if (writeBootstrapSectionFile(copilotPath, buildBrainclawSection(storageDir))) {
+      refreshed.add('.github/copilot-instructions.md');
+    }
+  } else if (copilotMode === 'export') {
+    const result = writeAgentExportForAgent('github-copilot', cwd);
+    if (result && (result.created || result.updated)) {
+      refreshed.add(result.relativePath);
+    }
+  }
+
+  for (const target of WORKSPACE_EXPORT_REFRESH_AGENTS) {
+    const filePath = path.join(cwd, target.relativePath);
+    if (!fs.existsSync(filePath) || !hasBrainclawSection(fs.readFileSync(filePath, 'utf-8'))) {
+      continue;
+    }
+
+    const result = writeAgentExportForAgent(target.agentName, cwd);
+    if (result && (result.created || result.updated)) {
+      refreshed.add(result.relativePath);
+    }
+  }
+
+  if (fs.existsSync(path.join(cwd, '.claude', 'commands', 'brainclaw.md'))) {
+    const result = ensureClaudeCodeCommand(cwd);
+    if (result.created || result.updated) {
+      refreshed.add(result.relativePath ?? '.claude/commands/brainclaw.md');
+    }
+  }
+
+  if (fs.existsSync(path.join(cwd, '.cursor', 'rules', 'brainclaw-session.mdc'))) {
+    const expected = generateCursorHook(config.project_name);
+    const filePath = path.join(cwd, '.cursor', 'rules', 'brainclaw-session.mdc');
+    if (fs.readFileSync(filePath, 'utf-8') !== expected) {
+      const result = writeHook(expected, '.cursor/rules/brainclaw-session.mdc', cwd);
+      refreshed.add(result.relativePath);
+    }
+  }
+
+  return [...refreshed];
+}
+
+function getManagedInstructionMode(filePath: string): 'bootstrap' | 'export' | undefined {
+  if (!fs.existsSync(filePath)) {
+    return undefined;
+  }
+  const existing = fs.readFileSync(filePath, 'utf-8');
+  if (!hasBrainclawSection(existing)) {
+    return undefined;
+  }
+  if (existing.includes('## Brainclaw — shared project memory')) {
+    return 'bootstrap';
+  }
+  return 'export';
+}
+
+function writeBootstrapSectionFile(filePath: string, section: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  const existing = fs.readFileSync(filePath, 'utf-8');
+  if (!hasBrainclawSection(existing)) {
+    return false;
+  }
+  const next = upsertSection(existing, section);
+  if (next === existing) {
+    return false;
+  }
+  fs.writeFileSync(filePath, next, 'utf-8');
+  return true;
+}
+
+function needsBootstrapSectionRefresh(filePath: string, section: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  const existing = fs.readFileSync(filePath, 'utf-8');
+  if (!hasBrainclawSection(existing)) {
+    return false;
+  }
+  return existing !== upsertSection(existing, section);
+}
+
+function needsExportSectionRefresh(filePath: string, content: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  const existing = fs.readFileSync(filePath, 'utf-8');
+  if (!hasBrainclawSection(existing)) {
+    return false;
+  }
+  const section = `${BRAINCLAW_SECTION_START}\n${content}\n${BRAINCLAW_SECTION_END}`;
+  return existing !== upsertSection(existing, section);
+}
+
+function upsertSection(existingContent: string, section: string): string {
+  const start = existingContent.indexOf(BRAINCLAW_SECTION_START);
+  const end = existingContent.indexOf(BRAINCLAW_SECTION_END);
+  if (start !== -1 && end !== -1) {
+    const before = existingContent.slice(0, start);
+    const after = existingContent.slice(end + BRAINCLAW_SECTION_END.length);
+    return before + section + after;
+  }
+  const trimmed = existingContent.trimEnd();
+  return trimmed.length > 0 ? `${trimmed}\n\n${section}\n` : `${section}\n`;
 }
 
 function listJsonFiles(dir: string): string[] {

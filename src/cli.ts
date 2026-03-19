@@ -165,7 +165,7 @@ program
 // --- upgrade ---
 program
   .command('upgrade')
-  .description('Upgrade project memory structure without losing data (entity dirs, schema migrations)')
+  .description('Upgrade project memory structure and refresh managed workspace agent files without losing data')
   .option('--json', 'Output as JSON')
   .option('--dry-run', 'Show what would be done without making changes')
   .action((options) => {

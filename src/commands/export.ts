@@ -117,30 +117,41 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
 export function writeAgentExportForAgent(
   agentName: string,
   cwd: string,
-): { relativePath: string; created: boolean } | undefined {
+): { relativePath: string; created: boolean; updated: boolean } | undefined {
+  const rendered = renderAgentExportForAgent(agentName, cwd);
+  if (!rendered) {
+    return undefined;
+  }
+
+  const result = writeExportFile(rendered.content, rendered.relativePath, cwd);
+  declareAgentIntegrationFromTarget(cwd, rendered.agentName, 'manual');
+  return { relativePath: rendered.relativePath, created: result.created, updated: result.updated };
+}
+
+export function renderAgentExportForAgent(
+  agentName: string,
+  cwd: string,
+): { agentName: string; relativePath: string; content: string } | undefined {
   const target = resolveExportTarget(agentName);
   if (target.agentName === 'unknown') {
     return undefined;
   }
 
   const content = generateExport(target.format, {}, cwd);
-  const result = writeExportFile(content, target.relativePath, cwd);
-  declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
-  return { relativePath: target.relativePath, created: result.created };
+  return { agentName: target.agentName, relativePath: target.relativePath, content };
 }
 
 export function writeDetectedAgentExport(detectedAgentName: string, cwd: string): { relativePath: string; created: boolean } | undefined {
-  const target = resolveExportTarget(detectedAgentName);
-  if (target.agentName === 'unknown') {
+  const rendered = renderAgentExportForAgent(detectedAgentName, cwd);
+  if (!rendered) {
     return undefined;
   }
   // Skip if this is the fallback and AGENTS.md is already handled by ensureAgentFiles
-  if (target.relativePath === 'AGENTS.md' || target.relativePath === '.github/copilot-instructions.md') {
+  if (rendered.relativePath === 'AGENTS.md' || rendered.relativePath === '.github/copilot-instructions.md') {
     return undefined;
   }
-  const content = generateExport(target.format, {}, cwd);
-  const result = writeExportFile(content, target.relativePath, cwd);
-  return { relativePath: target.relativePath, created: result.created };
+  const result = writeExportFile(rendered.content, rendered.relativePath, cwd);
+  return { relativePath: rendered.relativePath, created: result.created };
 }
 
 function declareAgentIntegrationFromTarget(

@@ -8,7 +8,9 @@ import {
   BRAINCLAW_SECTION_START,
   BRAINCLAW_SECTION_END,
   buildBrainclawSection,
+  buildClaudeCodeCommandText,
   buildHygieneSection,
+  hasBrainclawSection,
   upsertBrainclawSection,
   ensureClineMcpConfig,
   ensureCopilotSkill,
@@ -66,16 +68,16 @@ describe('core/agent-files — buildBrainclawSection', () => {
 
   it('contains before-finishing behavioral contract', () => {
     const section = buildBrainclawSection('.brainclaw');
-    assert.ok(section.includes('release-claim'), 'should mention release-claim');
-    assert.ok(section.includes('update-plan'), 'should mention update-plan');
+    assert.ok(section.includes('claim release'), 'should mention claim release');
+    assert.ok(section.includes('plan update'), 'should mention plan update');
     assert.ok(section.includes('Before finishing'), 'should have before finishing section');
   });
 
   it('contains recording-work quick reference', () => {
     const section = buildBrainclawSection('.brainclaw');
-    assert.ok(section.includes('brainclaw decision'), 'should mention decision command');
-    assert.ok(section.includes('brainclaw claim'), 'should mention claim command');
-    assert.ok(section.includes('brainclaw plan'), 'should mention plan command');
+    assert.ok(section.includes('brainclaw memory create decision'), 'should mention decision command');
+    assert.ok(section.includes('brainclaw claim create'), 'should mention claim command');
+    assert.ok(section.includes('brainclaw plan create'), 'should mention plan command');
   });
 });
 
@@ -83,15 +85,22 @@ describe('core/agent-files — buildHygieneSection', () => {
   it('contains before-starting and before-finishing rules', () => {
     const section = buildHygieneSection();
     assert.ok(section.includes('brainclaw context'));
-    assert.ok(section.includes('release-claim'));
+    assert.ok(section.includes('claim release'));
     assert.ok(section.includes('session-end'));
   });
 
   it('includes plan and claim workflow instructions', () => {
     const section = buildHygieneSection();
-    assert.ok(section.includes('list-claims'), 'should mention list-claims to check other agents');
-    assert.ok(section.includes('brainclaw plan'), 'should mention creating plans');
-    assert.ok(section.includes('brainclaw claim'), 'should mention claiming files');
+    assert.ok(section.includes('claim list'), 'should mention claim list to check other agents');
+    assert.ok(section.includes('brainclaw plan create'), 'should mention creating plans');
+    assert.ok(section.includes('brainclaw claim create'), 'should mention claiming files');
+  });
+});
+
+describe('core/agent-files — hasBrainclawSection', () => {
+  it('detects the managed sentinel block', () => {
+    assert.equal(hasBrainclawSection(`${BRAINCLAW_SECTION_START}\nhello\n${BRAINCLAW_SECTION_END}`), true);
+    assert.equal(hasBrainclawSection('# plain markdown'), false);
   });
 });
 
@@ -164,6 +173,45 @@ describe('core/agent-files — ensureAgentFiles', () => {
       const content = fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf-8');
       const count = (content.match(/<!-- brainclaw:start -->/g) ?? []).length;
       assert.equal(count, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('can refresh only existing managed files during upgrade-style flows', () => {
+    const dir = tmpDir();
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'AGENTS.md'),
+        '# Local notes\n\n<!-- brainclaw:start -->\nold\n<!-- brainclaw:end -->\n',
+        'utf-8',
+      );
+
+      const result = ensureAgentFiles(dir, '.brainclaw', {
+        onlyExisting: true,
+        requireExistingSection: true,
+      });
+
+      assert.equal(result.agentsMdUpdated, true);
+      assert.equal(result.copilotInstructionsCreated, false);
+      assert.ok(!fs.existsSync(path.join(dir, '.github', 'copilot-instructions.md')));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips existing files that are not already managed by brainclaw when required', () => {
+    const dir = tmpDir();
+    try {
+      fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# User-owned instructions\n', 'utf-8');
+
+      const result = ensureAgentFiles(dir, '.brainclaw', {
+        onlyExisting: true,
+        requireExistingSection: true,
+      });
+
+      assert.equal(result.agentsMdUpdated, false);
+      assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf-8'), '# User-owned instructions\n');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -433,8 +481,8 @@ describe('core/agent-files — auto-config writers', () => {
       const filePath = path.join(dir, '.claude', 'commands', 'brainclaw.md');
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(content.includes('brainclaw context --json'));
-      assert.ok(content.includes('brainclaw list-claims'));
-      assert.ok(content.includes('brainclaw claim'));
+      assert.ok(content.includes('brainclaw claim list'));
+      assert.ok(content.includes('brainclaw claim create'));
       assert.ok(content.includes('session-end'));
 
       const second = ensureClaudeCodeCommand(dir);
@@ -443,6 +491,13 @@ describe('core/agent-files — auto-config writers', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('builds Claude Code command text with resource-style CLI commands', () => {
+    const content = buildClaudeCodeCommandText();
+    assert.ok(content.includes('brainclaw claim list'));
+    assert.ok(content.includes('brainclaw claim create'));
+    assert.ok(!content.includes('brainclaw list-claims'));
   });
 
   it('creates Claude Code settings with permissions and session hooks', () => {

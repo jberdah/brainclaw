@@ -61,7 +61,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
       if (w.auto_released) {
         console.log('  → Claims auto-released and plans left for manual update.');
       } else {
-        console.log('  → Run `brainclaw release-claim <id>` and `brainclaw update-plan <id> --status done` to clean up.');
+        console.log('  → Run `brainclaw claim release <id>` and `brainclaw plan update <id> --status done` to clean up.');
       }
     }
 
