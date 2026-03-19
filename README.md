@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="brainclaw" width="140" />
+  <img src="https://raw.githubusercontent.com/jberdah/brainclaw/master/docs/assets/logo.png" alt="brainclaw" width="140" />
 </p>
 
 <h1 align="center">brainclaw</h1>
@@ -7,7 +7,7 @@
 <p align="center"><strong>Local-first coordination for humans and coding agents.</strong></p>
 
 <p align="center">
-  <a href="../../actions/workflows/ci.yml"><img src="../../actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml"><img src="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
 
 ---
@@ -86,7 +86,7 @@ brainclaw plan create "Coordinate auth rollout" --priority high
 brainclaw context --json
 ```
 
-→ [Full quickstart guide](docs/quickstart.md)
+→ [Full quickstart guide](https://github.com/jberdah/brainclaw/blob/master/docs/quickstart.md)
 
 ---
 
@@ -112,21 +112,21 @@ brainclaw can also expose collaboration views through MCP-readable tools, includ
 
 | | |
 |---|---|
-| [docs/quickstart.md](docs/quickstart.md) | Get started in 5 minutes |
-| [docs/cli.md](docs/cli.md) | Full command reference |
-| [docs/concepts/memory.md](docs/concepts/memory.md) | What "memory" means in brainclaw |
-| [docs/concepts/plans-and-claims.md](docs/concepts/plans-and-claims.md) | Coordination layer |
-| [docs/concepts/runtime-notes.md](docs/concepts/runtime-notes.md) | Ephemeral observations |
-| [docs/integrations/overview.md](docs/integrations/overview.md) | How to integrate with any agent |
-| [docs/integrations/cursor.md](docs/integrations/cursor.md) | Cursor |
-| [docs/integrations/claude-code.md](docs/integrations/claude-code.md) | Claude Code |
-| [docs/integrations/copilot.md](docs/integrations/copilot.md) | GitHub Copilot |
-| [docs/integrations/codex.md](docs/integrations/codex.md) | Codex |
-| [docs/integrations/mcp.md](docs/integrations/mcp.md) | MCP tools |
-| [docs/storage.md](docs/storage.md) | Storage model |
-| [docs/security.md](docs/security.md) | Security model |
-| [docs/review.md](docs/review.md) | Reflective review |
-| [docs/reputation.md](docs/reputation.md) | Reputation signals |
+| [docs/quickstart.md](https://github.com/jberdah/brainclaw/blob/master/docs/quickstart.md) | Get started in 5 minutes |
+| [docs/cli.md](https://github.com/jberdah/brainclaw/blob/master/docs/cli.md) | Full command reference |
+| [docs/concepts/memory.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/memory.md) | What "memory" means in brainclaw |
+| [docs/concepts/plans-and-claims.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/plans-and-claims.md) | Coordination layer |
+| [docs/concepts/runtime-notes.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/runtime-notes.md) | Ephemeral observations |
+| [docs/integrations/overview.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/overview.md) | How to integrate with any agent |
+| [docs/integrations/cursor.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/cursor.md) | Cursor |
+| [docs/integrations/claude-code.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/claude-code.md) | Claude Code |
+| [docs/integrations/copilot.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/copilot.md) | GitHub Copilot |
+| [docs/integrations/codex.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/codex.md) | Codex |
+| [docs/integrations/mcp.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/mcp.md) | MCP tools |
+| [docs/storage.md](https://github.com/jberdah/brainclaw/blob/master/docs/storage.md) | Storage model |
+| [docs/security.md](https://github.com/jberdah/brainclaw/blob/master/docs/security.md) | Security model |
+| [docs/review.md](https://github.com/jberdah/brainclaw/blob/master/docs/review.md) | Reflective review |
+| [docs/reputation.md](https://github.com/jberdah/brainclaw/blob/master/docs/reputation.md) | Reputation signals |
 
 ---
 

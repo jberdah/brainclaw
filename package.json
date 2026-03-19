@@ -7,17 +7,24 @@
     "brainclaw": "./dist/cli.js",
     "bclaw": "./dist/cli.js"
   },
+  "files": [
+    "dist/**/*.js",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc && node dist/cli.js",
     "build:test": "tsc -p tsconfig.test.json",
+    "pack:check": "node scripts/check-pack.mjs",
     "test": "npm run build:test && node scripts/run-tests.mjs default",
     "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
     "test:smoke": "npm run build:test && node scripts/run-tests.mjs smoke",
     "test:e2e": "npm run build:test && node scripts/run-tests.mjs e2e",
     "test:all": "npm run build:test && node scripts/run-tests.mjs all",
     "test:coverage": "npm run build:test && c8 --all --src dist-test/src --reporter=text-summary --reporter=lcov --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
-    "test:coverage:check": "npm run build:test && c8 --all --check-coverage --lines 55 --functions 60 --branches 65 --statements 55 --src dist-test/src --reporter=text-summary --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default"
+    "test:coverage:check": "npm run build:test && c8 --all --check-coverage --lines 55 --functions 60 --branches 65 --statements 55 --src dist-test/src --reporter=text-summary --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
+    "prepublishOnly": "npm run build && npm run pack:check"
   },
   "keywords": [
     "cli",
@@ -29,6 +36,17 @@
     "local-first"
   ],
   "license": "BUSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jberdah/brainclaw.git"
+  },
+  "homepage": "https://github.com/jberdah/brainclaw",
+  "bugs": {
+    "url": "https://github.com/jberdah/brainclaw/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "commander": "^13.1.0",
     "yaml": "^2.7.1",
