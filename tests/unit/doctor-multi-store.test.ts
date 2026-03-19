@@ -11,7 +11,9 @@ import { generateMarkdown } from '../../src/core/markdown.js';
 import { memoryPath, writeFileAtomic } from '../../src/core/io.js';
 
 function makeTmpDir(prefix = 'bclaw-doctor-ms-'): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  process.env.BRAINCLAW_STORE_BOUNDARY = dir;
+  return dir;
 }
 
 function initStore(dir: string, storeType?: 'workspace' | 'repo' | 'service'): void {

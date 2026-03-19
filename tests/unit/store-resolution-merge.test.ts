@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +9,10 @@ import { ensureMemoryDir } from '../../src/core/io.js';
 import { loadState, saveState } from '../../src/core/state.js';
 
 function makeTmpDir(prefix = 'bclaw-merge-'): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // Isolate from user store (~/.brainclaw/) — set boundary to temp root
+  process.env.BRAINCLAW_STORE_BOUNDARY = dir;
+  return dir;
 }
 
 function initStore(dir: string, projectName = 'test', projectId?: string): void {

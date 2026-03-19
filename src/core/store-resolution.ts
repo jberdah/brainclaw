@@ -43,7 +43,7 @@ export function resolveStoreChain(
   options: ResolveStoreChainOptions = {},
 ): StoreRef[] {
   const dirName = options.dirName ?? MEMORY_DIR;
-  const boundary = options.boundary ?? os.homedir();
+  const boundary = options.boundary ?? process.env.BRAINCLAW_STORE_BOUNDARY ?? os.homedir();
   const includePartial = options.includePartial ?? false;
 
   const results: StoreRef[] = [];
