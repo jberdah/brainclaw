@@ -45,18 +45,33 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 
 | Logo | Agent | Brainclaw fit | Best use today |
 |---|---|---|---|
-| ![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white) | **Claude Code** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
-| ![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white) | **Codex** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
-| ![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white) | **Cursor** | Strong fit | repo-native coordination with rules + MCP |
-| ![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white) | **OpenCode** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
-| ![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white) | **Windsurf** | Good fit | guided workflows with instructions, hooks, and MCP |
-| ![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white) | **Roo** | Good fit | workspace coordination with rules + MCP |
-| ![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white) | **Continue** | Good fit | context access and MCP-driven collaboration in editor workflows |
-| ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white) | **Antigravity / Gemini CLI** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
-| ![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white) | **Cline** | Functional fit | lightweight Brainclaw usage through rules + MCP |
-| ![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white) | **GitHub Copilot** | Supported fit | project awareness and shared instructions, with lighter workflow control |
+| [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
+| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
+| [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US) | **[Cursor](https://cursor.com/en-US)** | Strong fit | repo-native coordination with rules + MCP |
+| [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode) | **[OpenCode](https://github.com/opencode-ai/opencode)** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
+| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | Good fit | guided workflows with instructions, hooks, and MCP |
+| [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code) | **[Roo](https://github.com/RooCodeInc/Roo-Code)** | Good fit | workspace coordination with rules + MCP |
+| [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | Good fit | context access and MCP-driven collaboration in editor workflows |
+| [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
+| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | Functional fit | lightweight Brainclaw usage through rules + MCP |
+| [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | Supported fit | project awareness and shared instructions, with lighter workflow control |
 
 brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
+
+---
+
+## Platform Support
+
+brainclaw targets Node.js 20+ across major developer operating systems, but real-world support is not perfectly even yet.
+
+| Logo | Platform | Status today | Notes |
+|---|---|---|---|
+| [![Linux](https://img.shields.io/badge/Linux-111111?logo=linux&logoColor=white)](https://www.kernel.org/) | **[Linux](https://www.kernel.org/)** | Recommended | best-supported environment today; GitHub CI runs on Ubuntu with Node 20 and 22 |
+| [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/) | **[macOS](https://www.apple.com/macos/)** | Likely supported | Unix-like path and shell model should map well, but it is less exercised than Linux |
+| [![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows/) | **[Windows](https://www.microsoft.com/windows/)** | Supported with caveats | native support exists, but PATH, npm, SSH, and PowerShell quoting still create more friction than on Unix systems |
+| [![Windows + WSL2](https://img.shields.io/badge/Windows%20%2B%20WSL2-0078D4?logo=windows&logoColor=white)](https://learn.microsoft.com/windows/wsl/) | **[Windows + WSL2](https://learn.microsoft.com/windows/wsl/)** | Important, still maturing | Brainclaw detects this setup explicitly, but setup/install/store parity across Windows and WSL is not fully seamless yet |
+
+If you want the least surprising setup today, use Linux first. If you are on Windows, prefer a disciplined single-environment workflow and expect a few extra machine-specific fixes.
 
 ---
 
