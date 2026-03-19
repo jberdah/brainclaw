@@ -23,6 +23,7 @@ import {
   AgentTrustError,
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
+  resolveCurrentAgentName,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
@@ -43,6 +44,7 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
+import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import type { CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -1123,6 +1125,11 @@ export function handleMcpReadToolCall(
       enrichedContent = content + suggestions.join('\n');
     }
 
+    // Check for unseen events from other agents
+    const agentName = (args.agent as string) ?? resolveCurrentAgentName(cwd);
+    const unseenEvents = readUnseenEvents(agentName, cwd);
+    const notifications = buildNotificationSummary(unseenEvents);
+
     return {
       content: [{ type: 'text', text: enrichedContent || 'No relevant memory found.' }],
       structuredContent: {
@@ -1137,6 +1144,7 @@ export function handleMcpReadToolCall(
           name: tool.text.split('\n')[0],
           type: tool.tags.find((t) => t !== 'tool') || 'utility',
         })),
+        ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEvents.length } : {}),
       },
     };
   }

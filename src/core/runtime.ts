@@ -6,6 +6,7 @@ import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
+import { appendEvent } from './event-log.js';
 
 export interface RuntimeListOptions {
   agent?: string;
@@ -62,6 +63,7 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
     ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
     : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd, 'write'), `${note.id}.json`);
   saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
+  appendEvent({ action: 'create', item_type: 'runtime_note', item_id: note.id, agent: note.agent, agent_id: note.agent_id }, cwd);
   commitMemoryChange(`runtime note: ${note.note_type ?? 'note'} (${note.agent})`, cwd);
 }
 
