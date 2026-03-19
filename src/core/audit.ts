@@ -3,8 +3,24 @@ import path from 'node:path';
 import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
 import { logger } from './logger.js';
+import { appendEvent } from './event-log.js';
+import type { EventAction, EventItemType } from './event-log.js';
 
 const AUDIT_LOG_FILE = 'audit.log';
+
+/** Map audit actions to event-log actions (subset that overlaps) */
+const AUDIT_TO_EVENT_ACTION: Partial<Record<AuditAction, EventAction>> = {
+  create: 'create',
+  update: 'update',
+  delete: 'delete',
+  accept: 'accept',
+  reject: 'reject',
+  claim: 'claim',
+  release_claim: 'release_claim',
+  session_start: 'session_start',
+  session_end: 'session_end',
+  rollback: 'rollback',
+};
 
 export type AuditAction =
   | 'create'
@@ -52,6 +68,18 @@ export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAct
     // Remove undefined fields for compactness
     const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
     fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');
+
+    // Mirror to structured event log
+    const eventAction = AUDIT_TO_EVENT_ACTION[entry.action];
+    if (eventAction) {
+      appendEvent({
+        action: eventAction,
+        item_type: (entry.item_type as EventItemType) ?? 'state',
+        item_id: entry.item_id,
+        agent: entry.actor,
+        agent_id: entry.actor_id,
+      }, cwd);
+    }
   } catch (err) {
     logger.debug('Failed to write audit log entry:', err);
   }
