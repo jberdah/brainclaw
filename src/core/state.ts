@@ -3,6 +3,7 @@ import path from 'node:path';
 import { type ZodType, type ZodTypeDef } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
 import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
+import { commitMemoryChange } from './memory-git.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
 export function emptyState(): State {
   return {
@@ -92,4 +93,6 @@ export function saveState(state: State, cwd?: string): void {
   syncDirectory(resolveEntityDir('traps', effectiveCwd, 'write'), state.known_traps, 'trap');
   syncDirectory(resolveEntityDir('handoffs', effectiveCwd, 'write'), state.open_handoffs, 'handoff');
   syncDirectory(resolveEntityDir('plans', effectiveCwd, 'write'), state.plan_items, 'plan');
+
+  commitMemoryChange('state update', cwd);
 }

@@ -6,6 +6,7 @@ import { MEMORY_DIR, memoryExists, ensureMemoryDir, memoryPath, writeFileAtomic 
 import { emptyState, loadState, saveState } from '../core/state.js';
 import { defaultConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
+import { initMemoryRepo } from '../core/memory-git.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { scanProject, upsertProject } from '../core/global-registry.js';
 import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
@@ -238,6 +239,11 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log(`⚠  WSL detected (${wsl.distro}). brainclaw is installed in this WSL environment only.`);
     console.log(`   To use brainclaw from a Windows terminal (PowerShell/cmd), run inside this project:`);
     console.log(`     npm link    (in PowerShell, with Node.js for Windows)`);
+  }
+
+  // Initialize internal git repo for memory versioning
+  if (initMemoryRepo(cwd)) {
+    console.log('✔ Initialized memory git repo for versioning');
   }
 
   console.log('');

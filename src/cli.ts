@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
 import { runUpgrade } from './commands/upgrade.js';
+import { getMemoryLog, rollbackMemory, hasMemoryRepo } from './core/memory-git.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
 import { buildAgentInventory, saveAgentInventory, loadAgentInventory, renderAgentInventorySummary } from './core/agent-inventory.js';
 import { scanAndRegister, scanProject, upsertProject, loadGlobalRegistry, renderGlobalRegistrySummary } from './core/global-registry.js';
@@ -122,6 +123,41 @@ program
   .option('-y, --yes', 'Accept all defaults non-interactively')
   .action(async (options) => {
     await runSetup(options);
+  });
+
+// --- memory-log ---
+program
+  .command('memory-log')
+  .description('Show recent memory change history (from internal git repo)')
+  .option('-n, --limit <count>', 'Number of entries to show', '20')
+  .action((options) => {
+    const entries = getMemoryLog(parseInt(options.limit, 10));
+    if (entries.length === 0) {
+      console.log('No memory history available. Run `brainclaw init --force` to enable memory versioning.');
+      return;
+    }
+    console.log(`Memory history (${entries.length} entries):\n`);
+    for (const entry of entries) {
+      console.log(`  ${entry}`);
+    }
+  });
+
+// --- memory-rollback ---
+program
+  .command('memory-rollback <ref>')
+  .description('Rollback entire memory to a previous git snapshot (use memory-log to find refs)')
+  .action((ref) => {
+    if (!hasMemoryRepo()) {
+      console.error('Error: no memory git repo. Run `brainclaw init --force` to enable.');
+      process.exit(1);
+    }
+    const success = rollbackMemory(ref);
+    if (success) {
+      console.log(`✔ Memory rolled back to ${ref}`);
+    } else {
+      console.error(`Error: failed to rollback to '${ref}'. Check memory-log for valid refs.`);
+      process.exit(1);
+    }
   });
 
 // --- upgrade ---

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadState, saveState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
+import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
 
 export interface UpgradeOptions {
   cwd?: string;
@@ -138,6 +139,10 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
       removedDirs += removeEmptyDirsRecursive(legacyDir);
     }
   }
+
+  // Ensure memory git repo exists and commit the upgrade
+  initMemoryRepo(cwd);
+  commitMemoryChange(`upgrade: ${movedFiles} files moved, ${outdated.length} schemas migrated`, cwd);
 
   const parts = [`${movedFiles} file(s) moved`, `${outdated.length} schema(s) migrated`];
   if (removedDirs > 0) parts.push(`${removedDirs} empty legacy dir(s) removed`);
