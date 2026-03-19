@@ -38,6 +38,7 @@ test_spawn2.txt
 test_spawn.cjs
 test_spawn_tmp.cjs
 test_spawn_tmp2.cjs
+tmp_audit_windsurf/
 full_test_result.txt
 coverage/
 
@@ -59,9 +60,14 @@ CLAUDE.md
 .windsurfrules
 
 # Local Claude / MCP integration files
+.claude/settings.json
 .claude/settings.local.json
 .claude/commands/brainclaw.md
+.continue/config.json
+.roo/mcp.json
+.vscode/cline_mcp_settings.json
 .mcp.json
+opencode.json
 
 # Local installable Brainclaw releases
 .releases/

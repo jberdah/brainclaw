@@ -16,6 +16,8 @@ import {
   ensureCodexMcpConfig,
   writeDetectedAgentAutoConfig,
   describeAutoConfigWrite,
+  ensureGitignoreEntries,
+  collectWorkspaceGitignoreEntries,
 } from '../core/agent-files.js';
 import { MEMORY_DIR, memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
 import { loadConfig, saveConfig, defaultConfig } from '../core/config.js';
@@ -290,8 +292,12 @@ export async function initReposAndConfigureAgents(
   }
 
   for (const repo of selectedRepos) {
+    const gitignoreEntries = new Set<string>();
     for (const agentName of selectedAgents) {
       const configs = writeDetectedAgentAutoConfig(agentName, repo.path, env);
+      for (const entry of collectWorkspaceGitignoreEntries(repo.path, configs)) {
+        gitignoreEntries.add(entry);
+      }
       for (const config of configs) {
         const msg = describeAutoConfigWrite(config);
         if (msg) {
@@ -301,12 +307,19 @@ export async function initReposAndConfigureAgents(
       }
       const hooks = writeDetectedAgentHooks(agentName, repo.name, repo.path);
       for (const hook of hooks) {
+        gitignoreEntries.add(hook.relativePath);
+      }
+      for (const hook of hooks) {
         if (hook.created) {
           const msg = `✔ Created hook at ${hook.relativePath}`;
           console.log(`  ${msg}`);
           configActions.push(msg);
         }
       }
+    }
+    if (gitignoreEntries.size > 0) {
+      ensureGitignoreEntries(repo.path, [...gitignoreEntries]);
+      console.log(`  ✔ Updated .gitignore with generated agent files (${[...gitignoreEntries].join(', ')})`);
     }
   }
 

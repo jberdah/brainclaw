@@ -113,4 +113,21 @@ describe('setup/init guardrails', () => {
     assert.notEqual(nestedInit.exitCode, 0);
     assert.match(nestedInit.stderr, /inside an existing project memory store/i);
   });
+
+  it('setup adds generated workspace integration files to .gitignore', () => {
+    const setupResult = run(['setup', '--yes', '--roots', dir, '--agents', 'claude-code,roo,continue,cline,opencode'], dir, {
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '0',
+    });
+    assert.equal(setupResult.exitCode, 0, setupResult.stderr);
+
+    const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
+    assert.match(gitignore, /\.claude\/commands\/brainclaw\.md/);
+    assert.match(gitignore, /\.claude\/settings\.local\.json/);
+    assert.match(gitignore, /\.mcp\.json/);
+    assert.match(gitignore, /\.roo\/mcp\.json/);
+    assert.match(gitignore, /\.continue\/config\.json/);
+    assert.match(gitignore, /\.vscode\/cline_mcp_settings\.json/);
+    assert.match(gitignore, /opencode\.json/);
+    assert.doesNotMatch(gitignore, /package\.json/);
+  });
 });

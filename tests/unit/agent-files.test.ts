@@ -14,6 +14,7 @@ import {
   ensureCursorMdc,
   ensureAgentFiles,
   ensureGitignoreEntries,
+  collectWorkspaceGitignoreEntries,
   ensureWindsurfMcpConfig,
   ensureClaudeCodeMcpConfig,
   ensureClaudeCodeCommand,
@@ -187,6 +188,34 @@ describe('core/agent-files — ensureGitignoreEntries', () => {
       assert.equal(count, 1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('core/agent-files — collectWorkspaceGitignoreEntries', () => {
+  it('keeps only workspace-local generated files and excludes package.json', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const entries = collectWorkspaceGitignoreEntries(dir, [
+        {
+          filePath: path.join(dir, '.claude', 'settings.local.json'),
+          relativePath: '.claude/settings.local.json',
+        },
+        {
+          filePath: path.join(homeDir, '.cursor', 'mcp.json'),
+          relativePath: '.cursor/mcp.json',
+        },
+        {
+          filePath: path.join(dir, 'package.json'),
+          relativePath: 'package.json',
+        },
+      ]);
+
+      assert.deepEqual(entries, ['.claude/settings.local.json']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 });

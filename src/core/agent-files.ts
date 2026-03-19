@@ -123,6 +123,27 @@ export function ensureGitignoreEntries(cwd: string, entries: string[]): void {
   fs.writeFileSync(gitignorePath, next, 'utf-8');
 }
 
+export function collectWorkspaceGitignoreEntries(
+  cwd: string,
+  results: Array<Pick<AutoConfigWriteResult, 'filePath' | 'relativePath'>>,
+): string[] {
+  const workspaceRoot = path.resolve(cwd);
+  const collected = new Set<string>();
+
+  for (const result of results) {
+    if (!result.relativePath) continue;
+    if (result.relativePath === 'package.json') continue;
+
+    const expectedWorkspacePath = path.resolve(workspaceRoot, result.relativePath);
+    const actualPath = path.resolve(result.filePath);
+    if (actualPath !== expectedWorkspacePath) continue;
+
+    collected.add(result.relativePath.replace(/\\/g, '/'));
+  }
+
+  return [...collected];
+}
+
 // --- Agent export target registry ---
 
 export type ExportFormat =
