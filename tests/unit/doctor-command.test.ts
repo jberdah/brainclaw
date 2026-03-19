@@ -202,7 +202,7 @@ describe('commands/doctor', () => {
       memory_version: 'stale-version',
     }, workspace.dir);
 
-    const runtimeDir = path.join(workspace.dir, '.brainclaw', 'runtime', 'openclaw');
+    const runtimeDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime', 'openclaw');
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.writeFileSync(path.join(runtimeDir, 'doctor-events.json'), JSON.stringify({
       events: [
@@ -242,7 +242,7 @@ describe('commands/doctor', () => {
   });
 
   it('reports outdated and invalid documents with migration-check enabled', () => {
-    const claimsDir = path.join(workspace.dir, '.brainclaw', 'claims');
+    const claimsDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     fs.mkdirSync(claimsDir, { recursive: true });
     fs.writeFileSync(path.join(claimsDir, 'clm_legacy.json'), JSON.stringify({
       id: 'clm_legacy',
@@ -475,3 +475,4 @@ describe('doctor — handoff backlog check', () => {
     assert.equal(check.status, 'ok');
   });
 });
+

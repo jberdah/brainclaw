@@ -25,7 +25,7 @@ describe('core/json-store', () => {
 
   it('supports CRUD and persists schema_version on save', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-store-crud-' });
-    const dir = path.join(workspace.dir, '.brainclaw', 'claims');
+    const dir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     const store = createStore(dir);
 
     const claim: Claim = {
@@ -50,7 +50,7 @@ describe('core/json-store', () => {
 
   it('lists legacy documents, migrates them in memory, and skips malformed files', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-store-list-' });
-    const dir = path.join(workspace.dir, '.brainclaw', 'claims');
+    const dir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     fs.mkdirSync(dir, { recursive: true });
 
     fs.writeFileSync(path.join(dir, 'clm_old.json'), JSON.stringify({
@@ -73,7 +73,7 @@ describe('core/json-store', () => {
 
   it('throws on unsupported schema versions', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-store-future-' });
-    const dir = path.join(workspace.dir, '.brainclaw', 'claims');
+    const dir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'clm_future.json'), JSON.stringify({
       schema_version: 99,
@@ -89,3 +89,4 @@ describe('core/json-store', () => {
     assert.throws(() => store.load('clm_future'));
   });
 });
+

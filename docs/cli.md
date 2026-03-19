@@ -1160,6 +1160,11 @@ brainclaw mcp
 | `bclaw_get_agent_board` | Live plan + claim board with active sessions |
 | `bclaw_search` | Full-text BM25 search across all memory items |
 | `bclaw_estimation_report` | Estimation accuracy report for completed plans |
+| `bclaw_list_plans` | List plan items with the same filters as `brainclaw list-plans` |
+| `bclaw_list_claims` | List claims with the same filters as `brainclaw list-claims` |
+| `bclaw_list_agents` | List registered agents, optionally with bounded reputation summaries |
+| `bclaw_list_instructions` | List raw or resolved shared instructions |
+| `bclaw_list_candidates` | List pending or archived review candidates |
 
 **Write tools** (contributor trust or above):
 

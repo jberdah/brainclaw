@@ -220,6 +220,7 @@ type JsonObject = Record<string, unknown>;
 const ALL_BCLAW_TOOLS = [
   'bclaw_get_context', 'bclaw_bootstrap', 'bclaw_get_execution_context',
   'bclaw_read_handoff', 'bclaw_get_agent_board', 'bclaw_search', 'bclaw_estimation_report',
+  'bclaw_list_plans', 'bclaw_list_claims', 'bclaw_list_agents', 'bclaw_list_instructions', 'bclaw_list_candidates',
   'bclaw_write_note', 'bclaw_create_candidate', 'bclaw_accept', 'bclaw_reject',
   'bclaw_claim', 'bclaw_release_claim', 'bclaw_session_start', 'bclaw_session_end',
   'bclaw_create_plan', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',

@@ -27,8 +27,10 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       HOME: cwd,
       USERPROFILE: cwd,
     },
@@ -64,8 +66,8 @@ describe('Shared plan', () => {
     assert.equal(res.exitCode, 0);
     assert.ok(res.stdout.includes('Plan item added'));
 
-    const planFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'plans')).filter(f => f.endsWith('.json'));
-    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'plans', planFiles[0]), 'utf-8'));
+    const planFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'plans')).filter(f => f.endsWith('.json'));
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'plans', planFiles[0]), 'utf-8'));
     assert.equal(plan.priority, 'high');
     assert.equal(plan.assignee, 'copilot');
     assert.equal(plan.project, 'agent-platform');
@@ -89,8 +91,8 @@ describe('Shared plan', () => {
     const res = run(['update-plan', planId, '--status', 'in_progress', '--assignee', 'alice'], dir);
     assert.equal(res.exitCode, 0);
 
-    const [planFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'plans')).filter(f => f.endsWith('.json'));
-    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'plans', planFile), 'utf-8'));
+    const [planFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'plans')).filter(f => f.endsWith('.json'));
+    const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'plans', planFile), 'utf-8'));
     assert.equal(plan.status, 'in_progress');
     assert.equal(plan.assignee, 'alice');
   });
@@ -141,3 +143,4 @@ describe('Shared plan', () => {
     }
   });
 });
+

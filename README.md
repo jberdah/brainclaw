@@ -42,6 +42,7 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 ## Quick example
 
 ```bash
+npx brainclaw setup --yes
 npx brainclaw init
 
 npx brainclaw decision "OAuth migration now goes through auth-gateway" --tag auth
@@ -76,6 +77,7 @@ bclaw status
 ## Quickstart
 
 ```bash
+brainclaw setup --yes
 brainclaw init
 brainclaw decision "OAuth migration now goes through auth-gateway" --tag auth
 brainclaw constraint "Payments module frozen until 2026-04-01" --tag payments
@@ -94,14 +96,15 @@ brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline,
 
 Typical flow:
 
-1. `brainclaw init` — seeds workspace memory, writes to the detected agent's native instruction file
-2. record constraints, decisions, traps, and plans
-3. let agents read brainclaw context before editing
-4. use claims to reduce collisions
-5. hand work off explicitly when needed
-6. keep shared state visible across sessions
+1. `brainclaw setup` — machine-level bootstrap for agent integrations and global prerequisites
+2. `brainclaw init` — seeds workspace memory, writes to the detected agent's native instruction file
+3. record constraints, decisions, traps, and plans
+4. let agents read brainclaw context before editing
+5. use claims to reduce collisions
+6. hand work off explicitly when needed
+7. keep shared state visible across sessions
 
-brainclaw can also expose collaboration views through MCP-readable tools.
+brainclaw can also expose collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates.
 
 ---
 

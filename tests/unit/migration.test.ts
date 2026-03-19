@@ -101,7 +101,7 @@ describe('core/migration', () => {
   it('reports outdated and invalid versioned documents during scanning', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-migration-scan-' });
 
-    const claimsDir = path.join(workspace.dir, '.brainclaw', 'claims');
+    const claimsDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     fs.mkdirSync(claimsDir, { recursive: true });
     const legacyClaim: Claim = {
       id: 'clm_legacy',
@@ -134,3 +134,4 @@ describe('core/migration', () => {
     );
   });
 });
+

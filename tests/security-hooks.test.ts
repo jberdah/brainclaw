@@ -17,7 +17,13 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser' },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
+    },
   });
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitCode: result.status ?? 1 };
 }
@@ -59,7 +65,7 @@ describe('Security: strict mode on automated imports', () => {
       'should emit Blocked message'
     );
 
-    const inboxDir = path.join(dir, '.brainclaw', 'inbox');
+    const inboxDir = path.join(dir, '.brainclaw', 'coordination', 'inbox');
     const candidates = fs.existsSync(inboxDir)
       ? fs.readdirSync(inboxDir).filter(f => f.endsWith('.json'))
       : [];
@@ -189,4 +195,5 @@ describe('Security: install-hooks', () => {
     assert.ok(res.stdout.includes('installed'));
   });
 });
+
 

@@ -23,7 +23,13 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser' },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -59,8 +65,8 @@ describe('update-handoff command', () => {
     assert.ok(updateRes.stdout.includes('Handoff updated'), updateRes.stdout);
     assert.ok(updateRes.stdout.includes('accepted'), updateRes.stdout);
 
-    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'handoffs')).filter(f => f.endsWith('.json'));
-    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'handoffs', hFile), 'utf-8'));
+    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
+    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hFile), 'utf-8'));
     assert.equal(handoff.status, 'accepted');
   });
 
@@ -71,8 +77,8 @@ describe('update-handoff command', () => {
     const updateRes = run(['update-handoff', handoffId, '--to', 'gemini'], dir);
     assert.equal(updateRes.exitCode, 0, updateRes.stderr);
 
-    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'handoffs')).filter(f => f.endsWith('.json'));
-    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'handoffs', hFile), 'utf-8'));
+    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
+    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hFile), 'utf-8'));
     assert.equal(handoff.to, 'gemini');
   });
 
@@ -82,8 +88,8 @@ describe('update-handoff command', () => {
 
     run(['update-handoff', handoffId, '--status', 'closed'], dir);
 
-    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'handoffs')).filter(f => f.endsWith('.json'));
-    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'handoffs', hFile), 'utf-8'));
+    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
+    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hFile), 'utf-8'));
     assert.equal(handoff.status, 'closed');
   });
 
@@ -93,3 +99,4 @@ describe('update-handoff command', () => {
     assert.ok(res.stderr.includes('not found'), res.stderr);
   });
 });
+

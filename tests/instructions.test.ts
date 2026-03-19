@@ -21,8 +21,10 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       HOME: cwd,
       USERPROFILE: cwd,
     },
@@ -54,7 +56,7 @@ describe('Layered instructions', () => {
     run(['instruction', 'Use auth gateway conventions', '--layer', 'project', '--project', 'auth'], dir);
     run(['instruction', 'OpenClaw must surface blockers', '--layer', 'agent', '--agent', 'openclaw'], dir);
 
-    const entries = fs.readdirSync(path.join(dir, '.brainclaw', 'instructions')).filter((name) => name.endsWith('.json'));
+    const entries = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'instructions')).filter((name) => name.endsWith('.json'));
     assert.equal(entries.length, 3);
   });
 
@@ -77,9 +79,9 @@ describe('Layered instructions', () => {
     const res = run(['instruction', 'Current agent must capture blockers', '--layer', 'agent'], dir);
     assert.equal(res.exitCode, 0);
 
-    const entries = fs.readdirSync(path.join(dir, '.brainclaw', 'instructions')).filter((name) => name.endsWith('.json'));
+    const entries = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'instructions')).filter((name) => name.endsWith('.json'));
     assert.equal(entries.length, 1);
-    const entry = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'instructions', entries[0]), 'utf-8'));
+    const entry = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'instructions', entries[0]), 'utf-8'));
     assert.equal(entry.scope, 'testuser');
   });
 
@@ -114,3 +116,4 @@ describe('Layered instructions', () => {
     assert.ok(res.stdout.includes('Multiple active instructions share the same layer/scope') || res.stderr.includes('Multiple active instructions share the same layer/scope'));
   });
 });
+

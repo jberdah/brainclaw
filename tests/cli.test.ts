@@ -29,8 +29,10 @@ function run(
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       // Isolate home directory so ~/.codex (and similar) don't trigger AI agent detection
       HOME: cwd,
       USERPROFILE: cwd,
@@ -95,9 +97,9 @@ describe('brainclaw CLI', () => {
       const res = run(['init', '-y'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Initialized project memory'));
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'decisions')));
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'plans')));
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'instructions')));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'memory', 'decisions')));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'plans')));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'memory', 'instructions')));
       assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'project.md')));
       assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')));
     });
@@ -211,9 +213,9 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Decision added'));
 
-      const decFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'decisions')).filter(f => f.endsWith('.json'));
+      const decFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
       assert.equal(decFiles.length, 1);
-      const dPath = path.join(dir, '.brainclaw', 'decisions', decFiles[0]);
+      const dPath = path.join(dir, '.brainclaw', 'memory', 'decisions', decFiles[0]);
       assert.ok(fs.existsSync(dPath));
       const decision = JSON.parse(fs.readFileSync(dPath, 'utf-8'));
       assert.equal(decision.text, 'Use PostgreSQL for persistence');
@@ -224,15 +226,15 @@ describe('brainclaw CLI', () => {
       run(['init', '-y'], dir);
       run(['decision', 'First'], dir);
       run(['decision', 'Second'], dir);
-      const decFilesAll = fs.readdirSync(path.join(dir, '.brainclaw', 'decisions')).filter(f => f.endsWith('.json'));
+      const decFilesAll = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
       assert.equal(decFilesAll.length, 2);
     });
 
     it('records related path', () => {
       run(['init', '-y'], dir);
       run(['decision', 'Refactor auth', '--path', 'src/auth'], dir);
-      const [decFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'decisions')).filter(f => f.endsWith('.json'));
-      const decision = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'decisions', decFile), 'utf-8'));
+      const [decFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
+      const decision = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'decisions', decFile), 'utf-8'));
       assert.deepEqual(decision.related_paths, ['src/auth']);
     });
   });
@@ -244,8 +246,8 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Constraint added'));
 
-      const [cstFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'constraints')).filter(f => f.endsWith('.json'));
-      const cPath = path.join(dir, '.brainclaw', 'constraints', cstFile);
+      const [cstFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'constraints')).filter(f => f.endsWith('.json'));
+      const cPath = path.join(dir, '.brainclaw', 'memory', 'constraints', cstFile);
       assert.ok(fs.existsSync(cPath));
       const constraint = JSON.parse(fs.readFileSync(cPath, 'utf-8'));
       assert.equal(constraint.status, 'active');
@@ -259,16 +261,16 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Trap added'));
 
-      const [trpFile1] = fs.readdirSync(path.join(dir, '.brainclaw', 'traps')).filter(f => f.endsWith('.json'));
-      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'traps', trpFile1), 'utf-8'));
+      const [trpFile1] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
+      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFile1), 'utf-8'));
       assert.equal(trap.severity, 'high');
     });
 
     it('defaults severity to medium', () => {
       run(['init', '-y'], dir);
       run(['trap', 'Something weird'], dir);
-      const [trpFile2] = fs.readdirSync(path.join(dir, '.brainclaw', 'traps')).filter(f => f.endsWith('.json'));
-      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'traps', trpFile2), 'utf-8'));
+      const [trpFile2] = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
+      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFile2), 'utf-8'));
       assert.equal(trap.severity, 'medium');
     });
   });
@@ -279,8 +281,8 @@ describe('brainclaw CLI', () => {
       const res = run(['handoff', '--from', 'alice', '--to', 'bob', 'Review PR #42', '--tag', 'review'], dir);
       assert.equal(res.exitCode, 0);
 
-      const [hndFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'handoffs')).filter(f => f.endsWith('.json'));
-      const hPath = path.join(dir, '.brainclaw', 'handoffs', hndFile);
+      const [hndFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
+      const hPath = path.join(dir, '.brainclaw', 'coordination', 'handoffs', hndFile);
       const handoff = JSON.parse(fs.readFileSync(hPath, 'utf-8'));
       assert.equal(handoff.from, 'alice');
       assert.equal(handoff.to, 'bob');
@@ -337,11 +339,12 @@ describe('brainclaw CLI', () => {
         'utf-8',
       );
 
+      run(['set-trust', 'testuser', '--level', 'contributor'], dir);
       const reflectRes1 = run(['reflect', 'Useful proposal', '--type', 'decision'], dir);
       const cndId1 = extractId(reflectRes1.stdout);
-      run(['set-trust', 'testuser', '--level', 'curator'], dir);
       run(['star-candidate', cndId1, '--by', 'claude'], dir);
       run(['use-candidate', cndId1, '--by', 'claude', '--context', 'auth rollout'], dir);
+      run(['set-trust', 'testuser', '--level', 'curator'], dir);
       run(['accept', cndId1, '--by', 'testuser'], dir);
       run(['runtime-note', 'Tracked useful runtime observation'], dir);
 
@@ -597,7 +600,9 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(fs.existsSync(path.join(dir, '.windsurfrules')));
       assert.ok(fs.existsSync(path.join(dir, '.codeium', 'windsurf', 'mcp_config.json')));
-      assert.ok(fs.readFileSync(path.join(dir, '.windsurfrules'), 'utf-8').includes('## Brainclaw session hygiene'));
+      const windsurfRules = fs.readFileSync(path.join(dir, '.windsurfrules'), 'utf-8');
+      assert.ok(windsurfRules.includes('## Brainclaw — required coordination'));
+      assert.ok(windsurfRules.includes('brainclaw context'));
       assert.ok(!res.stdout.includes('Session hook written to .windsurfrules'));
     });
 
@@ -620,13 +625,14 @@ describe('brainclaw CLI', () => {
       run(['init', '-y'], dir);
       const configPath = path.join(dir, '.brainclaw', 'config.yaml');
       const manifestPath = path.join(dir, '.releases', 'brainclaw-local.json');
+      const latestInstallableVersion = '99.0.0';
       fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
       fs.writeFileSync(manifestPath, JSON.stringify({
         version: 1,
         channel: 'local-pack',
         package_name: 'brainclaw',
-        latest_installable_version: '0.6.1',
-        artifact_path: './brainclaw-0.6.1.tgz',
+        latest_installable_version: latestInstallableVersion,
+        artifact_path: `./brainclaw-${latestInstallableVersion}.tgz`,
         release_notes: 'Local tarball ready for self-upgrade.',
       }, null, 2), 'utf-8');
 
@@ -639,8 +645,8 @@ describe('brainclaw CLI', () => {
 
       const res = run(['version', '--check'], dir);
       assert.equal(res.exitCode, 0);
-      assert.ok(res.stdout.includes('A newer installable brainclaw build is available: 0.6.1'));
-      assert.ok(res.stdout.includes('Latest installable: 0.6.1'));
+      assert.ok(res.stdout.includes(`A newer installable brainclaw build is available: ${latestInstallableVersion}`));
+      assert.ok(res.stdout.includes(`Latest installable: ${latestInstallableVersion}`));
       assert.ok(res.stdout.includes('Install command:'));
     });
 
@@ -719,4 +725,5 @@ describe('brainclaw CLI', () => {
     });
   });
 });
+
 

@@ -47,7 +47,12 @@ export function runEnableAgent(agentName: string, options: EnableAgentOptions = 
   saveConfig(config, cwd);
 
   const exportResult = writeAgentExportForAgent(agentName, cwd);
-  const hookResults = writeDetectedAgentHooks(agentName, config.project_name, cwd);
+  // Windsurf uses .windsurfrules for both native rules and session hooks.
+  // Avoid clobbering the exported rules file during activation.
+  const hookResults = agentName === 'windsurf'
+    ? []
+    : writeDetectedAgentHooks(agentName, config.project_name, cwd)
+      .filter((hook) => hook.relativePath !== exportResult?.relativePath);
   const autoConfigResults = writeDetectedAgentAutoConfig(agentName, cwd);
   const messages = autoConfigResults.map(describeAutoConfigWrite).filter((message): message is string => Boolean(message));
 

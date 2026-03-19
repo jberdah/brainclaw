@@ -18,9 +18,17 @@ That is valuable for:
 | Tool | Purpose |
 |---|---|
 | `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
+| `bclaw_bootstrap` | Derive brownfield bootstrap signals when memory is still sparse |
+| `bclaw_get_execution_context` | Inspect local execution context and agent tooling |
 | `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
 | `bclaw_read_handoff` | Read active handoffs |
 | `bclaw_get_agent_board` | Coordination snapshot |
+| `bclaw_list_plans` | Structured plan listing with CLI-equivalent filters |
+| `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
+| `bclaw_list_agents` | Registered agent inventory, optionally with bounded reputation |
+| `bclaw_list_instructions` | Raw or resolved instruction listing |
+| `bclaw_list_candidates` | Pending or archived review queue listing |
+| `bclaw_search` | Full-text search across memory |
 
 ## Recommended use
 
@@ -28,6 +36,7 @@ Use MCP as the dynamic access path for:
 
 - fresh context
 - runtime coordination views
+- structured list views for plans, claims, agents, instructions, and review queues
 - shared board state
 - write operations that should preserve session continuity
 

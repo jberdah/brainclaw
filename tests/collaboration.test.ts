@@ -34,8 +34,10 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       HOME: cwd,
       USERPROFILE: cwd,
       ...envOverrides,
@@ -129,7 +131,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.match(res.stdout, /\[clm_[a-f0-9]+\]/);
       assert.ok(res.stdout.includes('Claim created'));
 
-      const claimsDir = path.join(dir, '.brainclaw', 'claims');
+      const claimsDir = path.join(dir, '.brainclaw', 'coordination', 'claims');
       const files = fs.readdirSync(claimsDir).filter(f => f.endsWith('.json'));
       assert.equal(files.length, 1);
 
@@ -145,8 +147,8 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('testuser → src/current/'));
 
-      const [clm2File] = fs.readdirSync(path.join(dir, '.brainclaw', 'claims')).filter(f => f.endsWith('.json'));
-      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'claims', clm2File), 'utf-8'));
+      const [clm2File] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'claims')).filter(f => f.endsWith('.json'));
+      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'claims', clm2File), 'utf-8'));
       assert.equal(claim.agent, 'testuser');
       assert.match(claim.agent_id, /^agt_[a-f0-9]+$/);
       assert.match(claim.project_id, /^prj_[a-f0-9]+$/);
@@ -174,13 +176,13 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes(`plan ${planId}`));
 
-      const [clmFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'claims')).filter(f => f.endsWith('.json'));
-      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'claims', clmFile), 'utf-8'));
+      const [clmFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'claims')).filter(f => f.endsWith('.json'));
+      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'claims', clmFile), 'utf-8'));
       assert.equal(claim.plan_id, planId);
       assert.equal(claim.project, 'auth');
 
-      const [plnFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'plans')).filter(f => f.endsWith('.json'));
-      const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'plans', plnFile), 'utf-8'));
+      const [plnFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'plans')).filter(f => f.endsWith('.json'));
+      const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'plans', plnFile), 'utf-8'));
       assert.equal(plan.assignee, 'copilot');
       assert.equal(plan.status, 'in_progress');
     });
@@ -229,13 +231,13 @@ describe('Git-backed Collaboration (Phase 2)', () => {
   describe('release-claim', () => {
     it('releases an active claim', () => {
       run(['claim', 'Work', '--agent', 'copilot', '--scope', 'src/'], dir);
-      const [clmFile3] = fs.readdirSync(path.join(dir, '.brainclaw', 'claims')).filter(f => f.endsWith('.json'));
+      const [clmFile3] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'claims')).filter(f => f.endsWith('.json'));
       const clmId3 = clmFile3.replace('.json', '');
       const res = run(['release-claim', clmId3], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('released'));
 
-      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'claims', clmFile3), 'utf-8'));
+      const claim = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'claims', clmFile3), 'utf-8'));
       assert.equal(claim.status, 'released');
       assert.ok(claim.released_at);
     });
@@ -249,8 +251,8 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       const res = run(['release-claim', clm3Id, '--plan-status', 'done'], dir);
       assert.equal(res.exitCode, 0);
 
-      const [plnFile3] = fs.readdirSync(path.join(dir, '.brainclaw', 'plans')).filter(f => f.endsWith('.json'));
-      const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'plans', plnFile3), 'utf-8'));
+      const [plnFile3] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'plans')).filter(f => f.endsWith('.json'));
+      const plan = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'plans', plnFile3), 'utf-8'));
       assert.equal(plan.status, 'done');
       assert.equal(plan.assignee, undefined);
     });
@@ -267,7 +269,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.equal(res.exitCode, 0);
       assert.match(res.stdout, /\[rtn_[a-f0-9]+\]/);
 
-      const noteDir = path.join(dir, '.brainclaw', 'runtime', 'codex');
+      const noteDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'codex');
       assert.ok(fs.existsSync(noteDir));
       const files = fs.readdirSync(noteDir).filter(f => f.endsWith('.json'));
       assert.equal(files.length, 1);
@@ -283,8 +285,8 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('(testuser, shared)'));
 
-      const [rtnFile2] = fs.readdirSync(path.join(dir, '.brainclaw', 'runtime', 'testuser')).filter(f => f.endsWith('.json'));
-      const note = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'runtime', 'testuser', rtnFile2), 'utf-8'));
+      const [rtnFile2] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'testuser')).filter(f => f.endsWith('.json'));
+      const note = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'testuser', rtnFile2), 'utf-8'));
       assert.equal(note.agent, 'testuser');
       assert.match(note.agent_id, /^agt_[a-f0-9]+$/);
       assert.match(note.project_id, /^prj_[a-f0-9]+$/);
@@ -296,8 +298,8 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       run(['runtime-note', 'Note A', '--agent', 'copilot'], dir);
       run(['runtime-note', 'Note B', '--agent', 'claude'], dir);
 
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'runtime', 'copilot')));
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'runtime', 'claude')));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'copilot')));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'claude')));
     });
 
     it('links runtime notes to a plan', () => {
@@ -305,8 +307,8 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       const pln4Id = extractId(planRes4.stdout);
       run(['runtime-note', 'Started auth work', '--agent', 'copilot', '--plan', pln4Id], dir);
 
-      const [rtnFile4] = fs.readdirSync(path.join(dir, '.brainclaw', 'runtime', 'copilot')).filter(f => f.endsWith('.json'));
-      const note = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'runtime', 'copilot', rtnFile4), 'utf-8'));
+      const [rtnFile4] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'copilot')).filter(f => f.endsWith('.json'));
+      const note = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'runtime', 'copilot', rtnFile4), 'utf-8'));
       assert.equal(note.plan_id, pln4Id);
       assert.equal(note.project, 'auth');
     });
@@ -314,7 +316,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
     it('stores machine-local runtime notes under the current host', () => {
       run(['runtime-note', 'Machine fix', '--agent', 'copilot', '--visibility', 'machine'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
 
-      const hostRtnDir = path.join(dir, '.brainclaw', 'runtime-hosts', 'host-a', 'copilot');
+      const hostRtnDir = path.join(dir, '.brainclaw', 'coordination', 'runtime-hosts', 'host-a', 'copilot');
       const [rtnHostFile] = fs.readdirSync(hostRtnDir).filter(f => f.endsWith('.json'));
       const notePath = path.join(hostRtnDir, rtnHostFile);
       assert.ok(fs.existsSync(notePath));
@@ -326,10 +328,10 @@ describe('Git-backed Collaboration (Phase 2)', () => {
     it('stores machine-local traps outside canonical shared traps', () => {
       run(['trap', 'Windows npm path workaround', '--visibility', 'machine', '--tag', 'windows'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
 
-      const hostTrapDir = path.join(dir, '.brainclaw', 'traps-hosts', 'host-a');
+      const hostTrapDir = path.join(dir, '.brainclaw', 'memory', 'traps-hosts', 'host-a');
       const localTrapFiles = fs.readdirSync(hostTrapDir).filter(f => f.endsWith('.json'));
       assert.equal(localTrapFiles.length, 1);
-      const sharedTrapsDir = path.join(dir, '.brainclaw', 'traps');
+      const sharedTrapsDir = path.join(dir, '.brainclaw', 'memory', 'traps');
       const sharedTrapFiles = fs.existsSync(sharedTrapsDir) ? fs.readdirSync(sharedTrapsDir).filter(f => f.endsWith('.json')) : [];
       assert.equal(sharedTrapFiles.length, 0);
     });
@@ -498,7 +500,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       run(['runtime-note', 'Scoped runtime note', '--agent', 'copilot'], dir);
       const res = run(['sync', '--scope', 'runtime', '--summary-only'], dir);
       assert.equal(res.exitCode, 0);
-      assert.ok(res.stdout.includes('Sync scope: .brainclaw/runtime/'));
+      assert.ok(res.stdout.includes('Sync scope: .brainclaw/coordination/runtime/'));
     });
 
     it('keeps machine-local runtime outside the default sync scope', () => {
@@ -509,7 +511,7 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       const res = run(['sync', '--summary-only'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
       assert.ok(res.stdout.includes('Runtime notes: 1 shared, 1 machine-local'));
       assert.ok(res.stdout.includes('Local traps: 1 machine-local'));
-      assert.ok(!res.stdout.includes('.brainclaw/runtime-hosts/'));
+      assert.ok(!res.stdout.includes('.brainclaw/coordination/runtime-hosts/'));
     });
   });
 
@@ -531,14 +533,14 @@ describe('Git-backed Collaboration (Phase 2)', () => {
   });
 
   describe('never modifies files outside .brainclaw/', () => {
-    it('claim only writes to .brainclaw/claims/', () => {
+    it('claim only writes to .brainclaw/coordination/claims/', () => {
       const before = fs.readdirSync(dir);
       run(['claim', 'Work', '--agent', 'a', '--scope', 'x'], dir);
       const after = fs.readdirSync(dir);
       assert.deepEqual(before, after);
     });
 
-    it('runtime-note only writes to .brainclaw/runtime/', () => {
+    it('runtime-note only writes to .brainclaw/coordination/runtime/', () => {
       const before = fs.readdirSync(dir);
       run(['runtime-note', 'Note', '--agent', 'a'], dir);
       const after = fs.readdirSync(dir);
@@ -546,4 +548,5 @@ describe('Git-backed Collaboration (Phase 2)', () => {
     });
   });
 });
+
 

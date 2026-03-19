@@ -7,11 +7,12 @@ import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/age
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
+import { loadConfig } from '../core/config.js';
 import { loadState, saveState } from '../core/state.js';
 import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
 import { generateMarkdown } from '../core/markdown.js';
-import { saveCandidate, generateCandidateIdWithLabel } from '../core/candidates.js';
-import { loadClaim, saveClaim, generateClaimId } from '../core/claims.js';
+import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
@@ -21,12 +22,17 @@ import {
   agentCanWriteDirect,
   AgentIdentityResolutionError,
   AgentTrustError,
+  listAgentIdentities,
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
+  resolveAgentScope,
+  resolveCurrentAgentIdentity,
   resolveCurrentAgentName,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
+import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
+import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
 import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
@@ -210,6 +216,70 @@ export const MCP_READ_TOOLS = [
       type: 'object',
       properties: {
         agent: { type: 'string', description: 'Filter by agent/author name.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_plans',
+    description: 'List plan items with optional filters on status, type, assignee, and project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        all: { type: 'boolean', description: 'Include done and dropped plans.' },
+        status: { type: 'string', description: 'Filter by status: todo, in_progress, blocked, done, dropped.' },
+        type: { type: 'string', description: 'Filter by plan type.' },
+        assignee: { type: 'string', description: 'Filter by assignee name.' },
+        project: { type: 'string', description: 'Filter by project namespace.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_claims',
+    description: 'List work claims with optional filters on project, plan, and agent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        all: { type: 'boolean', description: 'Include released claims.' },
+        project: { type: 'string', description: 'Filter by project namespace.' },
+        plan: { type: 'string', description: 'Filter by linked plan id.' },
+        agent: { type: 'string', description: 'Filter by agent name.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_agents',
+    description: 'List registered agent identities and optionally include bounded reputation summaries.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeReputation: { type: 'boolean', description: 'Include bounded reputation summaries for each agent.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_instructions',
+    description: 'List raw or resolved shared instructions with the same filters exposed by the CLI.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: 'Filter by layer: global, project, agent.' },
+        project: { type: 'string', description: 'Project namespace filter.' },
+        agent: { type: 'string', description: 'Agent name filter.' },
+        active: { type: 'boolean', description: 'Only include active instructions.' },
+        resolved: { type: 'boolean', description: 'Resolve effective instructions for the given scope.' },
+        path: { type: 'string', description: 'Infer project namespace from a target path when strategy=folder.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_candidates',
+    description: 'List review candidates across pending, accepted, rejected, or all queues.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Candidate bucket: pending, accepted, rejected, or all.' },
+        type: { type: 'string', description: 'Filter by candidate type.' },
+        assignee: { type: 'string', description: 'Filter pending candidates by assignee tag (assignee:<name>).' },
       },
     },
   },
@@ -1061,6 +1131,15 @@ export function parseTtl(ttl: string): string | undefined {
   return new Date(Date.now() + ms).toISOString();
 }
 
+function getReviewAssignee(tags: string[]): string | undefined {
+  for (const tag of tags) {
+    if (tag.startsWith('assignee:')) {
+      return tag.slice('assignee:'.length).trim() || undefined;
+    }
+  }
+  return undefined;
+}
+
 export function handleMcpReadToolCall(
   name: string,
   args: Record<string, unknown> = {},
@@ -1291,6 +1370,211 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  if (name === 'bclaw_list_plans') {
+    let plans = loadState(cwd).plan_items;
+    if (!args.all) {
+      plans = plans.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
+    }
+    if (args.status) {
+      plans = plans.filter((plan) => plan.status === args.status);
+    }
+    if (args.type) {
+      plans = plans.filter((plan) => plan.type === args.type);
+    }
+    if (args.assignee) {
+      const assignee = String(args.assignee).toLowerCase();
+      plans = plans.filter((plan) => plan.assignee?.toLowerCase() === assignee);
+    }
+    if (args.project) {
+      const project = String(args.project).toLowerCase();
+      plans = plans.filter((plan) => plan.project?.toLowerCase() === project);
+    }
+
+    const lines = plans.length === 0
+      ? ['No plan items found.']
+      : [
+          `${plans.length} plan item(s):`,
+          ...plans.map((plan) => {
+            const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
+            if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
+            if (plan.project) meta.push(`project ${plan.project}`);
+            if (plan.depends_on.length > 0) meta.push(`depends_on ${plan.depends_on.join(',')}`);
+            const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
+            return `[${plan.id}] ${plan.text} (${meta.join(' · ')})${tags}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: plans.length, plans },
+    };
+  }
+
+  if (name === 'bclaw_list_claims') {
+    let claims = listClaims(cwd);
+    if (!args.all) {
+      claims = claims.filter((claim) => claim.status === 'active');
+    }
+    if (args.project) {
+      claims = claims.filter((claim) => claim.project === args.project);
+    }
+    if (args.plan) {
+      claims = claims.filter((claim) => claim.plan_id === args.plan);
+    }
+    if (args.agent) {
+      claims = claims.filter((claim) => claim.agent === args.agent);
+    }
+
+    const label = args.all ? 'claim(s)' : 'active claim(s)';
+    const lines = claims.length === 0
+      ? ['No active claims.']
+      : [
+          `${claims.length} ${label}:`,
+          ...claims.map((claim) => {
+            const status = claim.status !== 'active' ? ` (${claim.status})` : '';
+            const extras: string[] = [];
+            if (claim.session_id) extras.push(`session ${claim.session_id.slice(-8)}`);
+            if (claim.plan_id) extras.push(`plan ${claim.plan_id}`);
+            if (claim.project) extras.push(`project ${claim.project}`);
+            const suffix = extras.length ? ` [${extras.join(', ')}]` : '';
+            return `[${claim.id}] ${claim.agent} -> ${claim.scope}: ${claim.description}${suffix}${status}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: claims.length, claims },
+    };
+  }
+
+  if (name === 'bclaw_list_agents') {
+    const agents = listAgentIdentities(cwd);
+    const current = resolveCurrentAgentIdentity(cwd);
+    const reputation = args.includeReputation ? buildReputationSnapshot(cwd) : undefined;
+    const reputationById = new Map((reputation?.agents ?? []).map((agent) => [agent.agent_id ?? agent.key, toPublicReputationSummary(agent)]));
+    const structuredAgents = args.includeReputation
+      ? agents.map((agent) => ({
+          ...agent,
+          reputation: reputationById.get(agent.agent_id),
+        }))
+      : agents;
+
+    const lines = structuredAgents.length === 0
+      ? ['No registered agents.']
+      : [
+          `${structuredAgents.length} registered agent(s):`,
+          ...structuredAgents.map((agent) => {
+            const reputation = (agent as {
+              reputation?: {
+                internal_trust: number;
+                contribution_quality: number;
+                review_reliability: number;
+                continuity_hygiene: number;
+              };
+            }).reputation;
+            const currentLabel = current?.agent_id === agent.agent_id ? ' [current]' : '';
+            const capabilitiesLabel = agent.capabilities.length > 0 ? ` caps=${agent.capabilities.join(',')}` : '';
+            const fingerprintLabel = agent.identity_key ? ` fp=${agent.identity_key.fingerprint.slice(0, 12)}` : '';
+            const reputationLabel = reputation
+              ? ` trust=${reputation.internal_trust} cq=${reputation.contribution_quality} rv=${reputation.review_reliability} ct=${reputation.continuity_hygiene}`
+              : '';
+            return `- ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}${reputationLabel}${capabilitiesLabel}${fingerprintLabel}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: {
+        current_agent_id: current?.agent_id,
+        current_agent: current?.agent_name,
+        agents: structuredAgents,
+      },
+    };
+  }
+
+  if (name === 'bclaw_list_instructions') {
+    const config = loadConfig(cwd);
+    const project = args.project as string | undefined;
+    const inferredProject = project ?? inferProjectFromTarget(args.path as string | undefined, config);
+    const resolvedAgent = args.resolved ? resolveAgentScope(args.agent as string | undefined) : args.agent as string | undefined;
+    const source = args.resolved
+      ? resolveInstructions(loadInstructions(cwd), { project: inferredProject, agent: resolvedAgent })
+      : loadInstructions(cwd);
+
+    let entries = source;
+    if (args.active) {
+      entries = entries.filter((entry) => entry.active);
+    }
+    if (args.layer) {
+      entries = entries.filter((entry) => entry.layer === args.layer);
+    }
+    if (inferredProject) {
+      entries = entries.filter((entry) => entry.layer !== 'project' || entry.scope === inferredProject);
+    }
+    if (args.agent) {
+      entries = entries.filter((entry) => entry.layer !== 'agent' || entry.scope === args.agent);
+    }
+
+    const lines = entries.length === 0
+      ? ['No instructions found.']
+      : [
+          `${entries.length} instruction(s):`,
+          ...entries.map((entry) => {
+            const scope = entry.scope ? `:${entry.scope}` : '';
+            const flags: string[] = [entry.layer];
+            if (!entry.active) flags.push('inactive');
+            if (entry.supersedes) flags.push(`supersedes ${entry.supersedes}`);
+            const tags = entry.tags.length ? ` [${entry.tags.join(', ')}]` : '';
+            return `[${entry.id}] <${entry.layer}${scope}> ${entry.text} (${flags.join(' · ')})${tags}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: entries.length, instructions: entries },
+    };
+  }
+
+  if (name === 'bclaw_list_candidates') {
+    const status = String(args.status ?? 'pending').toLowerCase();
+    let candidates = status === 'accepted'
+      ? listArchivedCandidates('accepted', cwd)
+      : status === 'rejected'
+        ? listArchivedCandidates('rejected', cwd)
+        : status === 'all'
+          ? [
+              ...listCandidates('pending', cwd),
+              ...listArchivedCandidates('accepted', cwd),
+              ...listArchivedCandidates('rejected', cwd),
+            ]
+          : listCandidates('pending', cwd);
+
+    if (args.type) {
+      candidates = candidates.filter((candidate) => candidate.type === args.type);
+    }
+    if (args.assignee) {
+      const assignee = String(args.assignee).toLowerCase();
+      candidates = candidates.filter((candidate) => getReviewAssignee(candidate.tags)?.toLowerCase() === assignee);
+    }
+
+    const lines = candidates.length === 0
+      ? ['No candidates found.']
+      : [
+          `${candidates.length} candidate(s):`,
+          ...candidates.map((candidate) => {
+            const assignee = getReviewAssignee(candidate.tags);
+            const tags = candidate.tags.length ? ` [${candidate.tags.join(', ')}]` : '';
+            const assigneeLabel = assignee ? ` assignee=${assignee}` : '';
+            return `[${candidate.id}] ${candidate.type}/${candidate.status}${assigneeLabel}: ${candidate.text}${tags}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: candidates.length, candidates },
     };
   }
 

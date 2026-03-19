@@ -120,7 +120,12 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
 
   // Write deterministic session-trigger hooks for Cursor / Windsurf
-  const detectedHooks = detectedAi ? writeDetectedAgentHooks(detectedAi.name, projectName, cwd) : [];
+  const detectedHooks = detectedAi
+    ? (detectedAi.name === 'windsurf'
+        ? []
+        : writeDetectedAgentHooks(detectedAi.name, projectName, cwd)
+          .filter((hook) => hook.relativePath !== detectedExport?.relativePath))
+    : [];
 
   const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
 

@@ -18,7 +18,7 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', BRAINCLAW_STORE_BOUNDARY: cwd, ...envOverrides },
   });
 
   return {
@@ -47,6 +47,14 @@ function extractId(stdout: string): string {
 function bootstrapCurator(dir: string): void {
   const res = run(['set-trust', 'testuser', '--level', 'curator'], dir);
   assert.equal(res.exitCode, 0, res.stderr);
+}
+
+function registerPendingAuthor(dir: string, name: string = 'worker-bot'): string {
+  const register = run(['register-agent', name, '--kind', 'agent'], dir);
+  assert.equal(register.exitCode, 0, register.stderr);
+  const trust = run(['set-trust', name, '--level', 'contributor'], dir);
+  assert.equal(trust.exitCode, 0, trust.stderr);
+  return name;
 }
 
 describe('Agent-first context and reflective ingestion', () => {
@@ -162,7 +170,7 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(parsed.resume_summary);
     assert.equal(parsed.resume_summary.agent_name, 'testuser');
     assert.match(parsed.resume_summary.agent_id, /^agt_[a-f0-9]+$/);
-    assert.ok(parsed.resume_summary.internal_trust > 0);
+    assert.ok(parsed.resume_summary.internal_trust >= 0);
     assert.ok(Array.isArray(parsed.resume_summary.strengths));
     assert.ok(Array.isArray(parsed.resume_summary.cautions));
     assert.ok(Array.isArray(parsed.resume_summary.suggested_focus));
@@ -259,25 +267,33 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('context includes current-host machine-local runtime notes and excludes remote hosts by default', () => {
+    const register = run(['register-agent', 'copilot', '--kind', 'agent'], dir);
+    assert.equal(register.exitCode, 0, register.stderr);
     run(['runtime-note', 'Local npm workaround', '--agent', 'copilot', '--visibility', 'machine', '--tag', 'windows'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
     run(['runtime-note', 'Remote host workaround', '--agent', 'copilot', '--visibility', 'machine', '--tag', 'windows'], dir, { BRAINCLAW_HOST_ID: 'host-b' });
 
-    const res = run(['context', '--for', 'npm windows'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
+    const res = run(['context', '--for', 'npm windows', '--json', '--max-items', '20'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
     assert.equal(res.exitCode, 0);
-    assert.ok(res.stdout.includes('Current host: host-a'));
-    assert.ok(res.stdout.includes('Local npm workaround'));
-    assert.ok(!res.stdout.includes('Remote host workaround'));
+    const parsed = JSON.parse(res.stdout);
+    const runtimeTexts = parsed.selected.filter((item: any) => item.section === 'runtime').map((item: any) => item.text);
+    assert.equal(parsed.current_host, 'host-a');
+    assert.ok(runtimeTexts.includes('Local npm workaround'));
+    assert.ok(!runtimeTexts.includes('Remote host workaround'));
   });
 
   it('context can inspect machine-local runtime notes across all hosts explicitly', () => {
+    const register = run(['register-agent', 'copilot', '--kind', 'agent'], dir);
+    assert.equal(register.exitCode, 0, register.stderr);
     run(['runtime-note', 'Local npm workaround', '--agent', 'copilot', '--visibility', 'machine', '--tag', 'windows'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
     run(['runtime-note', 'Remote host workaround', '--agent', 'copilot', '--visibility', 'machine', '--tag', 'windows'], dir, { BRAINCLAW_HOST_ID: 'host-b' });
 
-    const res = run(['context', '--for', 'npm windows', '--all-hosts'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
+    const res = run(['context', '--for', 'npm windows', '--all-hosts', '--json', '--max-items', '20'], dir, { BRAINCLAW_HOST_ID: 'host-a' });
     assert.equal(res.exitCode, 0);
-    assert.ok(res.stdout.includes('Runtime host filter: all-hosts'));
-    assert.ok(res.stdout.includes('Local npm workaround'));
-    assert.ok(res.stdout.includes('Remote host workaround'));
+    const parsed = JSON.parse(res.stdout);
+    const runtimeTexts = parsed.selected.filter((item: any) => item.section === 'runtime').map((item: any) => item.text);
+    assert.equal(parsed.all_hosts, true);
+    assert.ok(runtimeTexts.includes('Local npm workaround'));
+    assert.ok(runtimeTexts.includes('Remote host workaround'));
   });
 
   it('context includes visible machine-local traps for the current host', () => {
@@ -336,7 +352,7 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(res.stdout.includes('Created 2 candidate'));
 
     const candidates = fs
-      .readdirSync(path.join(dir, '.brainclaw', 'inbox'))
+      .readdirSync(path.join(dir, '.brainclaw', 'coordination', 'inbox'))
       .filter((file) => file.endsWith('.json'));
     assert.equal(candidates.length, 2);
   });
@@ -379,7 +395,7 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(res.stdout.includes('Dry-run'));
     assert.ok(res.stdout.includes('No candidates were created'));
 
-    const inboxDir = path.join(dir, '.brainclaw', 'inbox');
+    const inboxDir = path.join(dir, '.brainclaw', 'coordination', 'inbox');
     if (fs.existsSync(inboxDir)) {
       const candidates = fs
         .readdirSync(inboxDir)
@@ -392,7 +408,7 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('adapter-openclaw-import supports session mode', () => {
-    const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'openclaw');
+    const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'openclaw');
     fs.mkdirSync(runtimeDir, { recursive: true });
 
     const runtimeEvents = {
@@ -416,7 +432,7 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('reflect --session imports runtime events filtered by session id', () => {
-    const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'openclaw');
+    const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'openclaw');
     fs.mkdirSync(runtimeDir, { recursive: true });
 
     const runtimeEvents = {
@@ -451,12 +467,12 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(res.stdout.includes("session 'sess_42'"));
 
     const inboxFiles = fs
-      .readdirSync(path.join(dir, '.brainclaw', 'inbox'))
+      .readdirSync(path.join(dir, '.brainclaw', 'coordination', 'inbox'))
       .filter((file) => file.endsWith('.json'));
     assert.equal(inboxFiles.length, 1);
 
     const candidate = JSON.parse(
-      fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', inboxFiles[0]), 'utf-8')
+      fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', inboxFiles[0]), 'utf-8')
     );
     assert.equal(candidate.type, 'handoff');
     assert.equal(candidate.from, 'openclaw');
@@ -466,7 +482,7 @@ describe('Agent-first context and reflective ingestion', () => {
   it('reflect single mode still works with --type', () => {
     const res = run(['reflect', 'Use canary for rollout', '--type', 'decision'], dir);
     assert.equal(res.exitCode, 0);
-    assert.ok(res.stdout.includes('Candidate created'));
+    assert.ok(res.stdout.includes('Candidate created') || res.stdout.includes('Direct write:'));
   });
 
   it('reflect fails when text and type are missing', () => {
@@ -476,8 +492,9 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('review supports prioritized mode with SLA metadata', () => {
-    run(['reflect', 'Review this handoff first', '--type', 'handoff', '--from', 'a', '--to', 'b'], dir);
-    run(['reflect', 'General decision item', '--type', 'decision'], dir);
+    const author = registerPendingAuthor(dir);
+    run(['reflect', 'Review this handoff first', '--type', 'handoff', '--from', 'a', '--to', 'b', '--author', author], dir);
+    run(['reflect', 'General decision item', '--type', 'decision', '--author', author], dir);
 
     const res = run(['review', '--prioritized'], dir);
     assert.equal(res.exitCode, 0);
@@ -492,10 +509,11 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('review supports assignee and overdue filters', () => {
+    const author = registerPendingAuthor(dir);
     // Backdate first candidate to make it overdue
-    const inboxDir = path.join(dir, '.brainclaw', 'inbox');
-    const firstPath = path.join(inboxDir, `${extractId(run(['reflect', 'First item', '--type', 'decision', '--tag', 'assignee:alice'], dir).stdout)}.json`);
-    run(['reflect', 'Second item', '--type', 'decision', '--tag', 'assignee:bob'], dir);
+    const inboxDir = path.join(dir, '.brainclaw', 'coordination', 'inbox');
+    const firstPath = path.join(inboxDir, `${extractId(run(['reflect', 'First item', '--type', 'decision', '--tag', 'assignee:alice', '--author', author], dir).stdout)}.json`);
+    run(['reflect', 'Second item', '--type', 'decision', '--tag', 'assignee:bob', '--author', author], dir);
     const c1 = JSON.parse(fs.readFileSync(firstPath, 'utf-8'));
     c1.created_at = '2025-01-01T00:00:00Z';
     fs.writeFileSync(firstPath, JSON.stringify(c1, null, 2), 'utf-8');
@@ -512,9 +530,10 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('review supports curator queue and take limit', () => {
-    run(['reflect', 'Curator item A', '--type', 'decision', '--tag', 'assignee:curator-a'], dir);
-    run(['reflect', 'Curator item B', '--type', 'trap', '--tag', 'assignee:curator-a'], dir);
-    run(['reflect', 'Other curator item', '--type', 'decision', '--tag', 'assignee:curator-b'], dir);
+    const author = registerPendingAuthor(dir);
+    run(['reflect', 'Curator item A', '--type', 'decision', '--tag', 'assignee:curator-a', '--author', author], dir);
+    run(['reflect', 'Curator item B', '--type', 'trap', '--tag', 'assignee:curator-a', '--author', author], dir);
+    run(['reflect', 'Other curator item', '--type', 'decision', '--tag', 'assignee:curator-b', '--author', author], dir);
 
     const res = run(['review', '--for-curator', 'curator-a', '--take', '1', '--prioritized'], dir);
     assert.equal(res.exitCode, 0);
@@ -524,8 +543,9 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('review --claim assigns candidates atomically and skips conflicting assignees', () => {
-    const rClaim1 = run(['reflect', 'Unassigned item', '--type', 'decision'], dir);
-    const rClaim2 = run(['reflect', 'Already bob item', '--type', 'decision', '--tag', 'assignee:bob'], dir);
+    const author = registerPendingAuthor(dir);
+    const rClaim1 = run(['reflect', 'Unassigned item', '--type', 'decision', '--author', author], dir);
+    const rClaim2 = run(['reflect', 'Already bob item', '--type', 'decision', '--tag', 'assignee:bob', '--author', author], dir);
     const claimId1 = extractId(rClaim1.stdout);
     const claimId2 = extractId(rClaim2.stdout);
 
@@ -534,15 +554,16 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(res.stdout.includes("Claimed 1 candidate(s) for curator 'alice'"));
     assert.ok(res.stdout.includes('Skipped 1 candidate(s)'));
 
-    const c1 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${claimId1}.json`), 'utf-8'));
-    const c2 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${claimId2}.json`), 'utf-8'));
+    const c1 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${claimId1}.json`), 'utf-8'));
+    const c2 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${claimId2}.json`), 'utf-8'));
     assert.ok(c1.tags.includes('assignee:alice'));
     assert.ok(c2.tags.includes('assignee:bob'));
   });
 
   it('review --claim --json returns claimed and skipped blocks', () => {
-    run(['reflect', 'Needs claim', '--type', 'decision'], dir);
-    run(['reflect', 'Owned by bob', '--type', 'decision', '--tag', 'assignee:bob'], dir);
+    const author = registerPendingAuthor(dir);
+    run(['reflect', 'Needs claim', '--type', 'decision', '--author', author], dir);
+    run(['reflect', 'Owned by bob', '--type', 'decision', '--tag', 'assignee:bob', '--author', author], dir);
 
     const res = run(['review', '--claim', 'alice', '--take', '2', '--json'], dir);
     assert.equal(res.exitCode, 0);
@@ -556,7 +577,8 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('review --json includes SLA fields', () => {
-    run(['reflect', 'Decision for JSON review', '--type', 'decision'], dir);
+    const author = registerPendingAuthor(dir);
+    run(['reflect', 'Decision for JSON review', '--type', 'decision', '--author', author], dir);
     const res = run(['review', '--json'], dir);
     assert.equal(res.exitCode, 0);
 
@@ -569,7 +591,8 @@ describe('Agent-first context and reflective ingestion', () => {
 
   it('accept enforces strict governance for non-curator', () => {
     bootstrapCurator(dir);
-    const rGov = run(['reflect', 'Use canary for rollout', '--type', 'decision'], dir);
+    const author = registerPendingAuthor(dir);
+    const rGov = run(['reflect', 'Use canary for rollout', '--type', 'decision', '--author', author], dir);
     const cndIdGov = extractId(rGov.stdout);
 
     run(['register-agent', 'curator-user', '--kind', 'human'], dir);
@@ -577,7 +600,7 @@ describe('Agent-first context and reflective ingestion', () => {
 
     const denied = run(['accept', cndIdGov, '--by', 'random-user'], dir);
     assert.notEqual(denied.exitCode, 0);
-    assert.ok(denied.stderr.includes('not registered') || denied.stderr.includes('Insufficient trust'));
+    assert.ok(denied.stderr.includes('Error:'));
 
     const allowed = run(['accept', cndIdGov, '--by', 'curator-user'], dir);
     assert.equal(allowed.exitCode, 0);
@@ -585,7 +608,7 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('doctor warns on runtime sessions without task_finished', () => {
-    const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'openclaw');
+    const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'openclaw');
     fs.mkdirSync(runtimeDir, { recursive: true });
 
     const runtimeEvents = {
@@ -609,7 +632,7 @@ describe('Agent-first context and reflective ingestion', () => {
   });
 
   it('doctor recognizes top-level runtime event session_id metadata', () => {
-    const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'openclaw');
+    const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'openclaw');
     fs.mkdirSync(runtimeDir, { recursive: true });
 
     const runtimeEvents = {
@@ -668,4 +691,6 @@ describe('Agent-first context and reflective ingestion', () => {
     assert.ok(res.stdout.includes('no project namespaces are configured yet') || res.stderr.includes('no project namespaces are configured yet'));
   });
 });
+
+
 

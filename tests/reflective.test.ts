@@ -18,7 +18,14 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', ...envOverrides },
+    env: {
+      ...process.env,
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+      USERNAME: 'testuser',
+      USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
+      ...envOverrides,
+    },
   });
   return {
     stdout: result.stdout ?? '',
@@ -64,7 +71,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.ok(res.stdout.includes('Candidate created'));
 
       // Verify file exists
-      const inboxDir = path.join(dir, '.brainclaw', 'inbox');
+      const inboxDir = path.join(dir, '.brainclaw', 'coordination', 'inbox');
       assert.ok(fs.existsSync(inboxDir));
       const files = fs.readdirSync(inboxDir).filter(f => f.endsWith('.json'));
       assert.equal(files.length, 1);
@@ -115,7 +122,7 @@ describe('Reflective Memory (Phase 1)', () => {
       const res = run(['reflect', 'Review auth changes', '--type', 'handoff', '--from', 'alice', '--to', 'bob'], dir);
       assert.equal(res.exitCode, 0);
       const cndId = extractId(res.stdout);
-      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${cndId}.json`), 'utf-8'));
+      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndId}.json`), 'utf-8'));
       assert.equal(candidate.from, 'alice');
       assert.equal(candidate.to, 'bob');
     });
@@ -129,7 +136,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.ok(res.stdout.includes('Candidate created'));
 
       const cndId1 = extractId(res.stdout);
-      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${cndId1}.json`), 'utf-8'));
+      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndId1}.json`), 'utf-8'));
       assert.equal(candidate.text, 'Node is not on PATH on this host');
       assert.equal(candidate.type, 'trap');
       assert.equal(candidate.source, `runtime-note:copilot:${rtnId1}`);
@@ -156,7 +163,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(res.exitCode, 0);
 
       const cndId2 = extractId(res.stdout);
-      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${cndId2}.json`), 'utf-8'));
+      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndId2}.json`), 'utf-8'));
       assert.equal(candidate.text, 'On some Windows environments, validation should use the absolute Node binary when PATH is missing Node.');
       assert.deepEqual(candidate.tags, ['windows', 'validation']);
     });
@@ -182,8 +189,8 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Promotion suggestions'));
       assert.ok(res.stdout.includes('trap'));
-      const inboxCndFiles = fs.existsSync(path.join(dir, '.brainclaw', 'inbox'))
-        ? fs.readdirSync(path.join(dir, '.brainclaw', 'inbox')).filter(f => f.endsWith('.json') && f.startsWith('cnd_'))
+      const inboxCndFiles = fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'inbox'))
+        ? fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'inbox')).filter(f => f.endsWith('.json') && f.startsWith('cnd_'))
         : [];
       assert.equal(inboxCndFiles.length, 0);
     });
@@ -303,7 +310,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('already starred'));
 
-      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${cndIdSc}.json`), 'utf-8'));
+      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndIdSc}.json`), 'utf-8'));
       assert.equal(candidate.star_count, 1);
       assert.deepEqual(candidate.starred_by, ['copilot']);
     });
@@ -322,7 +329,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('already marked used'));
 
-      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'inbox', `${cndIdUse}.json`), 'utf-8'));
+      const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndIdUse}.json`), 'utf-8'));
       assert.equal(candidate.usage_count, 1);
       assert.equal(candidate.usage_events.length, 1);
       assert.equal(candidate.usage_events[0].context, 'auth rollout');
@@ -356,9 +363,9 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.ok(res.stdout.includes('accepted and archived'));
 
       // Verify state was updated
-      const decFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'decisions')).filter(f => f.endsWith('.json'));
+      const decFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'decisions')).filter(f => f.endsWith('.json'));
       assert.equal(decFiles.length, 1);
-      const dec = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'decisions', decFiles[0]), 'utf-8'));
+      const dec = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'decisions', decFiles[0]), 'utf-8'));
       assert.equal(dec.text, 'Use Redis for caching');
       assert.equal(dec.author, 'testuser');
       assert.match(dec.author_id, /^agt_[a-f0-9]+$/);
@@ -371,34 +378,34 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.ok(md.includes('Use Redis for caching'));
 
       // Verify candidate was archived
-      assert.ok(!fs.existsSync(path.join(dir, '.brainclaw', 'inbox', `${cndIdDec}.json`)));
-      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'inbox', 'accepted', `${cndIdDec}.json`)));
+      assert.ok(!fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndIdDec}.json`)));
+      assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', 'accepted', `${cndIdDec}.json`)));
     });
 
     it('promotes constraint candidate', () => {
       const rCst = run(['reflect', 'Payments frozen', '--type', 'constraint'], dir);
       run(['accept', extractId(rCst.stdout)], dir);
-      const cstFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'constraints')).filter(f => f.endsWith('.json'));
+      const cstFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'constraints')).filter(f => f.endsWith('.json'));
       assert.equal(cstFiles.length, 1);
-      const constraint = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'constraints', cstFiles[0]), 'utf-8'));
+      const constraint = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'constraints', cstFiles[0]), 'utf-8'));
       assert.equal(constraint.status, 'active');
     });
 
     it('promotes trap candidate with severity', () => {
       const rTrp = run(['reflect', 'Flaky test', '--type', 'trap', '--severity', 'high'], dir);
       run(['accept', extractId(rTrp.stdout)], dir);
-      const trpFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'traps')).filter(f => f.endsWith('.json'));
+      const trpFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
       assert.equal(trpFiles.length, 1);
-      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'traps', trpFiles[0]), 'utf-8'));
+      const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFiles[0]), 'utf-8'));
       assert.equal(trap.severity, 'high');
     });
 
     it('promotes handoff candidate', () => {
       const rHnd = run(['reflect', 'Review PR', '--type', 'handoff', '--from', 'alice', '--to', 'bob'], dir);
       run(['accept', extractId(rHnd.stdout)], dir);
-      const hndFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'handoffs')).filter(f => f.endsWith('.json'));
+      const hndFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
       assert.equal(hndFiles.length, 1);
-      const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'handoffs', hndFiles[0]), 'utf-8'));
+      const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hndFiles[0]), 'utf-8'));
       assert.equal(handoff.from, 'alice');
       assert.equal(handoff.to, 'bob');
     });
@@ -422,11 +429,11 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.ok(res.stdout.includes('rejected and archived'));
 
       // Verify removed from inbox
-      assert.ok(!fs.existsSync(path.join(dir, '.brainclaw', 'inbox', `${cndIdRej}.json`)));
+      assert.ok(!fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndIdRej}.json`)));
 
       // Verify in rejected archive
       const archived = JSON.parse(fs.readFileSync(
-        path.join(dir, '.brainclaw', 'inbox', 'rejected', `${cndIdRej}.json`), 'utf-8'
+        path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdRej}.json`), 'utf-8'
       ));
       assert.equal(archived.status, 'rejected');
       assert.equal(archived.resolved_by, 'testuser');
@@ -440,7 +447,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(res.exitCode, 0);
 
       const archived = JSON.parse(fs.readFileSync(
-        path.join(dir, '.brainclaw', 'inbox', 'rejected', `${cndIdRej2}.json`), 'utf-8'
+        path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdRej2}.json`), 'utf-8'
       ));
       assert.equal(archived.resolved_by, 'curator-bot');
       assert.equal(archived.resolution_reason, 'Duplicate of accepted decision');
@@ -454,7 +461,7 @@ describe('Reflective Memory (Phase 1)', () => {
       run(['reject', cndIdPrune], dir);
 
       // Manually backdate the rejected candidate
-      const rejectedPath = path.join(dir, '.brainclaw', 'inbox', 'rejected', `${cndIdPrune}.json`);
+      const rejectedPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdPrune}.json`);
       const candidate = JSON.parse(fs.readFileSync(rejectedPath, 'utf-8'));
       candidate.resolved_at = '2025-01-01T00:00:00Z';
       candidate.created_at = '2025-01-01T00:00:00Z';
@@ -471,7 +478,7 @@ describe('Reflective Memory (Phase 1)', () => {
       const cndIdDry = extractId(rDry.stdout);
       run(['reject', cndIdDry], dir);
 
-      const rejectedPath = path.join(dir, '.brainclaw', 'inbox', 'rejected', `${cndIdDry}.json`);
+      const rejectedPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdDry}.json`);
       const candidate = JSON.parse(fs.readFileSync(rejectedPath, 'utf-8'));
       candidate.resolved_at = '2025-01-01T00:00:00Z';
       fs.writeFileSync(rejectedPath, JSON.stringify(candidate, null, 2));
@@ -520,7 +527,7 @@ describe('Reflective Memory (Phase 1)', () => {
 
   describe('never auto-writes to canonical memory', () => {
     it('reflect does not modify decisions directory', () => {
-      const p = path.join(dir, '.brainclaw', 'decisions');
+      const p = path.join(dir, '.brainclaw', 'memory', 'decisions');
       const filesBefore = fs.readdirSync(p);
       run(['reflect', 'Some idea', '--type', 'decision'], dir);
       const filesAfter = fs.readdirSync(p);
@@ -535,4 +542,5 @@ describe('Reflective Memory (Phase 1)', () => {
     });
   });
 });
+
 

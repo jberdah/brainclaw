@@ -165,3 +165,4 @@ describe('init --force preserves existing data', () => {
     assert.equal(afterState.recent_decisions[0].id, 'dec_preserve');
   });
 });
+

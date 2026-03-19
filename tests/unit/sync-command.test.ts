@@ -165,7 +165,7 @@ describe('commands/sync', () => {
     assert.match(joined, /Runtime notes: 1 shared, 1 machine-local, 0 private/);
     assert.match(joined, /Local traps: 1 machine-local, 0 private/);
     assert.match(joined, /Summary-only mode enabled/);
-    assert.ok(!joined.includes('.brainclaw/runtime-hosts/'));
+    assert.ok(!joined.includes('.brainclaw/coordination/runtime-hosts/'));
     } finally {
       if (previousHost === undefined) {
         delete process.env.BRAINCLAW_HOST_ID;
@@ -176,19 +176,20 @@ describe('commands/sync', () => {
   });
 
   it('resolves sync scopes against the workspace and can include machine-local runtime paths', () => {
-    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'runtime'), { recursive: true });
-    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'runtime-hosts'), { recursive: true });
-    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'runtime-private'), { recursive: true });
+    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime-hosts'), { recursive: true });
+    fs.mkdirSync(path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime-private'), { recursive: true });
 
     const defaultScope = resolveScopePaths('all', false, workspace.dir);
-    assert.ok(defaultScope.includes('.brainclaw/runtime/'));
-    assert.ok(!defaultScope.includes('.brainclaw/runtime-hosts/'));
+    assert.ok(defaultScope.includes('.brainclaw/coordination/runtime/'));
+    assert.ok(!defaultScope.includes('.brainclaw/coordination/runtime-hosts/'));
 
     const expandedScope = resolveScopePaths('all', true, workspace.dir);
-    assert.ok(expandedScope.includes('.brainclaw/runtime-hosts/'));
-    assert.ok(expandedScope.includes('.brainclaw/runtime-private/'));
+    assert.ok(expandedScope.includes('.brainclaw/coordination/runtime-hosts/'));
+    assert.ok(expandedScope.includes('.brainclaw/coordination/runtime-private/'));
 
     const runtimeLocal = resolveScopePaths('runtime-local', false, workspace.dir);
-    assert.deepEqual(runtimeLocal, ['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/']);
+    assert.deepEqual(runtimeLocal, ['.brainclaw/coordination/runtime-hosts/', '.brainclaw/coordination/runtime-private/']);
   });
 });
+

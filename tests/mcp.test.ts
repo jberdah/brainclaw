@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import YAML from 'yaml';
+import { SCHEMA_VERSION } from '../src/commands/mcp.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
 const NODE = process.execPath;
@@ -22,8 +23,10 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       HOME: cwd,
       USERPROFILE: cwd,
       ...envOverrides,
@@ -61,8 +64,10 @@ function startMcp(cwd: string, envOverrides: Record<string, string> = {}): Child
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
+      BRAINCLAW_STORE_BOUNDARY: cwd,
       HOME: cwd,
       USERPROFILE: cwd,
       ...envOverrides,
@@ -230,6 +235,90 @@ describe('MCP server', () => {
       assert.equal(response.jsonrpc, '2.0');
       assert.ok(Array.isArray(response.result.tools));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_get_context'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_plans'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_claims'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_agents'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_instructions'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('exposes list-oriented coordination views over MCP', async () => {
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
+    run(['instruction', 'Read shared memory before editing'], dir);
+    run(['instruction', 'Use auth gateway conventions', '--layer', 'project', '--project', 'auth'], dir);
+    const planRes = run(['plan', 'Own auth rollout', '--project', 'auth'], dir);
+    const planId = extractId(planRes.stdout);
+    run(['claim', 'Taking auth rollout', '--agent', 'copilot', '--scope', 'src/auth/', '--plan', planId], dir);
+    run(['set-trust', 'testuser', '--level', 'contributor'], dir);
+    const candidateRes = run(['reflect', 'Auth edge-case note', '--type', 'decision'], dir);
+    const candidateId = extractId(candidateRes.stdout);
+
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+
+      const plans = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_plans',
+          arguments: { project: 'auth' },
+        },
+      });
+      assert.equal(plans.result.structuredContent.total, 1);
+      assert.equal(plans.result.structuredContent.plans[0].id, planId);
+
+      const claims = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 102,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_claims',
+          arguments: { agent: 'copilot' },
+        },
+      });
+      assert.equal(claims.result.structuredContent.total, 1);
+      assert.equal(claims.result.structuredContent.claims[0].plan_id, planId);
+
+      const agents = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 103,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_agents',
+          arguments: {},
+        },
+      });
+      assert.ok(agents.result.structuredContent.agents.some((agent: any) => agent.agent_name === 'copilot'));
+      assert.equal(agents.result.structuredContent.current_agent, 'testuser');
+
+      const instructions = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 104,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_instructions',
+          arguments: { resolved: true, project: 'auth', active: true },
+        },
+      });
+      assert.equal(instructions.result.structuredContent.total, 2);
+      assert.ok(instructions.result.structuredContent.instructions.some((entry: any) => entry.text.includes('Use auth gateway conventions')));
+
+      const candidates = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 105,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_candidates',
+          arguments: { status: 'pending' },
+        },
+      });
+      assert.equal(candidates.result.structuredContent.total, 1);
+      assert.equal(candidates.result.structuredContent.candidates[0].id, candidateId);
     } finally {
       await stopMcp(proc);
     }
@@ -266,7 +355,7 @@ describe('MCP server', () => {
       });
 
       assert.equal(response.result.isError, true);
-      assert.equal(response.result.schema_version, '0.3.0');
+      assert.equal(response.result.schema_version, SCHEMA_VERSION);
       assert.equal(response.result.structuredContent.error.kind, 'command_error');
     } finally {
       await stopMcp(proc);
@@ -706,7 +795,7 @@ describe('MCP server', () => {
       const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', '.current-session'), 'utf-8'));
       assert.equal(currentSession.session_id, first.result.session_id);
 
-      const inboxFile = path.join(dir, '.brainclaw', 'inbox', `${first.result.candidate_id}.json`);
+      const inboxFile = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${first.result.candidate_id}.json`);
       assert.equal(fs.existsSync(inboxFile), true);
     } finally {
       await stopMcp(proc);
@@ -759,7 +848,7 @@ describe('MCP server', () => {
       assert.match(response.result.session_id, /^sess_[a-f0-9]+$/);
       await expectNoMcpMessage(proc, 300);
 
-      const runtimeDir = path.join(dir, '.brainclaw', 'runtime', 'copilot');
+      const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'copilot');
       const runtimeFiles = fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).filter((file) => file.endsWith('.json')) : [];
       assert.equal(runtimeFiles.length, 1);
 
@@ -773,3 +862,4 @@ describe('MCP server', () => {
     }
   });
 });
+

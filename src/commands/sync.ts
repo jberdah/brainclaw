@@ -131,36 +131,41 @@ export function resolveScopePaths(scope?: string, includeMachineRuntime: boolean
       return existingScopePaths([
         '.brainclaw/config.yaml',
         '.brainclaw/project.md',
-        '.brainclaw/constraints/',
-        '.brainclaw/decisions/',
-        '.brainclaw/traps/',
-        '.brainclaw/handoffs/',
-        '.brainclaw/plans/',
-        '.brainclaw/instructions/',
-        '.brainclaw/inbox/',
+        '.brainclaw/memory/constraints/',
+        '.brainclaw/memory/decisions/',
+        '.brainclaw/memory/traps/',
+        '.brainclaw/coordination/handoffs/',
+        '.brainclaw/coordination/plans/',
+        '.brainclaw/memory/instructions/',
+        '.brainclaw/coordination/inbox/',
         '.brainclaw/archive/',
-        '.brainclaw/claims/',
-        '.brainclaw/runtime/',
-        ...(includeMachineRuntime ? ['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/'] : []),
+        '.brainclaw/coordination/claims/',
+        '.brainclaw/coordination/runtime/',
+        ...(includeMachineRuntime ? ['.brainclaw/coordination/runtime-hosts/', '.brainclaw/coordination/runtime-private/'] : []),
       ], cwd);
     case 'state':
-      return existingScopePaths(['.brainclaw/constraints/', '.brainclaw/decisions/', '.brainclaw/traps/', '.brainclaw/handoffs/'], cwd);
+      return existingScopePaths([
+        '.brainclaw/memory/constraints/',
+        '.brainclaw/memory/decisions/',
+        '.brainclaw/memory/traps/',
+        '.brainclaw/coordination/handoffs/',
+      ], cwd);
     case 'config':
       return existingScopePaths(['.brainclaw/config.yaml'], cwd);
     case 'project':
       return existingScopePaths(['.brainclaw/project.md'], cwd);
     case 'inbox':
-      return existingScopePaths(['.brainclaw/inbox/'], cwd);
+      return existingScopePaths(['.brainclaw/coordination/inbox/'], cwd);
     case 'archive':
       return existingScopePaths(['.brainclaw/archive/'], cwd);
     case 'claims':
-      return existingScopePaths(['.brainclaw/claims/'], cwd);
+      return existingScopePaths(['.brainclaw/coordination/claims/'], cwd);
     case 'runtime':
-      return existingScopePaths(['.brainclaw/runtime/'], cwd);
+      return existingScopePaths(['.brainclaw/coordination/runtime/'], cwd);
     case 'runtime-local':
-      return existingScopePaths(['.brainclaw/runtime-hosts/', '.brainclaw/runtime-private/'], cwd);
+      return existingScopePaths(['.brainclaw/coordination/runtime-hosts/', '.brainclaw/coordination/runtime-private/'], cwd);
     case 'trap-local':
-      return existingScopePaths(['.brainclaw/traps-hosts/', '.brainclaw/traps-private/'], cwd);
+      return existingScopePaths(['.brainclaw/memory/traps-hosts/', '.brainclaw/memory/traps-private/'], cwd);
     default:
       console.warn(`⚠ Unknown sync scope "${scope}"; defaulting to .brainclaw/`);
       return resolveScopePaths('all', includeMachineRuntime, cwd);
