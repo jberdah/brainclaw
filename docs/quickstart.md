@@ -2,6 +2,18 @@
 
 This guide walks through the shortest path to getting value from brainclaw.
 
+## Important limitation for now
+
+Do not run multiple coding agents in parallel on the same project checkout yet.
+
+brainclaw is already useful for sequential collaboration: one agent can pick up where another stopped, inspect shared context, and continue from explicit plans, claims, traps, and handoffs. But until Brainclaw supports dedicated Git worktrees per agent/session, parallel edits in the same checkout are still likely to create more Git and workspace problems than they solve.
+
+For now, prefer:
+
+1. one active editing agent per checkout
+2. explicit handoffs between agents
+3. claims and context to keep continuity between sessions
+
 ## 1. Bootstrap and initialize the workspace
 
 ```bash
@@ -36,7 +48,8 @@ brainclaw claim create "Taking auth rollout" --agent copilot --scope src/auth/ -
 brainclaw claim list --plan pln_001
 ```
 
-Claims reduce collisions when multiple agents or humans work in the same repo.
+Claims reduce collisions, but they are not a substitute for isolated worktrees yet.
+Use them mainly to coordinate sequential work or human/agent awareness in the same repo.
 
 ## 5. Create an explicit handoff
 

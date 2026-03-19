@@ -90,6 +90,20 @@ brainclaw context --json
 
 ---
 
+## Current Limitation
+
+For now, avoid having multiple coding agents edit the same project in parallel.
+
+brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, and handoffs. But until dedicated Git worktrees per agent/session are implemented, concurrent edits in the same checkout can still create conflicts, overwritten local state, or confusing Git transitions.
+
+Recommended use today:
+
+1. let one agent work at a time in a given checkout
+2. use handoffs when switching from one agent to another
+3. use shared plans, claims, and context to preserve continuity
+
+---
+
 ## How it fits into agent workflows
 
 brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Continue, OpenCode, and Antigravity/Gemini CLI.

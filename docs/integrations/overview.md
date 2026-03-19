@@ -2,6 +2,12 @@
 
 brainclaw is designed to work with existing coding agents, not replace them.
 
+## Current limitation
+
+For now, Brainclaw should be used for sequential multi-agent collaboration, not true parallel editing in the same checkout.
+
+One agent can hand work to another, and the next agent can recover good project context through shared memory, plans, claims, and handoffs. But without dedicated Git worktrees per agent/session, running several coding agents concurrently on the same project checkout is still risky and can create conflicts or unstable local state.
+
 ## Integration surfaces
 
 brainclaw can integrate through several surfaces:
