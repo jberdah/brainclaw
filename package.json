@@ -4,8 +4,8 @@
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
-    "brainclaw": "./dist/cli.js",
-    "bclaw": "./dist/cli.js"
+    "brainclaw": "dist/cli.js",
+    "bclaw": "dist/cli.js"
   },
   "files": [
     "dist/**/*.js",
@@ -38,7 +38,7 @@
   "license": "BUSL-1.1",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jberdah/brainclaw.git"
+    "url": "git+https://github.com/jberdah/brainclaw.git"
   },
   "homepage": "https://github.com/jberdah/brainclaw",
   "bugs": {
