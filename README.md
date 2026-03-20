@@ -118,7 +118,7 @@ brainclaw plan create "Coordinate auth rollout" --priority high
 brainclaw context --json
 ```
 
-→ [Full quickstart guide](https://github.com/jberdah/brainclaw/blob/master/docs/quickstart.md)
+Detailed Markdown guides are bundled in the npm package under `docs/`.
 
 ---
 
@@ -156,23 +156,25 @@ brainclaw can also expose collaboration views through MCP-readable tools, includ
 
 ## Documentation
 
+The npm package includes the Markdown docs below under `docs/`. Public web docs on `brainclaw.dev` are still being rolled out, so the npm README does not depend on private GitHub links.
+
 | | |
 |---|---|
-| [docs/quickstart.md](https://github.com/jberdah/brainclaw/blob/master/docs/quickstart.md) | Get started in 5 minutes |
-| [docs/cli.md](https://github.com/jberdah/brainclaw/blob/master/docs/cli.md) | Full command reference |
-| [docs/concepts/memory.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/memory.md) | What "memory" means in brainclaw |
-| [docs/concepts/plans-and-claims.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/plans-and-claims.md) | Coordination layer |
-| [docs/concepts/runtime-notes.md](https://github.com/jberdah/brainclaw/blob/master/docs/concepts/runtime-notes.md) | Ephemeral observations |
-| [docs/integrations/overview.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/overview.md) | How to integrate with any agent |
-| [docs/integrations/cursor.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/cursor.md) | Cursor |
-| [docs/integrations/claude-code.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/claude-code.md) | Claude Code |
-| [docs/integrations/copilot.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/copilot.md) | GitHub Copilot |
-| [docs/integrations/codex.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/codex.md) | Codex |
-| [docs/integrations/mcp.md](https://github.com/jberdah/brainclaw/blob/master/docs/integrations/mcp.md) | MCP tools |
-| [docs/storage.md](https://github.com/jberdah/brainclaw/blob/master/docs/storage.md) | Storage model |
-| [docs/security.md](https://github.com/jberdah/brainclaw/blob/master/docs/security.md) | Security model |
-| [docs/review.md](https://github.com/jberdah/brainclaw/blob/master/docs/review.md) | Reflective review |
-| [docs/reputation.md](https://github.com/jberdah/brainclaw/blob/master/docs/reputation.md) | Reputation signals |
+| `docs/quickstart.md` | Get started in 5 minutes |
+| `docs/cli.md` | Full command reference |
+| `docs/concepts/memory.md` | What "memory" means in brainclaw |
+| `docs/concepts/plans-and-claims.md` | Coordination layer |
+| `docs/concepts/runtime-notes.md` | Ephemeral observations |
+| `docs/integrations/overview.md` | How to integrate with any agent |
+| `docs/integrations/cursor.md` | Cursor |
+| `docs/integrations/claude-code.md` | Claude Code |
+| `docs/integrations/copilot.md` | GitHub Copilot |
+| `docs/integrations/codex.md` | Codex |
+| `docs/integrations/mcp.md` | MCP tools |
+| `docs/storage.md` | Storage model |
+| `docs/security.md` | Security model |
+| `docs/review.md` | Reflective review |
+| `docs/reputation.md` | Reputation signals |
 
 ---
 

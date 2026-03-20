@@ -4,7 +4,6 @@ const requiredPaths = ['LICENSE', 'README.md', 'dist/cli.js'];
 const forbiddenPrefixes = [
   '.github/',
   '.vscode/',
-  'docs/',
   'scripts/',
   'src/',
   'tests/',
@@ -13,6 +12,7 @@ const forbiddenPrefixes = [
 const forbiddenExactPaths = [
   'BRAINCLAW_VISION.md',
   'STANDARDIZATION_ANALYSIS.md',
+  'docs/plan.md',
   'tsconfig.json',
   'tsconfig.test.json',
 ];
