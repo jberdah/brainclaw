@@ -25,7 +25,7 @@ describe('hooks — generateCursorHook', () => {
   it('includes brainclaw context and session-end commands', () => {
     const content = generateCursorHook('proj');
     assert.ok(content.includes('brainclaw context'), 'must reference brainclaw context');
-    assert.ok(content.includes('release-claim'), 'must reference release-claim');
+    assert.ok(content.includes('brainclaw claim release'), 'must reference brainclaw claim release');
     assert.ok(content.includes('session-end'), 'must reference session-end');
   });
 });
@@ -40,7 +40,7 @@ describe('hooks — generateWindsurfHook', () => {
 
   it('includes session-end instructions', () => {
     const content = generateWindsurfHook('proj');
-    assert.ok(content.includes('release-claim'), 'must reference release-claim');
+    assert.ok(content.includes('brainclaw claim release'), 'must reference brainclaw claim release');
     assert.ok(content.includes('session-end'), 'must reference session-end');
   });
 });
