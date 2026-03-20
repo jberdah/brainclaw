@@ -135,7 +135,10 @@ describe('export command formats', () => {
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(content.includes('brainclaw'), 'should mention brainclaw');
       assert.ok(content.includes('brainclaw context'), 'should contain hygiene: brainclaw context');
-      assert.ok(content.includes('release-claim'), 'should contain hygiene: release-claim');
+      assert.ok(
+        content.includes('brainclaw claim release'),
+        'should contain hygiene: brainclaw claim release',
+      );
       const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
       assert.ok(gitignore.includes(expectedFile), `${expectedFile} should be gitignored by default`);
 
