@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "0.19.3",
+  "version": "0.19.4",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
@@ -36,14 +36,7 @@
     "local-first"
   ],
   "license": "BUSL-1.1",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/jberdah/brainclaw.git"
-  },
-  "homepage": "https://github.com/jberdah/brainclaw",
-  "bugs": {
-    "url": "https://github.com/jberdah/brainclaw/issues"
-  },
+  "homepage": "https://brainclaw.dev",
   "engines": {
     "node": ">=20"
   },
