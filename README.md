@@ -1,14 +1,10 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="brainclaw" width="140" />
+  <img src="https://brainclaw.dev/logo.png" alt="brainclaw" width="140" />
 </p>
 
 <h1 align="center">brainclaw</h1>
 
 <p align="center"><strong>Local-first coordination for humans and coding agents.</strong></p>
-
-<p align="center">
-  <a href="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml"><img src="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-</p>
 
 ---
 
