@@ -63,7 +63,10 @@ describe('core/agent-files — buildBrainclawSection', () => {
     const section = buildBrainclawSection('.brainclaw');
     assert.ok(section.includes('brainclaw context'), 'should mention brainclaw context');
     assert.ok(section.includes('Session start'), 'should have session start section');
-    assert.ok(section.includes('list-claims'), 'should mention list-claims for checking other agents');
+    assert.ok(
+      section.includes('brainclaw claim list'),
+      'should mention claim list for checking other agents',
+    );
   });
 
   it('contains before-finishing behavioral contract', () => {
