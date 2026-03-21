@@ -147,7 +147,7 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_bootstrap',
-    description: 'Derive brownfield bootstrap signals and an import proposal from repository docs, manifests, native agent files, and git history.',
+    description: 'Derive brownfield bootstrap signals, adaptive interview prompts for CLI or IDE chat agents, and an import proposal from repository docs, manifests, native agent files, and git history.',
     inputSchema: {
       type: 'object',
       properties: {

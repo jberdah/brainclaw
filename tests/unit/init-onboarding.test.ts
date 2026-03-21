@@ -55,6 +55,8 @@ describe('init onboarding preflight', () => {
     assert.match(result.stdout, /Onboarding preflight:/);
     assert.match(result.stdout, /Workspace kind: empty/);
     assert.match(result.stdout, /Open gaps:/);
+    assert.match(result.stdout, /brainclaw bootstrap --interview --audience cli/);
+    assert.match(result.stdout, /--audience ide_chat/);
   });
 
   it('prints detected native instruction files for an existing workspace', () => {
@@ -70,5 +72,6 @@ describe('init onboarding preflight', () => {
     assert.match(result.stdout, /Native instruction files:/);
     assert.match(result.stdout, /CLAUDE\.md/);
     assert.match(result.stdout, /brainclaw bootstrap --apply/);
+    assert.match(result.stdout, /brainclaw bootstrap --interview --audience cli/);
   });
 });

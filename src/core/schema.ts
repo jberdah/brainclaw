@@ -615,6 +615,31 @@ export const BootstrapSuggestionDocumentSchema = z.object({
 });
 export type BootstrapSuggestionDocument = z.infer<typeof BootstrapSuggestionDocumentSchema>;
 
+export const BootstrapInterviewAudienceSchema = z.enum(['cli', 'ide_chat', 'any']);
+export type BootstrapInterviewAudience = z.infer<typeof BootstrapInterviewAudienceSchema>;
+
+export const BootstrapInterviewQuestionSchema = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  rationale: z.string(),
+  priority: z.enum(['high', 'medium', 'low']),
+  audience: BootstrapInterviewAudienceSchema.default('any'),
+  response_kind: z.enum(['short_text', 'long_text', 'boolean', 'list']).default('short_text'),
+  gap_keys: z.array(z.string()).default([]),
+});
+export type BootstrapInterviewQuestion = z.infer<typeof BootstrapInterviewQuestionSchema>;
+
+export const BootstrapInterviewPlanSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  derived_at: z.string(),
+  workspace_kind: z.enum(['empty', 'existing']).optional(),
+  audience: BootstrapInterviewAudienceSchema.default('any'),
+  summary: z.string(),
+  question_count: z.number().int().nonnegative(),
+  questions: z.array(BootstrapInterviewQuestionSchema).default([]),
+});
+export type BootstrapInterviewPlan = z.infer<typeof BootstrapInterviewPlanSchema>;
+
 export const BootstrapImportPlanDocumentSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   derived_at: z.string(),
@@ -626,6 +651,7 @@ export const BootstrapImportPlanDocumentSchema = z.object({
   gaps: z.array(z.string()).default([]),
   suggestion_count: z.number().int().nonnegative(),
   suggestions: z.array(BootstrapSuggestionDocumentSchema).default([]),
+  interview: BootstrapInterviewPlanSchema.optional(),
 });
 export type BootstrapImportPlanDocument = z.infer<typeof BootstrapImportPlanDocumentSchema>;
 

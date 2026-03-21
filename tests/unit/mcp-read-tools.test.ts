@@ -264,6 +264,7 @@ describe('commands/mcp read tools', () => {
   it('returns bootstrap signals and brownfield context fallback through MCP', () => {
     fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Brownfield Auth\n\n## Test\n\n- npm test\n', 'utf-8');
     fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Guide\n\n- Read memory first\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'CLAUDE.md'), '# Claude Guidance\n\n- Check native instructions before editing\n', 'utf-8');
     fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
       scripts: { test: 'npm test' },
     }, null, 2), 'utf-8');
@@ -274,7 +275,11 @@ describe('commands/mcp read tools', () => {
     const bootstrapStructured = bootstrap.structuredContent as {
       seed_count: number;
       seeds: Array<{ seed_kind: string; source_kind: string }>;
-      import_plan?: { suggestion_count: number; suggestions: Array<{ target: string }> };
+      import_plan?: {
+        suggestion_count: number;
+        suggestions: Array<{ target: string }>;
+        interview?: { question_count: number; questions: Array<{ audience: string }> };
+      };
       reused_profile: boolean;
     };
     assert.ok(bootstrap.content[0].text.includes('Bootstrap summary'));
@@ -282,6 +287,8 @@ describe('commands/mcp read tools', () => {
     assert.ok(bootstrapStructured.seeds.some((seed) => seed.source_kind === 'agents_md'));
     assert.ok((bootstrapStructured.import_plan?.suggestion_count ?? 0) > 0);
     assert.ok(bootstrapStructured.import_plan?.suggestions.some((suggestion) => suggestion.target === 'instruction'));
+    assert.ok((bootstrapStructured.import_plan?.interview?.question_count ?? 0) > 0);
+    assert.ok(bootstrapStructured.import_plan?.interview?.questions.some((question) => question.audience === 'ide_chat'));
     assert.equal(bootstrapStructured.reused_profile, false);
 
     const context = handleMcpReadToolCall('bclaw_get_context', {

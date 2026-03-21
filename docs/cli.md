@@ -102,10 +102,17 @@ Bootstrap shared memory for a new agent or project context.
 | `--for <agent>` | Target agent name |
 | `--json` | Output as JSON |
 | `--refresh` | Force refresh even if bootstrap data is recent |
+| `--interview` | Render adaptive interview prompts instead of the bootstrap summary |
+| `--audience <audience>` | Filter interview prompts for `cli`, `ide_chat`, or `any` |
+| `--apply` | Import the current bootstrap proposal into canonical memory |
+| `--uninstall` | Deactivate the last bootstrap-managed import |
+| `-y, --yes` | Skip confirmation prompts for apply/uninstall |
 
 ```bash
 brainclaw bootstrap --for copilot
 brainclaw bootstrap --for claude --refresh --json
+brainclaw bootstrap --interview --audience cli
+brainclaw bootstrap --apply -y
 ```
 
 ### `brainclaw env`

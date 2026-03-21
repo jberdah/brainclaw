@@ -538,6 +538,8 @@ program
   .option('--for <target>', 'Target path or scope to tailor the bootstrap')
   .option('--json', 'Output as JSON')
   .option('--refresh', 'Force a fresh bootstrap scan instead of reusing the current profile')
+  .option('--interview', 'Render the adaptive interview prompts instead of the bootstrap summary')
+  .option('--audience <audience>', 'Target interview prompts for cli, ide_chat, or any')
   .option('--apply', 'Import the current bootstrap proposal into canonical memory')
   .option('--uninstall', 'Deactivate the last bootstrap import managed by this workspace')
   .option('-y, --yes', 'Skip confirmation prompts for apply/uninstall')

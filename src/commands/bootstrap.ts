@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { memoryExists } from '../core/io.js';
 import {
   applyBootstrapImport,
+  renderBootstrapInterview,
   renderBootstrapSummary,
   runBootstrapProfile,
   uninstallBootstrapImport,
@@ -16,6 +17,8 @@ export interface BootstrapCommandOptions {
   apply?: boolean;
   uninstall?: boolean;
   yes?: boolean;
+  interview?: boolean;
+  audience?: 'cli' | 'ide_chat' | 'any' | string;
 }
 
 export async function runBootstrap(options: BootstrapCommandOptions = {}): Promise<void> {
@@ -30,6 +33,8 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
       console.error('Error: --apply and --uninstall are mutually exclusive.');
       process.exit(1);
     }
+
+    const audience = resolveBootstrapInterviewAudience(options.audience);
 
     if (options.uninstall) {
       await confirmBootstrapAction('Remove the last bootstrap import?', options.yes);
@@ -80,11 +85,21 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
       return;
     }
 
-    console.log(renderBootstrapSummary(result));
+    console.log(options.interview ? renderBootstrapInterview(result, audience) : renderBootstrapSummary(result));
   } catch (error: unknown) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
+}
+
+function resolveBootstrapInterviewAudience(value?: string): 'cli' | 'ide_chat' | 'any' {
+  if (!value) {
+    return 'any';
+  }
+  if (value === 'cli' || value === 'ide_chat' || value === 'any') {
+    return value;
+  }
+  throw new Error(`Unsupported bootstrap interview audience '${value}'. Use cli, ide_chat, or any.`);
 }
 
 async function confirmBootstrapAction(question: string, yes?: boolean): Promise<void> {

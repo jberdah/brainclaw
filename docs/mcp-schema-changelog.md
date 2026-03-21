@@ -24,6 +24,9 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
   - Constraints can now have a category: architecture, performance, security, reliability, compatibility, process, other
   - Decisions can now have an outcome: approved, rejected, deferred, pending
 - Doctor check `metadata_consistency` — validates capability and tool completeness
+- `bclaw_bootstrap` now returns adaptive interview prompts alongside the import proposal when bootstrap confidence is incomplete
+  - `structuredContent.import_plan.interview` exposes `summary`, `question_count`, and audience-tagged questions
+  - Questions can be targeted to `cli`, `ide_chat`, or `any`
 
 **Changed**
 - MCP schema version bumped to 0.6.0 to reflect new metadata discovery capabilities

@@ -18,7 +18,7 @@ That is valuable for:
 | Tool | Purpose |
 |---|---|
 | `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
-| `bclaw_bootstrap` | Derive brownfield bootstrap signals when memory is still sparse |
+| `bclaw_bootstrap` | Derive brownfield bootstrap signals, adaptive interview prompts, and an import proposal when memory is still sparse |
 | `bclaw_get_execution_context` | Inspect local execution context and agent tooling |
 | `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
 | `bclaw_read_handoff` | Read active handoffs |

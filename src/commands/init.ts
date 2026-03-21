@@ -278,6 +278,10 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('');
     console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
     console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
+  }
+  if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
+    console.log('');
+    console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
   } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
     console.log('');
     console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);

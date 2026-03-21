@@ -87,4 +87,24 @@ describe('commands/bootstrap', () => {
     assert.ok(uninstalled.logs.some((line) => line.includes('Bootstrap uninstall completed:')));
     assert.ok(loadInstructions(workspace.dir).every((entry) => !entry.active || !entry.tags.includes('bootstrap-import')));
   });
+
+  it('renders adaptive interview prompts for CLI and IDE chat audiences', async () => {
+    fs.rmSync(path.join(workspace.dir, 'README.md'), { force: true });
+    fs.rmSync(path.join(workspace.dir, 'AGENTS.md'), { force: true });
+    fs.rmSync(path.join(workspace.dir, 'package.json'), { force: true });
+
+    const cliInterview = await captureConsole(async () => {
+      await runBootstrap({ interview: true, audience: 'cli', cwd: workspace.dir });
+    });
+    assert.equal(cliInterview.errors.length, 0);
+    assert.ok(cliInterview.logs.join('\n').includes('Audience: cli'));
+    assert.ok(cliInterview.logs.join('\n').includes('For a CLI-only agent'));
+
+    const ideInterview = await captureConsole(async () => {
+      await runBootstrap({ interview: true, audience: 'ide_chat', cwd: workspace.dir });
+    });
+    assert.equal(ideInterview.errors.length, 0);
+    assert.ok(ideInterview.logs.join('\n').includes('Audience: ide_chat'));
+    assert.ok(ideInterview.logs.join('\n').includes('For an IDE chat agent'));
+  });
 });

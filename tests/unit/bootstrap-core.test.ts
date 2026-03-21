@@ -104,9 +104,27 @@ describe('core/bootstrap', () => {
       assert.notEqual(result.profile.confidence, 'high');
       assert.ok(result.profile.gaps.includes('project intent is not documented yet'));
       assert.ok(result.profile.summary.includes('empty workspace'));
+      assert.ok((result.importPlan.interview?.question_count ?? 0) >= 4);
+      assert.ok(result.importPlan.interview?.questions.some((question) => question.audience === 'cli'));
+      assert.ok(result.importPlan.interview?.questions.some((question) => question.audience === 'ide_chat'));
     } finally {
       fs.rmSync(emptyDir, { recursive: true, force: true });
     }
+  });
+
+  it('adds a selective import interview prompt when native instruction files exist', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Existing Workspace\n\n## Build\n\n- npm run build\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'CLAUDE.md'), '# Claude Guidance\n\n- Read native instructions first\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
+      scripts: { build: 'npm run build' },
+    }, null, 2), 'utf-8');
+
+    const result = runBootstrapProfile({ cwd: workspace.dir });
+
+    assert.equal(result.profile.workspace_kind, 'existing');
+    assert.ok((result.importPlan.interview?.question_count ?? 0) > 0);
+    assert.ok(result.importPlan.interview?.questions.some((question) =>
+      question.audience === 'ide_chat' && question.prompt.includes('CLAUDE.md')));
   });
 
   it('reuses a valid profile and refresh replaces previous seeds', () => {

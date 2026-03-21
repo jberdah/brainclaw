@@ -6,11 +6,14 @@ import { generateId, nowISO } from './ids.js';
 import { memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
 import {
   BootstrapApplicationReceiptSchema,
+  BootstrapInterviewPlanSchema,
+  BootstrapInterviewQuestionSchema,
   BootstrapImportPlanDocumentSchema,
   BootstrapProfileDocumentSchema,
   BootstrapSuggestionDocumentSchema,
   MemorySeedDocumentSchema,
   type BootstrapApplicationReceipt,
+  type BootstrapInterviewPlan,
   type BootstrapImportPlanDocument,
   type BootstrapProfileDocument,
   type BootstrapSuggestionDocument,
@@ -236,12 +239,43 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
       lines.push(`- [${suggestion.target}/${suggestion.confidence}] <${suggestion.layer ?? 'global'}${scope}> ${suggestion.text}`);
     }
   }
+  if ((result.importPlan.interview?.question_count ?? 0) > 0) {
+    lines.push('');
+    lines.push('Adaptive interview:');
+    for (const question of result.importPlan.interview!.questions.slice(0, 6)) {
+      lines.push(`- [${question.priority}/${question.audience}] ${question.prompt}`);
+    }
+  }
   if (result.seeds.length > 0) {
     lines.push('');
     lines.push('Derived signals:');
     for (const seed of result.seeds.slice(0, 10)) {
       lines.push(`- [${seed.seed_kind}/${seed.confidence}] ${seed.text}`);
     }
+  }
+  return lines.join('\n');
+}
+
+export function renderBootstrapInterview(
+  result: BootstrapResult,
+  audience: 'cli' | 'ide_chat' | 'any' = 'any',
+): string {
+  const interview = result.importPlan.interview;
+  if (!interview || interview.question_count === 0) {
+    return 'No adaptive interview questions are needed right now.';
+  }
+
+  const questions = interview.questions.filter((question) => audience === 'any' || question.audience === 'any' || question.audience === audience);
+  if (questions.length === 0) {
+    return `No adaptive interview questions are targeted to ${audience}.`;
+  }
+
+  const lines = [interview.summary, `Audience: ${audience}`];
+  lines.push('');
+  for (const [index, question] of questions.entries()) {
+    lines.push(`${index + 1}. ${question.prompt}`);
+    lines.push(`   Why: ${question.rationale}`);
+    lines.push(`   Expected answer: ${question.response_kind}`);
   }
   return lines.join('\n');
 }
@@ -992,6 +1026,14 @@ function buildBootstrapImportPlan(input: {
   const summary = suggestions.length === 0
     ? 'No safe bootstrap imports are ready yet; review the gaps and use an interview/import step before promoting derived context.'
     : `${suggestions.length} bootstrap instruction suggestion(s) are ready to import after review.`;
+  const interview = buildBootstrapInterviewPlan({
+    workspaceKind: input.workspaceKind,
+    gaps: input.gaps,
+    confidence: input.confidence,
+    nativeInstructionSources: [...new Set(input.seeds
+      .filter((seed) => seed.source_kind === 'native_instruction')
+      .map((seed) => seed.source_ref))],
+  });
 
   return BootstrapImportPlanDocumentSchema.parse({
     schema_version: DERIVED_SCHEMA_VERSION,
@@ -1004,6 +1046,138 @@ function buildBootstrapImportPlan(input: {
     gaps: input.gaps,
     suggestion_count: suggestions.length,
     suggestions,
+    interview,
+  });
+}
+
+function buildBootstrapInterviewPlan(input: {
+  workspaceKind: 'empty' | 'existing';
+  gaps: string[];
+  confidence: MemorySeedConfidence;
+  nativeInstructionSources: string[];
+}): BootstrapInterviewPlan {
+  const questions: BootstrapInterviewPlan['questions'] = [];
+  const add = (
+    prompt: string,
+    rationale: string,
+    priority: 'high' | 'medium' | 'low',
+    audience: 'cli' | 'ide_chat' | 'any',
+    responseKind: 'short_text' | 'long_text' | 'boolean' | 'list',
+    gapKeys: string[],
+  ) => {
+    questions.push(BootstrapInterviewQuestionSchema.parse({
+      id: generateId('bootstrap_suggestions'),
+      prompt,
+      rationale,
+      priority,
+      audience,
+      response_kind: responseKind,
+      gap_keys: gapKeys,
+    }));
+  };
+
+  if (input.workspaceKind === 'empty') {
+    add(
+      'What is this workspace trying to build in one sentence?',
+      'An empty workspace needs a product intent anchor before Brainclaw can create durable guidance.',
+      'high',
+      'any',
+      'short_text',
+      ['project intent is not documented yet'],
+    );
+    add(
+      'Which coding agents do you expect to use here, and should they work mostly sequentially or in parallel later?',
+      'Bootstrap should capture collaboration expectations early, especially before worktree isolation exists.',
+      'high',
+      'any',
+      'list',
+      ['agent workflow expectations should be captured explicitly'],
+    );
+    add(
+      'For a CLI-only agent, what should the very first safe action be after reading context?',
+      'Pure CLI agents need an explicit first action because they do not benefit from rich IDE affordances.',
+      'medium',
+      'cli',
+      'short_text',
+      ['agent workflow expectations should be captured explicitly'],
+    );
+    add(
+      'For an IDE chat agent, what should it ask or inspect before editing code?',
+      'IDE chat agents can ask targeted follow-up questions; capturing that expectation avoids drift between surfaces.',
+      'medium',
+      'ide_chat',
+      'short_text',
+      ['agent workflow expectations should be captured explicitly'],
+    );
+  }
+
+  if (input.gaps.includes('no README-level project overview detected')) {
+    add(
+      'What is the current purpose of this existing project, and what would you want a new agent to understand first?',
+      'When README context is missing, Brainclaw needs an explicit project overview to avoid weak brownfield inference.',
+      'high',
+      'any',
+      'long_text',
+      ['no README-level project overview detected'],
+    );
+  }
+
+  if (input.gaps.includes('no native agent instruction files detected')) {
+    add(
+      'Should Brainclaw treat this project as agent-guided even though no native agent instruction files were found?',
+      'This determines whether Brainclaw should synthesize workflow guidance or stay memory-only for now.',
+      'medium',
+      'any',
+      'boolean',
+      ['no native agent instruction files detected'],
+    );
+  }
+
+  if (input.gaps.includes('derived context is sparse and may need an interview')) {
+    add(
+      'Which constraints or conventions are important enough that every future agent should see them immediately?',
+      'Sparse derived context should be turned into a small set of high-signal shared instructions or constraints.',
+      'high',
+      'any',
+      'list',
+      ['derived context is sparse and may need an interview'],
+    );
+  }
+
+  if (input.nativeInstructionSources.length > 0) {
+    add(
+      `Which parts of ${input.nativeInstructionSources.join(', ')} should become durable Brainclaw memory, and which parts should remain local agent guidance only?`,
+      'Native agent files are derived context first; Brainclaw needs a selective import decision instead of silently promoting them.',
+      'medium',
+      'ide_chat',
+      'long_text',
+      ['native instruction import boundary'],
+    );
+  }
+
+  if (questions.length === 0 && input.confidence !== 'high') {
+    add(
+      'What is still ambiguous enough that a future agent would likely ask you before proceeding?',
+      'Fallback question when bootstrap confidence is not high but no specific gap generated a dedicated prompt.',
+      'medium',
+      'any',
+      'long_text',
+      ['confidence fallback'],
+    );
+  }
+
+  const summary = questions.length === 0
+    ? 'No adaptive interview questions are needed right now.'
+    : `${questions.length} adaptive interview question(s) are ready to turn bootstrap gaps into confirmed shared memory.`;
+
+  return BootstrapInterviewPlanSchema.parse({
+    schema_version: DERIVED_SCHEMA_VERSION,
+    derived_at: nowISO(),
+    workspace_kind: input.workspaceKind,
+    audience: 'any',
+    summary,
+    question_count: questions.length,
+    questions,
   });
 }
 
