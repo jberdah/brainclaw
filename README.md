@@ -4,28 +4,31 @@
 
 <h1 align="center">brainclaw</h1>
 
-<p align="center"><strong>Local-first coordination for humans and coding agents.</strong></p>
+<p align="center"><strong>Local-first coordination for coding agents, with human-readable local control.</strong></p>
 
 ---
 
-brainclaw gives a workspace a shared coordination layer for coding agents: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context — stored locally, versioned in Git, readable in plain text.
+brainclaw gives a workspace a shared coordination layer for coding agents: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context, all stored locally, versioned in Git, and readable in plain text.
 
 For capable agents, the nominal path is:
 
 1. read dynamic state through MCP
 2. use native agent files such as `AGENTS.md`, `CLAUDE.md`, or Cursor rules as local guidance
-3. leave the CLI to humans, scripts, setup, release, and fallback workflows
+3. leave the CLI to operators, scripts, setup, release, and fallback workflows
 
-It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and any other coding agent. It does not replace them. It gives them a shared state layer they can resume from reliably.
+The best setup is usually not "open a terminal and run Brainclaw yourself".
+The best setup is to tell your agent, in natural language, to install and initialize Brainclaw in the repo so it can bootstrap its own working context correctly.
+
+It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and other coding agents. It does not replace them. It gives them a shared state layer they can resume from reliably across sessions.
 
 ---
 
 ## Why brainclaw exists
 
 Coding agents are getting better at local code generation, but they still struggle with shared project state.
-Across real projects, agents often miss active constraints, forget known traps, duplicate work, step on the same files, and lose context between sessions.
+Across real projects, agents often miss active constraints, forget known traps, duplicate work, step on the same files, and lose context between sessions or tool surfaces.
 
-brainclaw solves this by giving the workspace a shared coordination layer that agents can query dynamically and humans can inspect locally.
+brainclaw solves this by making the repo itself agent-readable and agent-writeable through MCP, local memory files, and explicit coordination primitives.
 
 ---
 
@@ -33,44 +36,44 @@ brainclaw solves this by giving the workspace a shared coordination layer that a
 
 | | |
 |---|---|
-| **Project memory** | constraints, decisions, traps, handoffs, layered instructions |
-| **Coordination state** | shared plans, file claims, handoffs, runtime notes, board views |
-| **Agent-ready context** | compact, prompt-sized context generated from real workspace state |
-| **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, etc. |
-| **Local-first storage** | plain text + JSON, Git-friendly, no cloud, no telemetry |
+| **Project memory** | constraints, decisions, traps, handoffs, and layered instructions agents can resume from |
+| **Coordination state** | shared plans, file claims, runtime notes, and board views for active work |
+| **Agent-ready context** | compact, prompt-sized context built from real workspace state instead of stale instructions |
+| **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance |
+| **Local-first storage** | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default |
 
 ---
 
 ## Agent Surfaces
 
-brainclaw exposes the same collaboration state through three surfaces, but they do not have the same role.
+brainclaw exposes the same collaboration state through three surfaces, but they do not have the same role in an agent-first workflow.
 
 | Surface | Primary use |
 |---|---|
 | **MCP** | default path for capable agents that need fresh context, board state, plans, claims, and write operations |
-| **Native agent files** | local guidance and bootstrapping for a specific agent surface (`AGENTS.md`, `CLAUDE.md`, Cursor rules, etc.) |
-| **CLI** | operator workflows, scripting, setup, release, debugging, and fallback access when MCP is not the integration path |
+| **Native agent files** | local guidance and bootstrap hints for a specific agent surface (`AGENTS.md`, `CLAUDE.md`, Cursor rules, etc.) |
+| **CLI** | operator workflows, scripting, setup, debugging, release, and fallback access when MCP is not the integration path |
 
-If you are documenting or integrating an agent workflow, prefer MCP first.
+If you are documenting or integrating an agent workflow, treat MCP as the primary runtime path.
 
 ---
 
 ## Works With
 
-brainclaw is designed to sit alongside the coding agents teams are already using.
+brainclaw is designed to sit alongside the coding agents teams are already using, not behind a separate hosted control plane.
 
 | Logo | Agent | Brainclaw fit | Best use today |
 |---|---|---|---|
-| [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | Best fit | full workflow integration with instructions, MCP, commands, and session hooks |
-| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | Strong fit | structured CLI/MCP collaboration with explicit plans, claims, and handoffs |
-| [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US) | **[Cursor](https://cursor.com/en-US)** | Strong fit | repo-native coordination with rules + MCP |
-| [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode) | **[OpenCode](https://github.com/opencode-ai/opencode)** | Strong fit | simple local-first setup with `AGENTS.md` + workspace MCP |
-| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | Good fit | guided workflows with instructions, hooks, and MCP |
-| [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code) | **[Roo](https://github.com/RooCodeInc/Roo-Code)** | Good fit | workspace coordination with rules + MCP |
-| [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | Good fit | context access and MCP-driven collaboration in editor workflows |
-| [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Promising fit | CLI-first workflows with `GEMINI.md` + MCP |
-| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | Functional fit | lightweight Brainclaw usage through rules + MCP |
-| [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | Supported fit | project awareness and shared instructions, with lighter workflow control |
+| [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | Best fit | full agent workflow with MCP, instructions, commands, and session hooks |
+| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | Strong fit | agent-first repo coordination with explicit plans, claims, and handoffs |
+| [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US) | **[Cursor](https://cursor.com/en-US)** | Strong fit | repo-native agent workflows with rules plus MCP |
+| [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode) | **[OpenCode](https://github.com/opencode-ai/opencode)** | Strong fit | simple agent bootstrap with `AGENTS.md` plus workspace MCP |
+| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | Good fit | guided agent workflows with instructions, hooks, and MCP |
+| [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code) | **[Roo](https://github.com/RooCodeInc/Roo-Code)** | Good fit | workspace agent coordination with rules plus MCP |
+| [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | Good fit | editor-based agent workflows with MCP context access |
+| [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Promising fit | local agent workflows with `GEMINI.md` plus MCP |
+| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | Functional fit | lightweight agent use through rules plus MCP |
+| [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | Supported fit | project awareness and shared local instructions with lighter workflow control |
 
 brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
 
@@ -91,15 +94,38 @@ If you want the least surprising setup today, use Linux first. If you are on Win
 
 ---
 
+## Best Setup
+
+If you want the cleanest Brainclaw onboarding, ask your agent to do it.
+
+Example:
+
+```text
+Install Brainclaw in this repo, initialize it, configure the agent integration if needed,
+and then use Brainclaw for shared context, plans, claims, and handoffs while you work.
+```
+
+That is the product's intended entry path.
+The human expresses the intent in plain language. The agent installs Brainclaw, bootstraps the repo, and then keeps using it through MCP and local agent files.
+
+If the agent supports MCP well, this produces a better bootstrap than a human manually running setup commands first, because the agent can immediately:
+
+- set up the workspace in the right environment
+- write the local agent-facing files it will actually use
+- configure MCP where supported
+- start from shared context instead of ad hoc instructions
+
+---
+
 ## Quick Example
 
 ```bash
-# Operator bootstrap
+# behind the scenes, the agent will typically bootstrap Brainclaw in the repo
 npx brainclaw setup --yes
 npx brainclaw init
 ```
 
-Once the workspace is initialized, a capable agent should use Brainclaw through MCP:
+After that, the agent should stay on Brainclaw's MCP path for live state:
 
 ```text
 bclaw_session_start      -> open session + return board/context
@@ -110,7 +136,7 @@ bclaw_write_note         -> record runtime observations
 bclaw_session_end        -> close session and hand work off cleanly
 ```
 
-Humans can still use the CLI directly for setup, inspection, and fallback workflows:
+Humans can still use the CLI directly for inspection, scripting, and fallback workflows:
 
 ```bash
 brainclaw plan create "Coordinate auth rollout" --priority high
@@ -123,10 +149,39 @@ brainclaw status
 
 ## Installation
 
+The intended path is agent-driven bootstrap inside the target repo, not a human doing a manual install flow first.
+
+In practice, that means:
+
+1. tell the agent to install and initialize Brainclaw in the repo
+2. let the agent bootstrap MCP and native agent files
+3. let the agent keep using Brainclaw for shared context and coordination while it works
+
+If you need the underlying commands, the agent will usually do something close to:
+
 ```bash
-npm install -g brainclaw   # global
-# or
-npm install && npm run build  # from source
+npx brainclaw setup --yes
+npx brainclaw init
+```
+
+That gives the agent a better bootstrap path because Brainclaw can immediately:
+
+- detect the workspace
+- write native agent files
+- configure MCP where supported
+- seed local project memory and coordination state
+
+If you want a machine-level CLI for operator workflows, debugging, or repeated local use, a global install is still available, but it is not the primary onboarding path:
+
+```bash
+npm install -g brainclaw
+```
+
+If you are working from source while developing Brainclaw itself:
+
+```bash
+npm install
+npm run build
 ```
 
 Also available as `bclaw`:
@@ -140,16 +195,19 @@ bclaw status
 
 ## Quickstart
 
-```bash
-brainclaw setup --yes
-brainclaw init
-```
+Start here conceptually:
+
+1. ask the agent to install and initialize Brainclaw in the repo
+2. let the agent use MCP for dynamic state
+3. use the CLI yourself only when you need operator-level inspection or fallback access
 
 Then choose the entry path that matches your surface:
 
-- agent-first: start with `docs/integrations/overview.md` and `docs/integrations/mcp.md`
+- agent-first runtime: start with `docs/integrations/overview.md` and `docs/integrations/mcp.md`
 - operator CLI: use `docs/quickstart.md` and `docs/cli.md`
 - brownfield onboarding: use `brainclaw bootstrap` and the onboarding guides in `docs/`
+
+If you are evaluating Brainclaw as a product, start with the agent-first runtime path, not the CLI reference.
 
 Detailed Markdown guides are bundled in the npm package under `docs/`.
 
@@ -157,9 +215,9 @@ Detailed Markdown guides are bundled in the npm package under `docs/`.
 
 ## Current Limitation
 
-For now, avoid having multiple coding agents edit the same project in parallel.
+For now, avoid having multiple coding agents edit the same project in parallel in the same checkout.
 
-brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, and handoffs. But until dedicated Git worktrees per agent/session are implemented, concurrent edits in the same checkout can still create conflicts, overwritten local state, or confusing Git transitions.
+brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, and handoffs. But until dedicated Git worktrees per agent or session are implemented, concurrent edits in the same checkout can still create conflicts, overwritten local state, or confusing Git transitions.
 
 Recommended use today:
 
@@ -175,14 +233,14 @@ brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline,
 
 Typical agent-first flow:
 
-1. `brainclaw setup` — machine-level bootstrap for agent integrations and global prerequisites
-2. `brainclaw init` — seeds workspace memory and writes the detected agent's native instruction file
-3. agents connect through MCP for fresh context, board views, plans, claims, and runtime writes
+1. a human asks the agent to install and initialize Brainclaw in the repo
+2. the agent bootstraps Brainclaw in the right environment for that workspace
+3. the agent connects through MCP for fresh context, board views, plans, claims, and runtime writes
 4. native agent files provide local guidance and workflow reminders in the surface the agent already uses
-5. humans use the CLI for inspection, scripting, release, bootstrap, and fallback operations
+5. humans use the CLI for inspection, scripting, release, and fallback operations
 6. shared plans, claims, handoffs, and runtime notes keep the next agent resumeable
 
-brainclaw exposes collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates. Readable local files still matter, but MCP is the stronger path for dynamic state.
+brainclaw exposes collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates. Readable local files still matter, but MCP is the stronger path for dynamic state and write operations.
 
 ---
 
@@ -190,19 +248,21 @@ brainclaw exposes collaboration views through MCP-readable tools, including cont
 
 The npm package includes the Markdown docs below under `docs/`. Public web docs on `brainclaw.dev` are still being rolled out, so the npm README does not depend on private GitHub links.
 
+If you are integrating Brainclaw into an agent workflow, start with the agent-facing docs first:
+
 | | |
 |---|---|
-| `docs/quickstart.md` | Get started in 5 minutes |
-| `docs/cli.md` | Full command reference |
+| `docs/integrations/overview.md` | Start here for agent integrations |
+| `docs/integrations/mcp.md` | MCP runtime path for capable agents |
+| `docs/quickstart.md` | Setup paths, including operator and brownfield flows |
+| `docs/cli.md` | CLI reference for operators, scripts, and fallback use |
 | `docs/concepts/memory.md` | What "memory" means in brainclaw |
 | `docs/concepts/plans-and-claims.md` | Coordination layer |
 | `docs/concepts/runtime-notes.md` | Ephemeral observations |
-| `docs/integrations/overview.md` | How to integrate with any agent |
 | `docs/integrations/cursor.md` | Cursor |
 | `docs/integrations/claude-code.md` | Claude Code |
 | `docs/integrations/copilot.md` | GitHub Copilot |
 | `docs/integrations/codex.md` | Codex |
-| `docs/integrations/mcp.md` | MCP tools |
 | `docs/storage.md` | Storage model |
 | `docs/security.md` | Security model |
 | `docs/review.md` | Reflective review |
@@ -211,6 +271,8 @@ The npm package includes the Markdown docs below under `docs/`. Public web docs 
 ---
 
 ## Running tests
+
+Contributor note: the commands below are for developing Brainclaw itself, not for normal agent usage inside a target repo.
 
 ```bash
 npm test                   # unit + smoke (fast path)
