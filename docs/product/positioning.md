@@ -65,32 +65,31 @@ Local-first gives teams:
 - Git history for shared project state
 - compatibility with enterprise or offline environments
 
-## Licensing
+## License direction
 
-brainclaw is published under the **Business Source License 1.1 (BSL 1.1)**.
+Today, brainclaw is published under the **Business Source License 1.1 (BSL 1.1)**.
 
-### What this means in practice
+The direction after the closed beta is simpler:
 
-| Use case | Status |
-|----------|--------|
-| Personal use, open-source projects | Free |
-| Internal team or company use | Free |
-| Embedding brainclaw in a product or service you sell | Requires a commercial license |
-| Competitive products that replicate brainclaw's core value | Requires a commercial license |
+- the local-first brainclaw core is intended to move to MIT
+- remote shared-memory, hosted collaboration, advanced dashboards, and related private add-ons will stay separate commercial products
 
-### Why BSL instead of MIT
+The intended MIT core covers the local coordination layer:
 
-MIT gives users complete freedom, including the freedom to take the source, wrap it, and resell it as a competing product without contributing back. For a small independent project, that means large vendors can capture the market before the original author can sustain the work.
+- local project memory
+- local MCP and CLI workflows
+- onboarding and bootstrap
+- plans, claims, handoffs, and runtime notes
+- local agent integrations
 
-BSL 1.1 preserves all the practical freedoms of open source (inspect, use, modify, contribute) while protecting the economic viability of the project. It is used by projects like MariaDB, HashiCorp Vault, and Sentry.
+The commercial side is meant to cover capabilities that go beyond the local-first core:
 
-### Conversion to MIT
+- shared memory through the cloud for agents working across machines
+- hosted sync and collaboration services
+- advanced dashboards
+- private add-ons around those hosted features
 
-The BSL includes an automatic conversion clause: the license converts to **MIT** after 4 years from each release date. Every version of brainclaw will eventually become fully open source.
-
-### Commercial licensing
-
-If your use case requires a commercial license, contact the project author. The intent is not to restrict legitimate internal use — it is to prevent competitive product embedding without a fair contribution back to the project.
+The goal is not to ship a stripped-down teaser. The goal is to keep the public core complete and useful on its own, while keeping remote and hosted features in a separate product line.
 
 ## Positioning summary
 
