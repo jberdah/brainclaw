@@ -10,7 +10,6 @@
   "files": [
     "dist/**/*.js",
     "docs/**/*.md",
-    "!docs/plan.md",
     "README.md",
     "LICENSE"
   ],

@@ -28,9 +28,6 @@ __pycache__/
 crop_logo.py
 ci-test-out.txt
 
-# Internal working documents
-docs/plan.md
-
 # Test artifacts
 test_output.txt
 test_spawn_out.txt
@@ -72,3 +69,6 @@ opencode.json
 
 # Local installable Brainclaw releases
 .releases/
+
+# Internal documents and notes
+internal-docs/
