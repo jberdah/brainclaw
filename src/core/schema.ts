@@ -549,6 +549,7 @@ export type MemorySeedKind = z.infer<typeof MemorySeedKindSchema>;
 export const MemorySeedSourceKindSchema = z.enum([
   'readme',
   'agents_md',
+  'native_instruction',
   'manifest',
   'repo_analysis',
   'git',
@@ -587,6 +588,10 @@ export const BootstrapProfileDocumentSchema = z.object({
   agents_md_present: z.boolean().default(false),
   seed_count: z.number().int().nonnegative(),
   target: z.string().optional(),
+  workspace_kind: z.enum(['empty', 'existing']).optional(),
+  confidence: MemorySeedConfidenceSchema.optional(),
+  native_instruction_files: z.array(z.string()).default([]),
+  gaps: z.array(z.string()).default([]),
 });
 export type BootstrapProfileDocument = z.infer<typeof BootstrapProfileDocumentSchema>;
 

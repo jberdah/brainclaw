@@ -10,6 +10,7 @@ import { initMemoryRepo } from '../core/memory-git.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
 import { scanProject, upsertProject } from '../core/global-registry.js';
 import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
+import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
@@ -265,6 +266,13 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Initialize internal git repo for memory versioning
   if (initMemoryRepo(cwd)) {
     console.log('✔ Initialized memory git repo for versioning');
+  }
+
+  const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
+  console.log('');
+  console.log('Onboarding preflight:');
+  for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
+    console.log(`  ${line}`);
   }
 
   console.log('');

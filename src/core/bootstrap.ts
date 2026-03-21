@@ -24,6 +24,29 @@ const MAKEFILE_NAME = 'Makefile';
 const PROFILE_FILE = 'profile.json';
 const HOTSPOT_LIMIT = 3;
 const DERIVED_SCHEMA_VERSION = 2;
+const EMPTY_WORKSPACE_IGNORED = new Set([
+  '.git',
+  '.brainclaw',
+  '.gitignore',
+  '.gitattributes',
+  '.gitmodules',
+  '.DS_Store',
+  'Thumbs.db',
+  'internal-docs',
+]);
+const NATIVE_INSTRUCTION_FILES = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  'GEMINI.md',
+  '.windsurfrules',
+  '.github/copilot-instructions.md',
+] as const;
+const NATIVE_INSTRUCTION_DIRS = [
+  '.cursor/rules',
+  '.roo/rules',
+  '.continue/rules',
+  '.clinerules',
+] as const;
 
 export interface BootstrapOptions {
   target?: string;
@@ -56,6 +79,11 @@ interface GitProbeResult {
 interface BuildBootstrapArtifactsResult {
   profile: BootstrapProfileDocument;
   seeds: MemorySeedDocument[];
+}
+
+interface WorkspaceClassification {
+  kind: 'empty' | 'existing';
+  visibleEntries: string[];
 }
 
 export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapResult {
@@ -135,8 +163,20 @@ export function selectDerivedSignals(
 
 export function renderBootstrapSummary(result: BootstrapResult): string {
   const lines: string[] = [result.profile.summary];
+  if (result.profile.workspace_kind) {
+    lines.push(`Workspace kind: ${result.profile.workspace_kind}`);
+  }
+  if (result.profile.confidence) {
+    lines.push(`Confidence: ${result.profile.confidence}`);
+  }
   lines.push(`Sources scanned: ${result.profile.sources_scanned.join(', ') || 'none'}`);
   lines.push(`Seed count: ${result.profile.seed_count}`);
+  if ((result.profile.native_instruction_files?.length ?? 0) > 0) {
+    lines.push(`Native instruction files: ${result.profile.native_instruction_files.join(', ')}`);
+  }
+  if ((result.profile.gaps?.length ?? 0) > 0) {
+    lines.push(`Open gaps: ${result.profile.gaps.join(' | ')}`);
+  }
   if (result.profile.repo_fingerprint) {
     lines.push(`Repo fingerprint: ${result.profile.repo_fingerprint}`);
   }
@@ -163,6 +203,8 @@ function buildBootstrapArtifacts(input: {
 }): BuildBootstrapArtifactsResult {
   const sourcesScanned: string[] = [];
   const seeds: MemorySeedDocument[] = [];
+  const workspace = classifyWorkspace(input.cwd);
+  const nativeInstructionFiles = discoverNativeInstructionFiles(input.cwd);
 
   const readmePath = findFirstExisting(input.cwd, README_CANDIDATES);
   if (readmePath) {
@@ -175,6 +217,15 @@ function buildBootstrapArtifacts(input: {
   if (agentsPresent) {
     sourcesScanned.push('AGENTS.md');
     seeds.push(...extractAgentsSeeds(agentsPath, input.target));
+  }
+
+  if (nativeInstructionFiles.length > 0) {
+    sourcesScanned.push('native_instructions');
+    seeds.push(...extractNativeInstructionSeeds(
+      nativeInstructionFiles.map((relativePath) => path.join(input.cwd, relativePath)),
+      input.cwd,
+      input.target,
+    ));
   }
 
   const manifestResult = extractManifestSeeds(input.cwd, input.target);
@@ -208,12 +259,29 @@ function buildBootstrapArtifacts(input: {
   }
 
   const uniqueSeeds = dedupeSeeds(seeds);
-  const summary = buildSummary({
+  const confidence = inferBootstrapConfidence({
+    workspaceKind: workspace.kind,
+    readmePresent: Boolean(readmePath),
     agentsPresent,
+    nativeInstructionFiles,
+    seedCount: uniqueSeeds.length,
+  });
+  const gaps = inferBootstrapGaps({
+    workspaceKind: workspace.kind,
+    readmePresent: Boolean(readmePath),
+    nativeInstructionFiles,
+    seedCount: uniqueSeeds.length,
+  });
+  const summary = buildSummary({
+    workspaceKind: workspace.kind,
+    agentsPresent,
+    nativeInstructionFiles,
     gitAvailable: gitProbe.available,
     repoAnalysis,
     seeds: uniqueSeeds,
     target: input.target,
+    confidence,
+    gaps,
   });
 
   return {
@@ -227,6 +295,10 @@ function buildBootstrapArtifacts(input: {
       agents_md_present: agentsPresent,
       seed_count: uniqueSeeds.length,
       target: input.target,
+      workspace_kind: workspace.kind,
+      confidence,
+      native_instruction_files: nativeInstructionFiles,
+      gaps,
     }),
     seeds: uniqueSeeds.map((seed) => MemorySeedDocumentSchema.parse({
       ...seed,
@@ -305,6 +377,62 @@ function extractAgentsSeeds(filepath: string, target?: string): MemorySeedDocume
           tags: ['bootstrap', 'agent'],
           relatedPaths: target ? [target] : undefined,
         }));
+      }
+    }
+  }
+
+  return seeds;
+}
+
+function extractNativeInstructionSeeds(filepaths: string[], cwd: string, target?: string): MemorySeedDocument[] {
+  const seeds: MemorySeedDocument[] = [];
+
+  for (const filepath of filepaths) {
+    if (path.basename(filepath) === 'AGENTS.md') {
+      continue;
+    }
+
+    const relativePath = path.relative(cwd, filepath).replace(/\\/g, '/');
+    const raw = fs.readFileSync(filepath, 'utf-8');
+    const lines = raw.split(/\r?\n/);
+    const heading = lines.find((line) => line.trim().startsWith('#'));
+    const firstContent = lines.find((line) => line.trim().length > 0);
+    const label = heading
+      ? heading.replace(/^#+\s*/, '').trim()
+      : firstContent?.trim().replace(/^[-*]\s+/, '') ?? relativePath;
+
+    seeds.push(createSeed({
+      text: `Native agent guidance from ${path.basename(relativePath)}: ${label}`,
+      seedKind: 'agent_rule',
+      sourceKind: 'native_instruction',
+      sourceRef: relativePath,
+      confidence: 'high',
+      tags: ['bootstrap', 'agent', 'native-context'],
+      relatedPaths: target ? [target] : undefined,
+    }));
+
+    let extracted = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!/^([-*]|\d+\.)\s+/.test(trimmed)) {
+        continue;
+      }
+      const text = trimmed.replace(/^([-*]|\d+\.)\s+/, '').trim();
+      if (!text) {
+        continue;
+      }
+      seeds.push(createSeed({
+        text,
+        seedKind: 'agent_rule',
+        sourceKind: 'native_instruction',
+        sourceRef: relativePath,
+        confidence: 'medium',
+        tags: ['bootstrap', 'agent', 'native-context'],
+        relatedPaths: target ? [target] : undefined,
+      }));
+      extracted++;
+      if (extracted >= 5) {
+        break;
       }
     }
   }
@@ -671,17 +799,25 @@ function dedupeSeeds(seeds: MemorySeedDocument[]): MemorySeedDocument[] {
 }
 
 function buildSummary(input: {
+  workspaceKind: 'empty' | 'existing';
   agentsPresent: boolean;
+  nativeInstructionFiles: string[];
   gitAvailable: boolean;
   repoAnalysis: ReturnType<typeof analyzeRepository>;
   seeds: MemorySeedDocument[];
   target?: string;
+  confidence: MemorySeedConfidence;
+  gaps: string[];
 }): string {
   const parts: string[] = [];
-  parts.push(`Bootstrap summary${input.target ? ` for ${input.target}` : ''}: ${input.seeds.length} derived signal(s).`);
+  parts.push(`Bootstrap summary${input.target ? ` for ${input.target}` : ''}: ${input.workspaceKind} workspace, ${input.seeds.length} derived signal(s).`);
+  parts.push(`Confidence: ${input.confidence}.`);
   parts.push(`Repository mode looks ${input.repoAnalysis.recommendedMode}.`);
   if (input.agentsPresent) {
     parts.push('AGENTS.md detected and summarized.');
+  }
+  if (input.nativeInstructionFiles.length > 0) {
+    parts.push(`${input.nativeInstructionFiles.length} native instruction file(s) detected.`);
   }
   if (input.gitAvailable) {
     parts.push('Git history available for hotspot detection.');
@@ -690,7 +826,88 @@ function buildSummary(input: {
   if (commandCount > 0) {
     parts.push(`${commandCount} command-oriented hint(s) found.`);
   }
+  if (input.gaps.length > 0) {
+    parts.push(`Needs follow-up on: ${input.gaps.join('; ')}.`);
+  }
   return parts.join(' ');
+}
+
+function classifyWorkspace(cwd: string): WorkspaceClassification {
+  const visibleEntries = fs.readdirSync(cwd)
+    .filter((entry) => !EMPTY_WORKSPACE_IGNORED.has(entry));
+  return {
+    kind: visibleEntries.length === 0 ? 'empty' : 'existing',
+    visibleEntries,
+  };
+}
+
+function discoverNativeInstructionFiles(cwd: string): string[] {
+  const discovered = new Set<string>();
+
+  for (const relativePath of NATIVE_INSTRUCTION_FILES) {
+    const filepath = path.join(cwd, relativePath);
+    if (fs.existsSync(filepath) && fs.statSync(filepath).isFile()) {
+      discovered.add(relativePath);
+    }
+  }
+
+  for (const relativeDir of NATIVE_INSTRUCTION_DIRS) {
+    const dir = path.join(cwd, relativeDir);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(dir).sort()) {
+      if (!/\.(md|mdc)$/i.test(entry)) {
+        continue;
+      }
+      discovered.add(path.posix.join(relativeDir.replace(/\\/g, '/'), entry));
+    }
+  }
+
+  return [...discovered].sort((left, right) => left.localeCompare(right));
+}
+
+function inferBootstrapConfidence(input: {
+  workspaceKind: 'empty' | 'existing';
+  readmePresent: boolean;
+  agentsPresent: boolean;
+  nativeInstructionFiles: string[];
+  seedCount: number;
+}): MemorySeedConfidence {
+  if (input.workspaceKind === 'empty') {
+    return input.seedCount > 3 ? 'medium' : 'low';
+  }
+  if (input.readmePresent && (input.agentsPresent || input.nativeInstructionFiles.length > 0) && input.seedCount >= 6) {
+    return 'high';
+  }
+  if (input.readmePresent || input.nativeInstructionFiles.length > 0 || input.seedCount >= 4) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function inferBootstrapGaps(input: {
+  workspaceKind: 'empty' | 'existing';
+  readmePresent: boolean;
+  nativeInstructionFiles: string[];
+  seedCount: number;
+}): string[] {
+  const gaps: string[] = [];
+  if (input.workspaceKind === 'empty') {
+    gaps.push('project intent is not documented yet');
+    gaps.push('agent workflow expectations should be captured explicitly');
+    return gaps;
+  }
+  if (!input.readmePresent) {
+    gaps.push('no README-level project overview detected');
+  }
+  if (input.nativeInstructionFiles.length === 0) {
+    gaps.push('no native agent instruction files detected');
+  }
+  if (input.seedCount < 4) {
+    gaps.push('derived context is sparse and may need an interview');
+  }
+  return gaps;
 }
 
 function scoreSeed(seed: MemorySeedDocument, target?: string): number {

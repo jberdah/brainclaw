@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadBootstrapProfile, listBootstrapSeeds, runBootstrapProfile } from '../../src/core/bootstrap.js';
@@ -44,6 +45,7 @@ describe('core/bootstrap', () => {
   it('derives seeds from README, AGENTS.md, manifests, and repo analysis', () => {
     fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Brownfield App\n\n## Test\n\n- npm test\n', 'utf-8');
     fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Read memory first\n- Prefer focused diffs\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'CLAUDE.md'), '# Claude Rules\n\n- Check native instructions before editing\n', 'utf-8');
     fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
       packageManager: 'pnpm@9.0.0',
       scripts: {
@@ -59,14 +61,19 @@ describe('core/bootstrap', () => {
     assert.equal(result.reusedProfile, false);
     assert.ok(result.profile.summary.includes('Bootstrap summary for src/auth/routes.ts'));
     assert.equal(result.profile.agents_md_present, true);
+    assert.equal(result.profile.workspace_kind, 'existing');
+    assert.equal(result.profile.confidence, 'high');
+    assert.ok(result.profile.native_instruction_files.includes('CLAUDE.md'));
     assert.ok(result.profile.sources_scanned.includes('README'));
     assert.ok(result.profile.sources_scanned.includes('AGENTS.md'));
+    assert.ok(result.profile.sources_scanned.includes('native_instructions'));
     assert.ok(result.profile.sources_scanned.includes('package.json'));
     assert.ok(result.profile.sources_scanned.includes('execution_context'));
     assert.ok(result.profile.sources_scanned.includes('skills'));
     assert.ok(result.profile.sources_scanned.includes('local_mcp'));
     assert.ok(result.profile.sources_scanned.includes('repo-analysis'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'agents_md' && seed.seed_kind === 'agent_rule'));
+    assert.ok(result.seeds.some((seed) => seed.source_kind === 'native_instruction' && seed.seed_kind === 'agent_rule'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'manifest' && seed.seed_kind === 'command'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'machine' && seed.seed_kind === 'tooling'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'skill' && seed.seed_kind === 'tooling'));
@@ -74,6 +81,20 @@ describe('core/bootstrap', () => {
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'repo_analysis'));
     assert.equal(loadBootstrapProfile(workspace.dir)?.seed_count, result.seeds.length);
     assert.equal(listBootstrapSeeds(workspace.dir).length, result.seeds.length);
+  });
+
+  it('marks an empty workspace with explicit onboarding gaps', () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-bootstrap-empty-'));
+    try {
+      const result = runBootstrapProfile({ cwd: emptyDir });
+
+      assert.equal(result.profile.workspace_kind, 'empty');
+      assert.notEqual(result.profile.confidence, 'high');
+      assert.ok(result.profile.gaps.includes('project intent is not documented yet'));
+      assert.ok(result.profile.summary.includes('empty workspace'));
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
   });
 
   it('reuses a valid profile and refresh replaces previous seeds', () => {

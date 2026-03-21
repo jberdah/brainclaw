@@ -1236,14 +1236,18 @@ export function handleMcpReadToolCall(
     });
     return {
       content: [{ type: 'text', text: renderBootstrapSummary(result) }],
-      structuredContent: {
-        summary: result.profile.summary,
-        target: result.profile.target,
-        repo_fingerprint: result.profile.repo_fingerprint,
-        sources_scanned: result.profile.sources_scanned,
-        seed_count: result.profile.seed_count,
-        seeds: result.seeds,
-        reused_profile: result.reusedProfile,
+        structuredContent: {
+          summary: result.profile.summary,
+          target: result.profile.target,
+          repo_fingerprint: result.profile.repo_fingerprint,
+          sources_scanned: result.profile.sources_scanned,
+          workspace_kind: result.profile.workspace_kind,
+          confidence: result.profile.confidence,
+          native_instruction_files: result.profile.native_instruction_files,
+          gaps: result.profile.gaps,
+          seed_count: result.profile.seed_count,
+          seeds: result.seeds,
+          reused_profile: result.reusedProfile,
       },
     };
   }

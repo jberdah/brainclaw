@@ -54,6 +54,8 @@ describe('commands/bootstrap', () => {
     const firstParsed = JSON.parse(first.logs.at(-1) as string);
     assert.equal(firstParsed.target, 'src/auth');
     assert.equal(firstParsed.reused_profile, false);
+    assert.equal(firstParsed.workspace_kind, 'existing');
+    assert.equal(firstParsed.confidence, 'high');
     assert.ok(Array.isArray(firstParsed.seeds));
     assert.ok(firstParsed.seeds.some((seed: { source_kind: string }) => seed.source_kind === 'agents_md'));
 
