@@ -1,6 +1,6 @@
 import { memoryExists } from '../core/io.js';
 import { readAuditLog } from '../core/audit.js';
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState, saveState } from '../core/state.js';
 import { loadCandidate, saveCandidate } from '../core/candidates.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { buildOperationalIdentity } from '../core/identity.js';
@@ -143,7 +143,7 @@ function applyRollback(
           state.known_traps.push(before as Trap);
         }
       }
-      saveState(state);
+      persistState(state);
     } else {
       return { ok: false, message: `Rollback not supported for item_type '${item_type}'.` };
     }

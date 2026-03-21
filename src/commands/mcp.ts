@@ -8,9 +8,8 @@ import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { loadConfig } from '../core/config.js';
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState, saveState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
 import { createRuntimeNote } from './runtime-note.js';
@@ -2051,8 +2050,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           if (releasePlanStatus === 'in_progress' && !releasePlan.started_at) releasePlan.started_at = ts;
           if (releasePlanStatus === 'done' && !releasePlan.completed_at) releasePlan.completed_at = ts;
           releasePlan.updated_at = ts;
-          saveState(releaseState, cwd);
-          writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(releaseState, cwd));
+          persistState(releaseState, cwd);
           releasePlanUpdated = true;
         }
       }
@@ -2209,8 +2207,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         estimated_effort: estimatedEffort,
       };
       state.plan_items.push(entry);
-      saveState(state, cwd);
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      persistState(state, cwd);
       appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: id, item_type: 'plan' }, cwd);
       return {
         response: toolResponse({
@@ -2244,8 +2241,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (args.priority) plan.priority = args.priority as Priority;
       if (args.actualEffort) plan.actual_effort = args.actualEffort as string;
       plan.updated_at = timestamp;
-      saveState(state, cwd);
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      persistState(state, cwd);
       appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: plan.id, item_type: 'plan' }, cwd);
       return {
         response: toolResponse({
@@ -2278,8 +2274,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       };
       plan.steps = [...(plan.steps ?? []), step];
       plan.updated_at = nowISO();
-      saveState(state, cwd);
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      persistState(state, cwd);
       const total = plan.steps.length;
       const done = plan.steps.filter((s) => s.status === 'done').length;
       return {
@@ -2309,8 +2304,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       step.status = 'done';
       step.updated_at = nowISO();
       plan.updated_at = nowISO();
-      saveState(state, cwd);
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+      persistState(state, cwd);
       const total = plan.steps!.length;
       const done = plan.steps!.filter((s) => s.status === 'done').length;
       return {
@@ -2372,8 +2366,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         state.known_traps = state.known_traps.filter((t) => t.id !== itemId && t.short_label !== itemId);
       }
 
-      saveState(state, foundStore.cwd);
-      writeFileAtomic(memoryPath('project.md', foundStore.cwd), generateMarkdown(state, foundStore.cwd));
+      persistState(state, foundStore.cwd);
       appendAuditEntry(
         { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'delete', item_id: itemId, item_type: itemType as CandidateType },
         foundStore.cwd,
@@ -2463,8 +2456,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         } else if (itemType === 'trap') {
           sourceState.known_traps = sourceState.known_traps.filter((t) => t.id !== itemId);
         }
-        saveState(sourceState, sourceStore.cwd);
-        writeFileAtomic(memoryPath('project.md', sourceStore.cwd), generateMarkdown(sourceState, sourceStore.cwd));
+        persistState(sourceState, sourceStore.cwd);
 
         // Add to target store
         const targetState = loadState(targetCwd);
@@ -2475,8 +2467,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         } else if (itemType === 'trap') {
           targetState.known_traps.push(item as Trap);
         }
-        saveState(targetState, targetCwd);
-        writeFileAtomic(memoryPath('project.md', targetCwd), generateMarkdown(targetState, targetCwd));
+        persistState(targetState, targetCwd);
       } else {
         // Just update in place
         const state = loadState(sourceStore.cwd);
@@ -2490,8 +2481,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           const idx = state.known_traps.findIndex((t) => t.id === itemId);
           if (idx >= 0) state.known_traps[idx] = item as Trap;
         }
-        saveState(state, sourceStore.cwd);
-        writeFileAtomic(memoryPath('project.md', sourceStore.cwd), generateMarkdown(state, sourceStore.cwd));
+        persistState(state, sourceStore.cwd);
       }
 
       appendAuditEntry(

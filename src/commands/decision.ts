@@ -1,10 +1,9 @@
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
-import { generateMarkdown } from '../core/markdown.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { Decision, DecisionOutcome } from '../core/schema.js';
@@ -55,10 +54,7 @@ export function runDecision(text: string, options: DecisionOptions = {}): void {
   };
 
   state.recent_decisions.push(entry);
-  saveState(state, cwd);
-
-  // Rebuild markdown
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
+  persistState(state, cwd);
 
   console.log(`✔ Decision added: [${id}] ${text}`);
 }

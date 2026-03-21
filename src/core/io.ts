@@ -3,6 +3,7 @@ import path from 'node:path';
 import { withLock, cleanStaleLocks } from './lock.js';
 
 export const MEMORY_DIR = '.brainclaw';
+const STORE_LOCK_BASENAME = '.store-mutation';
 const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const DEFAULT_RENAME_RETRY_ATTEMPTS = 6;
 const DEFAULT_RENAME_RETRY_DELAY_MS = 25;
@@ -96,6 +97,10 @@ export function memoryPath(filename: string, cwd?: string, preferredDirName?: st
   return path.join(memoryDir(cwd, preferredDirName), filename);
 }
 
+export function storeLockPath(cwd?: string, preferredDirName?: string): string {
+  return memoryPath(STORE_LOCK_BASENAME, cwd, preferredDirName);
+}
+
 export function memoryExists(cwd?: string, preferredDirName?: string): boolean {
   return fs.existsSync(memoryDir(cwd, preferredDirName));
 }
@@ -119,6 +124,11 @@ export function ensureMemoryDir(cwd?: string, preferredDirName?: string): void {
       fs.mkdirSync(p, { recursive: true });
     }
   }
+}
+
+export function withStoreLock<T>(cwd: string = process.cwd(), fn: () => T, preferredDirName?: string): T {
+  ensureMemoryDir(cwd, preferredDirName);
+  return withLock(storeLockPath(cwd, preferredDirName), fn);
 }
 
 /** Check if a path is a file, or a directory with at least one entry. */

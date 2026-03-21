@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { resolveEntityDir } from './io.js';
+import { resolveEntityDir, withStoreLock } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
@@ -58,13 +58,15 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
     ? { ...note, visibility, host_id: hostId }
     : { ...note, visibility, host_id: hostId };
 
-  ensureRuntimeDir(note.agent, cwd, visibility, hostId);
-  const filepath = visibility === 'shared'
-    ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
-    : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd, 'write'), `${note.id}.json`);
-  saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
-  appendEvent({ action: 'create', item_type: 'runtime_note', item_id: note.id, agent: note.agent, agent_id: note.agent_id }, cwd);
-  commitMemoryChange(`runtime note: ${note.note_type ?? 'note'} (${note.agent})`, cwd);
+  withStoreLock(cwd, () => {
+    ensureRuntimeDir(note.agent, cwd, visibility, hostId);
+    const filepath = visibility === 'shared'
+      ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
+      : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd, 'write'), `${note.id}.json`);
+    saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
+    appendEvent({ action: 'create', item_type: 'runtime_note', item_id: note.id, agent: note.agent, agent_id: note.agent_id }, cwd);
+    commitMemoryChange(`runtime note: ${note.note_type ?? 'note'} (${note.agent})`, cwd);
+  });
 }
 
 export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
@@ -76,12 +78,14 @@ export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
 }
 
 export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
-  const filepath = runtimeNotePath(note, cwd);
-  if (!fs.existsSync(filepath)) {
-    return false;
-  }
-  fs.unlinkSync(filepath);
-  return true;
+  return withStoreLock(cwd, () => {
+    const filepath = runtimeNotePath(note, cwd);
+    if (!fs.existsSync(filepath)) {
+      return false;
+    }
+    fs.unlinkSync(filepath);
+    return true;
+  });
 }
 
 function readAgentNotes(dir: string, agent?: string): RuntimeNote[] {

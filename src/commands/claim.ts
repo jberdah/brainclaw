@@ -1,5 +1,5 @@
 import { buildOperationalIdentity } from '../core/identity.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
 import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
@@ -90,19 +90,21 @@ export function runClaim(description: string, options: ClaimOptions): void {
     expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
   };
 
-  if (plan) {
-    if (!plan.assignee) {
-      plan.assignee = actor.agent;
+  withStoreLock(options.cwd, () => {
+    if (plan) {
+      if (!plan.assignee) {
+        plan.assignee = actor.agent;
+      }
+      if (plan.status === 'todo') {
+        plan.status = 'in_progress';
+      }
+      plan.updated_at = nowISO();
+      saveState(state, options.cwd);
     }
-    if (plan.status === 'todo') {
-      plan.status = 'in_progress';
-    }
-    plan.updated_at = nowISO();
-    saveState(state, options.cwd);
-  }
 
-  saveClaim(claim, options.cwd);
-  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(plan ? state : loadState(options.cwd), options.cwd));
+    saveClaim(claim, options.cwd);
+    writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(plan ? state : loadState(options.cwd), options.cwd));
+  });
   const planInfo = claim.plan_id ? ` [plan ${claim.plan_id}]` : '';
   const ttlInfo = claim.expires_at ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
   const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';

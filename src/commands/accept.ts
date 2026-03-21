@@ -1,7 +1,6 @@
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists, withStoreLock } from '../core/io.js';
 import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
-import { loadState, saveState } from '../core/state.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState } from '../core/state.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { generateTrapIdWithLabel } from '../core/traps.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
@@ -49,113 +48,112 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
   requireMinimumTrustLevel(actorIdentity, 'trusted');
   const actor = actorIdentity.agent_name;
 
-  const state = loadState(cwd);
   let promotedItemId = '';
 
-  // Promote candidate into canonical state based on type
-  switch (candidate.type) {
-    case 'constraint': {
-      const { id: entryId, short_label } = generateIdWithLabel('active_constraints', cwd);
-      const entry: Constraint = {
-        id: entryId,
-        short_label,
-        text: candidate.text,
-        created_at: candidate.created_at,
-        author: candidate.author,
-        author_id: candidate.author_id,
-        project_id: candidate.project_id,
-        host_id: candidate.host_id,
-        session_id: candidate.session_id,
-        status: 'active',
-        tags: candidate.tags,
-      };
-      state.active_constraints.push(entry);
-      promotedItemId = entryId;
-      break;
-    }
-    case 'decision': {
-      const { id: entryId, short_label } = generateIdWithLabel('recent_decisions', cwd);
-      const entry: Decision = {
-        id: entryId,
-        short_label,
-        text: candidate.text,
-        created_at: candidate.created_at,
-        author: candidate.author,
-        author_id: candidate.author_id,
-        project_id: candidate.project_id,
-        host_id: candidate.host_id,
-        session_id: candidate.session_id,
-        related_paths: candidate.related_paths,
-        plan_id: candidate.plan_id,
-        tags: candidate.tags,
-      };
-      state.recent_decisions.push(entry);
-      promotedItemId = entryId;
-      break;
-    }
-    case 'trap': {
-      const { id: entryId, short_label } = generateTrapIdWithLabel(cwd);
-      const entry: Trap = {
-        id: entryId,
-        short_label,
-        text: candidate.text,
-        created_at: candidate.created_at,
-        author: candidate.author,
-        author_id: candidate.author_id,
-        project_id: candidate.project_id,
-        host_id: candidate.host_id,
-        session_id: candidate.session_id,
-        status: 'active',
-        severity: candidate.severity ?? 'medium',
-        tags: candidate.tags,
-        plan_id: candidate.plan_id,
-        visibility: 'shared',
-      };
-      state.known_traps.push(entry);
-      promotedItemId = entryId;
-      break;
-    }
-    case 'handoff': {
-      const { id: entryId, short_label } = generateIdWithLabel('open_handoffs', cwd);
-      const entry: Handoff = {
-        id: entryId,
-        short_label,
-        from: candidate.from ?? 'unknown',
-        to: candidate.to ?? 'unknown',
-        text: candidate.text,
-        created_at: candidate.created_at,
-        author: candidate.author,
-        author_id: candidate.author_id,
-        project_id: candidate.project_id,
-        host_id: candidate.host_id,
-        session_id: candidate.session_id,
-        status: 'open',
-        tags: candidate.tags,
-      };
-      state.open_handoffs.push(entry);
-      promotedItemId = entryId;
-      break;
-    }
-  }
+  withStoreLock(cwd, () => {
+    const state = loadState(cwd);
 
-  saveState(state, cwd);
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+    switch (candidate.type) {
+      case 'constraint': {
+        const { id: entryId, short_label } = generateIdWithLabel('active_constraints', cwd);
+        const entry: Constraint = {
+          id: entryId,
+          short_label,
+          text: candidate.text,
+          created_at: candidate.created_at,
+          author: candidate.author,
+          author_id: candidate.author_id,
+          project_id: candidate.project_id,
+          host_id: candidate.host_id,
+          session_id: candidate.session_id,
+          status: 'active',
+          tags: candidate.tags,
+        };
+        state.active_constraints.push(entry);
+        promotedItemId = entryId;
+        break;
+      }
+      case 'decision': {
+        const { id: entryId, short_label } = generateIdWithLabel('recent_decisions', cwd);
+        const entry: Decision = {
+          id: entryId,
+          short_label,
+          text: candidate.text,
+          created_at: candidate.created_at,
+          author: candidate.author,
+          author_id: candidate.author_id,
+          project_id: candidate.project_id,
+          host_id: candidate.host_id,
+          session_id: candidate.session_id,
+          related_paths: candidate.related_paths,
+          plan_id: candidate.plan_id,
+          tags: candidate.tags,
+        };
+        state.recent_decisions.push(entry);
+        promotedItemId = entryId;
+        break;
+      }
+      case 'trap': {
+        const { id: entryId, short_label } = generateTrapIdWithLabel(cwd);
+        const entry: Trap = {
+          id: entryId,
+          short_label,
+          text: candidate.text,
+          created_at: candidate.created_at,
+          author: candidate.author,
+          author_id: candidate.author_id,
+          project_id: candidate.project_id,
+          host_id: candidate.host_id,
+          session_id: candidate.session_id,
+          status: 'active',
+          severity: candidate.severity ?? 'medium',
+          tags: candidate.tags,
+          plan_id: candidate.plan_id,
+          visibility: 'shared',
+        };
+        state.known_traps.push(entry);
+        promotedItemId = entryId;
+        break;
+      }
+      case 'handoff': {
+        const { id: entryId, short_label } = generateIdWithLabel('open_handoffs', cwd);
+        const entry: Handoff = {
+          id: entryId,
+          short_label,
+          from: candidate.from ?? 'unknown',
+          to: candidate.to ?? 'unknown',
+          text: candidate.text,
+          created_at: candidate.created_at,
+          author: candidate.author,
+          author_id: candidate.author_id,
+          project_id: candidate.project_id,
+          host_id: candidate.host_id,
+          session_id: candidate.session_id,
+          status: 'open',
+          tags: candidate.tags,
+        };
+        state.open_handoffs.push(entry);
+        promotedItemId = entryId;
+        break;
+      }
+    }
 
-  // Archive candidate (use resolved hash ID)
-  candidate.status = 'accepted';
-  candidate.resolved_at = nowISO();
-  candidate.resolved_by = actor;
-  archiveCandidate(candidate, 'accepted', cwd);
+    persistState(state, cwd);
+    candidate.status = 'accepted';
+    candidate.resolved_at = nowISO();
+    candidate.resolved_by = actor;
+    archiveCandidate(candidate, 'accepted', cwd);
 
-  appendAuditEntry({
-    actor,
-    actor_id: actorIdentity.agent_id,
-    action: 'accept',
-    item_id: resolvedId,
-    item_type: candidate.type,
-    after: { type: candidate.type, text: candidate.text },
-    reason: 'trusted-agent',
-  }, cwd);
+    appendAuditEntry({
+      actor,
+      actor_id: actorIdentity.agent_id,
+      action: 'accept',
+      item_id: resolvedId,
+      item_type: candidate.type,
+      after: { type: candidate.type, text: candidate.text },
+      reason: 'trusted-agent',
+    }, cwd);
+  });
 
   return {
     candidate_id: resolvedId,

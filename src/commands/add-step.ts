@@ -1,7 +1,6 @@
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { loadState, persistState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 import { generateId, nowISO } from '../core/ids.js';
-import { generateMarkdown } from '../core/markdown.js';
 import { validateCliInput } from '../core/input-validation.js';
 import type { PlanStep } from '../core/schema.js';
 
@@ -36,8 +35,7 @@ export function runAddStep(planId: string, text: string, options: AddStepOptions
   plan.steps = [...(plan.steps ?? []), step];
   plan.updated_at = nowISO();
 
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  persistState(state);
 
   const total = plan.steps.length;
   const done = plan.steps.filter((s) => s.status === 'done').length;

@@ -1,7 +1,6 @@
 import { loadConfig } from '../core/config.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
-import { loadState, saveState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
+import { loadState, persistState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
@@ -273,8 +272,7 @@ function runMemoryUpdate(id: string, options: MemoryCommandOptions): void {
       }
   }
 
-  saveState(state, options.cwd);
-  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+  persistState(state, options.cwd);
   console.log(`✔ Memory item updated: [${resolved.item.id}] ${resolved.item.text}`);
 }
 
@@ -306,8 +304,7 @@ function runMemoryDelete(id: string, cwd: string): void {
     process.exit(1);
   }
 
-  saveState(state, cwd);
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+  persistState(state, cwd);
   console.log(`✔ Memory item deleted: [${deleted.id}] ${deleted.text}`);
 }
 

@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ZodType, type ZodTypeDef } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
-import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
+import { memoryDir, ensureMemoryDir, memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent } from './event-log.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
+import { generateMarkdown } from './markdown.js';
 export function emptyState(): State {
   return {
     version: 1,
@@ -85,16 +86,40 @@ function syncDirectory<T extends { id: string }>(
 }
 
 export function saveState(state: State, cwd?: string): void {
+  persistState(state, cwd, { writeProjectMarkdown: false });
+}
+
+interface PersistStateOptions {
+  writeProjectMarkdown?: boolean;
+  eventAction?: 'update' | 'upgrade' | 'rollback';
+  eventSummary?: string;
+  commitMessage?: string;
+}
+
+function writeStateDirectories(state: State, cwd?: string): void {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
 
-  // Write to entity-aligned directories
   syncDirectory(resolveEntityDir('constraints', effectiveCwd, 'write'), state.active_constraints, 'constraint');
   syncDirectory(resolveEntityDir('decisions', effectiveCwd, 'write'), state.recent_decisions, 'decision');
   syncDirectory(resolveEntityDir('traps', effectiveCwd, 'write'), state.known_traps, 'trap');
   syncDirectory(resolveEntityDir('handoffs', effectiveCwd, 'write'), state.open_handoffs, 'handoff');
   syncDirectory(resolveEntityDir('plans', effectiveCwd, 'write'), state.plan_items, 'plan');
+}
 
-  appendEvent({ action: 'update', item_type: 'state', agent: 'system' }, cwd);
-  commitMemoryChange('state update', cwd);
+export function persistState(state: State, cwd?: string, options: PersistStateOptions = {}): void {
+  const effectiveCwd = cwd ?? process.cwd();
+  withStoreLock(effectiveCwd, () => {
+    writeStateDirectories(state, effectiveCwd);
+    if (options.writeProjectMarkdown ?? true) {
+      writeFileAtomic(memoryPath('project.md', effectiveCwd), generateMarkdown(state, effectiveCwd));
+    }
+    appendEvent({
+      action: options.eventAction ?? 'update',
+      item_type: 'state',
+      agent: 'system',
+      summary: options.eventSummary,
+    }, effectiveCwd);
+    commitMemoryChange(options.commitMessage ?? 'state update', effectiveCwd);
+  });
 }

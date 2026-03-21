@@ -1,7 +1,6 @@
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { loadState, persistState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 import { nowISO } from '../core/ids.js';
-import { generateMarkdown } from '../core/markdown.js';
 
 export function runCompleteStep(planId: string, stepId: string): void {
   if (!memoryExists()) {
@@ -26,8 +25,7 @@ export function runCompleteStep(planId: string, stepId: string): void {
   step.updated_at = nowISO();
   plan.updated_at = nowISO();
 
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  persistState(state);
 
   const total = plan.steps!.length;
   const done = plan.steps!.filter((s) => s.status === 'done').length;

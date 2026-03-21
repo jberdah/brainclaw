@@ -1,6 +1,5 @@
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 
 export interface DeletePlanOptions {
   cwd?: string;
@@ -20,8 +19,7 @@ export function runDeletePlan(id: string, options: DeletePlanOptions = {}): void
   }
 
   const [plan] = state.plan_items.splice(index, 1);
-  saveState(state, options.cwd);
-  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+  persistState(state, options.cwd);
 
   console.log(`✔ Plan item deleted: [${plan.id}] ${plan.text}`);
 }

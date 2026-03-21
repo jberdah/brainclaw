@@ -1,6 +1,5 @@
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 import type { HandoffStatus } from '../core/schema.js';
 
 export interface UpdateHandoffOptions {
@@ -24,8 +23,7 @@ export function runUpdateHandoff(id: string, options: UpdateHandoffOptions = {})
   if (options.status) handoff.status = options.status;
   if (options.to !== undefined) handoff.to = options.to;
 
-  saveState(state);
-  writeFileAtomic(memoryPath('project.md'), generateMarkdown(state));
+  persistState(state);
 
   console.log(`✔ Handoff updated: [${handoff.id}] ${handoff.from} → ${handoff.to} (${handoff.status})`);
 }

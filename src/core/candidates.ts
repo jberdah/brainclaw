@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CandidateSchema, type Candidate } from './schema.js';
-import { resolveEntityDir } from './io.js';
+import { resolveEntityDir, withStoreLock } from './io.js';
 import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 
@@ -41,8 +41,10 @@ function candidateStore(dest: 'pending' | 'accepted' | 'rejected' = 'pending', c
 }
 
 export function saveCandidate(candidate: Candidate, cwd?: string): void {
-  ensureInboxDirs(cwd);
-  candidateStore('pending', cwd).save(CandidateSchema.parse(candidate));
+  withStoreLock(cwd, () => {
+    ensureInboxDirs(cwd);
+    candidateStore('pending', cwd).save(CandidateSchema.parse(candidate));
+  });
 }
 
 export function loadCandidate(id: string, cwd?: string): Candidate {
@@ -59,9 +61,11 @@ export function listCandidates(status?: 'pending' | 'accepted' | 'rejected', cwd
 }
 
 export function archiveCandidate(candidate: Candidate, dest: 'accepted' | 'rejected', cwd?: string): void {
-  ensureInboxDirs(cwd);
-  candidateStore(dest, cwd).save(CandidateSchema.parse(candidate));
-  candidateStore('pending', cwd).delete(candidate.id);
+  withStoreLock(cwd, () => {
+    ensureInboxDirs(cwd);
+    candidateStore(dest, cwd).save(CandidateSchema.parse(candidate));
+    candidateStore('pending', cwd).delete(candidate.id);
+  });
 }
 
 export function listArchivedCandidates(dest: 'accepted' | 'rejected', cwd?: string): Candidate[] {

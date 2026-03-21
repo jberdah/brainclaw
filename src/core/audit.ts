@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryDir } from './io.js';
+import { memoryDir, withStoreLock } from './io.js';
 import { nowISO } from './ids.js';
 import { logger } from './logger.js';
 import { appendEvent } from './event-log.js';
@@ -54,32 +54,32 @@ function auditLogPath(cwd?: string): string {
 
 export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAction; actor: string }, cwd?: string): void {
   try {
-    const full: AuditEntry = {
-      timestamp: nowISO(),
-      actor: entry.actor,
-      action: entry.action,
-      item_id: entry.item_id,
-      item_type: entry.item_type,
-      before: entry.before,
-      after: entry.after,
-      actor_id: entry.actor_id,
-      reason: entry.reason,
-    };
-    // Remove undefined fields for compactness
-    const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
-    fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');
-
-    // Mirror to structured event log
-    const eventAction = AUDIT_TO_EVENT_ACTION[entry.action];
-    if (eventAction) {
-      appendEvent({
-        action: eventAction,
-        item_type: (entry.item_type as EventItemType) ?? 'state',
+    withStoreLock(cwd, () => {
+      const full: AuditEntry = {
+        timestamp: nowISO(),
+        actor: entry.actor,
+        action: entry.action,
         item_id: entry.item_id,
-        agent: entry.actor,
-        agent_id: entry.actor_id,
-      }, cwd);
-    }
+        item_type: entry.item_type,
+        before: entry.before,
+        after: entry.after,
+        actor_id: entry.actor_id,
+        reason: entry.reason,
+      };
+      const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
+      fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');
+
+      const eventAction = AUDIT_TO_EVENT_ACTION[entry.action];
+      if (eventAction) {
+        appendEvent({
+          action: eventAction,
+          item_type: (entry.item_type as EventItemType) ?? 'state',
+          item_id: entry.item_id,
+          agent: entry.actor,
+          agent_id: entry.actor_id,
+        }, cwd);
+      }
+    });
   } catch (err) {
     logger.debug('Failed to write audit log entry:', err);
   }

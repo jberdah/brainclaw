@@ -1,6 +1,5 @@
-import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
 import { nowISO } from '../core/ids.js';
 import type { PlanStatus, Priority } from '../core/schema.js';
 
@@ -38,8 +37,7 @@ export function runUpdatePlan(id: string, options: UpdatePlanOptions = {}): void
   if (options.actualEffort) plan.actual_effort = options.actualEffort;
   plan.updated_at = timestamp;
 
-  saveState(state, options.cwd);
-  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+  persistState(state, options.cwd);
 
   console.log(`✔ Plan item updated: [${plan.id}] ${plan.text}`);
 }

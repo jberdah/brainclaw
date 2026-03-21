@@ -1,9 +1,8 @@
 import fs from 'node:fs';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
 import { buildOperationalIdentity } from '../core/identity.js';
-import { loadState, saveState } from '../core/state.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { loadState, persistState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
 import { saveCandidate, generateCandidateIdWithLabel, listCandidates, archiveCandidate } from '../core/candidates.js';
@@ -321,8 +320,7 @@ function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
       break;
     }
   }
-  saveState(state, cwd);
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
+  persistState(state, cwd);
   return promotedItemId;
 }
 

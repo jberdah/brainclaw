@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir } from '../core/io.js';
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState, saveState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
 import {
@@ -152,7 +152,7 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   // Execute schema migrations by re-saving state (loadState auto-migrates via Zod parse)
   if (outdated.length > 0) {
     const state = loadState(cwd);
-    saveState(state, cwd);
+    persistState(state, cwd);
   }
 
   const refreshedAgentFiles = refreshManagedWorkspaceAgentFiles(cwd);

@@ -1,10 +1,9 @@
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
-import { generateMarkdown } from '../core/markdown.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { runListPlans } from './list-plans.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
@@ -93,8 +92,7 @@ export function runPlan(text: string, options: PlanOptions = {}): void {
   };
 
   state.plan_items.push(entry);
-  saveState(state, cwd);
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+  persistState(state, cwd);
 
   const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
   console.log(`✔ Plan item added: [${id}] ${text}${storeLabel}`);

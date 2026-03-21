@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
@@ -50,34 +50,36 @@ export function runReleaseClaims(options: ReleaseClaimsOptions = {}): void {
 
   if (toRelease.length === 0) process.exit(0);
 
-  let state = loadState(options.cwd);
   let released = 0;
 
-  for (const claim of toRelease) {
-    try {
-      releaseClaim(claim.id, options.cwd);
-      released++;
-      // Revert in_progress plan to todo if no more active claims
-      if (claim.plan_id) {
-        state = loadState(options.cwd);
-        const plan = state.plan_items.find((p) => p.id === claim.plan_id);
-        if (plan) {
-          const remaining = listClaims(options.cwd).filter(
-            (c) => c.status === 'active' && c.plan_id === claim.plan_id
-          );
-          if (remaining.length === 0 && plan.status === 'in_progress') {
-            plan.status = 'todo';
-            plan.updated_at = new Date().toISOString();
-            saveState(state, options.cwd);
+  withStoreLock(options.cwd, () => {
+    let state = loadState(options.cwd);
+
+    for (const claim of toRelease) {
+      try {
+        releaseClaim(claim.id, options.cwd);
+        released++;
+        if (claim.plan_id) {
+          state = loadState(options.cwd);
+          const plan = state.plan_items.find((p) => p.id === claim.plan_id);
+          if (plan) {
+            const remaining = listClaims(options.cwd).filter(
+              (c) => c.status === 'active' && c.plan_id === claim.plan_id
+            );
+            if (remaining.length === 0 && plan.status === 'in_progress') {
+              plan.status = 'todo';
+              plan.updated_at = new Date().toISOString();
+              saveState(state, options.cwd);
+            }
           }
         }
-      }
-      console.log(`✔ Auto-released claim [${claim.id}]: ${claim.scope}`);
-    } catch { /* skip individual failures */ }
-  }
+        console.log(`✔ Auto-released claim [${claim.id}]: ${claim.scope}`);
+      } catch { /* skip individual failures */ }
+    }
 
-  state = loadState(options.cwd);
-  writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+    state = loadState(options.cwd);
+    writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+  });
 
   if (released > 0) {
     console.log(`brainclaw: ${released} claim(s) auto-released after merge.`);

@@ -4,6 +4,7 @@ import path from 'node:path';
 const DEFAULT_TIMEOUT_MS = 2000;
 const LOCK_RETRY_INTERVAL_MS = 50;
 const LOCK_EXPIRY_MS = 5000;
+const heldLocks = new Map<string, number>();
 
 interface LockData {
   pid: number;
@@ -64,6 +65,11 @@ function tryBreakLock(lockPath: string): boolean {
 
 export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS): boolean {
   const lockPath = lockFilePath(targetPath);
+  const heldCount = heldLocks.get(lockPath);
+  if (heldCount) {
+    heldLocks.set(lockPath, heldCount + 1);
+    return true;
+  }
   const deadline = Date.now() + timeoutMs;
 
   const dir = path.dirname(lockPath);
@@ -72,8 +78,14 @@ export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS):
   }
 
   while (Date.now() < deadline) {
-    if (tryCreateLock(lockPath)) return true;
-    if (tryBreakLock(lockPath)) return true;
+    if (tryCreateLock(lockPath)) {
+      heldLocks.set(lockPath, 1);
+      return true;
+    }
+    if (tryBreakLock(lockPath)) {
+      heldLocks.set(lockPath, 1);
+      return true;
+    }
     syncSleep(Math.min(LOCK_RETRY_INTERVAL_MS, deadline - Date.now()));
   }
 
@@ -82,6 +94,12 @@ export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS):
 
 export function releaseLock(targetPath: string): void {
   const lockPath = lockFilePath(targetPath);
+  const heldCount = heldLocks.get(lockPath);
+  if (heldCount && heldCount > 1) {
+    heldLocks.set(lockPath, heldCount - 1);
+    return;
+  }
+  heldLocks.delete(lockPath);
   try {
     if (fs.existsSync(lockPath)) {
       fs.unlinkSync(lockPath);

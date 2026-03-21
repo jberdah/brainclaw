@@ -1,13 +1,13 @@
 import { resolveAgentScope, resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { createInstruction } from '../core/instructions.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { InstructionLayer } from '../core/schema.js';
+import type { InstructionEntry, InstructionLayer } from '../core/schema.js';
 
 export interface InstructionOptions {
   layer?: InstructionLayer;
@@ -42,15 +42,21 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
     }
   }
 
-  const entry = createInstruction(text, {
-    layer,
-    scope,
-    tags: options.tag,
-    author: options.author ?? resolveCurrentAgentName(cwd),
-    supersedes: options.supersedes,
-  }, cwd);
-
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
+  let entry: InstructionEntry | undefined;
+  withStoreLock(cwd, () => {
+    entry = createInstruction(text, {
+      layer,
+      scope,
+      tags: options.tag,
+      author: options.author ?? resolveCurrentAgentName(cwd),
+      supersedes: options.supersedes,
+    }, cwd);
+    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
+  });
+  if (!entry) {
+    console.error('Error: failed to persist instruction.');
+    process.exit(1);
+  }
   console.log(`✔ Instruction added: [${entry.id}] <${entry.layer}${entry.scope ? `:${entry.scope}` : ''}> ${entry.text}`);
 }
 

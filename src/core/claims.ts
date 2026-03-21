@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ClaimSchema, type Claim } from './schema.js';
-import { resolveEntityDir } from './io.js';
+import { resolveEntityDir, withStoreLock } from './io.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 
@@ -27,14 +27,16 @@ function claimStore(cwd?: string): JsonStore<Claim> {
 }
 
 export function saveClaim(claim: Claim, cwd?: string): void {
-  ensureClaimsDir(cwd);
-  const writeStore = new JsonStore<Claim>({
-    dirPath: claimsDir(cwd, 'write'),
-    documentType: 'claim',
-    getId: (c) => c.id,
-    sort: (a, b) => a.created_at.localeCompare(b.created_at),
+  withStoreLock(cwd, () => {
+    ensureClaimsDir(cwd);
+    const writeStore = new JsonStore<Claim>({
+      dirPath: claimsDir(cwd, 'write'),
+      documentType: 'claim',
+      getId: (c) => c.id,
+      sort: (a, b) => a.created_at.localeCompare(b.created_at),
+    });
+    writeStore.save(ClaimSchema.parse(claim));
   });
-  writeStore.save(ClaimSchema.parse(claim));
 }
 
 export function loadClaim(id: string, cwd?: string): Claim {

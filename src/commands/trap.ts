@@ -1,11 +1,10 @@
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { loadConfig } from '../core/config.js';
-import { generateMarkdown } from '../core/markdown.js';
 import { nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { generateTrapIdWithLabel, saveOperationalTrap } from '../core/traps.js';
 import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
@@ -71,8 +70,7 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
 
   if (visibility === 'shared') {
     state.known_traps.push(entry);
-    saveState(state, cwd);
-    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+    persistState(state, cwd);
   } else {
     saveOperationalTrap(entry, cwd);
   }

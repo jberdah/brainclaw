@@ -1,7 +1,6 @@
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { memoryExists } from '../core/io.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { loadConfig } from '../core/config.js';
 import { scanText } from '../core/security.js';
@@ -105,8 +104,7 @@ function runToolAdd(name: string, description: string, options: ToolOptions, cwd
   // For now, store as decision to avoid schema migration
   // Will migrate to separate tool storage in v0.16
   state.recent_decisions.push(entry);
-  saveState(state, cwd);
-  writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state));
+  persistState(state, cwd);
 
   console.log(`✔ Tool added: [${id}] ${name}`);
   console.log('  (Stored in decisions for now; will move to dedicated registry in v0.16)');

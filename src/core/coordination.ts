@@ -5,7 +5,7 @@ import { listClaims } from './claims.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
-import { loadState, saveState } from './state.js';
+import { loadState, persistState } from './state.js';
 
 export interface CoordinationOptions {
   agent?: string;
@@ -76,7 +76,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
         changed = true;
       }
     }
-    if (changed) saveState(state, options.cwd);
+    if (changed) persistState(state, options.cwd);
   }
 
   return {
