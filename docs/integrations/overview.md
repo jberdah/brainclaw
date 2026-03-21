@@ -1,61 +1,74 @@
 # Integration Overview
 
-brainclaw is designed to work with existing coding agents, not replace them.
+Brainclaw is designed to work with existing coding agents, not replace them.
 
-## Current limitation
+The key integration rule is simple:
+
+1. use MCP for dynamic shared state when the agent supports it
+2. use native agent files for local behavioral guidance
+3. use the CLI for setup, operator workflows, scripting, and fallback access
+
+## Current Limitation
 
 For now, Brainclaw should be used for sequential multi-agent collaboration, not true parallel editing in the same checkout.
 
 One agent can hand work to another, and the next agent can recover good project context through shared memory, plans, claims, and handoffs. But without dedicated Git worktrees per agent/session, running several coding agents concurrently on the same project checkout is still risky and can create conflicts or unstable local state.
 
-## Integration surfaces
+## Integration Surfaces
 
-brainclaw can integrate through several surfaces:
+brainclaw can integrate through several surfaces, but they do not have the same role.
 
-- **Readable files** — `.brainclaw/project.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`
-- **Native agent files** — `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/brainclaw.md`, `.windsurfrules`, etc. (via `brainclaw export`)
-- **CLI commands** — direct operational entry point
-- **MCP tools** — dynamic access path for capable agents
-- **System or project instructions** — static guidance for how to use brainclaw
+| Surface | Role |
+|---|---|
+| **MCP tools** | primary dynamic access path for context, plans, claims, board views, and runtime writes |
+| **Native agent files** | local guidance in the agent's own surface: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/brainclaw.md`, `.windsurfrules`, etc. |
+| **Readable files** | fallback readable state such as `.brainclaw/project.md` |
+| **CLI commands** | setup, scripting, release, inspection, and fallback workflows |
+| **System/project instructions** | static reminders about how Brainclaw should be used in this workspace |
 
-## Recommended pattern
+## Recommended Pattern
 
 A good default pattern is:
 
-1. use lightweight system instructions to tell the agent how to use brainclaw
-2. retrieve fresh workspace context before significant edits
-3. use shared plans and claims during execution
-4. use handoffs and runtime notes when switching work or surfacing issues
+1. give the agent lightweight static instructions about how to use Brainclaw
+2. let it retrieve fresh workspace state through MCP before significant edits
+3. rely on plans, claims, and handoffs during execution
+4. keep native files and readable project state available as fallback context
+5. use hooks or repeated reminders where the host surface supports them
 
-## Important principle
+## Native Files Are Support, Not The Live Source Of Truth
 
-Do not rely on a single point of contact.
+Generated files such as `CLAUDE.md` or `.cursor/rules/brainclaw.md` are useful because they keep Brainclaw visible inside the agent surface already in use.
 
-Agents are not perfectly reliable at following instructions every time.
-The strongest integrations combine:
+They are not meant to replace:
 
-- instructions (static)
-- readable workspace state (file)
-- MCP or CLI access (dynamic)
-- repeated reminders in the workflow
-- optional hooks where supported
+- fresh context retrieval
+- live board state
+- current claims
+- recent runtime notes
+- current handoffs
 
-## Getting the native file written automatically
+For those, use MCP when available.
 
-Run `brainclaw init` — it detects the running agent and writes to its native file automatically.
+## Getting The Native File Written Automatically
+
+Run `brainclaw init` and Brainclaw will detect the current agent surface and write the appropriate local file automatically.
+
 That includes OpenCode (`AGENTS.md` + `opencode.json`) and Antigravity/Gemini CLI (`GEMINI.md` + machine-local MCP config) when those environments are present.
 
 Or at any time:
 
 ```bash
-brainclaw export --detect
+brainclaw export --detect --write
 ```
 
-## Related pages
+By default, generated workspace files are treated as local setup and added to `.gitignore`. `--shared` should only be used when you intentionally want the main exported instruction file to be versioned.
 
-- [agents.md](agents.md)
-- [mcp.md](mcp.md)
-- [copilot.md](copilot.md)
-- [cursor.md](cursor.md)
+## Choose Your Next Page
+
+- [mcp.md](mcp.md) — the nominal path for capable agents
+- [agents.md](agents.md) — integration principles that apply to every agent
 - [claude-code.md](claude-code.md)
 - [codex.md](codex.md)
+- [cursor.md](cursor.md)
+- [copilot.md](copilot.md)

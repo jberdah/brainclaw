@@ -1,12 +1,18 @@
 # Quickstart
 
-This guide walks through the shortest path to getting value from brainclaw.
+This guide is organized by entry path, because Brainclaw serves different surfaces with different roles.
+
+Use this rule first:
+
+- capable agent with MCP support: prefer MCP for dynamic state
+- agent surface driven mainly by local instruction files: use generated native files plus CLI fallback
+- human operator or maintainer: use the CLI directly
 
 ## Important limitation for now
 
 Do not run multiple coding agents in parallel on the same project checkout yet.
 
-brainclaw is already useful for sequential collaboration: one agent can pick up where another stopped, inspect shared context, and continue from explicit plans, claims, traps, and handoffs. But until Brainclaw supports dedicated Git worktrees per agent/session, parallel edits in the same checkout are still likely to create more Git and workspace problems than they solve.
+Brainclaw is already useful for sequential collaboration: one agent can pick up where another stopped, inspect shared context, and continue from explicit plans, claims, traps, and handoffs. But until Brainclaw supports dedicated Git worktrees per agent/session, parallel edits in the same checkout are still likely to create more Git and workspace problems than they solve.
 
 For now, prefer:
 
@@ -14,17 +20,47 @@ For now, prefer:
 2. explicit handoffs between agents
 3. claims and context to keep continuity between sessions
 
-## 1. Bootstrap and initialize the workspace
+## Path 1: Agent-First With MCP
+
+Use this path when the agent can call Brainclaw through MCP.
+
+### Operator bootstrap
 
 ```bash
 brainclaw setup --yes
 brainclaw init
 ```
 
-`setup` installs the machine-level prerequisites and agent integrations. `init` then creates the workspace state, seeds stable identity, and prepares the project memory structure.
-If an AI coding agent is detected in the environment, brainclaw also writes to its native instruction file automatically.
+`setup` installs machine-level prerequisites and agent integrations. `init` creates the workspace state, seeds stable identity, and prepares the project memory structure.
 
-## 2. Capture the first important facts
+### Agent runtime pattern
+
+After the workspace is initialized, the nominal flow is:
+
+```text
+bclaw_session_start   -> open a session and return current board/context
+bclaw_get_context     -> fetch fresh prompt-ready context for the target path
+bclaw_list_plans      -> inspect active work
+bclaw_claim           -> claim scope before editing
+bclaw_write_note      -> record runtime observations
+bclaw_session_end     -> close session cleanly and hand work off
+```
+
+Use native agent files such as `AGENTS.md`, `CLAUDE.md`, or Cursor rules as local workflow guidance, not as the only source of live state.
+
+## Path 2: CLI-Oriented Agent Or Fallback Workflow
+
+Use this path when the agent does not have a good MCP integration yet, or when a human needs to drive the workflow directly.
+
+### Bootstrap and inspect
+
+```bash
+brainclaw setup --yes
+brainclaw init
+brainclaw export --detect --write
+```
+
+### Record the first important facts
 
 ```bash
 brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
@@ -32,68 +68,64 @@ brainclaw memory create constraint "Payments module frozen until 2026-04-01" --t
 brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
 ```
 
-These become part of the shared project memory.
-
-## 3. Create a shared plan
+### Create and claim work
 
 ```bash
 brainclaw plan create "Coordinate auth rollout" --priority high
-brainclaw plan list
+brainclaw claim create "Take auth rollout" --scope src/auth/
 ```
 
-## 4. Claim work before editing
-
-```bash
-brainclaw claim create "Taking auth rollout" --agent copilot --scope src/auth/ --plan pln_001
-brainclaw claim list --plan pln_001
-```
-
-Claims reduce collisions, but they are not a substitute for isolated worktrees yet.
-Use them mainly to coordinate sequential work or human/agent awareness in the same repo.
-
-## 5. Create an explicit handoff
-
-```bash
-brainclaw memory create handoff "Review auth patch" --from copilot --to claude --plan pln_001
-```
-
-## 6. Generate context for an agent
+### Refresh context before edits
 
 ```bash
 brainclaw context --for src/auth/routes.ts --digest
-brainclaw context --json --max-chars 1200
-```
-
-Use this to prepare compact context before edits or reviews.
-
-## 7. Export to your agent's native instruction file
-
-```bash
-brainclaw export --detect          # auto-detects running agent, writes to its file
-brainclaw export --format claude-md --write   # writes CLAUDE.md and gitignores it by default
-brainclaw export --format cursor-rules --write  # writes .cursor/rules/brainclaw.md and gitignores it by default
-brainclaw export --format claude-md --write --shared  # only if you intentionally want to commit it
-```
-
-## 8. Inspect the current board
-
-```bash
 brainclaw status
-brainclaw agent-board --agent copilot
 ```
 
-## Recommended first workflow
+Claims reduce collisions, but they are not a substitute for isolated worktrees yet. Use them mainly to coordinate sequential work or human/agent awareness in the same repo.
+
+## Path 3: Brownfield Onboarding
+
+Use this path when you are adopting Brainclaw into an existing workspace and do not want to hand-author all memory from scratch.
+
+### Build the initial bootstrap view
+
+```bash
+brainclaw setup --yes
+brainclaw init
+brainclaw bootstrap --json
+```
+
+### Fill the gaps
+
+```bash
+brainclaw bootstrap --interview --audience cli
+brainclaw bootstrap --interview --audience ide_chat
+```
+
+### Apply or rollback managed imports
+
+```bash
+brainclaw bootstrap --apply
+brainclaw bootstrap --uninstall
+```
+
+Use this path when the repo already has native instruction files, partial docs, or conventions that Brainclaw should adopt selectively instead of replacing blindly.
+
+## Recommended First Workflow
 
 1. initialize the workspace
-2. record 3–5 important decisions or traps
-3. create one shared plan
-4. use claims for touched folders
-5. generate context before edits
-6. hand off explicitly when switching between agents
+2. choose the correct entry path for your surface
+3. record or import 3-5 high-signal facts
+4. create one shared plan
+5. claim scope before editing
+6. refresh context before significant edits
+7. hand off explicitly when switching between agents
 
-## Next reads
+## Next Reads
 
-- [cli.md](cli.md) — full command reference
+- [integrations/overview.md](integrations/overview.md) — integration model by surface
+- [integrations/mcp.md](integrations/mcp.md) — nominal dynamic path for capable agents
+- [cli.md](cli.md) — operator and fallback reference
 - [concepts/memory.md](concepts/memory.md)
 - [concepts/plans-and-claims.md](concepts/plans-and-claims.md)
-- [integrations/overview.md](integrations/overview.md)

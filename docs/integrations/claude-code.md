@@ -12,12 +12,12 @@ brainclaw export --format claude-md --write
 
 ## Recommended approach
 
-- add lightweight usage instructions for brainclaw in `CLAUDE.md`
-- use `.brainclaw/project.md` as a readable baseline
-- prefer MCP for dynamic retrieval when available
+- use MCP as the default runtime path for dynamic retrieval and writes
+- keep `CLAUDE.md` lightweight and behavioral: it should tell Claude Code when to call Brainclaw, not carry all mutable workspace state
+- use `.brainclaw/project.md` as a readable fallback baseline, not as the primary live source of truth
 - use hooks or workflow checks when a stronger reminder is needed
 
 ## Key idea
 
 Claude Code should not carry all workspace state in static instructions.
-brainclaw provides the living workspace layer.
+brainclaw provides the living workspace layer through MCP plus local workflow guidance.

@@ -12,12 +12,12 @@ brainclaw export --format agents-md --write
 
 ## Recommended approach
 
-- keep a lightweight instruction telling Codex to consult brainclaw
-- let Codex read `.brainclaw/project.md` when simple file context is enough
-- use MCP for fresher scoped context when available
-- encourage use of plans, claims, and handoffs during multi-step work
+- use MCP as the default runtime path for fresh context, plans, claims, and runtime notes
+- keep `AGENTS.md` lightweight and behavioral: it should remind Codex how to use Brainclaw, not duplicate live state
+- use `.brainclaw/project.md` only as a readable fallback when MCP is unavailable or when a human wants a simple snapshot
+- encourage plans, claims, and handoffs during multi-step work
 
 ## Good role for brainclaw here
 
 Codex stays the coding agent.
-brainclaw provides the shared workspace context and coordination layer.
+brainclaw provides the live workspace context and coordination layer.

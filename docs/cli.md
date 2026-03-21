@@ -1,6 +1,15 @@
 # CLI Reference
 
-Commands grouped by purpose. All commands are available as `brainclaw` or its alias `bclaw`.
+The CLI is Brainclaw's explicit operator, scripting, release, and fallback surface. All commands are available as `brainclaw` or its alias `bclaw`.
+
+For capable coding agents, prefer MCP for dynamic runtime state:
+
+- `bclaw_bootstrap` instead of manual bootstrap polling
+- `bclaw_get_context` instead of repeated raw CLI context calls
+- `bclaw_list_plans` / `bclaw_list_claims` / `bclaw_get_agent_board` for live coordination views
+- `bclaw_claim`, `bclaw_write_note`, and `bclaw_session_end` for session continuity
+
+Use the CLI when a human operator is driving the workflow, when you are scripting setup or release operations, or when MCP is not the integration path.
 
 ---
 
@@ -96,6 +105,8 @@ brainclaw rebuild
 ### `brainclaw bootstrap`
 
 Bootstrap shared memory for a new agent or project context.
+
+For capable agents, the MCP equivalent is `bclaw_bootstrap`. Use the CLI when a human is driving onboarding, reviewing the import proposal, or operating in fallback mode.
 
 | Option | Description |
 |---|---|
@@ -580,6 +591,8 @@ brainclaw search "rollout" --since 2026-01-01 --json
 ---
 
 ## Planning and Coordination
+
+For capable agents, prefer the MCP plan and claim tools for live runtime interactions. The CLI remains the operator and scripting form of the same coordination model.
 
 ### `brainclaw plan create <text>`
 

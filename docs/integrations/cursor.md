@@ -12,12 +12,12 @@ brainclaw export --format cursor-rules --write
 
 ## Recommended approach
 
-- the generated `.cursor/rules/brainclaw.md` tells Cursor to consult brainclaw before significant edits
-- use `.brainclaw/project.md` for readable shared state
-- use MCP for dynamic retrieval when available
+- use MCP as the default dynamic path for context, board state, plans, and claims
+- let the generated `.cursor/rules/brainclaw.md` tell Cursor when to consult Brainclaw and how to stay inside the workflow
+- use `.brainclaw/project.md` only as readable fallback shared state
 - rely on claims and plans when multiple agents or humans are active in the same repo
 
 ## Key point
 
 Cursor rules describe behavior.
-brainclaw provides the living shared state those rules should point to.
+brainclaw provides the living shared state those rules should point to through MCP.

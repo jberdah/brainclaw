@@ -8,9 +8,15 @@
 
 ---
 
-brainclaw gives a workspace a shared coordination layer: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context — stored locally, versioned in Git, readable in plain text.
+brainclaw gives a workspace a shared coordination layer for coding agents: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context — stored locally, versioned in Git, readable in plain text.
 
-It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and any other coding agent. It does not replace them. It helps them work together.
+For capable agents, the nominal path is:
+
+1. read dynamic state through MCP
+2. use native agent files such as `AGENTS.md`, `CLAUDE.md`, or Cursor rules as local guidance
+3. leave the CLI to humans, scripts, setup, release, and fallback workflows
+
+It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and any other coding agent. It does not replace them. It gives them a shared state layer they can resume from reliably.
 
 ---
 
@@ -19,7 +25,7 @@ It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antig
 Coding agents are getting better at local code generation, but they still struggle with shared project state.
 Across real projects, agents often miss active constraints, forget known traps, duplicate work, step on the same files, and lose context between sessions.
 
-brainclaw solves this by giving the workspace a shared coordination layer that both humans and agents can read and update.
+brainclaw solves this by giving the workspace a shared coordination layer that agents can query dynamically and humans can inspect locally.
 
 ---
 
@@ -32,6 +38,20 @@ brainclaw solves this by giving the workspace a shared coordination layer that b
 | **Agent-ready context** | compact, prompt-sized context generated from real workspace state |
 | **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, etc. |
 | **Local-first storage** | plain text + JSON, Git-friendly, no cloud, no telemetry |
+
+---
+
+## Agent Surfaces
+
+brainclaw exposes the same collaboration state through three surfaces, but they do not have the same role.
+
+| Surface | Primary use |
+|---|---|
+| **MCP** | default path for capable agents that need fresh context, board state, plans, claims, and write operations |
+| **Native agent files** | local guidance and bootstrapping for a specific agent surface (`AGENTS.md`, `CLAUDE.md`, Cursor rules, etc.) |
+| **CLI** | operator workflows, scripting, setup, release, debugging, and fallback access when MCP is not the integration path |
+
+If you are documenting or integrating an agent workflow, prefer MCP first.
 
 ---
 
@@ -71,20 +91,32 @@ If you want the least surprising setup today, use Linux first. If you are on Win
 
 ---
 
-## Quick example
+## Quick Example
 
 ```bash
+# Operator bootstrap
 npx brainclaw setup --yes
 npx brainclaw init
+```
 
-npx brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
-npx brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
-npx brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high
-npx brainclaw plan create "Coordinate auth rollout" --priority high
-npx brainclaw memory create handoff "Validate refund endpoint" --from backend --to qa
+Once the workspace is initialized, a capable agent should use Brainclaw through MCP:
 
-npx brainclaw context --json
-npx brainclaw status
+```text
+bclaw_session_start      -> open session + return board/context
+bclaw_get_context        -> fetch fresh prompt-ready context for a path
+bclaw_list_plans         -> inspect shared work
+bclaw_claim              -> claim scope before editing
+bclaw_write_note         -> record runtime observations
+bclaw_session_end        -> close session and hand work off cleanly
+```
+
+Humans can still use the CLI directly for setup, inspection, and fallback workflows:
+
+```bash
+brainclaw plan create "Coordinate auth rollout" --priority high
+brainclaw claim create "Take auth rollout" --scope src/auth/
+brainclaw context --for src/auth/routes.ts --digest
+brainclaw status
 ```
 
 ---
@@ -111,12 +143,13 @@ bclaw status
 ```bash
 brainclaw setup --yes
 brainclaw init
-brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
-brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high
-brainclaw plan create "Coordinate auth rollout" --priority high
-brainclaw context --json
 ```
+
+Then choose the entry path that matches your surface:
+
+- agent-first: start with `docs/integrations/overview.md` and `docs/integrations/mcp.md`
+- operator CLI: use `docs/quickstart.md` and `docs/cli.md`
+- brownfield onboarding: use `brainclaw bootstrap` and the onboarding guides in `docs/`
 
 Detailed Markdown guides are bundled in the npm package under `docs/`.
 
@@ -140,17 +173,16 @@ Recommended use today:
 
 brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Continue, OpenCode, and Antigravity/Gemini CLI.
 
-Typical flow:
+Typical agent-first flow:
 
 1. `brainclaw setup` — machine-level bootstrap for agent integrations and global prerequisites
-2. `brainclaw init` — seeds workspace memory, writes to the detected agent's native instruction file
-3. record canonical memory with `brainclaw memory create ...` and work items with `brainclaw plan create ...`
-4. let agents read brainclaw context before editing
-5. use claims to reduce collisions
-6. hand work off explicitly when needed
-7. keep shared state visible across sessions
+2. `brainclaw init` — seeds workspace memory and writes the detected agent's native instruction file
+3. agents connect through MCP for fresh context, board views, plans, claims, and runtime writes
+4. native agent files provide local guidance and workflow reminders in the surface the agent already uses
+5. humans use the CLI for inspection, scripting, release, bootstrap, and fallback operations
+6. shared plans, claims, handoffs, and runtime notes keep the next agent resumeable
 
-brainclaw can also expose collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates.
+brainclaw exposes collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates. Readable local files still matter, but MCP is the stronger path for dynamic state.
 
 ---
 

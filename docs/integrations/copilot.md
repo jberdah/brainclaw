@@ -12,9 +12,10 @@ brainclaw export --format copilot-instructions --write
 
 ## Recommended approach
 
-- point Copilot to `.brainclaw/project.md` or use fresh context retrieval
+- use MCP whenever the Copilot surface supports it for fresh context and coordination views
+- keep `.github/copilot-instructions.md` lightweight and behavioral
+- use `.brainclaw/project.md` as readable fallback, not as the only live context source
 - use plans, claims, and handoffs to reduce ambiguity across sessions
-- use MCP where supported for dynamic collaboration views
 
 ## Why this matters
 
