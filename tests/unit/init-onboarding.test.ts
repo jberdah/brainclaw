@@ -69,5 +69,6 @@ describe('init onboarding preflight', () => {
     assert.match(result.stdout, /Workspace kind: existing/);
     assert.match(result.stdout, /Native instruction files:/);
     assert.match(result.stdout, /CLAUDE\.md/);
+    assert.match(result.stdout, /brainclaw bootstrap --apply/);
   });
 });

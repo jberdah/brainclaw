@@ -4,6 +4,8 @@ import type { ZodType, ZodTypeDef } from 'zod';
 import YAML from 'yaml';
 import { memoryDir, memoryPath, readFileSync, writeFileAtomic, resolveEntityDir } from './io.js';
 import {
+  BootstrapApplicationReceiptSchema,
+  BootstrapImportPlanDocumentSchema,
   AgentIdentityDocumentSchema,
   BootstrapProfileDocumentSchema,
   CandidateSchema,
@@ -24,6 +26,8 @@ import {
 
 export type VersionedDocumentType =
   | 'agent_identity'
+  | 'bootstrap_application'
+  | 'bootstrap_import_plan'
   | 'bootstrap_profile'
   | 'candidate'
   | 'claim'
@@ -88,6 +92,8 @@ const CURRENT_SCHEMA_VERSION = 2;
 
 const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> = {
   agent_identity: createRegistryEntry(AgentIdentityDocumentSchema),
+  bootstrap_application: createRegistryEntry(BootstrapApplicationReceiptSchema),
+  bootstrap_import_plan: createRegistryEntry(BootstrapImportPlanDocumentSchema),
   bootstrap_profile: createRegistryEntry(BootstrapProfileDocumentSchema),
   candidate: createRegistryEntry(CandidateSchema),
   claim: createRegistryEntry(ClaimSchema),
@@ -249,6 +255,8 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectSingle(entries, memoryPath('project.identity.json', cwd), 'project_identity');
   collectSingle(entries, memoryPath('.current-session', cwd), 'current_session');
   collectSingle(entries, memoryPath(path.join('bootstrap', 'profile.json'), cwd), 'bootstrap_profile');
+  collectSingle(entries, memoryPath(path.join('bootstrap', 'import-plan.json'), cwd), 'bootstrap_import_plan');
+  collectSingle(entries, memoryPath(path.join('bootstrap', 'last-application.json'), cwd), 'bootstrap_application');
 
   const effectiveCwd = cwd ?? process.cwd();
   collectDirectory(entries, resolveEntityDir('constraints', effectiveCwd, 'read'), 'constraint');
@@ -266,7 +274,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, resolveEntityDir('runtime-hosts', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('runtime-private', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('instructions', effectiveCwd, 'read'), 'instruction');
-  collectDirectory(entries, resolveEntityDir('bootstrap', effectiveCwd, 'read'), 'memory_seed');
+  collectDirectory(entries, path.join(resolveEntityDir('bootstrap', effectiveCwd, 'read'), 'seeds'), 'memory_seed');
   collectDirectory(entries, resolveEntityDir('agents', effectiveCwd, 'read'), 'agent_identity');
   collectDirectory(entries, resolveEntityDir('sessions', effectiveCwd, 'read'), 'session_snapshot');
 

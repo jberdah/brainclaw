@@ -274,6 +274,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
     console.log(`  ${line}`);
   }
+  if (onboardingPreflight.importPlan.suggestion_count > 0) {
+    console.log('');
+    console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
+    console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
+  } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
+    console.log('');
+    console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+  }
 
   console.log('');
   console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);

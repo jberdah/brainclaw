@@ -534,12 +534,15 @@ program
 // --- bootstrap ---
 program
   .command('bootstrap')
-  .description('Derive brownfield bootstrap signals from the current repository')
+  .description('Derive brownfield bootstrap signals and optionally import them into canonical memory')
   .option('--for <target>', 'Target path or scope to tailor the bootstrap')
   .option('--json', 'Output as JSON')
   .option('--refresh', 'Force a fresh bootstrap scan instead of reusing the current profile')
-  .action((options) => {
-    runBootstrap(options);
+  .option('--apply', 'Import the current bootstrap proposal into canonical memory')
+  .option('--uninstall', 'Deactivate the last bootstrap import managed by this workspace')
+  .option('-y, --yes', 'Skip confirmation prompts for apply/uninstall')
+  .action(async (options) => {
+    await runBootstrap(options);
   });
 
 // --- env ---

@@ -3,11 +3,17 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { JsonStore } from './json-store.js';
 import { generateId, nowISO } from './ids.js';
-import { resolveEntityDir } from './io.js';
+import { memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
 import {
+  BootstrapApplicationReceiptSchema,
+  BootstrapImportPlanDocumentSchema,
   BootstrapProfileDocumentSchema,
+  BootstrapSuggestionDocumentSchema,
   MemorySeedDocumentSchema,
+  type BootstrapApplicationReceipt,
+  type BootstrapImportPlanDocument,
   type BootstrapProfileDocument,
+  type BootstrapSuggestionDocument,
   type MemorySeedConfidence,
   type MemorySeedDocument,
   type MemorySeedKind,
@@ -17,11 +23,17 @@ import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { analyzeRepository } from './repo-analysis.js';
 import { buildExecutionContext, compactExecutionContext } from './execution-context.js';
 import { buildAgentToolingContext } from './agent-context.js';
+import { createInstruction, loadInstructions, saveInstruction } from './instructions.js';
+import { resolveCurrentAgentName } from './agent-registry.js';
+import { loadState } from './state.js';
+import { generateMarkdown } from './markdown.js';
 
 const README_CANDIDATES = ['README.md', 'README', 'README.txt', 'README.mdx'];
 const DOC_HINTS = ['docs', 'doc'];
 const MAKEFILE_NAME = 'Makefile';
 const PROFILE_FILE = 'profile.json';
+const IMPORT_PLAN_FILE = 'import-plan.json';
+const APPLICATION_FILE = 'last-application.json';
 const HOTSPOT_LIMIT = 3;
 const DERIVED_SCHEMA_VERSION = 2;
 const EMPTY_WORKSPACE_IGNORED = new Set([
@@ -57,6 +69,8 @@ export interface BootstrapOptions {
 export interface BootstrapResult {
   profile: BootstrapProfileDocument;
   seeds: MemorySeedDocument[];
+  importPlan: BootstrapImportPlanDocument;
+  lastApplication?: BootstrapApplicationReceipt;
   reusedProfile: boolean;
 }
 
@@ -79,6 +93,24 @@ interface GitProbeResult {
 interface BuildBootstrapArtifactsResult {
   profile: BootstrapProfileDocument;
   seeds: MemorySeedDocument[];
+  importPlan: BootstrapImportPlanDocument;
+}
+
+export interface ApplyBootstrapOptions extends BootstrapOptions {
+  force?: boolean;
+}
+
+export interface BootstrapApplyResult {
+  proposal: BootstrapImportPlanDocument;
+  receipt?: BootstrapApplicationReceipt;
+  createdCount: number;
+  skippedCount: number;
+}
+
+export interface BootstrapUninstallResult {
+  receipt?: BootstrapApplicationReceipt;
+  deactivatedCount: number;
+  skippedCount: number;
 }
 
 interface WorkspaceClassification {
@@ -90,12 +122,16 @@ export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapRe
   const cwd = options.cwd ?? process.cwd();
   const target = normalizeTarget(options.target);
   const existing = loadBootstrapProfile(cwd);
+  const existingPlan = loadBootstrapImportPlan(cwd);
+  const lastApplication = loadBootstrapApplication(cwd);
   const existingFingerprint = currentRepoFingerprint(cwd);
 
-  if (!options.refresh && existing && isProfileReusable(existing, target, existingFingerprint)) {
+  if (!options.refresh && existing && existingPlan && isProfileReusable(existing, target, existingFingerprint)) {
     return {
       profile: existing,
       seeds: listBootstrapSeeds(cwd),
+      importPlan: existingPlan,
+      lastApplication,
       reusedProfile: true,
     };
   }
@@ -105,6 +141,8 @@ export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapRe
   return {
     profile: artifacts.profile,
     seeds: artifacts.seeds,
+    importPlan: artifacts.importPlan,
+    lastApplication,
     reusedProfile: false,
   };
 }
@@ -177,6 +215,7 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
   if ((result.profile.gaps?.length ?? 0) > 0) {
     lines.push(`Open gaps: ${result.profile.gaps.join(' | ')}`);
   }
+  lines.push(`Import suggestions: ${result.importPlan.suggestion_count}`);
   if (result.profile.repo_fingerprint) {
     lines.push(`Repo fingerprint: ${result.profile.repo_fingerprint}`);
   }
@@ -185,6 +224,17 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
   }
   if (result.reusedProfile) {
     lines.push('Reused existing bootstrap profile.');
+  }
+  if (result.lastApplication && !result.lastApplication.uninstalled_at) {
+    lines.push(`Last bootstrap import: ${result.lastApplication.managed_artifacts.length} managed artifact(s) from ${result.lastApplication.applied_at}`);
+  }
+  if (result.importPlan.suggestions.length > 0) {
+    lines.push('');
+    lines.push('Import proposal:');
+    for (const suggestion of result.importPlan.suggestions.slice(0, 10)) {
+      const scope = suggestion.scope ? `:${suggestion.scope}` : '';
+      lines.push(`- [${suggestion.target}/${suggestion.confidence}] <${suggestion.layer ?? 'global'}${scope}> ${suggestion.text}`);
+    }
   }
   if (result.seeds.length > 0) {
     lines.push('');
@@ -283,6 +333,14 @@ function buildBootstrapArtifacts(input: {
     confidence,
     gaps,
   });
+  const importPlan = buildBootstrapImportPlan({
+    cwd: input.cwd,
+    target: input.target,
+    workspaceKind: workspace.kind,
+    confidence,
+    gaps,
+    seeds: uniqueSeeds,
+  });
 
   return {
     profile: BootstrapProfileDocumentSchema.parse({
@@ -304,6 +362,7 @@ function buildBootstrapArtifacts(input: {
       ...seed,
       schema_version: DERIVED_SCHEMA_VERSION,
     })),
+    importPlan,
   };
 }
 
@@ -382,6 +441,30 @@ function extractAgentsSeeds(filepath: string, target?: string): MemorySeedDocume
   }
 
   return seeds;
+}
+
+export function loadBootstrapImportPlan(cwd?: string): BootstrapImportPlanDocument | undefined {
+  const filepath = bootstrapImportPlanPath(cwd);
+  if (!fs.existsSync(filepath)) {
+    return undefined;
+  }
+  try {
+    return loadVersionedJsonFile<BootstrapImportPlanDocument>('bootstrap_import_plan', filepath).document;
+  } catch {
+    return undefined;
+  }
+}
+
+export function loadBootstrapApplication(cwd?: string): BootstrapApplicationReceipt | undefined {
+  const filepath = bootstrapApplicationPath(cwd);
+  if (!fs.existsSync(filepath)) {
+    return undefined;
+  }
+  try {
+    return loadVersionedJsonFile<BootstrapApplicationReceipt>('bootstrap_application', filepath).document;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractNativeInstructionSeeds(filepaths: string[], cwd: string, target?: string): MemorySeedDocument[] {
@@ -698,6 +781,7 @@ function probeGit(cwd: string, target?: string): GitProbeResult {
 function persistBootstrapArtifacts(artifacts: BuildBootstrapArtifactsResult, cwd: string): void {
   ensureBootstrapDirs(cwd);
   saveVersionedJsonFile('bootstrap_profile', bootstrapProfilePath(cwd), artifacts.profile);
+  saveVersionedJsonFile('bootstrap_import_plan', bootstrapImportPlanPath(cwd), artifacts.importPlan);
 
   const store = bootstrapSeedStore(cwd);
   const existingIds = new Set(store.list().map((seed) => seed.id));
@@ -737,6 +821,14 @@ function bootstrapSeedsDir(cwd?: string): string {
 
 function bootstrapProfilePath(cwd?: string): string {
   return path.join(bootstrapDir(cwd), PROFILE_FILE);
+}
+
+function bootstrapImportPlanPath(cwd?: string): string {
+  return path.join(bootstrapDir(cwd), IMPORT_PLAN_FILE);
+}
+
+function bootstrapApplicationPath(cwd?: string): string {
+  return path.join(bootstrapDir(cwd), APPLICATION_FILE);
 }
 
 function isProfileReusable(
@@ -830,6 +922,299 @@ function buildSummary(input: {
     parts.push(`Needs follow-up on: ${input.gaps.join('; ')}.`);
   }
   return parts.join(' ');
+}
+
+function buildBootstrapImportPlan(input: {
+  cwd: string;
+  target?: string;
+  workspaceKind: 'empty' | 'existing';
+  confidence: MemorySeedConfidence;
+  gaps: string[];
+  seeds: MemorySeedDocument[];
+}): BootstrapImportPlanDocument {
+  const activeInstructionKeys = new Set(
+    loadInstructions(input.cwd)
+      .filter((entry) => entry.active)
+      .map((entry) => instructionIdentityKey(entry.text, entry.layer, entry.scope)),
+  );
+
+  const suggestions: BootstrapSuggestionDocument[] = [];
+  const seenSuggestionKeys = new Set<string>();
+  const importedSources = new Set<string>();
+  const groupedBySource = new Map<string, MemorySeedDocument[]>();
+
+  for (const seed of input.seeds) {
+    const bucket = groupedBySource.get(seed.source_ref) ?? [];
+    bucket.push(seed);
+    groupedBySource.set(seed.source_ref, bucket);
+  }
+
+  for (const seed of input.seeds) {
+    const suggestion = seedToBootstrapSuggestion(seed, false);
+    if (!suggestion) {
+      continue;
+    }
+    const suggestionKey = suggestionIdentityKey(suggestion);
+    if (seenSuggestionKeys.has(suggestionKey) || activeInstructionKeys.has(suggestionKey)) {
+      continue;
+    }
+    seenSuggestionKeys.add(suggestionKey);
+    importedSources.add(seed.source_ref);
+    suggestions.push(BootstrapSuggestionDocumentSchema.parse({
+      ...suggestion,
+      schema_version: DERIVED_SCHEMA_VERSION,
+    }));
+  }
+
+  for (const [sourceRef, seeds] of groupedBySource.entries()) {
+    if (importedSources.has(sourceRef)) {
+      continue;
+    }
+    const summarySeed = seeds.find((seed) => isBootstrapSummarySeed(seed.text));
+    if (!summarySeed) {
+      continue;
+    }
+    const suggestion = seedToBootstrapSuggestion(summarySeed, true);
+    if (!suggestion) {
+      continue;
+    }
+    const suggestionKey = suggestionIdentityKey(suggestion);
+    if (seenSuggestionKeys.has(suggestionKey) || activeInstructionKeys.has(suggestionKey)) {
+      continue;
+    }
+    seenSuggestionKeys.add(suggestionKey);
+    suggestions.push(BootstrapSuggestionDocumentSchema.parse({
+      ...suggestion,
+      schema_version: DERIVED_SCHEMA_VERSION,
+    }));
+  }
+
+  const summary = suggestions.length === 0
+    ? 'No safe bootstrap imports are ready yet; review the gaps and use an interview/import step before promoting derived context.'
+    : `${suggestions.length} bootstrap instruction suggestion(s) are ready to import after review.`;
+
+  return BootstrapImportPlanDocumentSchema.parse({
+    schema_version: DERIVED_SCHEMA_VERSION,
+    derived_at: nowISO(),
+    target: input.target,
+    workspace_kind: input.workspaceKind,
+    confidence: input.confidence,
+    summary,
+    requires_confirmation: true,
+    gaps: input.gaps,
+    suggestion_count: suggestions.length,
+    suggestions,
+  });
+}
+
+function seedToBootstrapSuggestion(
+  seed: MemorySeedDocument,
+  allowSummaryFallback: boolean,
+): Omit<BootstrapSuggestionDocument, 'schema_version'> | undefined {
+  if (seed.seed_kind !== 'agent_rule' && seed.seed_kind !== 'command') {
+    return undefined;
+  }
+
+  if (seed.seed_kind === 'agent_rule' && isBootstrapSummarySeed(seed.text) && !allowSummaryFallback) {
+    return undefined;
+  }
+
+  const target = inferBootstrapInstructionTarget(seed);
+  if (!target) {
+    return undefined;
+  }
+
+  return {
+    id: generateId('bootstrap_suggestions'),
+    target: 'instruction',
+    text: seed.text,
+    rationale: renderBootstrapSuggestionRationale(seed),
+    confidence: seed.confidence,
+    source_seed_ids: [seed.id],
+    source_refs: [seed.source_ref],
+    layer: target.layer,
+    scope: target.scope,
+    tags: normalizeBootstrapSuggestionTags(seed.tags),
+    related_paths: seed.related_paths,
+    reversible: true,
+  };
+}
+
+function inferBootstrapInstructionTarget(seed: MemorySeedDocument): { layer: 'global' | 'agent'; scope?: string } | undefined {
+  if (seed.source_kind === 'agents_md') {
+    return { layer: 'global' };
+  }
+  if (seed.seed_kind === 'command') {
+    return { layer: 'global' };
+  }
+  if (seed.source_kind !== 'native_instruction') {
+    return { layer: 'global' };
+  }
+
+  const ref = seed.source_ref.replace(/\\/g, '/');
+  if (ref === 'CLAUDE.md') return { layer: 'agent', scope: 'claude-code' };
+  if (ref === 'GEMINI.md') return { layer: 'agent', scope: 'antigravity' };
+  if (ref === '.windsurfrules') return { layer: 'agent', scope: 'windsurf' };
+  if (ref === '.github/copilot-instructions.md') return { layer: 'agent', scope: 'github-copilot' };
+  if (ref.startsWith('.cursor/rules/')) return { layer: 'agent', scope: 'cursor' };
+  if (ref.startsWith('.roo/rules/')) return { layer: 'agent', scope: 'roo' };
+  if (ref.startsWith('.continue/rules/')) return { layer: 'agent', scope: 'continue' };
+  if (ref.startsWith('.clinerules/')) return { layer: 'agent', scope: 'cline' };
+  return { layer: 'global' };
+}
+
+function renderBootstrapSuggestionRationale(seed: MemorySeedDocument): string {
+  switch (seed.source_kind) {
+    case 'agents_md':
+      return 'Derived from AGENTS.md';
+    case 'native_instruction':
+      return `Derived from native agent instruction file ${seed.source_ref}`;
+    case 'readme':
+      return `Derived from ${seed.source_ref}`;
+    case 'manifest':
+      return `Derived from ${seed.source_ref}`;
+    default:
+      return `Derived from ${seed.source_ref}`;
+  }
+}
+
+function normalizeBootstrapSuggestionTags(tags: string[]): string[] {
+  const normalized = tags.filter((tag) => tag !== 'bootstrap' && tag !== 'native-context');
+  normalized.push('bootstrap-import');
+  return [...new Set(normalized)];
+}
+
+function isBootstrapSummarySeed(text: string): boolean {
+  return text.startsWith('Agent guide: ') || text.startsWith('Native agent guidance from ');
+}
+
+function suggestionIdentityKey(suggestion: Pick<BootstrapSuggestionDocument, 'text' | 'layer' | 'scope'>): string {
+  return instructionIdentityKey(suggestion.text, suggestion.layer ?? 'global', suggestion.scope);
+}
+
+function instructionIdentityKey(text: string, layer: string, scope?: string): string {
+  return `${layer}:${scope ?? '*'}:${text.trim().toLowerCase()}`;
+}
+
+export function applyBootstrapImport(options: ApplyBootstrapOptions = {}): BootstrapApplyResult {
+  const cwd = options.cwd ?? process.cwd();
+  const result = runBootstrapProfile(options);
+  const proposal = result.importPlan;
+  if (proposal.suggestions.length === 0) {
+    return {
+      proposal,
+      receipt: loadBootstrapApplication(cwd),
+      createdCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  const activeInstructionKeys = new Set(
+    loadInstructions(cwd)
+      .filter((entry) => entry.active)
+      .map((entry) => instructionIdentityKey(entry.text, entry.layer, entry.scope)),
+  );
+  const managedArtifacts: BootstrapApplicationReceipt['managed_artifacts'] = [];
+  let createdCount = 0;
+  let skippedCount = 0;
+
+  withStoreLock(cwd, () => {
+    for (const suggestion of proposal.suggestions) {
+      if (suggestion.target !== 'instruction') {
+        skippedCount++;
+        continue;
+      }
+      const identityKey = suggestionIdentityKey(suggestion);
+      if (activeInstructionKeys.has(identityKey)) {
+        skippedCount++;
+        continue;
+      }
+      const entry = createInstruction(suggestion.text, {
+        layer: suggestion.layer ?? 'global',
+        scope: suggestion.scope,
+        tags: suggestion.tags,
+        author: resolveCurrentAgentName(cwd),
+      }, cwd);
+      activeInstructionKeys.add(identityKey);
+      managedArtifacts.push({
+        kind: 'instruction',
+        id: entry.id,
+        suggestion_id: suggestion.id,
+        rollback_action: 'deactivate',
+      });
+      createdCount++;
+    }
+
+    if (createdCount > 0) {
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
+    }
+  });
+
+  const receipt = BootstrapApplicationReceiptSchema.parse({
+    schema_version: DERIVED_SCHEMA_VERSION,
+    applied_at: nowISO(),
+    proposal_derived_at: proposal.derived_at,
+    target: proposal.target,
+    workspace_kind: proposal.workspace_kind,
+    managed_artifacts: managedArtifacts,
+    suggestion_ids: managedArtifacts.map((artifact) => artifact.suggestion_id),
+  });
+  saveVersionedJsonFile('bootstrap_application', bootstrapApplicationPath(cwd), receipt);
+
+  return {
+    proposal,
+    receipt,
+    createdCount,
+    skippedCount,
+  };
+}
+
+export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult {
+  const resolvedCwd = cwd ?? process.cwd();
+  const receipt = loadBootstrapApplication(resolvedCwd);
+  if (!receipt || receipt.uninstalled_at) {
+    return {
+      receipt,
+      deactivatedCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  const instructions = loadInstructions(resolvedCwd);
+  let deactivatedCount = 0;
+  let skippedCount = 0;
+
+  withStoreLock(resolvedCwd, () => {
+    for (const artifact of receipt.managed_artifacts) {
+      if (artifact.kind !== 'instruction') {
+        skippedCount++;
+        continue;
+      }
+      const instruction = instructions.find((entry) => entry.id === artifact.id);
+      if (!instruction || !instruction.active) {
+        skippedCount++;
+        continue;
+      }
+      instruction.active = false;
+      instruction.updated_at = nowISO();
+      saveInstruction(instruction, resolvedCwd);
+      deactivatedCount++;
+    }
+    if (deactivatedCount > 0) {
+      writeFileAtomic(memoryPath('project.md', resolvedCwd), generateMarkdown(loadState(resolvedCwd)));
+    }
+  });
+
+  const nextReceipt = BootstrapApplicationReceiptSchema.parse({
+    ...receipt,
+    uninstalled_at: nowISO(),
+  });
+  saveVersionedJsonFile('bootstrap_application', bootstrapApplicationPath(resolvedCwd), nextReceipt);
+  return {
+    receipt: nextReceipt,
+    deactivatedCount,
+    skippedCount,
+  };
 }
 
 function classifyWorkspace(cwd: string): WorkspaceClassification {

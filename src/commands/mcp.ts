@@ -147,7 +147,7 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_bootstrap',
-    description: 'Derive brownfield bootstrap signals from repository docs, manifests, and git history.',
+    description: 'Derive brownfield bootstrap signals and an import proposal from repository docs, manifests, native agent files, and git history.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1242,12 +1242,14 @@ export function handleMcpReadToolCall(
           repo_fingerprint: result.profile.repo_fingerprint,
           sources_scanned: result.profile.sources_scanned,
           workspace_kind: result.profile.workspace_kind,
-          confidence: result.profile.confidence,
-          native_instruction_files: result.profile.native_instruction_files,
-          gaps: result.profile.gaps,
-          seed_count: result.profile.seed_count,
-          seeds: result.seeds,
-          reused_profile: result.reusedProfile,
+        confidence: result.profile.confidence,
+        native_instruction_files: result.profile.native_instruction_files,
+        gaps: result.profile.gaps,
+        seed_count: result.profile.seed_count,
+        seeds: result.seeds,
+        import_plan: result.importPlan,
+        last_application: result.lastApplication,
+        reused_profile: result.reusedProfile,
       },
     };
   }

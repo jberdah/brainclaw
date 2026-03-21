@@ -4,7 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadBootstrapProfile, listBootstrapSeeds, runBootstrapProfile } from '../../src/core/bootstrap.js';
+import {
+  applyBootstrapImport,
+  loadBootstrapApplication,
+  loadBootstrapImportPlan,
+  loadBootstrapProfile,
+  listBootstrapSeeds,
+  runBootstrapProfile,
+  uninstallBootstrapImport,
+} from '../../src/core/bootstrap.js';
+import { loadInstructions } from '../../src/core/instructions.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/bootstrap', () => {
@@ -79,7 +88,10 @@ describe('core/bootstrap', () => {
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'skill' && seed.seed_kind === 'tooling'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'mcp' && seed.seed_kind === 'tooling'));
     assert.ok(result.seeds.some((seed) => seed.source_kind === 'repo_analysis'));
+    assert.ok(result.importPlan.suggestion_count > 0);
+    assert.ok(result.importPlan.suggestions.some((suggestion) => suggestion.target === 'instruction'));
     assert.equal(loadBootstrapProfile(workspace.dir)?.seed_count, result.seeds.length);
+    assert.equal(loadBootstrapImportPlan(workspace.dir)?.suggestion_count, result.importPlan.suggestion_count);
     assert.equal(listBootstrapSeeds(workspace.dir).length, result.seeds.length);
   });
 
@@ -138,5 +150,28 @@ describe('core/bootstrap', () => {
     assert.equal(result.profile.git_available, true);
     assert.ok(typeof result.profile.repo_fingerprint === 'string' && result.profile.repo_fingerprint.length > 0);
     assert.ok(result.seeds.some((seed) => seed.seed_kind === 'hotspot' && seed.source_kind === 'git'));
+  });
+
+  it('applies bootstrap suggestions as instructions and can uninstall the last import', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Existing Workspace\n\n## Build\n\n- npm run build\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'CLAUDE.md'), '# Claude Rules\n\n- Check native instructions before editing\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Read memory first\n', 'utf-8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({
+      scripts: { build: 'npm run build' },
+    }, null, 2), 'utf-8');
+
+    const applied = applyBootstrapImport({ cwd: workspace.dir, refresh: true });
+    assert.ok(applied.createdCount > 0);
+    assert.ok(applied.receipt);
+
+    const instructionsAfterApply = loadInstructions(workspace.dir).filter((entry) => entry.active);
+    assert.ok(instructionsAfterApply.some((entry) => entry.tags.includes('bootstrap-import')));
+    assert.equal(loadBootstrapApplication(workspace.dir)?.managed_artifacts.length, applied.createdCount);
+
+    const uninstalled = uninstallBootstrapImport(workspace.dir);
+    assert.equal(uninstalled.deactivatedCount, applied.createdCount);
+    assert.equal(loadBootstrapApplication(workspace.dir)?.uninstalled_at !== undefined, true);
+    const instructionsAfterUninstall = loadInstructions(workspace.dir).filter((entry) => entry.active);
+    assert.ok(instructionsAfterUninstall.every((entry) => !entry.tags.includes('bootstrap-import')));
   });
 });

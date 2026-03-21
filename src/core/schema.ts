@@ -595,6 +595,60 @@ export const BootstrapProfileDocumentSchema = z.object({
 });
 export type BootstrapProfileDocument = z.infer<typeof BootstrapProfileDocumentSchema>;
 
+export const BootstrapSuggestionTargetSchema = z.enum(['instruction', 'decision', 'constraint', 'trap']);
+export type BootstrapSuggestionTarget = z.infer<typeof BootstrapSuggestionTargetSchema>;
+
+export const BootstrapSuggestionDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  target: BootstrapSuggestionTargetSchema,
+  text: z.string(),
+  rationale: z.string(),
+  confidence: MemorySeedConfidenceSchema,
+  source_seed_ids: z.array(z.string()).default([]),
+  source_refs: z.array(z.string()).default([]),
+  layer: z.enum(['global', 'project', 'agent']).optional(),
+  scope: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  related_paths: z.array(z.string()).optional(),
+  reversible: z.boolean().default(true),
+});
+export type BootstrapSuggestionDocument = z.infer<typeof BootstrapSuggestionDocumentSchema>;
+
+export const BootstrapImportPlanDocumentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  derived_at: z.string(),
+  target: z.string().optional(),
+  workspace_kind: z.enum(['empty', 'existing']).optional(),
+  confidence: MemorySeedConfidenceSchema.optional(),
+  summary: z.string(),
+  requires_confirmation: z.boolean().default(true),
+  gaps: z.array(z.string()).default([]),
+  suggestion_count: z.number().int().nonnegative(),
+  suggestions: z.array(BootstrapSuggestionDocumentSchema).default([]),
+});
+export type BootstrapImportPlanDocument = z.infer<typeof BootstrapImportPlanDocumentSchema>;
+
+export const BootstrapManagedArtifactSchema = z.object({
+  kind: z.enum(['instruction', 'decision', 'constraint', 'trap']),
+  id: z.string(),
+  suggestion_id: z.string(),
+  rollback_action: z.enum(['deactivate', 'delete']).default('delete'),
+});
+export type BootstrapManagedArtifact = z.infer<typeof BootstrapManagedArtifactSchema>;
+
+export const BootstrapApplicationReceiptSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  applied_at: z.string(),
+  proposal_derived_at: z.string(),
+  target: z.string().optional(),
+  workspace_kind: z.enum(['empty', 'existing']).optional(),
+  managed_artifacts: z.array(BootstrapManagedArtifactSchema).default([]),
+  suggestion_ids: z.array(z.string()).default([]),
+  uninstalled_at: z.string().optional(),
+});
+export type BootstrapApplicationReceipt = z.infer<typeof BootstrapApplicationReceiptSchema>;
+
 export const AgentIntegrationNameSchema = z.enum([
   'github-copilot',
   'claude-code',

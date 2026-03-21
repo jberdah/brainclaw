@@ -274,11 +274,14 @@ describe('commands/mcp read tools', () => {
     const bootstrapStructured = bootstrap.structuredContent as {
       seed_count: number;
       seeds: Array<{ seed_kind: string; source_kind: string }>;
+      import_plan?: { suggestion_count: number; suggestions: Array<{ target: string }> };
       reused_profile: boolean;
     };
     assert.ok(bootstrap.content[0].text.includes('Bootstrap summary'));
     assert.ok(bootstrapStructured.seed_count > 0);
     assert.ok(bootstrapStructured.seeds.some((seed) => seed.source_kind === 'agents_md'));
+    assert.ok((bootstrapStructured.import_plan?.suggestion_count ?? 0) > 0);
+    assert.ok(bootstrapStructured.import_plan?.suggestions.some((suggestion) => suggestion.target === 'instruction'));
     assert.equal(bootstrapStructured.reused_profile, false);
 
     const context = handleMcpReadToolCall('bclaw_get_context', {
