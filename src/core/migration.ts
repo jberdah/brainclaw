@@ -22,6 +22,7 @@ import {
   RuntimeNoteSchema,
   SessionSnapshotSchema,
   TrapSchema,
+  AiSurfaceTaskRequestSchema,
 } from './schema.js';
 
 export type VersionedDocumentType =
@@ -41,6 +42,7 @@ export type VersionedDocumentType =
   | 'plan'
   | 'project_identity'
   | 'runtime_note'
+  | 'ai_surface_task'
   | 'session_snapshot'
   | 'trap';
 
@@ -107,6 +109,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   plan: createRegistryEntry(PlanItemSchema),
   project_identity: createRegistryEntry(ProjectIdentityDocumentSchema),
   runtime_note: createRegistryEntry(RuntimeNoteSchema),
+  ai_surface_task: createRegistryEntry(AiSurfaceTaskRequestSchema),
   session_snapshot: createRegistryEntry(SessionSnapshotSchema),
   trap: createRegistryEntry(TrapSchema),
 };
@@ -273,6 +276,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, resolveEntityDir('runtime', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('runtime-hosts', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('runtime-private', effectiveCwd, 'read'), 'runtime_note', true);
+  collectDirectory(entries, resolveEntityDir('surface-tasks', effectiveCwd, 'read'), 'ai_surface_task');
   collectDirectory(entries, resolveEntityDir('instructions', effectiveCwd, 'read'), 'instruction');
   collectDirectory(entries, path.join(resolveEntityDir('bootstrap', effectiveCwd, 'read'), 'seeds'), 'memory_seed');
   collectDirectory(entries, resolveEntityDir('agents', effectiveCwd, 'read'), 'agent_identity');

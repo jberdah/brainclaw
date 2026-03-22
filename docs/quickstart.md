@@ -87,6 +87,43 @@ brainclaw status
 
 Claims reduce collisions, but they are not a substitute for isolated worktrees yet. Use them mainly to coordinate sequential work or human/agent awareness in the same repo.
 
+## Path 2.5: Desktop AI Work Surfaces Around The Repo
+
+Use this path when the active coding agent should stay focused on code, but the project could benefit from another local AI surface on the same machine, such as ChatGPT Desktop or Claude Desktop.
+
+Typical use cases:
+
+- visual asset generation
+- polished copy or release-note drafting
+- synthesis for operators or stakeholders
+- side research that should not consume the coding agent's main context window
+
+### Discover what is available on the machine
+
+```bash
+brainclaw machine-profile --refresh
+```
+
+### Queue work for another local AI surface
+
+```bash
+brainclaw surface-task create "Generate homepage hero visual" \
+  --target chatgpt \
+  --kind visual_asset \
+  --instructions "Create a lightweight product hero visual for the landing page." \
+  --output assets/hero-home.png \
+  --path src/pages/Home.tsx
+```
+
+### Review queued work later
+
+```bash
+brainclaw surface-task list
+brainclaw surface-task list --all --target chatgpt
+```
+
+This queue does not automate the target desktop app yet. It gives the project a clean place to stage work that another local AI surface should pick up during its next session.
+
 ## Path 3: Brownfield Onboarding
 
 Use this path when you are adopting Brainclaw into an existing workspace and do not want to hand-author all memory from scratch.

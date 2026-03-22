@@ -4,6 +4,7 @@ import readline from 'node:readline/promises';
 import { spawnSync } from 'node:child_process';
 import { runInit } from './init.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile } from '../core/machine-profile.js';
 import { buildAgentInventory, saveAgentInventory, loadAgentInventory } from '../core/agent-inventory.js';
 import {
@@ -439,11 +440,29 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   // Step 4: Agent detection & selection
   const detectedAi = detectAiAgent(env);
   const detectedName = detectedAi?.name;
+  const detectedSurfaces = buildAiSurfaceInventory();
   console.log('');
   if (detectedName) {
     console.log(`Detected AI agent: ${detectedName}`);
   } else {
     console.log('No AI agent detected automatically.');
+  }
+  const visibleSurfaces = detectedSurfaces.filter((surface) => surface.status !== 'not_detected');
+  if (visibleSurfaces.length > 0) {
+    console.log('Other AI work surfaces on this machine:');
+    for (const surface of visibleSurfaces) {
+      console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
+    }
+    const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
+    if (usageHints.length > 0) {
+      console.log('');
+      console.log('Suggested uses:');
+      for (const line of usageHints) {
+        console.log(`  ${line}`);
+      }
+    }
+    console.log('');
+    console.log('These surfaces are tracked separately from coding agents and will use tailored onboarding flows.');
   }
   console.log('Supported agents:');
   ALL_KNOWN_AGENTS.forEach((a, i) => {

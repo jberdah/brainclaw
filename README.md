@@ -21,6 +21,8 @@ The best setup is to tell your agent, in natural language, to install and initia
 
 It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and other coding agents. It does not replace them. It gives them a shared state layer they can resume from reliably across sessions.
 
+brainclaw is also starting to model other local AI work surfaces on the same machine, such as ChatGPT Desktop, Claude Desktop, Claude Cowork, and Gemini web or CLI. That makes it possible to keep a project-level queue of non-code work for those surfaces, instead of treating every task as something the active coding agent must do itself.
+
 ---
 
 ## Why brainclaw exists
@@ -40,6 +42,8 @@ brainclaw solves this by making the repo itself agent-readable and agent-writeab
 | **Coordination state** | shared plans, file claims, runtime notes, and board views for active work |
 | **Agent-ready context** | compact, prompt-sized context built from real workspace state instead of stale instructions |
 | **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance |
+| **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI |
+| **Queued surface tasks** | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research |
 | **Local-first storage** | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default |
 
 ---
@@ -144,6 +148,18 @@ brainclaw plan create "Coordinate auth rollout" --priority high
 brainclaw claim create "Take auth rollout" --scope src/auth/
 brainclaw context --for src/auth/routes.ts --digest
 brainclaw status
+```
+
+And if the current coding agent wants to hand off a non-code task to another local AI surface for later:
+
+```bash
+brainclaw surface-task create "Generate homepage hero visual" \
+  --target chatgpt \
+  --kind visual_asset \
+  --instructions "Create a lightweight product hero visual for the landing page." \
+  --output assets/hero-home.png
+
+brainclaw surface-task list
 ```
 
 ---

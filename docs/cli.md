@@ -60,6 +60,31 @@ brainclaw init --topology sidecar
 brainclaw init --project-mode multi-project --project-strategy folder
 ```
 
+### `brainclaw machine-profile`
+
+Detect and persist machine-level capabilities, including other local AI work surfaces on the same machine.
+
+This is the inventory Brainclaw uses to distinguish coding agents from desktop AI apps or adjacent surfaces such as:
+
+- `ChatGPT Desktop`
+- `Claude Desktop`
+- `Claude Cowork`
+- `Gemini Web`
+- `Gemini CLI / Antigravity`
+
+| Option | Description |
+|---|---|
+| `--refresh` | Force regeneration even if a cached profile already exists |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw machine-profile
+brainclaw machine-profile --refresh
+brainclaw machine-profile --refresh --json
+```
+
+Use this when you want Brainclaw to detect what AI work surfaces are actually available on the current machine before choosing an onboarding path or queueing work for another surface.
+
 ### `brainclaw status`
 
 Show the current state of project memory.
@@ -147,6 +172,54 @@ brainclaw env --agent-tooling
 ```
 
 When the project does not pin a local release channel, `brainclaw env` checks the public npm `latest` channel for installable updates. Projects can override that with `brainclaw_update_source`, for example to use `prelaunch` or a local-pack manifest.
+
+### `brainclaw surface-task <subcommand>`
+
+Manage queued tasks for non-editing AI work surfaces such as `ChatGPT Desktop`, `Claude Desktop`, or `Gemini Web`.
+
+This command is useful when the active coding agent should keep building in the repo, but another local AI surface would be a better fit for a related task such as:
+
+- generating a visual asset
+- drafting polished copy
+- writing a release summary
+- doing side research or structured analysis
+
+Supported subcommands:
+
+- `create`
+- `list`
+- `update`
+
+| Option | Description |
+|---|---|
+| `--target <surface>` | Target surface such as `chatgpt`, `claude`, or `gemini` |
+| `--kind <kind>` | `visual_asset`, `draft`, `summary`, `analysis`, `research`, or `custom` |
+| `--instructions <text>` | Detailed task instructions |
+| `--output <paths...>` | Expected output files or deliverables |
+| `--tag <tags...>` | Optional tags |
+| `--path <paths...>` | Related repo paths |
+| `--status <status>` | For `list` filtering or `update`: `queued`, `in_progress`, `completed`, `cancelled`, `failed` |
+| `--result <text>` | Result note when updating a task |
+| `--all` | Include completed, cancelled, and failed tasks in `list` |
+| `--json` | Output as JSON for `list` |
+
+```bash
+brainclaw surface-task create "Generate homepage hero visual" \
+  --target chatgpt \
+  --kind visual_asset \
+  --instructions "Create a lightweight SaaS hero visual in PNG format." \
+  --output assets/hero-home.png \
+  --path src/pages/Home.tsx
+
+brainclaw surface-task list
+
+brainclaw surface-task update ast_12345678 \
+  --status completed \
+  --result "Saved the visual to assets/hero-home.png" \
+  --output assets/hero-home.png
+```
+
+These tasks are local project coordination state. They do not execute automatically yet. The intended model is that Brainclaw can queue work for another local AI surface so that the next session on that surface can pick it up cleanly.
 
 ---
 

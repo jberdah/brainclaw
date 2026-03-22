@@ -12,6 +12,7 @@ const PREFIXES: Record<string, string> = {
   plan_items: 'pln',
   plan_steps: 'stp',
   instruction_entries: 'ins',
+  ai_surface_tasks: 'ast',
 };
 
 const ID_COUNTER_FILE = '.id-counter.json';

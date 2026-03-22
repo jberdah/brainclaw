@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
 import { MEMORY_DIR } from './io.js';
+import { buildAiSurfaceInventory, renderAiSurfaceSummary, type AiSurfaceInfo } from './ai-surface-inventory.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,8 @@ export interface MachineProfile {
   toolchains: ToolchainInfo[];
   /** WSL distros (Windows only) */
   wsl_distros: WslDistroInfo[];
+  /** Desktop AI apps, web surfaces, and CLI AI surfaces discovered on this machine */
+  ai_surfaces: AiSurfaceInfo[];
 }
 
 // ── Detection Functions ────────────────────────────────────────────────────────
@@ -313,7 +316,7 @@ function detectWslDistros(): WslDistroInfo[] {
  */
 export function buildMachineProfile(): MachineProfile {
   return {
-    schema_version: 1,
+    schema_version: 2,
     generated_at: new Date().toISOString(),
     hostname: os.hostname(),
     os_user: os.userInfo().username,
@@ -327,6 +330,7 @@ export function buildMachineProfile(): MachineProfile {
     ssh_keys: detectSshKeys(),
     toolchains: detectToolchains(),
     wsl_distros: detectWslDistros(),
+    ai_surfaces: buildAiSurfaceInventory(),
   };
 }
 
@@ -371,6 +375,7 @@ export function loadMachineProfile(): MachineProfile | undefined {
  */
 export function renderMachineProfileSummary(profile: MachineProfile): string {
   const lines: string[] = [];
+  const aiSurfaces = profile.ai_surfaces ?? [];
 
   lines.push(`Machine: ${profile.hostname} (user: ${profile.os_user})`);
   lines.push(`Home: ${profile.home_dir}`);
@@ -419,6 +424,10 @@ export function renderMachineProfileSummary(profile: MachineProfile): string {
       const nodeInfo = d.node_version ? `node ${d.node_version} at ${d.node_path}` : 'no node';
       lines.push(`  - ${d.name}${d.default ? ' (default)' : ''}: ${nodeInfo}`);
     }
+  }
+
+  if (aiSurfaces.length > 0) {
+    lines.push(...renderAiSurfaceSummary(aiSurfaces));
   }
 
   lines.push(`Profile generated: ${profile.generated_at}`);

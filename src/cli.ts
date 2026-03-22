@@ -23,6 +23,7 @@ import { runCompleteStep } from './commands/complete-step.js';
 import { runUpdateHandoff } from './commands/update-handoff.js';
 import { runInstruction } from './commands/instruction.js';
 import { runListAgents } from './commands/list-agents.js';
+import { runSurfaceTaskResource } from './commands/surface-task-resource.js';
 import { runListInstructions } from './commands/list-instructions.js';
 import { runDoctor } from './commands/doctor.js';
 import { runRebuild } from './commands/rebuild.js';
@@ -176,11 +177,11 @@ program
   });
 
 // --- machine-profile ---
-program
-  .command('machine-profile')
-  .description('Detect and persist machine capabilities (OS, shells, git users, SSH keys, toolchains, WSL)')
-  .option('--refresh', 'Force regeneration even if profile exists')
-  .option('--json', 'Output as JSON')
+  program
+    .command('machine-profile')
+    .description('Detect and persist machine capabilities (OS, shells, git users, SSH keys, toolchains, WSL, AI surfaces)')
+    .option('--refresh', 'Force regeneration even if profile exists')
+    .option('--json', 'Output as JSON')
   .action(async (options) => {
     const existing = loadMachineProfile();
     if (existing && !options.refresh) {
@@ -407,17 +408,40 @@ program
   });
 
 // --- update-plan ---
-program
-  .command('update-plan <id>')
+  program
+    .command('update-plan <id>')
   .description('Update a shared plan item')
   .option('--status <status>', 'Status: todo, in_progress, blocked, done, dropped')
   .option('--assignee <assignee>', 'Assign a user or agent to this plan item')
   .option('--project <project>', 'Set or change project namespace')
   .option('--priority <priority>', 'Priority: low, medium, high')
   .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
-  .action((id, options) => {
-    runUpdatePlan(id, { ...options, actualEffort: options.actualEffort });
-  });
+    .action((id, options) => {
+      runUpdatePlan(id, { ...options, actualEffort: options.actualEffort });
+    });
+
+  // --- surface-task ---
+  program
+    .command('surface-task <subcommand> [args...]')
+    .description('Manage queued tasks for desktop AI surfaces such as ChatGPT Desktop or Claude Desktop')
+    .option('--json', 'Output as JSON for list')
+    .option('--all', 'Include completed, cancelled, and failed tasks in list')
+    .option('--status <status>', 'Status filter/update: queued, in_progress, completed, cancelled, failed')
+    .option('--target <surface>', 'Target surface, e.g. chatgpt, claude, gemini')
+    .option('--kind <kind>', 'Task kind: visual_asset, draft, summary, analysis, research, custom')
+    .option('--instructions <text>', 'Detailed instructions for the target surface')
+    .option('--output <paths...>', 'Expected output paths')
+    .option('--result <text>', 'Optional result note when updating a task')
+    .option('--tag <tags...>', 'Tags for this task')
+    .option('--path <paths...>', 'Related file paths')
+    .option('--agent <agent>', 'Author agent name')
+    .option('--agent-id <agentId>', 'Author agent id')
+    .action((subcommand, args, options) => {
+      runSurfaceTaskResource(subcommand, args, {
+        ...options,
+        agentId: options.agentId,
+      });
+    });
 
 // --- delete-plan ---
 program

@@ -406,6 +406,38 @@ export const RuntimeNoteSchema = z.object({
 });
 export type RuntimeNote = z.infer<typeof RuntimeNoteSchema>;
 
+// --- AI surface task request schemas ---
+
+export const AiSurfaceTaskStatusSchema = z.enum(['queued', 'in_progress', 'completed', 'cancelled', 'failed']);
+export type AiSurfaceTaskStatus = z.infer<typeof AiSurfaceTaskStatusSchema>;
+
+export const AiSurfaceTaskKindSchema = z.enum(['visual_asset', 'draft', 'summary', 'analysis', 'research', 'custom']);
+export type AiSurfaceTaskKind = z.infer<typeof AiSurfaceTaskKindSchema>;
+
+export const AiSurfaceTaskRequestSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+  title: z.string(),
+  instructions: z.string(),
+  target_surface: z.string(),
+  kind: AiSurfaceTaskKindSchema.default('custom'),
+  created_at: z.string(),
+  updated_at: z.string(),
+  author: z.string(),
+  author_id: z.string().optional(),
+  project_id: z.string().optional(),
+  session_id: z.string().optional(),
+  status: AiSurfaceTaskStatusSchema.default('queued'),
+  requested_outputs: z.array(z.string()).default([]),
+  related_paths: z.array(z.string()).optional(),
+  tags: z.array(z.string()).default([]),
+  claimed_at: z.string().optional(),
+  completed_at: z.string().optional(),
+  result_note: z.string().optional(),
+});
+export type AiSurfaceTaskRequest = z.infer<typeof AiSurfaceTaskRequestSchema>;
+
 // --- Runtime event schemas ---
 
 export const RuntimeEventTypeSchema = z.enum([

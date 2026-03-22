@@ -14,6 +14,7 @@ import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.j
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
+import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
 import { hasCompletedSetup } from '../core/setup-state.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
@@ -214,6 +215,20 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi!.detection_source}] (${registeredAiAgent.agent_id})`);
   }  if (detectedExport) {
     console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
+  }
+  const visibleSurfaces = buildAiSurfaceInventory().filter((surface) => surface.status !== 'not_detected');
+  if (visibleSurfaces.length > 0) {
+    console.log('✔ Other AI work surfaces detected on this machine:');
+    for (const surface of visibleSurfaces) {
+      console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
+    }
+    const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
+    if (usageHints.length > 0) {
+      console.log('  Suggested uses:');
+      for (const line of usageHints) {
+        console.log(`    ${line}`);
+      }
+    }
   }
   for (const hook of detectedHooks) {
     console.log(`\u2714 Session hook written to ${hook.relativePath} (${hook.created ? 'created' : 'updated'})`);
