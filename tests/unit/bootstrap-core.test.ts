@@ -14,6 +14,7 @@ import {
   uninstallBootstrapImport,
 } from '../../src/core/bootstrap.js';
 import { loadInstructions } from '../../src/core/instructions.js';
+import { loadState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/bootstrap', () => {
@@ -191,5 +192,79 @@ describe('core/bootstrap', () => {
     assert.equal(loadBootstrapApplication(workspace.dir)?.uninstalled_at !== undefined, true);
     const instructionsAfterUninstall = loadInstructions(workspace.dir).filter((entry) => entry.active);
     assert.ok(instructionsAfterUninstall.every((entry) => !entry.tags.includes('bootstrap-import')));
+  });
+
+  it('turns interview answers into selective memory imports beyond instructions', () => {
+    const base = runBootstrapProfile({ cwd: workspace.dir, refresh: true });
+    const interview = base.importPlan.interview;
+    assert.ok(interview);
+    const firstQuestion = interview!.questions[0];
+    const secondQuestion = interview!.questions[1] ?? interview!.questions[0];
+    assert.ok(firstQuestion && secondQuestion);
+
+    const interviewAnswers = [
+      {
+        question_id: firstQuestion.id,
+        response_items: [],
+        suggestions: [
+          {
+            target: 'decision' as const,
+            text: 'Project intent: Build a local-first agent coordination layer for brownfield repositories.',
+            tags: ['bootstrap'],
+          },
+          {
+            target: 'instruction' as const,
+            text: 'Load Brainclaw context, inspect claims, then review the target path before editing.',
+            layer: 'global' as const,
+            tags: ['bootstrap'],
+          },
+        ],
+      },
+      {
+        question_id: secondQuestion.id,
+        response_items: [],
+        suggestions: [
+          {
+            target: 'constraint' as const,
+            text: 'Use Codex and Claude Code sequentially in one checkout.',
+            category: 'process' as const,
+            tags: ['workflow'],
+          },
+          {
+            target: 'trap' as const,
+            text: 'Do not run multiple coding agents in the same checkout in parallel.',
+            severity: 'high' as const,
+            tags: ['workflow'],
+          },
+        ],
+      },
+    ];
+
+    const preview = runBootstrapProfile({ cwd: workspace.dir, interviewAnswers });
+    assert.ok((preview.importPlan.confirmed_suggestion_count ?? 0) >= 4);
+    assert.ok(preview.importPlan.suggestions.some((suggestion) => suggestion.target === 'decision'));
+    assert.ok(preview.importPlan.suggestions.some((suggestion) => suggestion.target === 'constraint'));
+    assert.ok(preview.importPlan.suggestions.some((suggestion) => suggestion.target === 'instruction'));
+    assert.ok(preview.importPlan.suggestions.some((suggestion) => suggestion.target === 'trap'));
+
+    const applied = applyBootstrapImport({ cwd: workspace.dir, interviewAnswers });
+    assert.ok(applied.createdCount >= 4);
+    assert.ok(applied.receipt);
+
+    const stateAfterApply = loadState(workspace.dir);
+    const instructionsAfterApply = loadInstructions(workspace.dir).filter((entry) => entry.active);
+    assert.ok(stateAfterApply.recent_decisions.some((entry) => entry.text.includes('Project intent:')));
+    assert.ok(stateAfterApply.active_constraints.some((entry) => entry.text.includes('Use Codex and Claude Code sequentially')));
+    assert.ok(stateAfterApply.known_traps.some((entry) => entry.text.includes('Do not run multiple coding agents')));
+    assert.ok(instructionsAfterApply.some((entry) => entry.text.includes('Load Brainclaw context')));
+
+    const uninstalled = uninstallBootstrapImport(workspace.dir);
+    assert.ok(uninstalled.deactivatedCount >= 1);
+    assert.ok(uninstalled.deletedCount >= 3);
+    const stateAfterUninstall = loadState(workspace.dir);
+    assert.equal(stateAfterUninstall.recent_decisions.length, 0);
+    assert.equal(stateAfterUninstall.active_constraints.length, 0);
+    assert.equal(stateAfterUninstall.known_traps.length, 0);
+    assert.ok(loadInstructions(workspace.dir).every((entry) => !entry.active || !entry.tags.includes('bootstrap-import')));
   });
 });

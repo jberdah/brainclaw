@@ -2,7 +2,7 @@ import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectTarget, writeCrossProjectNote } from '../core/cross-project.js';
-import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
+import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
@@ -50,7 +50,8 @@ import {
 } from './setup.js';
 import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
-import type { CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
+import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
+import type { BootstrapInterviewAnswer, CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -153,6 +154,15 @@ export const MCP_READ_TOOLS = [
       properties: {
         target: { type: 'string', description: 'Optional path or scope to tailor the bootstrap.' },
         refresh: { type: 'boolean', description: 'Force a fresh bootstrap scan.' },
+        audience: { type: 'string', description: 'Optional interview audience filter: cli, ide_chat, or any.' },
+        interview: { type: 'boolean', description: 'Render interview text instead of the summary text.' },
+        apply: { type: 'boolean', description: 'Apply the current import proposal into canonical memory.' },
+        uninstall: { type: 'boolean', description: 'Uninstall the last bootstrap-managed import.' },
+        interviewAnswers: {
+          type: 'array',
+          description: 'Optional structured interview answers. Each answer may include question_id, response_text, response_items, response_boolean, and explicit suggestions.',
+          items: { type: 'object' },
+        },
       },
     },
   },
@@ -613,6 +623,20 @@ export function createToolErrorResponse(kind: string, message: string, details?:
       },
     },
   }, true);
+}
+
+function normalizeBootstrapInterviewAnswersArg(value: unknown): BootstrapInterviewAnswer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => BootstrapInterviewAnswerSchema.parse(entry));
+}
+
+function normalizeBootstrapInterviewAudienceArg(value: unknown): 'cli' | 'ide_chat' | 'any' {
+  if (value === 'cli' || value === 'ide_chat' || value === 'any') {
+    return value;
+  }
+  return 'any';
 }
 
 function requireObjectParams(params: unknown, id: JsonRpcId): Record<string, unknown> {
@@ -1229,19 +1253,64 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_bootstrap') {
+    const interviewAnswers = normalizeBootstrapInterviewAnswersArg(args.interviewAnswers);
+    if (args.apply && args.uninstall) {
+      throw new Error('bclaw_bootstrap does not allow apply and uninstall at the same time.');
+    }
+    if (args.uninstall) {
+      const result = uninstallBootstrapImport(cwd);
+      const text = !result.receipt
+        ? 'No bootstrap import receipt found.'
+        : `Bootstrap uninstall completed: ${result.deactivatedCount} instruction(s) deactivated, ${result.deletedCount} artifact(s) deleted, ${result.skippedCount} artifact(s) skipped.`;
+      return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          receipt: result.receipt,
+          deactivated_count: result.deactivatedCount,
+          deleted_count: result.deletedCount,
+          skipped_count: result.skippedCount,
+        },
+      };
+    }
+    if (args.apply) {
+      const applied = applyBootstrapImport({
+        target: args.target as string | undefined,
+        refresh: args.refresh as boolean | undefined,
+        interviewAnswers,
+        cwd,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: `Bootstrap import applied: ${applied.createdCount} item(s) created, ${applied.skippedCount} suggestion(s) skipped.`,
+        }],
+        structuredContent: {
+          created_count: applied.createdCount,
+          skipped_count: applied.skippedCount,
+          receipt: applied.receipt,
+          import_plan: applied.proposal,
+        },
+      };
+    }
     const result = runBootstrapProfile({
       target: args.target as string | undefined,
       refresh: args.refresh as boolean | undefined,
+      interviewAnswers,
       cwd,
     });
+    const audience = normalizeBootstrapInterviewAudienceArg(args.audience);
+    const text = args.interview
+      ? renderBootstrapInterview(result, audience)
+      : renderBootstrapSummary(result);
     return {
-      content: [{ type: 'text', text: renderBootstrapSummary(result) }],
+      content: [{ type: 'text', text }],
         structuredContent: {
           summary: result.profile.summary,
           target: result.profile.target,
           repo_fingerprint: result.profile.repo_fingerprint,
           sources_scanned: result.profile.sources_scanned,
           workspace_kind: result.profile.workspace_kind,
+        onboarding_mode: result.profile.onboarding_mode,
         confidence: result.profile.confidence,
         native_instruction_files: result.profile.native_instruction_files,
         gaps: result.profile.gaps,

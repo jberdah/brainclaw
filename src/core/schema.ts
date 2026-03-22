@@ -589,6 +589,7 @@ export const BootstrapProfileDocumentSchema = z.object({
   seed_count: z.number().int().nonnegative(),
   target: z.string().optional(),
   workspace_kind: z.enum(['empty', 'existing']).optional(),
+  onboarding_mode: z.enum(['empty_workspace', 'existing_documented', 'existing_sparse']).optional(),
   confidence: MemorySeedConfidenceSchema.optional(),
   native_instruction_files: z.array(z.string()).default([]),
   gaps: z.array(z.string()).default([]),
@@ -611,6 +612,9 @@ export const BootstrapSuggestionDocumentSchema = z.object({
   scope: z.string().optional(),
   tags: z.array(z.string()).default([]),
   related_paths: z.array(z.string()).optional(),
+  category: ConstraintCategorySchema.optional(),
+  outcome: DecisionOutcomeSchema.optional(),
+  severity: SeveritySchema.optional(),
   reversible: z.boolean().default(true),
 });
 export type BootstrapSuggestionDocument = z.infer<typeof BootstrapSuggestionDocumentSchema>;
@@ -626,6 +630,7 @@ export const BootstrapInterviewQuestionSchema = z.object({
   audience: BootstrapInterviewAudienceSchema.default('any'),
   response_kind: z.enum(['short_text', 'long_text', 'boolean', 'list']).default('short_text'),
   gap_keys: z.array(z.string()).default([]),
+  target_hints: z.array(BootstrapSuggestionTargetSchema).default([]),
 });
 export type BootstrapInterviewQuestion = z.infer<typeof BootstrapInterviewQuestionSchema>;
 
@@ -640,15 +645,42 @@ export const BootstrapInterviewPlanSchema = z.object({
 });
 export type BootstrapInterviewPlan = z.infer<typeof BootstrapInterviewPlanSchema>;
 
+export const BootstrapInterviewAnswerSuggestionSchema = z.object({
+  target: BootstrapSuggestionTargetSchema,
+  text: z.string(),
+  rationale: z.string().optional(),
+  confidence: MemorySeedConfidenceSchema.optional(),
+  layer: z.enum(['global', 'project', 'agent']).optional(),
+  scope: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  related_paths: z.array(z.string()).optional(),
+  category: ConstraintCategorySchema.optional(),
+  outcome: DecisionOutcomeSchema.optional(),
+  severity: SeveritySchema.optional(),
+});
+export type BootstrapInterviewAnswerSuggestion = z.infer<typeof BootstrapInterviewAnswerSuggestionSchema>;
+
+export const BootstrapInterviewAnswerSchema = z.object({
+  question_id: z.string(),
+  response_text: z.string().optional(),
+  response_items: z.array(z.string()).default([]),
+  response_boolean: z.boolean().optional(),
+  suggestions: z.array(BootstrapInterviewAnswerSuggestionSchema).default([]),
+});
+export type BootstrapInterviewAnswer = z.infer<typeof BootstrapInterviewAnswerSchema>;
+
 export const BootstrapImportPlanDocumentSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   derived_at: z.string(),
   target: z.string().optional(),
   workspace_kind: z.enum(['empty', 'existing']).optional(),
+  onboarding_mode: z.enum(['empty_workspace', 'existing_documented', 'existing_sparse']).optional(),
   confidence: MemorySeedConfidenceSchema.optional(),
   summary: z.string(),
   requires_confirmation: z.boolean().default(true),
   gaps: z.array(z.string()).default([]),
+  confirmed_suggestion_count: z.number().int().nonnegative().default(0),
+  interview_answer_count: z.number().int().nonnegative().default(0),
   suggestion_count: z.number().int().nonnegative(),
   suggestions: z.array(BootstrapSuggestionDocumentSchema).default([]),
   interview: BootstrapInterviewPlanSchema.optional(),

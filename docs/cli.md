@@ -115,6 +115,7 @@ For capable agents, the MCP equivalent is `bclaw_bootstrap`. Use the CLI when a 
 | `--refresh` | Force refresh even if bootstrap data is recent |
 | `--interview` | Render adaptive interview prompts instead of the bootstrap summary |
 | `--audience <audience>` | Filter interview prompts for `cli`, `ide_chat`, or `any` |
+| `--answers-file <path>` | Load structured interview answers from JSON and enrich the import proposal before preview/apply |
 | `--apply` | Import the current bootstrap proposal into canonical memory |
 | `--uninstall` | Deactivate the last bootstrap-managed import |
 | `-y, --yes` | Skip confirmation prompts for apply/uninstall |
@@ -123,8 +124,12 @@ For capable agents, the MCP equivalent is `bclaw_bootstrap`. Use the CLI when a 
 brainclaw bootstrap --for copilot
 brainclaw bootstrap --for claude --refresh --json
 brainclaw bootstrap --interview --audience cli
+brainclaw bootstrap --answers-file ./bootstrap-answers.json --json
+brainclaw bootstrap --answers-file ./bootstrap-answers.json --apply -y
 brainclaw bootstrap --apply -y
 ```
+
+`--answers-file` expects a JSON array keyed by interview question IDs. Each entry can provide free-form answers (`response_text`, `response_items`, `response_boolean`) and optional explicit `suggestions` to confirm durable imports such as `decision`, `constraint`, `instruction`, or `trap`.
 
 ### `brainclaw env`
 

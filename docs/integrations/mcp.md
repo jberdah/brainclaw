@@ -34,7 +34,7 @@ This keeps session continuity inside Brainclaw instead of pushing the agent back
 | Tool | Purpose |
 |---|---|
 | `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
-| `bclaw_bootstrap` | Derive brownfield bootstrap signals, adaptive interview prompts, and an import proposal when memory is still sparse |
+| `bclaw_bootstrap` | Derive brownfield bootstrap signals, return adaptive interview prompts, accept structured interview answers, and preview/apply a selective import proposal |
 | `bclaw_get_execution_context` | Inspect local execution context and agent tooling |
 | `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
 | `bclaw_read_handoff` | Read active handoffs |
@@ -64,6 +64,23 @@ brainclaw mcp
 ```
 
 In practice, most agents pick this up through generated MCP config such as `.mcp.json`, `~/.cursor/mcp.json`, or other agent-specific config files written by `brainclaw setup`, `brainclaw init`, or `brainclaw export`.
+
+## Bootstrap Through MCP
+
+For agent-first onboarding, `bclaw_bootstrap` is the nominal path:
+
+1. call `bclaw_bootstrap` to get the current `import_plan` and adaptive interview questions
+2. collect answers in the agent surface
+3. call `bclaw_bootstrap` again with `interviewAnswers` to preview confirmed `decision`, `constraint`, `instruction`, or `trap` suggestions
+4. call `bclaw_bootstrap` with `apply: true` to create canonical memory
+5. call `bclaw_bootstrap` with `uninstall: true` to revert the last bootstrap-managed import
+
+Interview answers are keyed by question ID and may contain:
+
+- `response_text`
+- `response_items`
+- `response_boolean`
+- optional explicit `suggestions` when the agent wants to confirm exact canonical memory items
 
 ## Important Rule
 

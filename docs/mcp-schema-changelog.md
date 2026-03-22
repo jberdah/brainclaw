@@ -27,6 +27,12 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
 - `bclaw_bootstrap` now returns adaptive interview prompts alongside the import proposal when bootstrap confidence is incomplete
   - `structuredContent.import_plan.interview` exposes `summary`, `question_count`, and audience-tagged questions
   - Questions can be targeted to `cli`, `ide_chat`, or `any`
+  - Interview questions now expose stable IDs and `target_hints`
+  - `structuredContent.onboarding_mode` distinguishes `empty_workspace`, `existing_documented`, and `existing_sparse`
+  - `structuredContent.import_plan.confirmed_suggestion_count` reports how many suggestions were confirmed by interview answers
+- `bclaw_bootstrap` now accepts `interviewAnswers`, `apply`, `uninstall`, `audience`, and `interview`
+  - capable agents can preview confirmed selective imports through MCP before applying them
+  - bootstrap apply/uninstall now covers selective canonical memory imports beyond instructions
 
 **Changed**
 - MCP schema version bumped to 0.6.0 to reflect new metadata discovery capabilities

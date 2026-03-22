@@ -103,10 +103,28 @@ brainclaw bootstrap --interview --audience cli
 brainclaw bootstrap --interview --audience ide_chat
 ```
 
+Use the returned question IDs to prepare a small JSON answers file when the interview needs to confirm durable memory:
+
+```json
+[
+  {
+    "question_id": "biq_example",
+    "response_items": ["Use agents sequentially in one checkout."],
+    "suggestions": []
+  }
+]
+```
+
+Preview the enriched import proposal:
+
+```bash
+brainclaw bootstrap --answers-file ./bootstrap-answers.json --json
+```
+
 ### Apply or rollback managed imports
 
 ```bash
-brainclaw bootstrap --apply
+brainclaw bootstrap --answers-file ./bootstrap-answers.json --apply
 brainclaw bootstrap --uninstall
 ```
 

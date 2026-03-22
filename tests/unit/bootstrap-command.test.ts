@@ -5,6 +5,7 @@ import path from 'node:path';
 import { runBootstrap } from '../../src/commands/bootstrap.js';
 import { loadBootstrapApplication } from '../../src/core/bootstrap.js';
 import { loadInstructions } from '../../src/core/instructions.js';
+import { loadState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 async function captureConsole(fn: () => Promise<void>): Promise<{ logs: string[]; errors: string[] }> {
@@ -106,5 +107,54 @@ describe('commands/bootstrap', () => {
     assert.equal(ideInterview.errors.length, 0);
     assert.ok(ideInterview.logs.join('\n').includes('Audience: ide_chat'));
     assert.ok(ideInterview.logs.join('\n').includes('For an IDE chat agent'));
+  });
+
+  it('loads interview answers from file and applies selective memory imports', async () => {
+    fs.rmSync(path.join(workspace.dir, 'README.md'), { force: true });
+    fs.rmSync(path.join(workspace.dir, 'AGENTS.md'), { force: true });
+    fs.rmSync(path.join(workspace.dir, 'package.json'), { force: true });
+
+    const preview = await captureConsole(async () => {
+      await runBootstrap({ json: true, cwd: workspace.dir });
+    });
+    const previewParsed = JSON.parse(preview.logs.at(-1) as string);
+    const interview = previewParsed.import_plan.interview as {
+      questions: Array<{ id: string; prompt: string }>;
+    };
+    const projectIntent = interview.questions.find((question) => question.prompt.includes('trying to build in one sentence'));
+    const workflow = interview.questions.find((question) => question.prompt.includes('Which coding agents do you expect to use here'));
+    assert.ok(projectIntent && workflow);
+
+    const answersPath = path.join(workspace.dir, 'bootstrap-answers.json');
+    fs.writeFileSync(answersPath, JSON.stringify([
+      {
+        question_id: projectIntent.id,
+        response_text: 'Build a repo-local memory layer for coding agents.',
+        response_items: [],
+        suggestions: [],
+      },
+      {
+        question_id: workflow.id,
+        response_items: ['Use agents sequentially.', 'Record handoffs before switching agents.'],
+        suggestions: [],
+      },
+    ], null, 2), 'utf-8');
+
+    const enriched = await captureConsole(async () => {
+      await runBootstrap({ json: true, cwd: workspace.dir, answersFile: answersPath });
+    });
+    const enrichedParsed = JSON.parse(enriched.logs.at(-1) as string);
+    assert.ok((enrichedParsed.import_plan.confirmed_suggestion_count ?? 0) >= 2);
+    assert.ok(enrichedParsed.import_plan.suggestions.some((suggestion: { target: string }) => suggestion.target === 'decision'));
+    assert.ok(enrichedParsed.import_plan.suggestions.some((suggestion: { target: string }) => suggestion.target === 'constraint'));
+
+    const applied = await captureConsole(async () => {
+      await runBootstrap({ apply: true, yes: true, cwd: workspace.dir, answersFile: answersPath });
+    });
+    assert.equal(applied.errors.length, 0);
+    assert.ok(applied.logs.some((line) => line.includes('Bootstrap import applied:')));
+    const state = loadState(workspace.dir);
+    assert.ok(state.recent_decisions.some((entry) => entry.text.includes('Project intent:')));
+    assert.ok(state.active_constraints.some((entry) => entry.text.includes('Agent workflow expectation:')));
   });
 });

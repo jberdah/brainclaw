@@ -322,6 +322,72 @@ describe('commands/mcp read tools', () => {
     assert.equal(disabledStructured.derived_signals, undefined);
   });
 
+  it('accepts interview answers through MCP bootstrap and applies selective memory imports', () => {
+    const bootstrap = handleMcpReadToolCall('bclaw_bootstrap', {}, { cwd: workspace.dir });
+    const structured = bootstrap.structuredContent as {
+      import_plan: {
+        interview?: {
+          questions: Array<{ id: string; prompt: string }>;
+        };
+      };
+    };
+    const questions = structured.import_plan.interview?.questions ?? [];
+    const projectIntent = questions.find((question) => question.prompt.includes('current purpose of this existing project'));
+    const workflow = questions.find((question) => question.prompt.includes('Should Brainclaw treat this project as agent-guided'));
+    assert.ok(projectIntent && workflow);
+
+    const preview = handleMcpReadToolCall('bclaw_bootstrap', {
+      interviewAnswers: [
+        {
+          question_id: projectIntent!.id,
+          response_text: 'Build a local-first coordination layer for coding agents.',
+          response_items: [],
+          suggestions: [],
+        },
+        {
+          question_id: workflow!.id,
+          response_items: [],
+          response_boolean: true,
+          suggestions: [],
+        },
+      ],
+    }, { cwd: workspace.dir });
+    const previewStructured = preview.structuredContent as {
+      import_plan: {
+        confirmed_suggestion_count?: number;
+        suggestions: Array<{ target: string }>;
+      };
+    };
+    assert.ok((previewStructured.import_plan.confirmed_suggestion_count ?? 0) >= 2);
+    assert.ok(previewStructured.import_plan.suggestions.some((suggestion) => suggestion.target === 'decision'));
+    assert.ok(previewStructured.import_plan.suggestions.filter((suggestion) => suggestion.target === 'decision').length >= 2);
+
+    const applied = handleMcpReadToolCall('bclaw_bootstrap', {
+      apply: true,
+      interviewAnswers: [
+        {
+          question_id: projectIntent!.id,
+          response_text: 'Build a local-first coordination layer for coding agents.',
+          response_items: [],
+          suggestions: [],
+        },
+        {
+          question_id: workflow!.id,
+          response_items: [],
+          response_boolean: true,
+          suggestions: [],
+        },
+      ],
+    }, { cwd: workspace.dir });
+    const appliedStructured = applied.structuredContent as {
+      created_count: number;
+      receipt?: { managed_artifacts: Array<unknown> };
+    };
+    assert.ok(applied.content[0].text.includes('Bootstrap import applied:'));
+    assert.ok(appliedStructured.created_count >= 2);
+    assert.ok((appliedStructured.receipt?.managed_artifacts.length ?? 0) >= 2);
+  });
+
   it('returns execution context and agent tooling through the dedicated MCP read tool', () => {
     const response = handleMcpReadToolCall('bclaw_get_execution_context', {
       includeAgentTooling: true,

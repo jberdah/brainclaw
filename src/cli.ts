@@ -540,6 +540,7 @@ program
   .option('--refresh', 'Force a fresh bootstrap scan instead of reusing the current profile')
   .option('--interview', 'Render the adaptive interview prompts instead of the bootstrap summary')
   .option('--audience <audience>', 'Target interview prompts for cli, ide_chat, or any')
+  .option('--answers-file <path>', 'Load structured bootstrap interview answers from a JSON file')
   .option('--apply', 'Import the current bootstrap proposal into canonical memory')
   .option('--uninstall', 'Deactivate the last bootstrap import managed by this workspace')
   .option('-y, --yes', 'Skip confirmation prompts for apply/uninstall')

@@ -282,6 +282,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
     console.log('');
     console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
+    console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
   } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
     console.log('');
     console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);

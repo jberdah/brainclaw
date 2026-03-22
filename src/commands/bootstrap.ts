@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { memoryExists } from '../core/io.js';
@@ -8,6 +9,7 @@ import {
   runBootstrapProfile,
   uninstallBootstrapImport,
 } from '../core/bootstrap.js';
+import { BootstrapInterviewAnswerSchema, type BootstrapInterviewAnswer } from '../core/schema.js';
 
 export interface BootstrapCommandOptions {
   for?: string;
@@ -19,6 +21,7 @@ export interface BootstrapCommandOptions {
   yes?: boolean;
   interview?: boolean;
   audience?: 'cli' | 'ide_chat' | 'any' | string;
+  answersFile?: string;
 }
 
 export async function runBootstrap(options: BootstrapCommandOptions = {}): Promise<void> {
@@ -35,6 +38,7 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
     }
 
     const audience = resolveBootstrapInterviewAudience(options.audience);
+    const interviewAnswers = loadBootstrapInterviewAnswers(options.answersFile);
 
     if (options.uninstall) {
       await confirmBootstrapAction('Remove the last bootstrap import?', options.yes);
@@ -43,7 +47,7 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
         console.log('No bootstrap import receipt found.');
         return;
       }
-      console.log(`✔ Bootstrap uninstall completed: ${result.deactivatedCount} instruction(s) deactivated, ${result.skippedCount} artifact(s) skipped.`);
+      console.log(`✔ Bootstrap uninstall completed: ${result.deactivatedCount} instruction(s) deactivated, ${result.deletedCount} artifact(s) deleted, ${result.skippedCount} artifact(s) skipped.`);
       return;
     }
 
@@ -52,6 +56,7 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
       const result = applyBootstrapImport({
         target: options.for,
         refresh: options.refresh,
+        interviewAnswers,
         cwd,
       });
       console.log(`✔ Bootstrap import applied: ${result.createdCount} item(s) created, ${result.skippedCount} suggestion(s) skipped.`);
@@ -64,6 +69,7 @@ export async function runBootstrap(options: BootstrapCommandOptions = {}): Promi
     const result = runBootstrapProfile({
       target: options.for,
       refresh: options.refresh,
+      interviewAnswers,
       cwd,
     });
     if (options.json) {
@@ -100,6 +106,18 @@ function resolveBootstrapInterviewAudience(value?: string): 'cli' | 'ide_chat' |
     return value;
   }
   throw new Error(`Unsupported bootstrap interview audience '${value}'. Use cli, ide_chat, or any.`);
+}
+
+function loadBootstrapInterviewAnswers(filepath?: string): BootstrapInterviewAnswer[] {
+  if (!filepath) {
+    return [];
+  }
+  const raw = fs.readFileSync(filepath, 'utf-8');
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Bootstrap interview answers file must contain a JSON array: ${filepath}`);
+  }
+  return parsed.map((entry) => BootstrapInterviewAnswerSchema.parse(entry));
 }
 
 async function confirmBootstrapAction(question: string, yes?: boolean): Promise<void> {

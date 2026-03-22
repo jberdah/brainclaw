@@ -1,12 +1,16 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { JsonStore } from './json-store.js';
-import { generateId, nowISO } from './ids.js';
+import { generateId, generateIdWithLabel, nowISO } from './ids.js';
 import { memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
 import {
   BootstrapApplicationReceiptSchema,
+  BootstrapInterviewAnswerSchema,
   BootstrapInterviewPlanSchema,
+  type BootstrapInterviewAnswer,
+  type BootstrapInterviewQuestion,
   BootstrapInterviewQuestionSchema,
   BootstrapImportPlanDocumentSchema,
   BootstrapProfileDocumentSchema,
@@ -17,10 +21,16 @@ import {
   type BootstrapImportPlanDocument,
   type BootstrapProfileDocument,
   type BootstrapSuggestionDocument,
+  type Constraint,
+  type ConstraintCategory,
+  type Decision,
+  type DecisionOutcome,
   type MemorySeedConfidence,
   type MemorySeedDocument,
   type MemorySeedKind,
   type MemorySeedSourceKind,
+  type Severity,
+  type Trap,
 } from './schema.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { analyzeRepository } from './repo-analysis.js';
@@ -28,7 +38,7 @@ import { buildExecutionContext, compactExecutionContext } from './execution-cont
 import { buildAgentToolingContext } from './agent-context.js';
 import { createInstruction, loadInstructions, saveInstruction } from './instructions.js';
 import { resolveCurrentAgentName } from './agent-registry.js';
-import { loadState } from './state.js';
+import { loadState, persistState } from './state.js';
 import { generateMarkdown } from './markdown.js';
 
 const README_CANDIDATES = ['README.md', 'README', 'README.txt', 'README.mdx'];
@@ -67,6 +77,7 @@ export interface BootstrapOptions {
   target?: string;
   refresh?: boolean;
   cwd?: string;
+  interviewAnswers?: BootstrapInterviewAnswer[];
 }
 
 export interface BootstrapResult {
@@ -113,6 +124,7 @@ export interface BootstrapApplyResult {
 export interface BootstrapUninstallResult {
   receipt?: BootstrapApplicationReceipt;
   deactivatedCount: number;
+  deletedCount: number;
   skippedCount: number;
 }
 
@@ -124,16 +136,35 @@ interface WorkspaceClassification {
 export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapResult {
   const cwd = options.cwd ?? process.cwd();
   const target = normalizeTarget(options.target);
+  const interviewAnswers = normalizeBootstrapInterviewAnswers(options.interviewAnswers);
   const existing = loadBootstrapProfile(cwd);
   const existingPlan = loadBootstrapImportPlan(cwd);
   const lastApplication = loadBootstrapApplication(cwd);
   const existingFingerprint = currentRepoFingerprint(cwd);
 
   if (!options.refresh && existing && existingPlan && isProfileReusable(existing, target, existingFingerprint)) {
+    const seeds = listBootstrapSeeds(cwd);
+    const importPlan = interviewAnswers.length > 0
+      ? buildBootstrapImportPlan({
+        cwd,
+        target,
+        workspaceKind: existing.workspace_kind ?? 'existing',
+        onboardingMode: existing.onboarding_mode ?? inferOnboardingMode({
+          workspaceKind: existing.workspace_kind ?? 'existing',
+          confidence: existing.confidence ?? 'low',
+          readmePresent: existing.sources_scanned.includes('README'),
+          nativeInstructionFiles: existing.native_instruction_files,
+        }),
+        confidence: existing.confidence ?? 'low',
+        gaps: existing.gaps,
+        seeds,
+        interviewAnswers,
+      })
+      : existingPlan;
     return {
       profile: existing,
-      seeds: listBootstrapSeeds(cwd),
-      importPlan: existingPlan,
+      seeds,
+      importPlan,
       lastApplication,
       reusedProfile: true,
     };
@@ -141,10 +172,22 @@ export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapRe
 
   const artifacts = buildBootstrapArtifacts({ cwd, target, repoFingerprint: existingFingerprint });
   persistBootstrapArtifacts(artifacts, cwd);
+  const importPlan = interviewAnswers.length > 0
+    ? buildBootstrapImportPlan({
+      cwd,
+      target,
+      workspaceKind: artifacts.profile.workspace_kind ?? 'existing',
+      onboardingMode: artifacts.profile.onboarding_mode ?? 'existing_sparse',
+      confidence: artifacts.profile.confidence ?? 'low',
+      gaps: artifacts.profile.gaps,
+      seeds: artifacts.seeds,
+      interviewAnswers,
+    })
+    : artifacts.importPlan;
   return {
     profile: artifacts.profile,
     seeds: artifacts.seeds,
-    importPlan: artifacts.importPlan,
+    importPlan,
     lastApplication,
     reusedProfile: false,
   };
@@ -207,6 +250,9 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
   if (result.profile.workspace_kind) {
     lines.push(`Workspace kind: ${result.profile.workspace_kind}`);
   }
+  if (result.profile.onboarding_mode) {
+    lines.push(`Onboarding mode: ${result.profile.onboarding_mode}`);
+  }
   if (result.profile.confidence) {
     lines.push(`Confidence: ${result.profile.confidence}`);
   }
@@ -219,6 +265,9 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
     lines.push(`Open gaps: ${result.profile.gaps.join(' | ')}`);
   }
   lines.push(`Import suggestions: ${result.importPlan.suggestion_count}`);
+  if ((result.importPlan.confirmed_suggestion_count ?? 0) > 0) {
+    lines.push(`Confirmed by interview: ${result.importPlan.confirmed_suggestion_count}`);
+  }
   if (result.profile.repo_fingerprint) {
     lines.push(`Repo fingerprint: ${result.profile.repo_fingerprint}`);
   }
@@ -243,7 +292,7 @@ export function renderBootstrapSummary(result: BootstrapResult): string {
     lines.push('');
     lines.push('Adaptive interview:');
     for (const question of result.importPlan.interview!.questions.slice(0, 6)) {
-      lines.push(`- [${question.priority}/${question.audience}] ${question.prompt}`);
+      lines.push(`- [${question.priority}/${question.audience}] [${question.id}] ${question.prompt}`);
     }
   }
   if (result.seeds.length > 0) {
@@ -273,9 +322,12 @@ export function renderBootstrapInterview(
   const lines = [interview.summary, `Audience: ${audience}`];
   lines.push('');
   for (const [index, question] of questions.entries()) {
-    lines.push(`${index + 1}. ${question.prompt}`);
+    lines.push(`${index + 1}. [${question.id}] ${question.prompt}`);
     lines.push(`   Why: ${question.rationale}`);
     lines.push(`   Expected answer: ${question.response_kind}`);
+    if (question.target_hints.length > 0) {
+      lines.push(`   Target hints: ${question.target_hints.join(', ')}`);
+    }
   }
   return lines.join('\n');
 }
@@ -350,6 +402,12 @@ function buildBootstrapArtifacts(input: {
     nativeInstructionFiles,
     seedCount: uniqueSeeds.length,
   });
+  const onboardingMode = inferOnboardingMode({
+    workspaceKind: workspace.kind,
+    readmePresent: Boolean(readmePath),
+    nativeInstructionFiles,
+    confidence,
+  });
   const gaps = inferBootstrapGaps({
     workspaceKind: workspace.kind,
     readmePresent: Boolean(readmePath),
@@ -364,6 +422,7 @@ function buildBootstrapArtifacts(input: {
     repoAnalysis,
     seeds: uniqueSeeds,
     target: input.target,
+    onboardingMode,
     confidence,
     gaps,
   });
@@ -371,6 +430,7 @@ function buildBootstrapArtifacts(input: {
     cwd: input.cwd,
     target: input.target,
     workspaceKind: workspace.kind,
+    onboardingMode,
     confidence,
     gaps,
     seeds: uniqueSeeds,
@@ -388,6 +448,7 @@ function buildBootstrapArtifacts(input: {
       seed_count: uniqueSeeds.length,
       target: input.target,
       workspace_kind: workspace.kind,
+      onboarding_mode: onboardingMode,
       confidence,
       native_instruction_files: nativeInstructionFiles,
       gaps,
@@ -926,6 +987,7 @@ function dedupeSeeds(seeds: MemorySeedDocument[]): MemorySeedDocument[] {
 
 function buildSummary(input: {
   workspaceKind: 'empty' | 'existing';
+  onboardingMode: 'empty_workspace' | 'existing_documented' | 'existing_sparse';
   agentsPresent: boolean;
   nativeInstructionFiles: string[];
   gitAvailable: boolean;
@@ -937,6 +999,7 @@ function buildSummary(input: {
 }): string {
   const parts: string[] = [];
   parts.push(`Bootstrap summary${input.target ? ` for ${input.target}` : ''}: ${input.workspaceKind} workspace, ${input.seeds.length} derived signal(s).`);
+  parts.push(`Onboarding mode: ${input.onboardingMode}.`);
   parts.push(`Confidence: ${input.confidence}.`);
   parts.push(`Repository mode looks ${input.repoAnalysis.recommendedMode}.`);
   if (input.agentsPresent) {
@@ -962,9 +1025,11 @@ function buildBootstrapImportPlan(input: {
   cwd: string;
   target?: string;
   workspaceKind: 'empty' | 'existing';
+  onboardingMode: 'empty_workspace' | 'existing_documented' | 'existing_sparse';
   confidence: MemorySeedConfidence;
   gaps: string[];
   seeds: MemorySeedDocument[];
+  interviewAnswers?: BootstrapInterviewAnswer[];
 }): BootstrapImportPlanDocument {
   const activeInstructionKeys = new Set(
     loadInstructions(input.cwd)
@@ -988,7 +1053,7 @@ function buildBootstrapImportPlan(input: {
     if (!suggestion) {
       continue;
     }
-    const suggestionKey = suggestionIdentityKey(suggestion);
+    const suggestionKey = genericSuggestionIdentityKey(suggestion);
     if (seenSuggestionKeys.has(suggestionKey) || activeInstructionKeys.has(suggestionKey)) {
       continue;
     }
@@ -1012,7 +1077,7 @@ function buildBootstrapImportPlan(input: {
     if (!suggestion) {
       continue;
     }
-    const suggestionKey = suggestionIdentityKey(suggestion);
+    const suggestionKey = genericSuggestionIdentityKey(suggestion);
     if (seenSuggestionKeys.has(suggestionKey) || activeInstructionKeys.has(suggestionKey)) {
       continue;
     }
@@ -1023,9 +1088,6 @@ function buildBootstrapImportPlan(input: {
     }));
   }
 
-  const summary = suggestions.length === 0
-    ? 'No safe bootstrap imports are ready yet; review the gaps and use an interview/import step before promoting derived context.'
-    : `${suggestions.length} bootstrap instruction suggestion(s) are ready to import after review.`;
   const interview = buildBootstrapInterviewPlan({
     workspaceKind: input.workspaceKind,
     gaps: input.gaps,
@@ -1034,16 +1096,36 @@ function buildBootstrapImportPlan(input: {
       .filter((seed) => seed.source_kind === 'native_instruction')
       .map((seed) => seed.source_ref))],
   });
+  const interviewSuggestions = buildBootstrapInterviewSuggestions(interview, input.interviewAnswers ?? []);
+  let confirmedSuggestionCount = 0;
+  for (const suggestion of interviewSuggestions) {
+    const suggestionKey = genericSuggestionIdentityKey(suggestion);
+    if ((suggestion.target === 'instruction' && activeInstructionKeys.has(suggestionKey)) || seenSuggestionKeys.has(suggestionKey)) {
+      continue;
+    }
+    seenSuggestionKeys.add(suggestionKey);
+    confirmedSuggestionCount++;
+    suggestions.push(BootstrapSuggestionDocumentSchema.parse({
+      ...suggestion,
+      schema_version: DERIVED_SCHEMA_VERSION,
+    }));
+  }
+  const summary = suggestions.length === 0
+    ? 'No safe bootstrap imports are ready yet; review the gaps and use an interview/import step before promoting derived context.'
+    : `${suggestions.length} bootstrap suggestion(s) are ready to import after review${confirmedSuggestionCount > 0 ? `, including ${confirmedSuggestionCount} confirmed via interview` : ''}.`;
 
   return BootstrapImportPlanDocumentSchema.parse({
     schema_version: DERIVED_SCHEMA_VERSION,
     derived_at: nowISO(),
     target: input.target,
     workspace_kind: input.workspaceKind,
+    onboarding_mode: input.onboardingMode,
     confidence: input.confidence,
     summary,
     requires_confirmation: true,
     gaps: input.gaps,
+    confirmed_suggestion_count: confirmedSuggestionCount,
+    interview_answer_count: input.interviewAnswers?.length ?? 0,
     suggestion_count: suggestions.length,
     suggestions,
     interview,
@@ -1064,15 +1146,17 @@ function buildBootstrapInterviewPlan(input: {
     audience: 'cli' | 'ide_chat' | 'any',
     responseKind: 'short_text' | 'long_text' | 'boolean' | 'list',
     gapKeys: string[],
+    targetHints: BootstrapInterviewQuestion['target_hints'],
   ) => {
     questions.push(BootstrapInterviewQuestionSchema.parse({
-      id: generateId('bootstrap_suggestions'),
+      id: bootstrapInterviewQuestionId(prompt, audience),
       prompt,
       rationale,
       priority,
       audience,
       response_kind: responseKind,
       gap_keys: gapKeys,
+      target_hints: targetHints,
     }));
   };
 
@@ -1084,6 +1168,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'short_text',
       ['project intent is not documented yet'],
+      ['decision'],
     );
     add(
       'Which coding agents do you expect to use here, and should they work mostly sequentially or in parallel later?',
@@ -1092,6 +1177,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'list',
       ['agent workflow expectations should be captured explicitly'],
+      ['constraint', 'instruction'],
     );
     add(
       'For a CLI-only agent, what should the very first safe action be after reading context?',
@@ -1100,6 +1186,7 @@ function buildBootstrapInterviewPlan(input: {
       'cli',
       'short_text',
       ['agent workflow expectations should be captured explicitly'],
+      ['instruction'],
     );
     add(
       'For an IDE chat agent, what should it ask or inspect before editing code?',
@@ -1108,6 +1195,7 @@ function buildBootstrapInterviewPlan(input: {
       'ide_chat',
       'short_text',
       ['agent workflow expectations should be captured explicitly'],
+      ['instruction'],
     );
   }
 
@@ -1119,6 +1207,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'long_text',
       ['no README-level project overview detected'],
+      ['decision'],
     );
   }
 
@@ -1130,6 +1219,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'boolean',
       ['no native agent instruction files detected'],
+      ['decision'],
     );
   }
 
@@ -1141,6 +1231,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'list',
       ['derived context is sparse and may need an interview'],
+      ['constraint'],
     );
   }
 
@@ -1152,6 +1243,7 @@ function buildBootstrapInterviewPlan(input: {
       'ide_chat',
       'long_text',
       ['native instruction import boundary'],
+      ['decision', 'instruction', 'constraint'],
     );
   }
 
@@ -1163,6 +1255,7 @@ function buildBootstrapInterviewPlan(input: {
       'any',
       'long_text',
       ['confidence fallback'],
+      ['instruction', 'constraint'],
     );
   }
 
@@ -1179,6 +1272,165 @@ function buildBootstrapInterviewPlan(input: {
     question_count: questions.length,
     questions,
   });
+}
+
+function bootstrapInterviewQuestionId(prompt: string, audience: 'cli' | 'ide_chat' | 'any'): string {
+  const digest = crypto.createHash('sha1').update(`${audience}:${prompt}`).digest('hex').slice(0, 8);
+  return `biq_${digest}`;
+}
+
+function normalizeBootstrapInterviewAnswers(answers?: BootstrapInterviewAnswer[]): BootstrapInterviewAnswer[] {
+  if (!answers || answers.length === 0) {
+    return [];
+  }
+  return answers.map((answer) => BootstrapInterviewAnswerSchema.parse(answer));
+}
+
+function buildBootstrapInterviewSuggestions(
+  interview: BootstrapInterviewPlan | undefined,
+  answers: BootstrapInterviewAnswer[],
+): Array<Omit<BootstrapSuggestionDocument, 'schema_version'>> {
+  if (!interview || answers.length === 0) {
+    return [];
+  }
+
+  const questionsById = new Map(interview.questions.map((question) => [question.id, question] as const));
+  const suggestions: Array<Omit<BootstrapSuggestionDocument, 'schema_version'>> = [];
+  for (const answer of answers) {
+    const question = questionsById.get(answer.question_id);
+    if (!question) {
+      continue;
+    }
+    if (answer.suggestions.length > 0) {
+      for (const suggestion of answer.suggestions) {
+        suggestions.push({
+          id: generateId('bootstrap_suggestions'),
+          target: suggestion.target,
+          text: suggestion.text.trim(),
+          rationale: suggestion.rationale ?? renderBootstrapInterviewRationale(question),
+          confidence: suggestion.confidence ?? 'high',
+          source_seed_ids: [],
+          source_refs: [`bootstrap-interview:${question.id}`],
+          layer: suggestion.layer,
+          scope: suggestion.scope,
+          tags: normalizeBootstrapSuggestionTags(['bootstrap-interview', ...suggestion.tags]),
+          related_paths: suggestion.related_paths,
+          category: suggestion.category,
+          outcome: suggestion.outcome,
+          severity: suggestion.severity,
+          reversible: true,
+        });
+      }
+      continue;
+    }
+    suggestions.push(...deriveBootstrapSuggestionsFromAnswer(question, answer));
+  }
+
+  return suggestions.filter((suggestion) => suggestion.text.trim().length > 0);
+}
+
+function deriveBootstrapSuggestionsFromAnswer(
+  question: BootstrapInterviewQuestion,
+  answer: BootstrapInterviewAnswer,
+): Array<Omit<BootstrapSuggestionDocument, 'schema_version'>> {
+  const itemTexts = answer.response_items.map((entry) => entry.trim()).filter(Boolean);
+  const text = answer.response_text?.trim();
+  const base = {
+    id: generateId('bootstrap_suggestions'),
+    rationale: renderBootstrapInterviewRationale(question),
+    confidence: 'high' as const,
+    source_seed_ids: [] as string[],
+    source_refs: [`bootstrap-interview:${question.id}`],
+    tags: normalizeBootstrapSuggestionTags(['bootstrap-interview']),
+    related_paths: undefined as string[] | undefined,
+    reversible: true,
+  };
+
+  if (question.gap_keys.includes('project intent is not documented yet') && text) {
+    return [{ ...base, target: 'decision', text: `Project intent: ${text}` }];
+  }
+
+  if (question.gap_keys.includes('no README-level project overview detected') && text) {
+    return [{ ...base, target: 'decision', text: `Project overview: ${text}` }];
+  }
+
+  if (question.prompt.startsWith('Which coding agents do you expect to use here') && (itemTexts.length > 0 || text)) {
+    const values = itemTexts.length > 0 ? itemTexts : [text as string];
+    return values.map((entry) => ({
+      ...base,
+      id: generateId('bootstrap_suggestions'),
+      target: 'constraint' as const,
+      text: `Agent workflow expectation: ${entry}`,
+      category: 'process' as ConstraintCategory,
+    }));
+  }
+
+  if (question.prompt.startsWith('For a CLI-only agent') && text) {
+    return [{ ...base, target: 'instruction', text: `CLI-only agents should first: ${text}`, layer: 'global' }];
+  }
+
+  if (question.prompt.startsWith('For an IDE chat agent') && text) {
+    return [{ ...base, target: 'instruction', text: `IDE chat agents should ask or inspect: ${text}`, layer: 'global' }];
+  }
+
+  if (question.gap_keys.includes('no native agent instruction files detected') && answer.response_boolean !== undefined) {
+    return [{
+      ...base,
+      target: 'decision',
+      text: answer.response_boolean
+        ? 'Brainclaw should treat this project as agent-guided.'
+        : 'Brainclaw should stay memory-only until agent guidance is clarified.',
+    }];
+  }
+
+  if (question.gap_keys.includes('derived context is sparse and may need an interview') && (itemTexts.length > 0 || text)) {
+    const values = itemTexts.length > 0 ? itemTexts : [text as string];
+    return values.map((entry) => ({
+      ...base,
+      id: generateId('bootstrap_suggestions'),
+      target: 'constraint' as const,
+      text: entry,
+      category: 'process' as ConstraintCategory,
+    }));
+  }
+
+  if (question.gap_keys.includes('native instruction import boundary') && text) {
+    return [{ ...base, target: 'decision', text: `Native instruction import boundary: ${text}` }];
+  }
+
+  if (question.gap_keys.includes('confidence fallback') && text) {
+    return [{
+      ...base,
+      target: question.target_hints.includes('constraint') ? 'constraint' : 'instruction',
+      text,
+      category: question.target_hints.includes('constraint') ? 'process' as ConstraintCategory : undefined,
+      layer: question.target_hints.includes('instruction') ? 'global' : undefined,
+    }];
+  }
+
+  if (itemTexts.length > 0 && question.target_hints.includes('constraint')) {
+    return itemTexts.map((entry) => ({
+      ...base,
+      id: generateId('bootstrap_suggestions'),
+      target: 'constraint' as const,
+      text: entry,
+      category: 'process' as ConstraintCategory,
+    }));
+  }
+
+  if (text && question.target_hints.includes('instruction')) {
+    return [{ ...base, target: 'instruction', text, layer: 'global' }];
+  }
+
+  if (text && question.target_hints.includes('decision')) {
+    return [{ ...base, target: 'decision', text }];
+  }
+
+  return [];
+}
+
+function renderBootstrapInterviewRationale(question: BootstrapInterviewQuestion): string {
+  return `Confirmed via bootstrap interview answer to ${question.id}: ${question.prompt}`;
 }
 
 function seedToBootstrapSuggestion(
@@ -1262,8 +1514,16 @@ function isBootstrapSummarySeed(text: string): boolean {
   return text.startsWith('Agent guide: ') || text.startsWith('Native agent guidance from ');
 }
 
-function suggestionIdentityKey(suggestion: Pick<BootstrapSuggestionDocument, 'text' | 'layer' | 'scope'>): string {
-  return instructionIdentityKey(suggestion.text, suggestion.layer ?? 'global', suggestion.scope);
+function genericSuggestionIdentityKey(
+  suggestion: Pick<BootstrapSuggestionDocument, 'target' | 'text' | 'layer' | 'scope' | 'severity'>,
+): string {
+  if (suggestion.target === 'instruction') {
+    return instructionIdentityKey(suggestion.text, suggestion.layer ?? 'global', suggestion.scope);
+  }
+  if (suggestion.target === 'trap') {
+    return `trap:${suggestion.severity ?? 'medium'}:${suggestion.text.trim().toLowerCase()}`;
+  }
+  return `${suggestion.target}:${suggestion.text.trim().toLowerCase()}`;
 }
 
 function instructionIdentityKey(text: string, layer: string, scope?: string): string {
@@ -1283,44 +1543,156 @@ export function applyBootstrapImport(options: ApplyBootstrapOptions = {}): Boots
     };
   }
 
-  const activeInstructionKeys = new Set(
-    loadInstructions(cwd)
-      .filter((entry) => entry.active)
-      .map((entry) => instructionIdentityKey(entry.text, entry.layer, entry.scope)),
-  );
   const managedArtifacts: BootstrapApplicationReceipt['managed_artifacts'] = [];
   let createdCount = 0;
   let skippedCount = 0;
 
   withStoreLock(cwd, () => {
+    const state = loadState(cwd);
+    const activeInstructionKeys = new Set(
+      loadInstructions(cwd)
+        .filter((entry) => entry.active)
+        .map((entry) => instructionIdentityKey(entry.text, entry.layer, entry.scope)),
+    );
+    const activeDecisionKeys = new Set(state.recent_decisions.map((entry) => genericSuggestionIdentityKey({
+      target: 'decision',
+      text: entry.text,
+      layer: 'global',
+      scope: undefined,
+      severity: undefined,
+    })));
+    const activeConstraintKeys = new Set(state.active_constraints
+      .filter((entry) => entry.status === 'active')
+      .map((entry) => genericSuggestionIdentityKey({
+        target: 'constraint',
+        text: entry.text,
+        layer: 'global',
+        scope: undefined,
+        severity: undefined,
+      })));
+    const activeTrapKeys = new Set(state.known_traps
+      .filter((entry) => entry.status === 'active')
+      .map((entry) => genericSuggestionIdentityKey({
+        target: 'trap',
+        text: entry.text,
+        layer: 'global',
+        scope: undefined,
+        severity: entry.severity,
+      })));
+    let stateChanged = false;
+
     for (const suggestion of proposal.suggestions) {
-      if (suggestion.target !== 'instruction') {
+      const identityKey = genericSuggestionIdentityKey(suggestion);
+      if (
+        (suggestion.target === 'instruction' && activeInstructionKeys.has(identityKey)) ||
+        (suggestion.target === 'decision' && activeDecisionKeys.has(identityKey)) ||
+        (suggestion.target === 'constraint' && activeConstraintKeys.has(identityKey)) ||
+        (suggestion.target === 'trap' && activeTrapKeys.has(identityKey))
+      ) {
         skippedCount++;
         continue;
       }
-      const identityKey = suggestionIdentityKey(suggestion);
-      if (activeInstructionKeys.has(identityKey)) {
-        skippedCount++;
-        continue;
+      switch (suggestion.target) {
+        case 'instruction': {
+          const entry = createInstruction(suggestion.text, {
+            layer: suggestion.layer ?? 'global',
+            scope: suggestion.scope,
+            tags: suggestion.tags,
+            author: resolveCurrentAgentName(cwd),
+          }, cwd);
+          activeInstructionKeys.add(identityKey);
+          managedArtifacts.push({
+            kind: 'instruction',
+            id: entry.id,
+            suggestion_id: suggestion.id,
+            rollback_action: 'deactivate',
+          });
+          createdCount++;
+          break;
+        }
+        case 'decision': {
+          const { id, short_label } = generateIdWithLabel('recent_decisions', cwd);
+          const entry: Decision = {
+            id,
+            short_label,
+            text: suggestion.text,
+            created_at: nowISO(),
+            author: resolveCurrentAgentName(cwd),
+            outcome: suggestion.outcome as DecisionOutcome | undefined,
+            tags: suggestion.tags ?? [],
+            related_paths: suggestion.related_paths,
+          };
+          state.recent_decisions.push(entry);
+          activeDecisionKeys.add(identityKey);
+          managedArtifacts.push({
+            kind: 'decision',
+            id: entry.id,
+            suggestion_id: suggestion.id,
+            rollback_action: 'delete',
+          });
+          stateChanged = true;
+          createdCount++;
+          break;
+        }
+        case 'constraint': {
+          const { id, short_label } = generateIdWithLabel('active_constraints', cwd);
+          const entry: Constraint = {
+            id,
+            short_label,
+            text: suggestion.text,
+            created_at: nowISO(),
+            author: resolveCurrentAgentName(cwd),
+            status: 'active',
+            category: suggestion.category as ConstraintCategory | undefined,
+            tags: suggestion.tags ?? [],
+            related_paths: suggestion.related_paths,
+          };
+          state.active_constraints.push(entry);
+          activeConstraintKeys.add(identityKey);
+          managedArtifacts.push({
+            kind: 'constraint',
+            id: entry.id,
+            suggestion_id: suggestion.id,
+            rollback_action: 'delete',
+          });
+          stateChanged = true;
+          createdCount++;
+          break;
+        }
+        case 'trap': {
+          const { id, short_label } = generateIdWithLabel('known_traps', cwd);
+          const entry: Trap = {
+            id,
+            short_label,
+            text: suggestion.text,
+            created_at: nowISO(),
+            author: resolveCurrentAgentName(cwd),
+            status: 'active',
+            severity: (suggestion.severity as Severity | undefined) ?? 'medium',
+            tags: suggestion.tags ?? [],
+            related_paths: suggestion.related_paths,
+            visibility: 'shared',
+          };
+          state.known_traps.push(entry);
+          activeTrapKeys.add(identityKey);
+          managedArtifacts.push({
+            kind: 'trap',
+            id: entry.id,
+            suggestion_id: suggestion.id,
+            rollback_action: 'delete',
+          });
+          stateChanged = true;
+          createdCount++;
+          break;
+        }
       }
-      const entry = createInstruction(suggestion.text, {
-        layer: suggestion.layer ?? 'global',
-        scope: suggestion.scope,
-        tags: suggestion.tags,
-        author: resolveCurrentAgentName(cwd),
-      }, cwd);
-      activeInstructionKeys.add(identityKey);
-      managedArtifacts.push({
-        kind: 'instruction',
-        id: entry.id,
-        suggestion_id: suggestion.id,
-        rollback_action: 'deactivate',
-      });
-      createdCount++;
     }
 
+    if (stateChanged) {
+      persistState(state, cwd, { writeProjectMarkdown: false });
+    }
     if (createdCount > 0) {
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
+      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd), cwd));
     }
   });
 
@@ -1350,32 +1722,59 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
     return {
       receipt,
       deactivatedCount: 0,
+      deletedCount: 0,
       skippedCount: 0,
     };
   }
 
-  const instructions = loadInstructions(resolvedCwd);
   let deactivatedCount = 0;
+  let deletedCount = 0;
   let skippedCount = 0;
 
   withStoreLock(resolvedCwd, () => {
+    const state = loadState(resolvedCwd);
+    const instructions = loadInstructions(resolvedCwd);
+    let stateChanged = false;
     for (const artifact of receipt.managed_artifacts) {
-      if (artifact.kind !== 'instruction') {
+      if (artifact.kind === 'instruction') {
+        const instruction = instructions.find((entry) => entry.id === artifact.id);
+        if (!instruction || !instruction.active) {
+          skippedCount++;
+          continue;
+        }
+        instruction.active = false;
+        instruction.updated_at = nowISO();
+        saveInstruction(instruction, resolvedCwd);
+        deactivatedCount++;
+        continue;
+      }
+      const beforeCounts = {
+        decisions: state.recent_decisions.length,
+        constraints: state.active_constraints.length,
+        traps: state.known_traps.length,
+      };
+      if (artifact.kind === 'decision') {
+        state.recent_decisions = state.recent_decisions.filter((entry) => entry.id !== artifact.id);
+      } else if (artifact.kind === 'constraint') {
+        state.active_constraints = state.active_constraints.filter((entry) => entry.id !== artifact.id);
+      } else if (artifact.kind === 'trap') {
+        state.known_traps = state.known_traps.filter((entry) => entry.id !== artifact.id);
+      }
+      const changed = beforeCounts.decisions !== state.recent_decisions.length
+        || beforeCounts.constraints !== state.active_constraints.length
+        || beforeCounts.traps !== state.known_traps.length;
+      if (!changed) {
         skippedCount++;
         continue;
       }
-      const instruction = instructions.find((entry) => entry.id === artifact.id);
-      if (!instruction || !instruction.active) {
-        skippedCount++;
-        continue;
-      }
-      instruction.active = false;
-      instruction.updated_at = nowISO();
-      saveInstruction(instruction, resolvedCwd);
-      deactivatedCount++;
+      stateChanged = true;
+      deletedCount++;
     }
-    if (deactivatedCount > 0) {
-      writeFileAtomic(memoryPath('project.md', resolvedCwd), generateMarkdown(loadState(resolvedCwd)));
+    if (stateChanged) {
+      persistState(state, resolvedCwd, { writeProjectMarkdown: false });
+    }
+    if (deactivatedCount > 0 || deletedCount > 0) {
+      writeFileAtomic(memoryPath('project.md', resolvedCwd), generateMarkdown(loadState(resolvedCwd), resolvedCwd));
     }
   });
 
@@ -1387,6 +1786,7 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
   return {
     receipt: nextReceipt,
     deactivatedCount,
+    deletedCount,
     skippedCount,
   };
 }
@@ -1443,6 +1843,21 @@ function inferBootstrapConfidence(input: {
     return 'medium';
   }
   return 'low';
+}
+
+function inferOnboardingMode(input: {
+  workspaceKind: 'empty' | 'existing';
+  readmePresent: boolean;
+  nativeInstructionFiles: string[];
+  confidence: MemorySeedConfidence;
+}): 'empty_workspace' | 'existing_documented' | 'existing_sparse' {
+  if (input.workspaceKind === 'empty') {
+    return 'empty_workspace';
+  }
+  if (input.readmePresent || input.nativeInstructionFiles.length > 0 || input.confidence === 'high') {
+    return 'existing_documented';
+  }
+  return 'existing_sparse';
 }
 
 function inferBootstrapGaps(input: {
