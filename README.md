@@ -129,6 +129,7 @@ After that, the agent should stay on Brainclaw's MCP path for live state:
 
 ```text
 bclaw_session_start      -> open session + return board/context
+bclaw_get_execution_context -> inspect local tooling + notice Brainclaw package updates
 bclaw_get_context        -> fetch fresh prompt-ready context for a path
 bclaw_list_plans         -> inspect shared work
 bclaw_claim              -> claim scope before editing
@@ -176,6 +177,8 @@ If you want a machine-level CLI for operator workflows, debugging, or repeated l
 ```bash
 npm install -g brainclaw
 ```
+
+By default, Brainclaw's update checks for end-user installs follow the public npm `latest` channel. Projects that need a different track can override `brainclaw_update_source`, for example to use `prelaunch` or a local tarball channel.
 
 If you are working from source while developing Brainclaw itself:
 

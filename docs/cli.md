@@ -133,7 +133,7 @@ brainclaw bootstrap --apply -y
 
 ### `brainclaw env`
 
-Display environment and tooling detection information.
+Display environment, tooling detection, and installable Brainclaw update information.
 
 | Option | Description |
 |---|---|
@@ -145,6 +145,8 @@ brainclaw env
 brainclaw env --json
 brainclaw env --agent-tooling
 ```
+
+When the project does not pin a local release channel, `brainclaw env` checks the public npm `latest` channel for installable updates. Projects can override that with `brainclaw_update_source`, for example to use `prelaunch` or a local-pack manifest.
 
 ---
 
@@ -1253,3 +1255,10 @@ brainclaw version
 brainclaw version --check
 brainclaw version --publish-local --release-notes "Add estimation-report command"
 ```
+
+`brainclaw version --check` now follows this order:
+
+- if `brainclaw_update_source` is configured, use it
+- otherwise, fall back to the public npm channel `brainclaw@latest`
+
+This keeps end-user installs aware of published npm releases without requiring a local tarball channel. To keep beta testers on a different channel, set `brainclaw_update_source` to `type: npm` with a different `dist_tag`, such as `prelaunch`.

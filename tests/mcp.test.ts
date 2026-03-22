@@ -558,6 +558,24 @@ describe('MCP server', () => {
   });
 
   it('returns execution context and local agent tooling through MCP', async () => {
+    const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8'));
+    config.brainclaw_update_source = {
+      type: 'local-pack',
+      manifest_path: '.releases/brainclaw-local.json',
+    };
+    fs.writeFileSync(configPath, YAML.stringify(config), 'utf-8');
+    fs.mkdirSync(path.join(dir, '.releases'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.releases', 'brainclaw-local.json'), JSON.stringify({
+      version: 1,
+      channel: 'local-pack',
+      package_name: 'brainclaw',
+      latest_installable_version: '99.0.0',
+      artifact_path: './brainclaw-99.0.0.tgz',
+      install_command: 'npm install -g "./.releases/brainclaw-99.0.0.tgz"',
+      release_notes: 'Local release ready for upgrade.',
+    }, null, 2), 'utf-8');
+
     const codexHome = path.join(dir, '.codex-home');
     fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
     fs.writeFileSync(
@@ -588,6 +606,8 @@ describe('MCP server', () => {
 
       assert.equal(response.result.isError, false);
       assert.ok(response.result.structuredContent.execution_context);
+      assert.equal(response.result.structuredContent.installable_update.status, 'update_available');
+      assert.equal(response.result.structuredContent.installable_update.latest_installable_version, '99.0.0');
       assert.ok(Array.isArray(response.result.structuredContent.execution_context.toolchains));
       assert.equal(response.result.structuredContent.agent_tooling.skills[0].name, 'openai-docs');
       assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].name, 'atlassian');

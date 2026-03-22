@@ -39,6 +39,7 @@ After the workspace is initialized, the nominal flow is:
 
 ```text
 bclaw_session_start   -> open a session and return current board/context
+bclaw_get_execution_context -> inspect local tooling and notice package updates
 bclaw_get_context     -> fetch fresh prompt-ready context for the target path
 bclaw_list_plans      -> inspect active work
 bclaw_claim           -> claim scope before editing
@@ -47,6 +48,8 @@ bclaw_session_end     -> close session cleanly and hand work off
 ```
 
 Use native agent files such as `AGENTS.md`, `CLAUDE.md`, or Cursor rules as local workflow guidance, not as the only source of live state.
+
+Unless the project overrides `brainclaw_update_source`, `bclaw_get_execution_context` checks the public npm `latest` channel so the agent can notice when a newer Brainclaw release is available.
 
 ## Path 2: CLI-Oriented Agent Or Fallback Workflow
 

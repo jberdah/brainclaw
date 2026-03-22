@@ -58,7 +58,21 @@ describe('commands/env + whoami', () => {
       upsertAgentIntegrationDeclaration(config, 'github-copilot', 'manual');
       config.recommended_brainclaw_version = '99.0.0';
       config.brainclaw_upgrade_message = 'Includes improved doctor/env/whoami upgrade guidance.';
+      config.brainclaw_update_source = {
+        type: 'local-pack',
+        manifest_path: '.releases/brainclaw-local.json',
+      };
     });
+    fs.mkdirSync(path.join(workspace.dir, '.releases'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, '.releases', 'brainclaw-local.json'), JSON.stringify({
+      version: 1,
+      channel: 'local-pack',
+      package_name: 'brainclaw',
+      latest_installable_version: '99.0.0',
+      artifact_path: './brainclaw-99.0.0.tgz',
+      install_command: 'npm install -g "./.releases/brainclaw-99.0.0.tgz"',
+      release_notes: 'Local release ready for upgrade.',
+    }, null, 2), 'utf-8');
   });
 
   afterEach(() => {
@@ -81,6 +95,8 @@ describe('commands/env + whoami', () => {
     assert.deepEqual(parsed.agent_tooling.agents_rules, ['Read memory first']);
     assert.equal(parsed.brainclaw_version.status, 'update_available');
     assert.equal(parsed.brainclaw_version.recommended_brainclaw_version, '99.0.0');
+    assert.equal(parsed.installable_update.status, 'update_available');
+    assert.equal(parsed.installable_update.latest_installable_version, '99.0.0');
     assert.equal(parsed.declared_agent_integrations.declarations[0].agent_name, 'github-copilot');
     assert.equal(parsed.integration_readiness[0].ready, false);
     assert.ok(Array.isArray(parsed.execution_context.toolchains));
@@ -101,6 +117,8 @@ describe('commands/env + whoami', () => {
     assert.ok(parsed.execution_context);
     assert.equal(parsed.brainclaw_version.status, 'update_available');
     assert.equal(parsed.brainclaw_version.upgrade_message, 'Includes improved doctor/env/whoami upgrade guidance.');
+    assert.equal(parsed.installable_update.status, 'update_available');
+    assert.equal(parsed.installable_update.install_command, 'npm install -g "./.releases/brainclaw-99.0.0.tgz"');
     assert.equal(parsed.declared_agent_integrations.declarations[0].agent_name, 'github-copilot');
     assert.equal(parsed.integration_readiness[0].ready, false);
     assert.equal(parsed.agent_tooling.agents_md_present, true);

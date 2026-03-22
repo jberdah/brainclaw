@@ -47,7 +47,9 @@ export function runVersion(options: VersionOptions = {}): void {
   }
 
   const assessment = assessBrainclawVersion(config);
-  const updateCheck = options.check ? checkBrainclawInstallableUpdate(config, cwd) : undefined;
+  const updateCheck = options.check
+    ? checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true })
+    : undefined;
 
   const result = {
     initialized,

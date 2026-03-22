@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   BrainclawLocalReleaseManifestSchema,
   type BrainclawUpdateSource,
+  type BrainclawUpdateSourceNpm,
   type Config,
 } from './schema.js';
 
@@ -13,6 +15,9 @@ type InstallableUpdateStatus = 'not_configured' | 'unsupported_source' | 'check_
 
 export const DEFAULT_LOCAL_RELEASES_DIR = '.releases';
 export const DEFAULT_LOCAL_RELEASE_MANIFEST_PATH = `${DEFAULT_LOCAL_RELEASES_DIR}/brainclaw-local.json`;
+export const DEFAULT_NPM_UPDATE_PACKAGE = 'brainclaw';
+export const DEFAULT_NPM_UPDATE_DIST_TAG = 'latest';
+export const DEFAULT_INSTALLABLE_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 interface ParsedVersion {
   major: number;
@@ -42,6 +47,9 @@ export interface BrainclawInstallableUpdateCheck {
   release_notes: string | null;
   status: InstallableUpdateStatus;
   message: string;
+  checked_at?: string | null;
+  cached?: boolean;
+  default_source?: boolean;
 }
 
 export interface BrainclawLocalReleasePublication {
@@ -59,7 +67,40 @@ export interface PublishLocalBrainclawReleaseOptions {
   outputDir?: string;
 }
 
+export interface CheckBrainclawInstallableUpdateOptions {
+  useDefaultNpmSource?: boolean;
+  now?: Date;
+  cacheTtlMs?: number;
+  npmLookup?: NpmDistTagLookup;
+}
+
+interface NpmDistTagLookupResult {
+  dist_tags: Record<string, string>;
+  checked_at: string;
+  cached: boolean;
+}
+
+interface NpmDistTagLookupOptions {
+  cwd: string;
+  now?: Date;
+  cacheTtlMs?: number;
+}
+
+interface CachedNpmDistTagsDocument {
+  version: 1;
+  package_name: string;
+  fetched_at: string;
+  dist_tags: Record<string, string>;
+}
+
+type NpmDistTagLookup = (packageName: string, options: NpmDistTagLookupOptions) => NpmDistTagLookupResult;
+
 const SEMVER_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+const DEFAULT_NPM_UPDATE_SOURCE: BrainclawUpdateSourceNpm = {
+  type: 'npm',
+  package_name: DEFAULT_NPM_UPDATE_PACKAGE,
+  dist_tag: DEFAULT_NPM_UPDATE_DIST_TAG,
+};
 
 let cachedCliVersion: string | undefined;
 
@@ -158,8 +199,12 @@ export function assessBrainclawVersion(
 export function checkBrainclawInstallableUpdate(
   config: Pick<Config, 'brainclaw_update_source' | 'brainclaw_upgrade_command' | 'brainclaw_upgrade_message'> | undefined,
   cwd: string,
+  options: CheckBrainclawInstallableUpdateOptions = {},
 ): BrainclawInstallableUpdateCheck {
-  const source = config?.brainclaw_update_source;
+  const source = config?.brainclaw_update_source
+    ?? (options.useDefaultNpmSource ? DEFAULT_NPM_UPDATE_SOURCE : undefined);
+  const defaultSource = !config?.brainclaw_update_source && source?.type === 'npm';
+
   if (!source) {
     return {
       checked: false,
@@ -175,119 +220,27 @@ export function checkBrainclawInstallableUpdate(
   }
 
   if (source.type === 'npm') {
-    const packageName = source.package_name?.trim() || 'brainclaw';
-    const distTag = source.dist_tag?.trim() || 'latest';
-    return {
-      checked: false,
-      source_type: 'npm',
-      source_description: `${packageName}@${distTag}`,
-      latest_installable_version: null,
-      artifact_path: null,
-      install_command: null,
-      release_notes: null,
-      status: 'unsupported_source',
-      message: 'The npm update source is modeled in config but is not implemented yet in this build.',
-    };
+    return checkNpmInstallableUpdate(source, config, cwd, options, defaultSource);
   }
 
-  const manifestPath = source.manifest_path.trim();
-  if (manifestPath.length === 0) {
-    return {
-      checked: false,
-      source_type: 'local-pack',
-      source_description: null,
-      latest_installable_version: null,
-      artifact_path: null,
-      install_command: null,
-      release_notes: null,
-      status: 'invalid_config',
-      message: 'brainclaw_update_source.manifest_path must not be empty.',
-    };
+  return checkLocalPackInstallableUpdate(source.manifest_path, config, cwd);
+}
+
+export function renderBrainclawInstallableUpdateNotice(
+  updateCheck: BrainclawInstallableUpdateCheck | undefined,
+): string | null {
+  if (!updateCheck || updateCheck.status !== 'update_available') {
+    return null;
   }
 
-  const resolvedManifestPath = path.isAbsolute(manifestPath)
-    ? manifestPath
-    : path.resolve(cwd, manifestPath);
-
-  if (!fs.existsSync(resolvedManifestPath)) {
-    return {
-      checked: true,
-      source_type: 'local-pack',
-      source_description: resolvedManifestPath,
-      latest_installable_version: null,
-      artifact_path: null,
-      install_command: null,
-      release_notes: null,
-      status: 'check_failed',
-      message: `The configured local-pack manifest was not found: ${resolvedManifestPath}`,
-    };
+  const lines = [updateCheck.message];
+  if (updateCheck.install_command) {
+    lines.push(`Install: ${updateCheck.install_command}`);
   }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolvedManifestPath, 'utf-8')) as unknown;
-    const manifest = BrainclawLocalReleaseManifestSchema.parse(parsed);
-    const latestVersion = normalizeConfiguredVersion(manifest.latest_installable_version);
-    if (!latestVersion) {
-      return {
-        checked: true,
-        source_type: 'local-pack',
-        source_description: resolvedManifestPath,
-        latest_installable_version: null,
-        artifact_path: null,
-        install_command: null,
-        release_notes: manifest.release_notes?.trim() || config?.brainclaw_upgrade_message?.trim() || null,
-        status: 'check_failed',
-        message: `The local-pack manifest has an invalid latest_installable_version: ${manifest.latest_installable_version}`,
-      };
-    }
-
-    const artifactPath = manifest.artifact_path
-      ? resolveManifestArtifactPath(manifest.artifact_path, resolvedManifestPath)
-      : null;
-    const installCommand = manifest.install_command?.trim()
-      || (artifactPath ? `npm install -g "${artifactPath}"` : config?.brainclaw_upgrade_command?.trim() || null);
-    const releaseNotes = manifest.release_notes?.trim() || config?.brainclaw_upgrade_message?.trim() || null;
-    const installedVersion = getInstalledBrainclawVersion();
-
-    if (compareVersions(installedVersion, latestVersion) < 0) {
-      return {
-        checked: true,
-        source_type: 'local-pack',
-        source_description: resolvedManifestPath,
-        latest_installable_version: latestVersion,
-        artifact_path: artifactPath,
-        install_command: installCommand,
-        release_notes: releaseNotes,
-        status: 'update_available',
-        message: `A newer installable brainclaw build is available: ${latestVersion} (installed ${installedVersion}).`,
-      };
-    }
-
-    return {
-      checked: true,
-      source_type: 'local-pack',
-      source_description: resolvedManifestPath,
-      latest_installable_version: latestVersion,
-      artifact_path: artifactPath,
-      install_command: installCommand,
-      release_notes: releaseNotes,
-      status: 'up_to_date',
-      message: `Installed brainclaw ${installedVersion} is up to date for the configured local-pack channel.`,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      checked: true,
-      source_type: 'local-pack',
-      source_description: resolvedManifestPath,
-      latest_installable_version: null,
-      artifact_path: null,
-      install_command: null,
-      release_notes: null,
-      status: 'check_failed',
-      message: `Failed to read the configured local-pack manifest: ${message}`,
-    };
+  if (updateCheck.release_notes) {
+    lines.push(`Why update: ${updateCheck.release_notes}`);
   }
+  return lines.join('\n');
 }
 
 export function publishLocalBrainclawRelease(
@@ -352,6 +305,234 @@ export function publishLocalBrainclawRelease(
   };
 }
 
+function checkNpmInstallableUpdate(
+  source: BrainclawUpdateSourceNpm,
+  config: Pick<Config, 'brainclaw_upgrade_command' | 'brainclaw_upgrade_message'> | undefined,
+  cwd: string,
+  options: CheckBrainclawInstallableUpdateOptions,
+  defaultSource: boolean,
+): BrainclawInstallableUpdateCheck {
+  const packageName = source.package_name?.trim() || DEFAULT_NPM_UPDATE_PACKAGE;
+  const distTag = source.dist_tag?.trim() || DEFAULT_NPM_UPDATE_DIST_TAG;
+
+  if (packageName.length === 0) {
+    return {
+      checked: false,
+      source_type: 'npm',
+      source_description: null,
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: null,
+      status: 'invalid_config',
+      message: 'brainclaw_update_source.package_name must not be empty.',
+      default_source: defaultSource,
+    };
+  }
+
+  if (distTag.length === 0) {
+    return {
+      checked: false,
+      source_type: 'npm',
+      source_description: packageName,
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: null,
+      status: 'invalid_config',
+      message: 'brainclaw_update_source.dist_tag must not be empty.',
+      default_source: defaultSource,
+    };
+  }
+
+  try {
+    const lookup = (options.npmLookup ?? lookupNpmDistTags)(packageName, {
+      cwd,
+      now: options.now,
+      cacheTtlMs: options.cacheTtlMs,
+    });
+    const latestVersion = normalizeConfiguredVersion(lookup.dist_tags[distTag]);
+    if (!latestVersion) {
+      return {
+        checked: true,
+        source_type: 'npm',
+        source_description: formatNpmSourceDescription(packageName, distTag, defaultSource),
+        latest_installable_version: null,
+        artifact_path: null,
+        install_command: null,
+        release_notes: config?.brainclaw_upgrade_message?.trim() || null,
+        status: 'check_failed',
+        message: `The npm channel ${packageName}@${distTag} did not resolve to a valid semver release.`,
+        checked_at: lookup.checked_at,
+        cached: lookup.cached,
+        default_source: defaultSource,
+      };
+    }
+
+    const installCommand = config?.brainclaw_upgrade_command?.trim()
+      || `npm install -g ${packageName}@${latestVersion}`;
+    const releaseNotes = config?.brainclaw_upgrade_message?.trim() || null;
+    const installedVersion = getInstalledBrainclawVersion();
+
+    if (compareVersions(installedVersion, latestVersion) < 0) {
+      return {
+        checked: true,
+        source_type: 'npm',
+        source_description: formatNpmSourceDescription(packageName, distTag, defaultSource),
+        latest_installable_version: latestVersion,
+        artifact_path: null,
+        install_command: installCommand,
+        release_notes: releaseNotes,
+        status: 'update_available',
+        message: `A newer installable brainclaw build is available from npm: ${latestVersion} (installed ${installedVersion}).`,
+        checked_at: lookup.checked_at,
+        cached: lookup.cached,
+        default_source: defaultSource,
+      };
+    }
+
+    return {
+      checked: true,
+      source_type: 'npm',
+      source_description: formatNpmSourceDescription(packageName, distTag, defaultSource),
+      latest_installable_version: latestVersion,
+      artifact_path: null,
+      install_command: installCommand,
+      release_notes: releaseNotes,
+      status: 'up_to_date',
+      message: `Installed brainclaw ${installedVersion} is up to date for npm channel ${packageName}@${distTag}.`,
+      checked_at: lookup.checked_at,
+      cached: lookup.cached,
+      default_source: defaultSource,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      checked: true,
+      source_type: 'npm',
+      source_description: formatNpmSourceDescription(packageName, distTag, defaultSource),
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: config?.brainclaw_upgrade_message?.trim() || null,
+      status: 'check_failed',
+      message: `Failed to check npm installable updates: ${message}`,
+      default_source: defaultSource,
+    };
+  }
+}
+
+function checkLocalPackInstallableUpdate(
+  manifestPath: string,
+  config: Pick<Config, 'brainclaw_upgrade_command' | 'brainclaw_upgrade_message'> | undefined,
+  cwd: string,
+): BrainclawInstallableUpdateCheck {
+  const trimmedManifestPath = manifestPath.trim();
+  if (trimmedManifestPath.length === 0) {
+    return {
+      checked: false,
+      source_type: 'local-pack',
+      source_description: null,
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: null,
+      status: 'invalid_config',
+      message: 'brainclaw_update_source.manifest_path must not be empty.',
+      default_source: false,
+    };
+  }
+
+  const resolvedManifestPath = path.isAbsolute(trimmedManifestPath)
+    ? trimmedManifestPath
+    : path.resolve(cwd, trimmedManifestPath);
+
+  if (!fs.existsSync(resolvedManifestPath)) {
+    return {
+      checked: true,
+      source_type: 'local-pack',
+      source_description: resolvedManifestPath,
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: null,
+      status: 'check_failed',
+      message: `The configured local-pack manifest was not found: ${resolvedManifestPath}`,
+      default_source: false,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolvedManifestPath, 'utf-8')) as unknown;
+    const manifest = BrainclawLocalReleaseManifestSchema.parse(parsed);
+    const latestVersion = normalizeConfiguredVersion(manifest.latest_installable_version);
+    if (!latestVersion) {
+      return {
+        checked: true,
+        source_type: 'local-pack',
+        source_description: resolvedManifestPath,
+        latest_installable_version: null,
+        artifact_path: null,
+        install_command: null,
+        release_notes: manifest.release_notes?.trim() || config?.brainclaw_upgrade_message?.trim() || null,
+        status: 'check_failed',
+        message: `The local-pack manifest has an invalid latest_installable_version: ${manifest.latest_installable_version}`,
+        default_source: false,
+      };
+    }
+
+    const artifactPath = manifest.artifact_path
+      ? resolveManifestArtifactPath(manifest.artifact_path, resolvedManifestPath)
+      : null;
+    const installCommand = manifest.install_command?.trim()
+      || (artifactPath ? `npm install -g "${artifactPath}"` : config?.brainclaw_upgrade_command?.trim() || null);
+    const releaseNotes = manifest.release_notes?.trim() || config?.brainclaw_upgrade_message?.trim() || null;
+    const installedVersion = getInstalledBrainclawVersion();
+
+    if (compareVersions(installedVersion, latestVersion) < 0) {
+      return {
+        checked: true,
+        source_type: 'local-pack',
+        source_description: resolvedManifestPath,
+        latest_installable_version: latestVersion,
+        artifact_path: artifactPath,
+        install_command: installCommand,
+        release_notes: releaseNotes,
+        status: 'update_available',
+        message: `A newer installable brainclaw build is available: ${latestVersion} (installed ${installedVersion}).`,
+        default_source: false,
+      };
+    }
+
+    return {
+      checked: true,
+      source_type: 'local-pack',
+      source_description: resolvedManifestPath,
+      latest_installable_version: latestVersion,
+      artifact_path: artifactPath,
+      install_command: installCommand,
+      release_notes: releaseNotes,
+      status: 'up_to_date',
+      message: `Installed brainclaw ${installedVersion} is up to date for the configured local-pack channel.`,
+      default_source: false,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      checked: true,
+      source_type: 'local-pack',
+      source_description: resolvedManifestPath,
+      latest_installable_version: null,
+      artifact_path: null,
+      install_command: null,
+      release_notes: null,
+      status: 'check_failed',
+      message: `Failed to read the configured local-pack manifest: ${message}`,
+      default_source: false,
+    };
+  }
+}
+
 function resolveNpmCommand(): string {
   return process.platform === 'win32' ? (process.env.ComSpec?.trim() || 'cmd.exe') : 'npm';
 }
@@ -362,6 +543,14 @@ function resolveNpmPackArgs(outputDir: string): string[] {
   }
 
   return ['pack', '--json', '--pack-destination', outputDir];
+}
+
+function resolveNpmViewArgs(packageName: string): string[] {
+  if (process.platform === 'win32') {
+    return ['/d', '/s', '/c', 'npm', 'view', packageName, 'dist-tags', '--json'];
+  }
+
+  return ['view', packageName, 'dist-tags', '--json'];
 }
 
 function findOwnPackageJson(): string | undefined {
@@ -429,6 +618,138 @@ function parsePackedFilename(stdout: string): string | undefined {
   } catch {
     return firstNonEmptyLine(stdout);
   }
+}
+
+function lookupNpmDistTags(packageName: string, options: NpmDistTagLookupOptions): NpmDistTagLookupResult {
+  const now = options.now ?? new Date();
+  const cachePath = resolveNpmUpdateCachePath(packageName);
+  const ttlMs = options.cacheTtlMs ?? DEFAULT_INSTALLABLE_UPDATE_CACHE_TTL_MS;
+  const cached = readCachedNpmDistTags(cachePath, packageName, now, ttlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const viewResult = spawnSync(resolveNpmCommand(), resolveNpmViewArgs(packageName), {
+    cwd: options.cwd,
+    encoding: 'utf-8',
+    timeout: 15000,
+  });
+
+  if (viewResult.error) {
+    throw new Error(`npm view failed: ${viewResult.error.message}`);
+  }
+  if (viewResult.status !== 0) {
+    throw new Error(firstNonEmptyLine(viewResult.stderr) ?? firstNonEmptyLine(viewResult.stdout) ?? 'npm view failed');
+  }
+
+  const distTags = parseNpmDistTags(viewResult.stdout);
+  const result: NpmDistTagLookupResult = {
+    dist_tags: distTags,
+    checked_at: now.toISOString(),
+    cached: false,
+  };
+
+  writeCachedNpmDistTags(cachePath, {
+    version: 1,
+    package_name: packageName,
+    fetched_at: result.checked_at,
+    dist_tags: distTags,
+  });
+
+  return result;
+}
+
+function parseNpmDistTags(stdout: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`npm view returned invalid JSON: ${message}`);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('npm view did not return a dist-tag object.');
+  }
+
+  const distTags: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      distTags[key] = value.trim();
+    }
+  }
+
+  if (Object.keys(distTags).length === 0) {
+    throw new Error('npm view returned an empty dist-tag object.');
+  }
+
+  return distTags;
+}
+
+function resolveNpmUpdateCachePath(packageName: string): string {
+  const safeName = packageName.replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || DEFAULT_NPM_UPDATE_PACKAGE;
+  return path.join(os.homedir(), '.brainclaw', 'cache', 'installable-updates', `${safeName}.json`);
+}
+
+function readCachedNpmDistTags(
+  cachePath: string,
+  packageName: string,
+  now: Date,
+  ttlMs: number,
+): NpmDistTagLookupResult | undefined {
+  if (!fs.existsSync(cachePath)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as Partial<CachedNpmDistTagsDocument>;
+    if (
+      parsed.version !== 1
+      || parsed.package_name !== packageName
+      || typeof parsed.fetched_at !== 'string'
+      || !parsed.dist_tags
+      || typeof parsed.dist_tags !== 'object'
+      || Array.isArray(parsed.dist_tags)
+    ) {
+      return undefined;
+    }
+
+    const fetchedAt = Date.parse(parsed.fetched_at);
+    if (!Number.isFinite(fetchedAt) || now.getTime() - fetchedAt > ttlMs) {
+      return undefined;
+    }
+
+    const distTags: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed.dist_tags)) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        distTags[key] = value.trim();
+      }
+    }
+    if (Object.keys(distTags).length === 0) {
+      return undefined;
+    }
+
+    return {
+      dist_tags: distTags,
+      checked_at: parsed.fetched_at,
+      cached: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedNpmDistTags(cachePath: string, document: CachedNpmDistTagsDocument): void {
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, `${JSON.stringify(document, null, 2)}\n`, 'utf-8');
+  } catch {
+    // Cache writes are best-effort only.
+  }
+}
+
+function formatNpmSourceDescription(packageName: string, distTag: string, defaultSource: boolean): string {
+  return defaultSource ? `${packageName}@${distTag} (default npm channel)` : `${packageName}@${distTag}`;
 }
 
 function firstNonEmptyLine(value: string): string | undefined {

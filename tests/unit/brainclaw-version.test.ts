@@ -72,19 +72,54 @@ describe('core/brainclaw-version', () => {
     }
   });
 
-  it('recognizes npm as a modeled but not yet implemented update source', () => {
+  it('resolves npm dist-tags for an explicit npm update source', () => {
     const result = checkBrainclawInstallableUpdate({
       brainclaw_update_source: {
         type: 'npm',
         package_name: 'brainclaw',
-        dist_tag: 'latest',
+        dist_tag: 'prelaunch',
       },
       brainclaw_upgrade_command: undefined,
       brainclaw_upgrade_message: undefined,
-    }, process.cwd());
+    }, process.cwd(), {
+      npmLookup: () => ({
+        dist_tags: {
+          latest: '0.19.11',
+          prelaunch: '99.0.0',
+        },
+        checked_at: '2026-03-22T10:00:00.000Z',
+        cached: false,
+      }),
+    });
 
-    assert.equal(result.status, 'unsupported_source');
+    assert.equal(result.status, 'update_available');
     assert.equal(result.source_type, 'npm');
+    assert.equal(result.latest_installable_version, '99.0.0');
+    assert.equal(result.install_command, 'npm install -g brainclaw@99.0.0');
+    assert.equal(result.checked_at, '2026-03-22T10:00:00.000Z');
+    assert.equal(result.cached, false);
+  });
+
+  it('falls back to the public npm latest channel when requested', () => {
+    const result = checkBrainclawInstallableUpdate({
+      brainclaw_upgrade_command: undefined,
+      brainclaw_upgrade_message: undefined,
+    }, process.cwd(), {
+      useDefaultNpmSource: true,
+      npmLookup: () => ({
+        dist_tags: {
+          latest: '99.0.0',
+        },
+        checked_at: '2026-03-22T10:00:00.000Z',
+        cached: true,
+      }),
+    });
+
+    assert.equal(result.status, 'update_available');
+    assert.equal(result.source_type, 'npm');
+    assert.equal(result.default_source, true);
+    assert.equal(result.source_description, 'brainclaw@latest (default npm channel)');
+    assert.equal(result.cached, true);
   });
 
   it('publishes a local installable release manifest and tarball into .releases', () => {

@@ -39,6 +39,22 @@ describe('commands/mcp read tools', () => {
       '[mcp_servers.atlassian]\ncommand = "npx"\nargs = ["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"]\n',
       'utf-8',
     );
+    workspace.updateConfig((config) => {
+      config.brainclaw_update_source = {
+        type: 'local-pack',
+        manifest_path: '.releases/brainclaw-local.json',
+      };
+    });
+    fs.mkdirSync(path.join(workspace.dir, '.releases'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, '.releases', 'brainclaw-local.json'), JSON.stringify({
+      version: 1,
+      channel: 'local-pack',
+      package_name: 'brainclaw',
+      latest_installable_version: '99.0.0',
+      artifact_path: './brainclaw-99.0.0.tgz',
+      install_command: 'npm install -g "./.releases/brainclaw-99.0.0.tgz"',
+      release_notes: 'Local release ready for upgrade.',
+    }, null, 2), 'utf-8');
     previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
   });
@@ -396,6 +412,7 @@ describe('commands/mcp read tools', () => {
     assert.match(response.content[0].text, /Platform:/);
     const structured = response.structuredContent as {
       execution_context: { git_status: string; toolchains: Array<unknown> };
+      installable_update: { status: string; latest_installable_version?: string };
       agent_tooling: {
         agents_md_present: boolean;
         agents_rules: string[];
@@ -404,6 +421,8 @@ describe('commands/mcp read tools', () => {
       };
     };
     assert.ok(structured.execution_context);
+    assert.equal(structured.installable_update.status, 'update_available');
+    assert.equal(structured.installable_update.latest_installable_version, '99.0.0');
     assert.ok(Array.isArray(structured.execution_context.toolchains));
     assert.equal(structured.agent_tooling.agents_md_present, false);
     assert.deepEqual(structured.agent_tooling.agents_rules, []);

@@ -4,7 +4,11 @@ import { loadConfig } from '../core/config.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
-import { assessBrainclawVersion } from '../core/brainclaw-version.js';
+import {
+  assessBrainclawVersion,
+  checkBrainclawInstallableUpdate,
+  renderBrainclawInstallableUpdateNotice,
+} from '../core/brainclaw-version.js';
 import { buildExecutionContext, compactExecutionContext } from '../core/execution-context.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
 
@@ -25,6 +29,8 @@ export function runWhoami(options: WhoamiOptions = {}): void {
   const executionContext = compactExecutionContext(buildExecutionContext({ cwd }));
   const integrationReadiness = assessAgentIntegrationReadiness(config, cwd);
   const brainclawVersion = assessBrainclawVersion(config);
+  const installableUpdate = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+  const installableUpdateNotice = renderBrainclawInstallableUpdateNotice(installableUpdate);
   const agentTooling = buildAgentToolingContext({ cwd });
 
   let identity;
@@ -55,6 +61,7 @@ export function runWhoami(options: WhoamiOptions = {}): void {
     env_session: process.env.BRAINCLAW_SESSION_ID ?? null,
     env_host: process.env.BRAINCLAW_HOST_ID ?? null,
     brainclaw_version: brainclawVersion,
+    installable_update: installableUpdate,
     declared_agent_integrations: config.agent_integrations,
     integration_readiness: integrationReadiness,
     execution_context: executionContext,
@@ -86,6 +93,13 @@ export function runWhoami(options: WhoamiOptions = {}): void {
   console.log(`  Brainclaw  : ${result.brainclaw_version.cli_version}`);
   if (result.brainclaw_version.status !== 'ok') {
     console.log(`  Version    : ${result.brainclaw_version.message}`);
+  }
+  if (installableUpdateNotice) {
+    const lines = installableUpdateNotice.split('\n');
+    console.log(`  Update     : ${lines[0]}`);
+    for (const line of lines.slice(1)) {
+      console.log(`             ${line}`);
+    }
   }
   console.log(`  Declared integrations: ${result.declared_agent_integrations.declarations.length}`);
   const missingIntegrations = result.integration_readiness.filter((entry) => !entry.ready);
