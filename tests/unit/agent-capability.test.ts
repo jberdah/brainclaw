@@ -13,6 +13,7 @@ describe('agent-capability', () => {
     const agents = [
       'claude-code', 'cursor', 'windsurf', 'cline', 'roo',
       'continue', 'opencode', 'codex', 'antigravity', 'github-copilot',
+      'openclaw',
     ];
     for (const name of agents) {
       const profile = getAgentCapabilityProfile(name);
@@ -26,9 +27,9 @@ describe('agent-capability', () => {
     assert.equal(getAgentCapabilityProfile(''), undefined);
   });
 
-  it('getAllAgentCapabilityProfiles returns 10 agents', () => {
+  it('getAllAgentCapabilityProfiles returns 11 agents', () => {
     const all = getAllAgentCapabilityProfiles();
-    assert.equal(all.length, 10);
+    assert.equal(all.length, 11);
   });
 
   it('isKnownAgent validates known names', () => {

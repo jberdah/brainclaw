@@ -55,6 +55,7 @@ export const ALL_KNOWN_AGENTS = [
   'antigravity',
   'continue',
   'roo',
+  'openclaw',
 ];
 
 const BRAINCLAW_ASCII = [

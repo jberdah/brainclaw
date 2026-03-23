@@ -69,6 +69,7 @@ The agent cannot call brainclaw tools at all. The instruction file becomes the o
 | **Codex** | ✔ global | AGENTS.md | — | — | — |
 | **Gemini CLI** | ✔ global | GEMINI.md | — | — | — |
 | **Copilot** | — | .github/copilot-instructions.md | — | — | ✔ brainclaw-context |
+| **OpenClaw** | — | — | — | — | ✔ brainclaw skill |
 
 **Legend:** ✔ = fully supported, ◐ = partial (static trigger, not dynamic injection), — = not available
 
@@ -98,3 +99,4 @@ Running multiple agents in parallel on the same checkout will create conflicts. 
 - [cursor.md](cursor.md)
 - [codex.md](codex.md)
 - [copilot.md](copilot.md)
+- [openclaw.md](openclaw.md)

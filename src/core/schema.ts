@@ -757,6 +757,7 @@ export const AgentIntegrationNameSchema = z.enum([
   'antigravity',
   'continue',
   'roo',
+  'openclaw',
 ]);
 export type AgentIntegrationName = z.infer<typeof AgentIntegrationNameSchema>;
 
