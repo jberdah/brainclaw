@@ -1308,6 +1308,19 @@ export function handleMcpReadToolCall(
     const text = args.interview
       ? renderBootstrapInterview(result, audience)
       : renderBootstrapSummary(result);
+
+    // Extract top-level suggested questions for conversational bootstrap (step 11)
+    const suggestedQuestions = result.importPlan.interview?.questions?.map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      rationale: q.rationale,
+      priority: q.priority,
+    })) ?? [];
+
+    // Separate auto-imports (high confidence) from proposals (need discussion)
+    const autoImports = result.importPlan.suggestions.filter((s) => s.confidence === 'high');
+    const proposals = result.importPlan.suggestions.filter((s) => s.confidence !== 'high');
+
     return {
       content: [{ type: 'text', text }],
         structuredContent: {
@@ -1323,6 +1336,9 @@ export function handleMcpReadToolCall(
         seed_count: result.profile.seed_count,
         seeds: result.seeds,
         import_plan: result.importPlan,
+        auto_imports: autoImports,
+        proposals,
+        suggested_questions: suggestedQuestions,
         last_application: result.lastApplication,
         reused_profile: result.reusedProfile,
       },
