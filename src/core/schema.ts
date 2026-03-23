@@ -590,6 +590,12 @@ export const MemorySeedSourceKindSchema = z.enum([
   'machine',
   'skill',
   'mcp',
+  'ci_config',
+  'contributing',
+  'changelog',
+  'docker',
+  'env_example',
+  'adr',
 ]);
 export type MemorySeedSourceKind = z.infer<typeof MemorySeedSourceKindSchema>;
 

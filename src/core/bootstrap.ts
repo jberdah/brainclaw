@@ -388,6 +388,13 @@ function buildBootstrapArtifacts(input: {
   sourcesScanned.push('repo-analysis');
   seeds.push(...extractRepoAnalysisSeeds(repoAnalysis, input.target));
 
+  // Additional brownfield sources (step 12)
+  const additionalSeeds = extractAdditionalBrownfieldSeeds(input.cwd, input.target);
+  if (additionalSeeds.seeds.length > 0) {
+    sourcesScanned.push(...additionalSeeds.sources);
+    seeds.push(...additionalSeeds.seeds);
+  }
+
   const gitProbe = probeGit(input.cwd, input.target);
   if (gitProbe.available) {
     sourcesScanned.push('git');
@@ -862,6 +869,46 @@ function probeGit(cwd: string, target?: string): GitProbeResult {
         confidence: 'medium',
         tags: ['bootstrap', 'git', 'hotspot'],
         relatedPaths: [filepath, ...(target ? [target] : [])],
+      }));
+    }
+  }
+
+  // Step 13: Active branches
+  const branchResult = spawnSync('git', ['branch', '--no-merged', 'HEAD', '--format=%(refname:short)'], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 5000,
+  });
+  if (branchResult.status === 0) {
+    const branches = branchResult.stdout.split(/\r?\n/).map((b) => b.trim()).filter(Boolean).slice(0, 5);
+    for (const branch of branches) {
+      hotspotSeeds.push(createSeed({
+        text: `Active branch: ${branch}`,
+        seedKind: 'hotspot',
+        sourceKind: 'git',
+        sourceRef: `branch:${branch}`,
+        confidence: 'low',
+        tags: ['bootstrap', 'git', 'branch'],
+      }));
+    }
+  }
+
+  // Step 13: Recent tags
+  const tagResult = spawnSync('git', ['tag', '--sort=-creatordate', '-l'], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 5000,
+  });
+  if (tagResult.status === 0) {
+    const tags = tagResult.stdout.split(/\r?\n/).map((t) => t.trim()).filter(Boolean).slice(0, 3);
+    if (tags.length > 0) {
+      hotspotSeeds.push(createSeed({
+        text: `Version tags: ${tags.join(', ')} (${tags.length} most recent)`,
+        seedKind: 'convention',
+        sourceKind: 'git',
+        sourceRef: 'tags',
+        confidence: 'medium',
+        tags: ['bootstrap', 'git', 'versioning'],
       }));
     }
   }
@@ -1981,4 +2028,146 @@ function capitalize(value: string): string {
 function normalizeTarget(target?: string): string | undefined {
   const trimmed = target?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+// ─── Step 12: Additional brownfield sources ──────────────────────────────────
+
+const CI_WORKFLOW_DIRS = ['.github/workflows', '.gitlab'];
+const CI_FILES = ['.gitlab-ci.yml', 'Jenkinsfile', '.circleci/config.yml'];
+const CONTRIBUTING_FILES = ['CONTRIBUTING.md', 'CONTRIBUTING'];
+const CHANGELOG_FILES = ['CHANGELOG.md', 'CHANGELOG', 'HISTORY.md'];
+const DOCKER_FILES = ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const ENV_EXAMPLE_FILES = ['.env.example', '.env.sample', '.env.template'];
+const ADR_DIRS = ['doc/adr', 'docs/adr', 'doc/decisions', 'docs/decisions', 'adr'];
+
+function extractAdditionalBrownfieldSeeds(
+  cwd: string,
+  target?: string,
+): { seeds: MemorySeedDocument[]; sources: string[] } {
+  const seeds: MemorySeedDocument[] = [];
+  const sources: string[] = [];
+
+  // CI/CD workflows
+  for (const dir of CI_WORKFLOW_DIRS) {
+    const fullPath = path.join(cwd, dir);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+      sources.push('ci_workflows');
+      try {
+        const files = fs.readdirSync(fullPath).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
+        if (files.length > 0) {
+          seeds.push(createSeed({
+            text: `CI/CD: ${files.length} workflow(s) in ${dir}/`,
+            seedKind: 'convention',
+            sourceKind: 'ci_config',
+            sourceRef: dir,
+            confidence: 'medium',
+            tags: ['bootstrap', 'ci'],
+            relatedPaths: target ? [target] : undefined,
+          }));
+        }
+      } catch { /* skip unreadable */ }
+      break;
+    }
+  }
+  for (const file of CI_FILES) {
+    if (fs.existsSync(path.join(cwd, file))) {
+      if (!sources.includes('ci_workflows')) sources.push('ci_config');
+      seeds.push(createSeed({
+        text: `CI/CD config: ${file}`,
+        seedKind: 'convention',
+        sourceKind: 'ci_config',
+        sourceRef: file,
+        confidence: 'medium',
+        tags: ['bootstrap', 'ci'],
+      }));
+      break;
+    }
+  }
+
+  // CONTRIBUTING.md
+  const contributingPath = findFirstExisting(cwd, CONTRIBUTING_FILES);
+  if (contributingPath) {
+    sources.push('contributing');
+    seeds.push(createSeed({
+      text: `Contributing guide found: ${path.basename(contributingPath)}`,
+      seedKind: 'convention',
+      sourceKind: 'contributing',
+      sourceRef: path.basename(contributingPath),
+      confidence: 'medium',
+      tags: ['bootstrap', 'contributing'],
+    }));
+  }
+
+  // CHANGELOG
+  const changelogPath = findFirstExisting(cwd, CHANGELOG_FILES);
+  if (changelogPath) {
+    sources.push('changelog');
+    seeds.push(createSeed({
+      text: `Changelog found: ${path.basename(changelogPath)}`,
+      seedKind: 'convention',
+      sourceKind: 'changelog',
+      sourceRef: path.basename(changelogPath),
+      confidence: 'low',
+      tags: ['bootstrap', 'changelog'],
+    }));
+  }
+
+  // Docker
+  for (const file of DOCKER_FILES) {
+    if (fs.existsSync(path.join(cwd, file))) {
+      sources.push('docker');
+      seeds.push(createSeed({
+        text: `Docker config: ${file}`,
+        seedKind: 'convention',
+        sourceKind: 'docker',
+        sourceRef: file,
+        confidence: 'medium',
+        tags: ['bootstrap', 'docker', 'infrastructure'],
+      }));
+      break;
+    }
+  }
+
+  // .env.example
+  const envPath = findFirstExisting(cwd, ENV_EXAMPLE_FILES);
+  if (envPath) {
+    sources.push('env_example');
+    try {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      const varCount = content.split(/\r?\n/).filter((l) => l.includes('=') && !l.startsWith('#')).length;
+      seeds.push(createSeed({
+        text: `Environment template: ${path.basename(envPath)} (${varCount} variables)`,
+        seedKind: 'convention',
+        sourceKind: 'env_example',
+        sourceRef: path.basename(envPath),
+        confidence: 'medium',
+        tags: ['bootstrap', 'env', 'configuration'],
+      }));
+    } catch { /* skip unreadable */ }
+  }
+
+  // ADR (Architecture Decision Records)
+  for (const dir of ADR_DIRS) {
+    const fullPath = path.join(cwd, dir);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+      sources.push('adr');
+      try {
+        const files = fs.readdirSync(fullPath).filter((f) => f.endsWith('.md'));
+        if (files.length > 0) {
+          seeds.push(createSeed({
+            text: `Architecture Decision Records: ${files.length} ADR(s) in ${dir}/`,
+            seedKind: 'convention',
+            sourceKind: 'adr',
+            sourceRef: dir,
+            confidence: 'high',
+            tags: ['bootstrap', 'adr', 'architecture'],
+            relatedPaths: target ? [target] : undefined,
+          }));
+        }
+      } catch { /* skip unreadable */ }
+      break;
+    }
+  }
+
+  return { seeds, sources: [...new Set(sources)] };
 }

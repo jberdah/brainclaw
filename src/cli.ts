@@ -485,6 +485,18 @@ program
     runVersion(options);
   });
 
+// --- uninstall ---
+import { runUninstall } from './commands/uninstall.js';
+program
+  .command('uninstall')
+  .description('Remove brainclaw from a project and/or machine')
+  .option('--project', 'Remove brainclaw from the current project (.brainclaw/, agent files, configs)')
+  .option('--machine', 'Remove brainclaw global config (~/.brainclaw/)')
+  .option('-y, --yes', 'Skip confirmation prompts')
+  .action(async (options) => {
+    await runUninstall(options);
+  });
+
 // --- rebuild ---
 program
   .command('rebuild')
