@@ -97,12 +97,30 @@ function readAgentsMarkdown(cwd: string): { present: boolean; title?: string; ru
   const raw = fs.readFileSync(filepath, 'utf-8');
   const lines = raw.split(/\r?\n/);
   const title = lines.find((line) => line.trim().startsWith('#'))?.replace(/^#+\s*/, '').trim();
-  const rules = lines
-    .map((line) => line.trim())
-    .filter((line) => /^([-*]|\d+\.)\s+/.test(line))
-    .map((line) => line.replace(/^([-*]|\d+\.)\s+/, '').trim())
-    .filter(Boolean)
-    .slice(0, MAX_AGENT_RULES);
+
+  // Only extract rules from actionable sections, not from descriptive sections
+  // like "why this matters" which contain explanatory bullets, not instructions.
+  const SKIP_SECTIONS = /why this matters|what it provides|what brainclaw/i;
+  let currentSection = '';
+  let skipSection = false;
+
+  const rules: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#')) {
+      currentSection = trimmed.replace(/^#+\s*/, '');
+      skipSection = SKIP_SECTIONS.test(currentSection);
+      continue;
+    }
+    if (skipSection) continue;
+    if (/^([-*]|\d+\.)\s+/.test(trimmed)) {
+      const text = trimmed.replace(/^([-*]|\d+\.)\s+/, '').trim();
+      if (text) {
+        rules.push(text);
+        if (rules.length >= MAX_AGENT_RULES) break;
+      }
+    }
+  }
 
   return {
     present: true,
