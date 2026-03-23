@@ -15,13 +15,14 @@ export interface DetectedAiAgent {
  * environment variables and well-known config paths. Returns the first confident
  * match, or undefined if no agent is detected.
  *
- * Detection order (highest confidence first):
+ * Detection order (highest confidence first — agents with dedicated env vars
+ * are tested before agents detected via passive/ambient env vars):
  * 1. BRAINCLAW_AGENT env var (explicit override)
- * 2. GitHub Copilot (VSCODE_GIT_IPC_HANDLE or VSCODE_INJECTION, then GITHUB_COPILOT_*)
- * 3. Claude Code (CLAUDE_CODE_VERSION or ANTHROPIC_AI_PRODUCT)
- * 4. Cursor (CURSOR_TRACE_ID or CURSOR_*)
- * 5. Windsurf (WINDSURF_*)
- * 6. Cline (CLINE_*)
+ * 2. Claude Code (CLAUDE_CODE_VERSION — set by Claude Code itself)
+ * 3. Cursor (CURSOR_TRACE_ID — set by Cursor itself)
+ * 4. Windsurf (WINDSURF_SESSION_ID — set by Windsurf itself)
+ * 5. Cline (CLINE_AGENT — set by Cline itself)
+ * 6. GitHub Copilot (GITHUB_COPILOT_PRODUCT — passive VS Code env, tested after active agents)
  * 7. Codex CLI (~/.codex/ directory exists)
  * 8. OpenCode (OPENCODE_* env or ~/.config/opencode/)
  * 9. Antigravity / Gemini CLI (ANTIGRAVITY_* env or ~/.gemini/antigravity/)
@@ -40,27 +41,14 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     };
   }
 
-  // GitHub Copilot — VS Code extension or Copilot Chat
-  if (
-    env.GITHUB_COPILOT_TOKEN ||
-    env.GITHUB_COPILOT_PRODUCT ||
-    (env.VSCODE_GIT_IPC_HANDLE && (env.AGENT_NAME?.toLowerCase().includes('copilot') || env.GH_COPILOT_AGENT))
-  ) {
-    return {
-      name: 'github-copilot',
-      kind: 'agent',
-      trust_level: 'trusted',
-      detection_source: 'GITHUB_COPILOT_* env var',
-    };
-  }
-
-  // Claude Code (Anthropic's CLI coding agent)
+  // Claude Code — tested BEFORE Copilot because both can be present in VS Code.
+  // CLAUDE_CODE_VERSION is set by Claude Code itself, not by VS Code passively.
   if (env.CLAUDE_CODE_VERSION || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
     return {
       name: 'claude-code',
       kind: 'agent',
       trust_level: 'trusted',
-      detection_source: 'CLAUDE_CODE_VERSION env var',
+      detection_source: env.CLAUDE_CODE_VERSION ? 'CLAUDE_CODE_VERSION env var' : 'ANTHROPIC_AI_PRODUCT env var',
     };
   }
 
@@ -91,6 +79,23 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
       kind: 'agent',
       trust_level: 'trusted',
       detection_source: 'CLINE_* env var',
+    };
+  }
+
+  // GitHub Copilot — tested AFTER agents with dedicated env vars.
+  // GITHUB_COPILOT_TOKEN and GITHUB_COPILOT_PRODUCT are set passively by VS Code
+  // whenever the Copilot extension is installed, even when another agent is active.
+  // We only match if no higher-priority agent was detected above.
+  if (
+    env.GITHUB_COPILOT_PRODUCT ||
+    (env.GITHUB_COPILOT_TOKEN && !env.CLAUDE_CODE_VERSION && !env.CURSOR_TRACE_ID && !env.WINDSURF_SESSION_ID) ||
+    (env.VSCODE_GIT_IPC_HANDLE && (env.AGENT_NAME?.toLowerCase().includes('copilot') || env.GH_COPILOT_AGENT))
+  ) {
+    return {
+      name: 'github-copilot',
+      kind: 'agent',
+      trust_level: 'trusted',
+      detection_source: env.GITHUB_COPILOT_PRODUCT ? 'GITHUB_COPILOT_PRODUCT env var' : 'GITHUB_COPILOT_TOKEN env var',
     };
   }
 

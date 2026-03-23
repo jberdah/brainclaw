@@ -130,6 +130,35 @@ describe('detectAiAgent', () => {
     assert.equal(result.name, 'roo');
   });
 
+  it('Claude Code wins over Copilot when both env vars are present (VS Code with both extensions)', () => {
+    const env: NodeJS.ProcessEnv = {
+      CLAUDE_CODE_VERSION: '1.5.0',
+      GITHUB_COPILOT_TOKEN: 'token-abc',
+      GITHUB_COPILOT_PRODUCT: 'copilot-chat',
+      VSCODE_GIT_IPC_HANDLE: '/tmp/ipc',
+    };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'claude-code', 'Claude Code should take priority over Copilot');
+  });
+
+  it('Cursor wins over Copilot when both env vars are present', () => {
+    const env: NodeJS.ProcessEnv = {
+      CURSOR_TRACE_ID: 'trace-123',
+      GITHUB_COPILOT_TOKEN: 'token-abc',
+    };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'cursor', 'Cursor should take priority over Copilot');
+  });
+
+  it('Copilot still detected when alone (no other agent env vars)', () => {
+    const env: NodeJS.ProcessEnv = { GITHUB_COPILOT_TOKEN: 'token-abc' };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'github-copilot');
+  });
+
   it('all detections return kind=agent and trust_level=trusted', () => {
     const cases: NodeJS.ProcessEnv[] = [
       { GITHUB_COPILOT_TOKEN: 'x' },
