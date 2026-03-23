@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveStoreChain, resolvePrimaryStore } from '../../src/core/store-resolution.js';
+import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { resolveContextStoreCwd, resolveStoreChain, resolvePrimaryStore } from '../../src/core/store-resolution.js';
 
 function tmpDir(prefix = 'bclaw-storechain-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -205,6 +206,64 @@ describe('core/store-resolution', () => {
         assert.equal(result, undefined);
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('resolveContextStoreCwd', () => {
+    it('switches to the most specific child store when target path is inside a nested project', () => {
+      const workspace = tmpDir('bclaw-context-store-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig({
+          ...defaultConfig('workspace', {
+            projectId: 'prj_workspace',
+            projectMode: 'multi-project',
+            projectStrategy: 'folder',
+          }),
+        }, workspace);
+
+        const child = path.join(workspace, 'apps', 'lodestar');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+        saveConfig({
+          ...defaultConfig('lodestar', {
+            projectId: 'prj_lodestar',
+          }),
+        }, child);
+
+        const resolved = resolveContextStoreCwd(workspace, 'apps/lodestar/src/app.ts');
+        assert.equal(resolved, child);
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps the current store when target is not a path into a child project', () => {
+      const workspace = tmpDir('bclaw-context-store-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig({
+          ...defaultConfig('workspace', {
+            projectId: 'prj_workspace',
+            projectMode: 'multi-project',
+            projectStrategy: 'folder',
+          }),
+        }, workspace);
+
+        const child = path.join(workspace, 'apps', 'lodestar');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+        saveConfig({
+          ...defaultConfig('lodestar', {
+            projectId: 'prj_lodestar',
+          }),
+        }, child);
+
+        const resolved = resolveContextStoreCwd(workspace, 'release notes');
+        assert.equal(resolved, workspace);
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
       }
     });
   });

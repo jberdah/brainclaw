@@ -918,7 +918,7 @@ Generate compact, prompt-ready context for agents.
 
 | Option | Description |
 |---|---|
-| `--for <path>` | Scope context to a file or path |
+| `--for <path>` | Scope context to a file or path; in folder-mode workspaces, child project paths resolve the matching nested store automatically |
 | `--project <name>` | Filter by project |
 | `--agent <name>` | Filter by agent |
 | `--host <name>` | Filter by host |
@@ -938,6 +938,7 @@ Generate compact, prompt-ready context for agents.
 
 ```bash
 brainclaw context --for src/auth/routes.ts --digest
+brainclaw context --for applications/lodestar/src/app.ts --json
 brainclaw context --json --max-chars 1200
 brainclaw context --explain
 brainclaw context --since-session --max-items 20

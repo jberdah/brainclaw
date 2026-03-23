@@ -4,6 +4,8 @@ import { createInstruction } from '../../src/core/instructions.js';
 import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { ensureMemoryDir } from '../../src/core/io.js';
 import { buildContext, buildContextDigest, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
 import { runSessionStart } from '../../src/commands/session-start.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
@@ -578,6 +580,72 @@ describe('core/context', () => {
 
     const template = renderContextPromptTemplate(result, false);
     assert.match(template, /context_schema: 1\.2/);
+  });
+
+  it('resolves a child project store when a workspace target path points into a nested project', () => {
+    workspace.updateConfig((config) => {
+      config.project_mode = 'multi-project';
+      config.projects.strategy = 'folder';
+    });
+
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [
+        {
+          id: 'dec_workspace_parent',
+          text: 'Workspace deploy guardrail',
+          created_at: iso(20),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_ctx_test',
+          tags: ['workspace'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const childDir = path.join(workspace.dir, 'apps', 'lodestar');
+    fs.mkdirSync(childDir, { recursive: true });
+    ensureMemoryDir(childDir);
+    saveConfig(defaultConfig('lodestar', {
+      projectId: 'prj_lodestar',
+    }), childDir);
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [
+        {
+          id: 'dec_lodestar_child',
+          text: 'Lodestar uses the new websocket transport',
+          created_at: iso(5),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_lodestar',
+          related_paths: ['src/app.ts'],
+          tags: ['lodestar'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, childDir);
+
+    const result = buildContext({
+      target: 'apps/lodestar/src/app.ts',
+      maxItems: 5,
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.project_id, 'prj_lodestar');
+    assert.ok(result.selected.some((item) => item.id === 'dec_lodestar_child'));
+    assert.ok(result.selected.some((item) => item.id === 'dec_workspace_parent'));
+    assert.equal(result.stores?.[0]?.cwd, childDir);
+    assert.equal(result.stores?.[1]?.cwd, workspace.dir);
   });
 
   it('can disable bootstrap fallback when memory is sparse', () => {

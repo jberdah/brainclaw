@@ -1,7 +1,8 @@
+import path from 'node:path';
 import { loadConfig } from './config.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
-import { resolveStoreChain, type StoreRef } from './store-resolution.js';
+import { resolveContextStoreCwd, resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
 import { buildAgentToolingContext, type AgentToolingSnapshot } from './agent-context.js';
@@ -109,27 +110,29 @@ export interface ScopedActivitySummary {
 }
 
 export function buildContext(options: ContextOptions = {}): ContextResult {
-  const state = loadState(options.cwd);
-  const config = loadConfig(options.cwd);
+  const requestedCwd = options.cwd ?? process.cwd();
+  const contextCwd = resolveContextStoreCwd(requestedCwd, options.target);
+  const state = loadState(contextCwd);
+  const config = loadConfig(contextCwd);
   // Resolve parent stores for multi-store merge (walk-up from cwd)
-  const storeChain = resolveStoreChain(options.cwd ?? process.cwd());
+  const storeChain = resolveStoreChain(contextCwd);
 
   const profile = options.profile ?? config.profile ?? 'dev';
   const projectMode = config.project_mode ?? 'auto';
   const projectStrategy = config.projects?.strategy ?? 'manual';
   const currentHost = resolveCurrentHostId();
-  const memoryVersion = getVisibleMemoryVersion({ cwd: options.cwd, hostId: options.host, allHosts: options.allHosts });
-  const target = options.target?.trim() ?? '';
+  const memoryVersion = getVisibleMemoryVersion({ cwd: contextCwd, hostId: options.host, allHosts: options.allHosts });
+  const target = normalizeContextTarget(options.target, requestedCwd, contextCwd);
   const project = options.project?.trim() || inferProjectFromTarget(target, config);
   const agent = options.agent?.trim() || config.current_agent?.trim();
   const currentAgentIdentity = agent
-    ? (options.agent?.trim() ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
+    ? (options.agent?.trim() ? findAgentIdentityByName(agent, contextCwd) : resolveCurrentAgentIdentity(contextCwd))
     : undefined;
   const profileMaxItems: Record<string, number> = { compact: 6, copilot: 5, quick: 3 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
   // Instructions will be resolved after parent-store merge below (line ~460)
-  const rankingLookup = buildReputationRankingLookup(options.cwd);
+  const rankingLookup = buildReputationRankingLookup(contextCwd);
 
   // Profile-specific section allow-list (undefined = all sections allowed)
   type Section = ContextItem['section'];
@@ -222,7 +225,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     });
   }
 
-  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts }, options.cwd).filter((entry) => isTrapActive(entry))) {
+  for (const trap of listOperationalTraps({ hostId: options.host, includeAllHosts: options.allHosts }, contextCwd).filter((entry) => isTrapActive(entry))) {
     items.push({
       id: trap.id,
       section: 'trap',
@@ -258,7 +261,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const runtimeNotes = listRuntimeNotes({
     hostId: options.host,
     includeAllHosts: options.allHosts,
-  }, options.cwd);
+  }, contextCwd);
   for (const note of runtimeNotes) {
     if (project && note.project && note.project !== project) {
       continue;
@@ -289,7 +292,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   }
 
   if (options.includePending) {
-    for (const p of listCandidates('pending', options.cwd)) {
+    for (const p of listCandidates('pending', contextCwd)) {
       const meta: string[] = [`${p.type}`, `stars:${p.star_count ?? 0}`, `uses:${p.usage_count ?? 0}`];
       if (p.author_id) meta.push(`author_id:${p.author_id}`);
       if (p.session_id) meta.push(`session:${p.session_id}`);
@@ -390,7 +393,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   }
 
   // Merge instructions from all stores in the chain
-  const allInstructions: InstructionEntry[] = [...loadInstructions(options.cwd)];
+  const allInstructions: InstructionEntry[] = [...loadInstructions(contextCwd)];
   for (const parentStore of storeChain.slice(1)) {
     try {
       const parentInstrs = loadInstructions(parentStore.cwd);
@@ -429,34 +432,34 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     .slice(0, maxItems);
 
   const selected = maxChars ? applyCharBudget(ranked, maxChars) : ranked;
-  const resumeSummary = buildCurrentAgentResumeSummary(options.cwd);
+  const resumeSummary = buildCurrentAgentResumeSummary(contextCwd);
   const scopedActivity = buildScopedActivity({
     target,
     project,
     state,
     runtimeNotes,
-    pendingCandidates: listCandidates('pending', options.cwd),
+    pendingCandidates: listCandidates('pending', contextCwd),
   });
   const memoryDensity = classifyMemoryDensity(selected.length);
   const bootstrapEnabled = options.bootstrap !== false;
-  let bootstrapAvailable = hasReusableBootstrapProfile(target, options.cwd);
+  let bootstrapAvailable = hasReusableBootstrapProfile(target, contextCwd);
   let derivedSignals: DerivedContextSignal[] | undefined;
 
   if (bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
     const bootstrap = runBootstrapProfile({
       target,
       refresh: options.refreshBootstrap,
-      cwd: options.cwd,
+      cwd: contextCwd,
     });
     bootstrapAvailable = bootstrap.profile.seed_count > 0;
     if (memoryDensity === 'low') {
-      const signals = selectDerivedSignals(target, 5, options.cwd);
+      const signals = selectDerivedSignals(target, 5, contextCwd);
       if (signals.length > 0) {
         derivedSignals = signals;
       }
     }
   } else if (bootstrapEnabled && bootstrapAvailable && memoryDensity === 'low') {
-    const signals = selectDerivedSignals(target, 5, options.cwd);
+    const signals = selectDerivedSignals(target, 5, contextCwd);
     if (signals.length > 0) {
       derivedSignals = signals;
     }
@@ -465,7 +468,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const executionSensitive = isExecutionSensitiveTarget(target);
   const derivedUsesExecution = derivedSignals?.some((signal) => signal.source_kind === 'machine') ?? false;
   const derivedUsesTooling = derivedSignals?.some((signal) => signal.source_kind === 'skill' || signal.source_kind === 'mcp') ?? false;
-  const rawAgentTooling = buildAgentToolingContext({ cwd: options.cwd });
+  const rawAgentTooling = buildAgentToolingContext({ cwd: contextCwd });
   const actionableAgentRules = rawAgentTooling.agents_rules.length > 0;
   const blockingTooling = rawAgentTooling.mcp_servers.some((server) => server.availability === 'missing_command');
   const shouldExposeExecution = memoryDensity === 'low' || executionSensitive || derivedUsesExecution;
@@ -475,7 +478,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     || actionableAgentRules
     || blockingTooling;
   const executionContext = shouldExposeExecution
-    ? compactExecutionContext(buildExecutionContext({ cwd: options.cwd }))
+    ? compactExecutionContext(buildExecutionContext({ cwd: contextCwd }))
     : undefined;
   const agentTooling = shouldExposeAgentTooling
     ? summariseAgentTooling(rawAgentTooling)
@@ -486,7 +489,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   if (currentAgentIdentity || agent) {
     const agentName = agent;
     const agentId = currentAgentIdentity?.agent_id;
-    const allClaims = [...listClaims(options.cwd), ...parentStoreClaims];
+    const allClaims = [...listClaims(contextCwd), ...parentStoreClaims];
     const activeClaims = allClaims.filter(
       (c) => c.status === 'active' && (agentId ? c.agent_id === agentId : c.agent === agentName)
     );
@@ -506,7 +509,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
 
   // Cross-project items (subscriber links — read-only, always injected, bypass scoring)
   const crossProjectItems: ContextItem[] = [];
-  for (const link of resolveCrossProjectLinks(options.cwd)) {
+  for (const link of resolveCrossProjectLinks(contextCwd)) {
     if (!link.available) continue;
     try {
       const linkedState = loadCrossProjectState(link.absolutePath);
@@ -554,7 +557,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     context_diff: options.sinceSession
       ? buildContextDiff({
           session: options.sinceSession,
-          cwd: options.cwd,
+          cwd: contextCwd,
           includeItems: true,
         })
       : undefined,
@@ -566,7 +569,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       : undefined,
     estimation_calibration: (() => {
       try {
-        const report = buildEstimationReport({ agent, cwd: options.cwd });
+        const report = buildEstimationReport({ agent, cwd: contextCwd });
         return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
       } catch { return undefined; }
     })(),
@@ -1167,6 +1170,32 @@ function tokenise(input: string): string[] {
     .split(/[^a-z0-9_\/-]+/)
     .map((x) => x.trim())
     .filter(Boolean);
+}
+
+function normalizeContextTarget(target: string | undefined, requestedCwd: string, contextCwd: string): string {
+  const trimmed = target?.trim() ?? '';
+  if (!trimmed) {
+    return '';
+  }
+
+  if (path.resolve(requestedCwd) === path.resolve(contextCwd)) {
+    return trimmed;
+  }
+
+  if (!(path.isAbsolute(trimmed) || trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('.'))) {
+    return trimmed;
+  }
+
+  const absoluteTarget = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(requestedCwd, trimmed);
+
+  const relativeToContext = path.relative(contextCwd, absoluteTarget);
+  if (relativeToContext.startsWith('..') || path.isAbsolute(relativeToContext)) {
+    return trimmed;
+  }
+
+  return relativeToContext.split(path.sep).join('/');
 }
 
 function matchesPath(pattern: string, target: string): boolean {
