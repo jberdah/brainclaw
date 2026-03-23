@@ -1,189 +1,85 @@
 # Quickstart
 
-This guide is organized by entry path, because Brainclaw serves different surfaces with different roles.
+## The fastest way to start
 
-Use this rule first:
+Ask your coding agent:
 
-- capable agent with MCP support: prefer MCP for dynamic state
-- agent surface driven mainly by local instruction files: use generated native files plus CLI fallback
-- human operator or maintainer: use the CLI directly
+> "Install brainclaw and initialize it in this project."
 
-## Important limitation for now
+The agent will run `brainclaw setup` and `brainclaw init`, detect your environment, write the right config files, and activate MCP. After reloading, brainclaw tools become available.
 
-Do not run multiple coding agents in parallel on the same project checkout yet.
-
-Brainclaw is already useful for sequential collaboration: one agent can pick up where another stopped, inspect shared context, and continue from explicit plans, claims, traps, and handoffs. But until Brainclaw supports dedicated Git worktrees per agent/session, parallel edits in the same checkout are still likely to create more Git and workspace problems than they solve.
-
-For now, prefer:
-
-1. one active editing agent per checkout
-2. explicit handoffs between agents
-3. claims and context to keep continuity between sessions
-
-## Path 1: Agent-First With MCP
-
-Use this path when the agent can call Brainclaw through MCP.
-
-### Operator bootstrap
+If you prefer doing it manually:
 
 ```bash
-brainclaw setup --yes
+npm install -g brainclaw
 brainclaw init
 ```
 
-`setup` installs machine-level prerequisites and agent integrations. `init` creates the workspace state, seeds stable identity, and prepares the project memory structure.
+`init` creates the user store if needed (no separate `setup` step required), initializes the project, detects your agent, and writes all integration files.
 
-### Agent runtime pattern
+## What happens after init
 
-After the workspace is initialized, the nominal flow is:
+Once initialized, your agent can:
+
+1. **See project context** — constraints, decisions, traps, plans, handoffs
+2. **Coordinate with other agents** — claim files before editing, check who's working where
+3. **Build shared memory** — record observations, create plans, track work
+4. **Resume across sessions** — the next agent (or the same one tomorrow) picks up where you left off
+
+## For agents with MCP (most agents)
+
+This is the primary path. The agent calls brainclaw tools directly.
 
 ```text
-bclaw_session_start   -> open a session and return current board/context
-bclaw_get_execution_context -> inspect local tooling and notice package updates
-bclaw_get_context     -> fetch fresh prompt-ready context for the target path
-bclaw_list_plans      -> inspect active work
-bclaw_claim           -> claim scope before editing
-bclaw_write_note      -> record runtime observations
-bclaw_session_end     -> close session cleanly and hand work off
+bclaw_session_start   → identify yourself, see the board
+bclaw_get_context     → load relevant memory for your target scope
+bclaw_claim           → signal what you're about to edit
+bclaw_write_note      → record observations during work
+bclaw_session_end     → clean up claims and update plans
 ```
 
-Use native agent files such as `AGENTS.md`, `CLAUDE.md`, or Cursor rules as local workflow guidance, not as the only source of live state.
+Instruction files like `CLAUDE.md` or `.cursor/rules/brainclaw.md` provide the protocol and constraints. The live state (plans, claims, traps) comes through MCP.
 
-Unless the project overrides `brainclaw_update_source`, `bclaw_get_execution_context` checks the public npm `latest` channel so the agent can notice when a newer Brainclaw release is available.
+## For agents without MCP (Copilot)
 
-## Path 2: CLI-Oriented Agent Or Fallback Workflow
+The instruction file (`.github/copilot-instructions.md`) contains everything: constraints, active plans, traps, and decisions. Use the brainclaw-context skill to refresh.
 
-Use this path when the agent does not have a good MCP integration yet, or when a human needs to drive the workflow directly.
-
-### Bootstrap and inspect
+Regenerate the instruction file when project memory changes:
 
 ```bash
-brainclaw setup --yes
-brainclaw init
 brainclaw export --detect --write
 ```
 
-### Record the first important facts
+## Onboarding an existing project
+
+If the repo already has code, brainclaw can extract context from it:
 
 ```bash
-brainclaw memory create decision "OAuth migration now goes through auth-gateway" --tag auth
-brainclaw memory create constraint "Payments module frozen until 2026-04-01" --tag payments
-brainclaw memory create trap "Checkout E2E tests are flaky on Windows" --severity high --tag tests
+brainclaw bootstrap --json        # see what brainclaw detected
+brainclaw bootstrap --apply       # import into memory
 ```
 
-### Create and claim work
+Or let your agent drive the conversation — it can call `bclaw_bootstrap`, review the detected signals, ask you about gaps, and structure the results into brainclaw memory.
+
+## Desktop AI surfaces
+
+brainclaw can also track work for desktop AI tools on your machine (ChatGPT Desktop, Claude Desktop, Gemini CLI) as a project-scoped task queue:
 
 ```bash
-brainclaw plan create "Coordinate auth rollout" --priority high
-brainclaw claim create "Take auth rollout" --scope src/auth/
-```
-
-### Refresh context before edits
-
-```bash
-brainclaw context --for src/auth/routes.ts --digest
-brainclaw status
-```
-
-Claims reduce collisions, but they are not a substitute for isolated worktrees yet. Use them mainly to coordinate sequential work or human/agent awareness in the same repo.
-
-## Path 2.5: Desktop AI Work Surfaces Around The Repo
-
-Use this path when the active coding agent should stay focused on code, but the project could benefit from another local AI surface on the same machine, such as ChatGPT Desktop or Claude Desktop.
-
-Typical use cases:
-
-- visual asset generation
-- polished copy or release-note drafting
-- synthesis for operators or stakeholders
-- side research that should not consume the coding agent's main context window
-
-### Discover what is available on the machine
-
-```bash
-brainclaw machine-profile --refresh
-```
-
-### Queue work for another local AI surface
-
-```bash
-brainclaw surface-task create "Generate homepage hero visual" \
-  --target chatgpt \
-  --kind visual_asset \
-  --instructions "Create a lightweight product hero visual for the landing page." \
-  --output assets/hero-home.png \
-  --path src/pages/Home.tsx
-```
-
-### Review queued work later
-
-```bash
+brainclaw surface-task create "Generate hero visual" --target chatgpt --kind visual_asset
 brainclaw surface-task list
-brainclaw surface-task list --all --target chatgpt
 ```
 
-This queue does not automate the target desktop app yet. It gives the project a clean place to stage work that another local AI surface should pick up during its next session.
+This keeps non-code work visible to the project without overloading the active coding agent.
 
-## Path 3: Brownfield Onboarding
+## Important: one agent at a time
 
-Use this path when you are adopting Brainclaw into an existing workspace and do not want to hand-author all memory from scratch.
+For now, use brainclaw for sequential collaboration. One agent works, finishes, and the next one picks up from shared context. Running multiple agents in parallel on the same checkout will cause conflicts.
 
-### Build the initial bootstrap view
+## Next reads
 
-```bash
-brainclaw setup --yes
-brainclaw init
-brainclaw bootstrap --json
-```
-
-### Fill the gaps
-
-```bash
-brainclaw bootstrap --interview --audience cli
-brainclaw bootstrap --interview --audience ide_chat
-```
-
-Use the returned question IDs to prepare a small JSON answers file when the interview needs to confirm durable memory:
-
-```json
-[
-  {
-    "question_id": "biq_example",
-    "response_items": ["Use agents sequentially in one checkout."],
-    "suggestions": []
-  }
-]
-```
-
-Preview the enriched import proposal:
-
-```bash
-brainclaw bootstrap --answers-file ./bootstrap-answers.json --json
-```
-
-### Apply or rollback managed imports
-
-```bash
-brainclaw bootstrap --answers-file ./bootstrap-answers.json --apply
-brainclaw bootstrap --uninstall
-```
-
-Use this path when the repo already has native instruction files, partial docs, or conventions that Brainclaw should adopt selectively instead of replacing blindly.
-
-## Recommended First Workflow
-
-1. initialize the workspace
-2. choose the correct entry path for your surface
-3. record or import 3-5 high-signal facts
-4. create one shared plan
-5. claim scope before editing
-6. refresh context before significant edits
-7. hand off explicitly when switching between agents
-
-## Next Reads
-
-- [integrations/overview.md](integrations/overview.md) — integration model by surface
-- [integrations/mcp.md](integrations/mcp.md) — nominal dynamic path for capable agents
-- [cli.md](cli.md) — operator and fallback reference
-- [concepts/memory.md](concepts/memory.md)
-- [concepts/plans-and-claims.md](concepts/plans-and-claims.md)
+- [integrations/overview.md](integrations/overview.md) — how brainclaw adapts to each agent
+- [integrations/mcp.md](integrations/mcp.md) — the dynamic runtime path
+- [concepts/memory.md](concepts/memory.md) — what project memory includes
+- [concepts/plans-and-claims.md](concepts/plans-and-claims.md) — coordination layer
+- [cli.md](cli.md) — full CLI reference

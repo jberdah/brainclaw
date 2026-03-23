@@ -18,6 +18,9 @@ import {
   type ExportFormat,
 } from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
+import { getAgentCapabilityProfile } from '../core/agent-capability.js';
+import { renderBrainclawSection } from '../core/instruction-templates.js';
+import { getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
 
 export type { ExportFormat };
 
@@ -169,7 +172,29 @@ function declareAgentIntegrationFromTarget(
   }
 }
 
+function formatToAgentName(format: ExportFormat): string | undefined {
+  const map: Record<string, string> = {
+    'claude-md': 'claude-code',
+    'cursor-rules': 'cursor',
+    'copilot-instructions': 'github-copilot',
+    'agents-md': 'codex',
+    'gemini-md': 'antigravity',
+    'windsurf': 'windsurf',
+    'cline': 'cline',
+    'roo': 'roo',
+    'continue': 'continue',
+  };
+  return map[format];
+}
+
 function generateExport(format: ExportFormat, options: ExportOptions, cwd: string): string {
+  const agentName = formatToAgentName(format);
+  if (agentName) {
+    const adaptive = generateAdaptiveExport(agentName, options, cwd);
+    if (adaptive) return adaptive;
+  }
+
+  // Fallback to legacy generators for unknown formats
   switch (format) {
     case 'copilot-instructions': return generateCopilotInstructions(options, cwd);
     case 'cursor-rules':         return generateCursorRules(options, cwd);
@@ -183,6 +208,29 @@ function generateExport(format: ExportFormat, options: ExportOptions, cwd: strin
     default:
       throw new Error(`Unknown export format: ${format}`);
   }
+}
+
+/**
+ * Generate export content using adaptive templates when a capability profile
+ * exists for the agent, falling back to the legacy per-format generators.
+ */
+function generateAdaptiveExport(agentName: string, options: ExportOptions, cwd: string): string | undefined {
+  const profile = getAgentCapabilityProfile(agentName);
+  if (!profile) return undefined;
+
+  const state = loadState(cwd);
+  const instructions = getInstructionText(options, cwd);
+  const config = loadConfig(cwd);
+
+  const result = renderBrainclawSection({
+    profile,
+    state,
+    projectName: config.project_name,
+    brainclawVersion: getInstalledBrainclawVersion(),
+    resolvedInstructions: instructions,
+  });
+
+  return result.content;
 }
 
 function getInstructionText(options: ExportOptions, cwd: string): string[] {

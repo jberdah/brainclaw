@@ -12,7 +12,7 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-init-onboarding-'));
 }
 
-function runInit(cwd: string): { stdout: string; stderr: string; exitCode: number } {
+function runInit(cwd: string, homeDir: string): { stdout: string; stderr: string; exitCode: number } {
   const result = spawnSync(NODE, [CLI_PATH, 'init', '-y'], {
     cwd,
     encoding: 'utf-8',
@@ -21,10 +21,9 @@ function runInit(cwd: string): { stdout: string; stderr: string; exitCode: numbe
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       BRAINCLAW_STORE_BOUNDARY: cwd,
-      HOME: cwd,
-      USERPROFILE: cwd,
+      HOME: homeDir,
+      USERPROFILE: homeDir,
       USERNAME: 'testuser',
       USER: 'testuser',
     },
@@ -39,17 +38,20 @@ function runInit(cwd: string): { stdout: string; stderr: string; exitCode: numbe
 
 describe('init onboarding preflight', () => {
   let dir: string;
+  let homeDir: string;
 
   beforeEach(() => {
     dir = tmpDir();
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-init-home-'));
   });
 
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('prints onboarding gaps for an empty workspace', () => {
-    const result = runInit(dir);
+    const result = runInit(dir, homeDir);
 
     assert.equal(result.exitCode, 0, result.stderr);
     assert.match(result.stdout, /Onboarding preflight:/);
@@ -64,7 +66,7 @@ describe('init onboarding preflight', () => {
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Claude Guidance\n\n- Read the native instructions first\n', 'utf-8');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'npm run build' } }, null, 2), 'utf-8');
 
-    const result = runInit(dir);
+    const result = runInit(dir, homeDir);
 
     assert.equal(result.exitCode, 0, result.stderr);
     assert.match(result.stdout, /Onboarding preflight:/);

@@ -15,7 +15,7 @@ import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../co
 import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
-import { hasCompletedSetup } from '../core/setup-state.js';
+import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
@@ -38,12 +38,12 @@ export interface InitOptions {
 export async function runInit(options: InitOptions = {}): Promise<void> {
   const cwd = options.cwd ?? process.cwd();
   const containingMemoryStore = resolveContainingMemoryStore(cwd);
-  const skipSetupRequirement = options.skipSetupRequirement === true || process.env.BRAINCLAW_SKIP_SETUP_REQUIREMENT === '1';
-
-  if (!skipSetupRequirement && !hasCompletedSetup()) {
-    console.error('Error: global brainclaw setup has not been completed on this machine.');
-    console.error('Run `brainclaw setup` first, then retry `brainclaw init` from your project root.');
-    process.exit(1);
+  // Auto-create user store if absent (replaces the old "setup required" guard).
+  // The skipSetupRequirement flag and BRAINCLAW_SKIP_SETUP_REQUIREMENT env var
+  // are kept for backward compatibility but are now effectively no-ops —
+  // init always ensures the user store exists before proceeding.
+  if (!hasCompletedSetup()) {
+    ensureUserStore();
   }
 
   if (containingMemoryStore) {
