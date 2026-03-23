@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { loadConfig } from './config.js';
 import { MEMORY_DIR } from './io.js';
+import { summarizeWorkspaceProjects } from './workspace-projects.js';
 
 export type StoreRole = 'service' | 'repo' | 'workspace' | 'user' | 'unknown';
 
@@ -129,12 +131,82 @@ export function resolveTargetStore(
 }
 
 /**
+ * Resolve the most specific child store that should answer a context request.
+ *
+ * This keeps the current cwd by default, but when `target` clearly points inside
+ * a nested Brainclaw project (for example from a workspace root in folder mode),
+ * it returns that child store cwd instead.
+ */
+export function resolveContextStoreCwd(
+  cwd: string = process.cwd(),
+  target?: string,
+): string {
+  const trimmedTarget = target?.trim();
+  if (!trimmedTarget) {
+    return cwd;
+  }
+
+  const primary = resolvePrimaryStore(cwd);
+  if (!primary) {
+    return cwd;
+  }
+
+  const absoluteTarget = resolveAbsoluteTargetPath(cwd, trimmedTarget);
+  if (!absoluteTarget) {
+    return cwd;
+  }
+
+  let config;
+  try {
+    config = loadConfig(primary.cwd);
+  } catch {
+    return cwd;
+  }
+
+  const summary = summarizeWorkspaceProjects(primary.cwd, config);
+  if (summary.discovered_projects.length === 0) {
+    return cwd;
+  }
+
+  const candidates = summary.discovered_projects
+    .map((project) => path.resolve(primary.cwd, project.path))
+    .filter((candidatePath) => candidatePath !== primary.cwd)
+    .filter((candidatePath) => fs.existsSync(path.join(candidatePath, MEMORY_DIR)))
+    .sort((a, b) => b.length - a.length);
+
+  for (const candidate of candidates) {
+    if (isAtOrBelow(absoluteTarget, candidate)) {
+      return candidate;
+    }
+  }
+
+  return cwd;
+}
+
+/**
  * Return true if `dir` is at or below `ancestor` in the filesystem hierarchy.
  */
 function isAtOrBelow(dir: string, ancestor: string): boolean {
   const rel = path.relative(ancestor, dir);
   // If relative path starts with '..', dir is above ancestor
   return !rel.startsWith('..');
+}
+
+function resolveAbsoluteTargetPath(cwd: string, target: string): string | undefined {
+  if (path.isAbsolute(target)) {
+    return path.resolve(target);
+  }
+
+  const joined = path.resolve(cwd, target);
+  if (fs.existsSync(joined)) {
+    return joined;
+  }
+
+  if (target.includes('/') || target.includes('\\') || target.startsWith('.')) {
+    return joined;
+  }
+
+  return undefined;
 }
 
 /**

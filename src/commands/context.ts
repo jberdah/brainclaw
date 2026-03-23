@@ -3,6 +3,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from
 import { writeContextMarker } from '../core/freshness.js';
 import { nowISO } from '../core/ids.js';
 import { logger } from '../core/logger.js';
+import { resolveContextStoreCwd } from '../core/store-resolution.js';
 
 export interface ContextCommandOptions {
   for?: string;
@@ -39,6 +40,7 @@ export function runContext(options: ContextCommandOptions = {}): void {
     return;
   }
 
+  const contextCwd = resolveContextStoreCwd(cwd, options.for);
   const result = buildContext({
     target: options.for,
     project: options.project,
@@ -65,7 +67,7 @@ export function runContext(options: ContextCommandOptions = {}): void {
     console.log(renderContextMarkdown(result, options.explain));
   }
 
-  writeLastContextMarker(result, options, cwd);
+  writeLastContextMarker(result, options, contextCwd);
 }
 
 function writeLastContextMarker(result: ReturnType<typeof buildContext>, options: ContextCommandOptions, cwd?: string): void {
