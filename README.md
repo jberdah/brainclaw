@@ -305,6 +305,19 @@ npm run test:coverage      # with coverage report
 
 ## Changelog
 
+### v0.20.0
+
+- **Onboarding rework** : nouveau parcours d'installation en 2-3 étapes au lieu de 4, avec choix explicites (type de projet, topologie mémoire) au lieu de termes techniques
+- **Agent capability profiles** : chaque agent (10 supportés) a un profil de capacité (MCP, hooks, auto-approve, skills, rules) qui détermine le contenu de ses fichiers d'instructions
+- **Templates adaptatifs** : les fichiers d'instructions (CLAUDE.md, AGENTS.md, etc.) sont générés selon 3 tiers — Full (léger, hooks font le reste), Standard (directif, top traps inclus), Limited (riche, tout en statique)
+- **Séparation core/run** : les fichiers statiques ne contiennent plus que le protocole, les contraintes et instructions. Les traps, plans, decisions et claims sont exclusivement dans le contexte dynamique MCP
+- **Bootstrap enrichi** : scan des workflows CI/CD, ADR, CONTRIBUTING, Docker, .env.example, branches actives et tags git
+- **Quick setup MCP** : `bclaw_setup` détecte le repo courant et propose un init rapide au lieu de forcer le scan multi-repo
+- **`brainclaw uninstall`** : nouvelle commande pour retirer brainclaw d'un projet (`--project`) ou d'une machine (`--machine`)
+- **Traps machine-scoped** : nouveau champ `platform_scope` sur les traps — les traps machine ne polluent plus les fichiers d'instructions statiques
+- **Init sans setup préalable** : `brainclaw init` crée automatiquement le user store si absent, plus besoin de `brainclaw setup` d'abord
+- **Docs réécrites** : intégrations, quickstart et README avec niveaux Full/Standard/Limited et matrice agent factuelle
+
 ### v0.9.10
 
 - **OpenCode** : détection et auto-config MCP workspace via `opencode.json`; l'export réutilise `AGENTS.md`
