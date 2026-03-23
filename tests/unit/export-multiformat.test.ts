@@ -134,10 +134,14 @@ describe('export command formats', () => {
       assert.ok(fs.existsSync(filePath), `${expectedFile} should exist`);
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(content.includes('brainclaw'), 'should mention brainclaw');
-      assert.ok(content.includes('brainclaw context'), 'should contain hygiene: brainclaw context');
+      // Adaptive templates include "why this matters" and protocol sections
       assert.ok(
-        content.includes('brainclaw claim release'),
-        'should contain hygiene: brainclaw claim release',
+        content.includes('why this matters') || content.includes('brainclaw context'),
+        'should contain adaptive "why" section or legacy hygiene',
+      );
+      assert.ok(
+        content.includes('session protocol') || content.includes('project coordination') || content.includes('brainclaw claim release'),
+        'should contain adaptive protocol section or legacy hygiene',
       );
       const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
       assert.ok(gitignore.includes(expectedFile), `${expectedFile} should be gitignored by default`);
