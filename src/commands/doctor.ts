@@ -25,6 +25,7 @@ import { assessBrainclawVersion } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
+import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
 
@@ -161,24 +162,30 @@ export function runDoctor(options: DoctorOptions = {}): void {
     }
   }
 
-  if (config.project_mode === 'multi-project' && (config.projects?.known.length ?? 0) === 0) {
+  const workspaceProjects = summarizeWorkspaceProjects(options.cwd ?? process.cwd(), config);
+  if (config.project_mode === 'multi-project' && workspaceProjects.effective_project_count === 0) {
     checks.push({
       name: 'project_mode',
       status: 'warn',
-      message: 'project_mode is multi-project but no project namespaces are configured yet.',
+      message: config.projects?.strategy === 'folder'
+        ? 'project_mode is multi-project with folder strategy but no child projects were resolved from config, registry, or nested stores yet.'
+        : 'project_mode is multi-project but no project namespaces are configured yet.',
     });
     if (!options.json) {
-      console.warn('⚠ project_mode is multi-project but no project namespaces are configured yet.');
+      console.warn(config.projects?.strategy === 'folder'
+        ? '⚠ project_mode is multi-project with folder strategy but no child projects were resolved from config, registry, or nested stores yet.'
+        : '⚠ project_mode is multi-project but no project namespaces are configured yet.');
     }
     hasIssues = true;
   } else {
     checks.push({
       name: 'project_mode',
       status: 'ok',
-      message: `project_mode=${config.project_mode}, strategy=${config.projects?.strategy ?? 'manual'}, known_projects=${config.projects?.known.length ?? 0}`,
+      message: `project_mode=${config.project_mode}, strategy=${config.projects?.strategy ?? 'manual'}, configured_projects=${workspaceProjects.configured_projects.length}, effective_projects=${workspaceProjects.effective_project_count}`,
+      details: workspaceProjects,
     });
     if (!options.json) {
-      console.log(`✔ project mode: ${config.project_mode} (${config.projects?.strategy ?? 'manual'})`);
+      console.log(`✔ project mode: ${config.project_mode} (${config.projects?.strategy ?? 'manual'}), effective projects=${workspaceProjects.effective_project_count}`);
     }
   }
 

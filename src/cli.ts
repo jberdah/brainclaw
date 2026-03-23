@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
 import { runUpgrade } from './commands/upgrade.js';
+import { runReconcile } from './commands/reconcile.js';
 import { getMemoryLog, rollbackMemory, hasMemoryRepo } from './core/memory-git.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
 import { buildAgentInventory, saveAgentInventory, loadAgentInventory, renderAgentInventorySummary } from './core/agent-inventory.js';
@@ -997,6 +998,26 @@ program
   .option('--agent <agent>', 'Agent name for agent-layer instructions')
   .action((options) => {
     runExport(options);
+  });
+
+program
+  .command('reconcile')
+  .description('Refresh machine and workspace bootstrap state after updates or onboarding on complex installs')
+  .option('--json', 'Output as JSON')
+  .option('--dry-run', 'Preview the reconciliation plan without writing machine or bootstrap state')
+  .option('--apply-bootstrap', 'Apply bootstrap suggestions across all selected stores after refresh')
+  .option('-y, --yes', 'Skip confirmation prompts for multi-store bootstrap apply')
+  .option('--skip-machine-profile', 'Skip machine-profile refresh')
+  .option('--skip-agent-inventory', 'Skip agent-inventory refresh')
+  .action(async (options) => {
+    await runReconcile({
+      json: options.json,
+      dryRun: options.dryRun,
+      applyBootstrap: options.applyBootstrap,
+      yes: options.yes,
+      skipMachineProfile: options.skipMachineProfile,
+      skipAgentInventory: options.skipAgentInventory,
+    });
   });
 
 // --- hooks ---

@@ -85,6 +85,60 @@ brainclaw machine-profile --refresh --json
 
 Use this when you want Brainclaw to detect what AI work surfaces are actually available on the current machine before choosing an onboarding path or queueing work for another surface.
 
+### `brainclaw upgrade`
+
+Upgrade the local Brainclaw store layout and refresh managed agent files when a release changes persisted schema or generated workspace integrations.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+| `--dry-run` | Preview what would be upgraded without writing |
+
+```bash
+brainclaw upgrade
+brainclaw upgrade --dry-run
+brainclaw upgrade --dry-run --json
+```
+
+`upgrade` only covers store and generated-file migrations. On complex workspaces, it does not refresh machine detection, agent inventory, or brownfield bootstrap state by itself.
+
+### `brainclaw reconcile`
+
+Refresh machine, agent, and bootstrap state after a package update or when onboarding an already-initialized multi-store workspace.
+
+This is the command to use when `brainclaw upgrade` reports no schema migration, but the installed release still introduces new workspace-centric behavior that depends on:
+
+- a refreshed `machine-profile`
+- a refreshed `agent-inventory`
+- refreshed bootstrap state for the current store and any nested Brainclaw stores discovered under a `multi-project` + `folder` workspace
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+| `--dry-run` | Preview the reconciliation plan without writing |
+| `--apply-bootstrap` | Apply bootstrap suggestions across all selected stores after refresh |
+| `-y, --yes` | Skip confirmation prompts for multi-store bootstrap apply |
+| `--skip-machine-profile` | Skip machine profile refresh |
+| `--skip-agent-inventory` | Skip agent inventory refresh |
+
+```bash
+brainclaw reconcile --dry-run --json
+brainclaw reconcile
+brainclaw reconcile --apply-bootstrap -y
+```
+
+Recommended post-update flow for an existing complex workspace:
+
+```bash
+brainclaw upgrade --dry-run --json
+brainclaw reconcile --dry-run --json
+brainclaw reconcile --apply-bootstrap -y
+brainclaw context --json
+brainclaw doctor --json
+```
+
+For a `multi-project` workspace using `projects.strategy: folder`, `reconcile` treats the current store as the workspace root and plans refreshes for nested child stores that already contain their own `.brainclaw/` directories.
+
 ### `brainclaw status`
 
 Show the current state of project memory.
@@ -99,6 +153,8 @@ brainclaw status
 brainclaw status --json
 brainclaw status --markdown
 ```
+
+In `multi-project` mode, status now reports the effective project count resolved for the workspace. With `projects.strategy: folder`, that includes child stores discovered from nested `.brainclaw/` directories even when `config.projects.known` is still empty.
 
 ### `brainclaw doctor`
 
@@ -118,6 +174,8 @@ brainclaw doctor --fix-agent-ignore
 ```
 
 When Brainclaw detects generated local agent files such as `.mcp.json` or `.claude/settings.local.json` inside a Git repo, `doctor` warns if they are not ignored or are still tracked. `--fix-agent-ignore` only updates `.gitignore`; if a file is already tracked you still need to untrack it with `git rm --cached <path>`.
+
+In `multi-project` mode with `projects.strategy: folder`, `doctor` now checks the effective workspace project set, not just `config.projects.known`. That avoids false positives on workspaces that resolve child stores from the filesystem or global project registry.
 
 ### `brainclaw rebuild`
 
