@@ -11,6 +11,7 @@ import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
+import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
 
 function sessionsDir(cwd?: string): string {
   return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
@@ -45,6 +46,7 @@ export interface SessionStartResult extends SessionSnapshot {
     missing_gitignore_paths: string[];
     tracked_paths: string[];
   };
+  inventory_advisory?: string[];
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -66,6 +68,11 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
       if (snapshot.agent_git_hygiene.tracked_paths.length > 0) {
         console.warn(`  Tracked local agent files: ${snapshot.agent_git_hygiene.tracked_paths.join(', ')}`);
         console.warn('  After fixing .gitignore, untrack them with `git rm --cached <path>` as needed.');
+      }
+    }
+    if (snapshot.inventory_advisory) {
+      for (const line of snapshot.inventory_advisory) {
+        console.warn(`⚠ ${line}`);
       }
     }
   } catch (e: unknown) {
@@ -147,6 +154,24 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
 
   appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' }, options.cwd);
   const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
+
+  // Inventory reconciliation — detect new/disappeared agents on this machine
+  let inventoryAdvisory: string[] | undefined;
+  try {
+    const previousInventory = loadAgentInventory();
+    const currentInventory = buildAgentInventory();
+    const diff = diffInventory(previousInventory, currentInventory);
+    saveAgentInventory(currentInventory);
+
+    const lines: string[] = [];
+    if (diff.appeared.length > 0) lines.push(`New agents detected: ${diff.appeared.join(', ')}`);
+    if (diff.disappeared.length > 0) lines.push(`Agents no longer detected: ${diff.disappeared.join(', ')}`);
+    for (const vc of diff.version_changed) {
+      lines.push(`${vc.name} version changed: ${vc.from ?? '?'} → ${vc.to ?? '?'}`);
+    }
+    if (lines.length > 0) inventoryAdvisory = lines;
+  } catch { /* non-fatal — inventory scan failure should not block session start */ }
+
   return {
     ...snapshot,
     ...(agentGitHygiene.isGitRepo && (agentGitHygiene.missingGitignorePaths.length > 0 || agentGitHygiene.trackedPaths.length > 0)
@@ -157,6 +182,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
           },
         }
       : {}),
+    ...(inventoryAdvisory ? { inventory_advisory: inventoryAdvisory } : {}),
   };
 }
 

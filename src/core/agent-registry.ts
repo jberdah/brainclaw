@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
 import { MEMORY_DIR, resolveEntityDir } from './io.js';
@@ -264,6 +265,15 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
     if (byEnvName) return byEnvName;
   }
 
+  // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID).
+  // Falls through to config if the detected agent is not registered.
+  const detected = detectAiAgent();
+  if (detected) {
+    const byDetected = findAgentIdentityByName(detected.name, cwd, preferredDirName);
+    if (byDetected) return byDetected;
+  }
+
+  // Config fallback (last resort — may not reflect the actual calling agent)
   const config = loadConfig(cwd, preferredDirName);
   if (config.current_agent_id) {
     const byId = findAgentIdentityById(config.current_agent_id, cwd, preferredDirName);

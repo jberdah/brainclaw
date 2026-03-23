@@ -69,6 +69,25 @@ describe('detectAiAgent', () => {
     assert.equal(result.name, 'claude-code');
   });
 
+  it('detects Claude Code via CLAUDECODE env var (VS Code extension mode)', () => {
+    const env: NodeJS.ProcessEnv = { CLAUDECODE: '1' };
+    const result = detectAiAgent(env, '/nonexistent-home-xyz');
+    assert.ok(result);
+    assert.equal(result.name, 'claude-code');
+    assert.equal(result.detection_source, 'CLAUDECODE env var');
+  });
+
+  it('Claude Code via CLAUDECODE wins over Copilot when both present', () => {
+    const env: NodeJS.ProcessEnv = {
+      CLAUDECODE: '1',
+      GITHUB_COPILOT_TOKEN: 'token-abc',
+      GITHUB_COPILOT_PRODUCT: 'copilot-chat',
+    };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'claude-code', 'CLAUDECODE should take priority over Copilot');
+  });
+
   it('detects Cursor via CURSOR_TRACE_ID', () => {
     const env: NodeJS.ProcessEnv = { CURSOR_TRACE_ID: 'trace-123' };
     const result = detectAiAgent(env, '/home/user');
@@ -163,6 +182,7 @@ describe('detectAiAgent', () => {
     const cases: NodeJS.ProcessEnv[] = [
       { GITHUB_COPILOT_TOKEN: 'x' },
       { CLAUDE_CODE_VERSION: 'x' },
+      { CLAUDECODE: '1' },
       { CURSOR_TRACE_ID: 'x' },
       { WINDSURF_SESSION_ID: 'x' },
       { CLINE_AGENT: 'x' },
