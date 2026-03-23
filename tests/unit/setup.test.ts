@@ -93,13 +93,21 @@ describe('setup/init guardrails', () => {
     assert.match(setupResult.stdout, /already initialised|skip/i);
   });
 
-  it('init requires setup before first project initialization', () => {
+  it('init auto-creates user store when setup has not been run', () => {
+    // User store should not exist yet
+    const userStorePath = path.join(testHomeDir, '.brainclaw', 'config.yaml');
+    assert.ok(!fs.existsSync(userStorePath), 'user store should not exist before init');
+
     const initResult = run(['init', '-y'], dir, {
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '0',
     });
 
-    assert.notEqual(initResult.exitCode, 0);
-    assert.match(initResult.stderr, /brainclaw setup/i);
+    // init should succeed without prior setup
+    assert.equal(initResult.exitCode, 0, initResult.stderr);
+    // user store should now exist
+    assert.ok(fs.existsSync(userStorePath), 'user store should be auto-created by init');
+    // project should be initialized
+    assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')), 'project should be initialized');
   });
 
   it('init refuses to run from inside an existing .brainclaw store', () => {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeFileAtomic } from './io.js';
+import { ensureMemoryDir, writeFileAtomic } from './io.js';
+import { defaultConfig, saveConfig } from './config.js';
 
 export interface SetupState {
   completed_at: string;
@@ -54,4 +55,36 @@ export function hasCompletedSetup(env: NodeJS.ProcessEnv = process.env): boolean
 
   const configPath = userStoreConfigPath(env);
   return configPath ? fs.existsSync(configPath) : false;
+}
+
+/**
+ * Ensure the user-global store (~/.brainclaw/) exists, creating it implicitly
+ * if absent. This replaces the old "setup required before init" guard —
+ * init can now auto-create the minimal user store on first run.
+ *
+ * Idempotent: returns immediately if the user store already exists.
+ * Non-fatal: logs a warning if creation fails but does not throw.
+ */
+export function ensureUserStore(env: NodeJS.ProcessEnv = process.env): boolean {
+  const home = resolveHomeDir(env);
+  if (!home) return false;
+
+  const configPath = path.join(home, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    return true; // already exists
+  }
+
+  try {
+    ensureMemoryDir(home);
+    const cfg = defaultConfig('user-global');
+    saveConfig(cfg, home);
+    fs.appendFileSync(configPath, 'store_type: user\n');
+    return true;
+  } catch (err) {
+    console.warn(
+      `Warning: could not create user store at ${path.join(home, '.brainclaw')}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return false;
+  }
 }
