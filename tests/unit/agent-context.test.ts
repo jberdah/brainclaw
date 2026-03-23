@@ -77,6 +77,35 @@ describe('core/agent-context', () => {
     }
   });
 
+  it('skips descriptive "why this matters" bullets in AGENTS.md', () => {
+    fs.writeFileSync(
+      path.join(dir, 'AGENTS.md'),
+      [
+        '## brainclaw — why this matters',
+        '',
+        'This project uses brainclaw for shared memory.',
+        '- You may edit files another agent is actively working on',
+        '- You will miss known traps and architectural decisions',
+        '',
+        '## brainclaw — session protocol (REQUIRED)',
+        '',
+        '- Call bclaw_session_start before any work',
+        '- Call bclaw_get_context for your scope',
+        '',
+        '## brainclaw — active constraints',
+        '',
+        '- No deployments on Friday',
+      ].join('\n'),
+      'utf-8',
+    );
+    const snapshot = buildAgentToolingContext({ cwd: dir });
+    // "why" bullets should be excluded, only protocol and constraints kept
+    assert.ok(!snapshot.agents_rules.some((r) => r.includes('You may edit')), 'why bullet should be excluded');
+    assert.ok(!snapshot.agents_rules.some((r) => r.includes('You will miss')), 'why bullet should be excluded');
+    assert.ok(snapshot.agents_rules.some((r) => r.includes('bclaw_session_start')), 'protocol rule should be included');
+    assert.ok(snapshot.agents_rules.some((r) => r.includes('No deployments')), 'constraint should be included');
+  });
+
   it('marks stdio MCP servers with missing local commands', () => {
     fs.writeFileSync(
       path.join(codexHome, 'config.toml'),
