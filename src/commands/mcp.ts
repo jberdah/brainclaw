@@ -50,6 +50,8 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
+import { probeForQuickSetup, buildQuickSetupProbeResponse, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
+import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
 import type { BootstrapInterviewAnswer, CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
@@ -333,14 +335,17 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_setup',
-    description: 'Interactive onboarding wizard — global agent install + multi-repo brainclaw init. Use the resume pattern: call without step to start, then pass step+choice to advance through each stage.',
+    description: 'Interactive onboarding wizard. Two modes: (1) Quick mode (default): probes the current repo and asks project type + topology, then inits. (2) Batch mode: scan root directories and init multiple repos. Call without step to start — brainclaw auto-detects the best mode.',
     inputSchema: {
       type: 'object',
       properties: {
-        step: { type: 'string', description: 'Current step to resume: "project_roots", "repo_selection", or "agent_selection". Omit to start from the beginning.' },
-        choice: { type: 'string', description: 'User choice for the current step (e.g. path list, "all", "detected", or comma-separated numbers).' },
-        roots: { type: 'string', description: 'Comma-separated root paths (required from step "repo_selection" onward to re-scan).' },
-        repo_selection: { type: 'string', description: 'Repo selection choice from previous step (required for "agent_selection" step).' },
+        step: { type: 'string', description: 'Resume step: "quick_init" (quick mode), or "project_roots"/"repo_selection"/"agent_selection" (batch mode). Omit to start.' },
+        choice: { type: 'string', description: 'User choice for the current step.' },
+        project_type: { type: 'string', description: 'Quick mode: "standalone", "workspace", or "linked".' },
+        topology: { type: 'string', description: 'Quick mode: "embedded" (shared via git) or "sidecar" (local only).' },
+        roots: { type: 'string', description: 'Batch mode: comma-separated root paths.' },
+        repo_selection: { type: 'string', description: 'Batch mode: repo selection from previous step.' },
+        mode: { type: 'string', description: 'Force "quick" or "batch" mode. Default: auto-detect.' },
       },
     },
   },
@@ -1801,16 +1806,84 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const choice = (args.choice as string | undefined) ?? '';
       const rootsArg = args.roots as string | undefined;
       const repoSelectionArg = args.repo_selection as string | undefined;
+      const modeArg = args.mode as string | undefined;
       const env = process.env;
 
       if (!checkGitPresence()) {
         return { response: toolResponse({ content: [{ type: 'text', text: 'Git is not installed or not found in PATH. Install git from https://git-scm.com before running brainclaw setup.' }], structuredContent: { error: 'git_not_found' } }, true) };
       }
 
+      // ─── Quick mode: probe current repo ──────────────────────────────
       if (!step) {
+        // Auto-detect mode: if we're in a git repo, use quick mode unless batch is forced
+        const forceBatch = modeArg === 'batch';
+        if (!forceBatch) {
+          const probe = probeForQuickSetup(cwd);
+          if (probe.isGitRepo || probe.alreadyInitialized) {
+            const response = buildQuickSetupProbeResponse(probe);
+            return { response: toolResponse({ content: [{ type: 'text', text: response.text }], structuredContent: response.structured }) };
+          }
+        }
+
+        // Fall through to batch mode
         const existingState = readSetupState(env);
         const alreadyRun = existingState ? `Setup was previously run on ${new Date(existingState.completed_at).toLocaleDateString()}. You can re-run it.` : undefined;
         return { response: toolResponse({ content: [{ type: 'text', text: [alreadyRun, "Where are the user's project directories? Please ask the user to provide one or more root paths where their git repositories are located (e.g. ~/Projects, C:\\Users\\user\\code)."].filter(Boolean).join('\n\n') }], structuredContent: { pending_question: 'project_roots', prompt: 'Please ask the user: "Where are your projects? Enter one or more root directories (comma-separated):"', ...(alreadyRun ? { already_run: alreadyRun } : {}) } }) };
+      }
+
+      // ─── Quick mode step: init with choices ──────────────────────────
+      if (step === 'quick_init') {
+        const projectType = (args.project_type as ProjectTypeChoice | undefined) ?? 'standalone';
+        const topology = (args.topology as TopologyChoice | undefined) ?? 'embedded';
+
+        // Ensure user store exists
+        ensureUserStore(env);
+
+        // Map choices to init options
+        const projectMode = projectType === 'workspace' ? 'multi-project' as const : 'auto' as const;
+        const topologyMode = topology === 'sidecar' ? 'sidecar' as const : 'embedded' as const;
+
+        // Run init
+        try {
+          const { runInit } = await import('./init.js');
+          await runInit({
+            yes: true,
+            cwd,
+            skipAgentBootstrap: false,
+            projectMode,
+            topology: topologyMode,
+          });
+        } catch (err) {
+          return { response: toolResponse({ content: [{ type: 'text', text: `Init failed: ${err instanceof Error ? err.message : String(err)}` }], structuredContent: { error: 'init_failed', details: err instanceof Error ? err.message : String(err) } }, true) };
+        }
+
+        // Detect agent and report
+        const detected = detectAiAgent(env);
+        const summary: string[] = [
+          `✔ Initialized ${cwd.split(/[\\/]/).pop() ?? cwd} (${projectType}, ${topology})`,
+        ];
+        if (detected) {
+          summary.push(`✔ Agent detected: ${detected.name}`);
+        }
+        summary.push('✔ Reload your agent session to activate brainclaw MCP tools.');
+
+        // Check if bootstrap is available
+        const probe = probeForQuickSetup(cwd);
+        const bootstrapAvailable = probe.hasContent;
+
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: summary.join('\n') + (bootstrapAvailable ? '\n\nThe repo has existing content. Run bclaw_bootstrap to extract initial project context.' : '') }],
+            structuredContent: {
+              setup_complete: true,
+              project_type: projectType,
+              topology,
+              detected_agent: detected?.name ?? null,
+              bootstrap_available: bootstrapAvailable,
+              summary,
+            },
+          }),
+        };
       }
 
       if (step === 'project_roots') {
