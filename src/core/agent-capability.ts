@@ -42,7 +42,8 @@ export type AgentName =
   | 'opencode'
   | 'codex'
   | 'antigravity'
-  | 'github-copilot';
+  | 'github-copilot'
+  | 'openclaw';
 
 const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   'claude-code': {
@@ -162,6 +163,18 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasRules: true,
     instructionFile: '.github/copilot-instructions.md',
     sharedInstructionFile: true,
+    mcpConfigScope: 'none',
+    templateTier: 'C',
+  },
+  openclaw: {
+    name: 'openclaw',
+    hasMcp: false,
+    hasHooks: false,
+    hasAutoApprove: false,
+    hasSkills: true,
+    hasRules: false,
+    instructionFile: 'skills/openclaw/SKILL.md',
+    sharedInstructionFile: false,
     mcpConfigScope: 'none',
     templateTier: 'C',
   },

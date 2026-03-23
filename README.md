@@ -78,8 +78,9 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 | [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | Standard | MCP + .continue/rules/ |
 | [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Standard | MCP + GEMINI.md |
 | [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | Limited | copilot-instructions.md + brainclaw-context skill |
+| [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw) | **[OpenClaw](https://github.com/openclaw/openclaw)** | Limited | brainclaw skill (SKILL.md) for structured project memory |
 
-**Full** = MCP + hooks + auto-approve (context injected every prompt). **Standard** = MCP + instruction file (agent must call tools explicitly). **Limited** = no MCP (static instruction file is the only source of context).
+**Full** = MCP + hooks + auto-approve (context injected every prompt). **Standard** = MCP + instruction file (agent must call tools explicitly). **Limited** = skill-based (agent calls brainclaw CLI via skill instructions).
 
 brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
 

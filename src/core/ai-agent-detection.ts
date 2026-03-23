@@ -27,6 +27,7 @@ export interface DetectedAiAgent {
  * 9. Antigravity / Gemini CLI (ANTIGRAVITY_* env or ~/.gemini/antigravity/)
  * 10. Continue (CONTINUE_*)
  * 11. Roo Code (ROO_*)
+ * 12. OpenClaw (~/.openclaw/ or OPENCLAW_*)
  */
 export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): DetectedAiAgent | undefined {
   // Explicit override
@@ -140,6 +141,16 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
       kind: 'agent',
       trust_level: 'trusted',
       detection_source: 'ROO_* env var',
+    };
+  }
+
+  // OpenClaw (~/.openclaw/ presence or OPENCLAW_* env)
+  if (env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT || fs.existsSync(path.join(homeDir, '.openclaw'))) {
+    return {
+      name: 'openclaw',
+      kind: 'agent',
+      trust_level: 'trusted',
+      detection_source: env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT ? 'OPENCLAW_* env var' : '~/.openclaw directory',
     };
   }
 
