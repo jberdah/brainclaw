@@ -102,6 +102,7 @@ export const TrapSchema = z.object({
   visibility: MemoryVisibilitySchema.default('shared'),
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
+  platform_scope: z.string().optional(),
 });
 export type Trap = z.infer<typeof TrapSchema>;
 
@@ -769,9 +770,13 @@ export const AgentIntegrationSurfaceSchema = z.object({
 });
 export type AgentIntegrationSurface = z.infer<typeof AgentIntegrationSurfaceSchema>;
 
+export const AgentIntegrationLevelSchema = z.enum(['full', 'standard', 'limited', 'custom']);
+export type AgentIntegrationLevel = z.infer<typeof AgentIntegrationLevelSchema>;
+
 export const AgentIntegrationDeclarationSchema = z.object({
   agent_name: AgentIntegrationNameSchema,
   declaration_source: AgentIntegrationDeclarationSourceSchema.default('manual'),
+  level: AgentIntegrationLevelSchema.optional(),
   surfaces: z.array(AgentIntegrationSurfaceSchema).default([]),
   notes: z.string().optional(),
 });

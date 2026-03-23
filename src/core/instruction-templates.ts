@@ -291,7 +291,7 @@ function renderInstructions(instructions: string[]): string | undefined {
 
 function renderTopTraps(state: State, limit: number): string | undefined {
   const traps = state.known_traps
-    .filter((t: Trap) => t.visibility === 'shared' && (!t.status || t.status === 'active'))
+    .filter((t: Trap) => t.visibility === 'shared' && (!t.status || t.status === 'active') && !t.platform_scope)
     .sort((a: Trap, b: Trap) => severityOrder(b.severity) - severityOrder(a.severity))
     .slice(0, limit);
 

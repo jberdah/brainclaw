@@ -18,6 +18,7 @@ import { resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { analyzeRepository } from './repo-analysis.js';
 import { getAgentCapabilityProfile, getAllAgentCapabilityProfiles, type AgentCapabilityProfile } from './agent-capability.js';
 import { describeAgentSurfaces } from './agent-capability.js';
+import { loadState } from './state.js';
 
 export interface QuickSetupProbe {
   /** Current working directory */
@@ -199,4 +200,38 @@ export function buildQuickSetupProbeResponse(probe: QuickSetupProbe): {
       },
     },
   };
+}
+
+/**
+ * Generate a "moment aha" preview after init — shows what an agent
+ * would see when calling bclaw_get_context on this project.
+ */
+export function buildOnboardingPreview(cwd: string): string {
+  try {
+    const state = loadState(cwd);
+    const constraints = state.active_constraints.filter((c) => c.status === 'active');
+    const traps = state.known_traps.filter((t) => t.visibility === 'shared' && (!t.status || t.status === 'active'));
+    const plans = state.plan_items.filter((p) => p.status === 'in_progress' || p.status === 'todo');
+
+    if (constraints.length === 0 && traps.length === 0 && plans.length === 0) {
+      return 'Memory is empty. Run bclaw_bootstrap to extract initial context from this repo.';
+    }
+
+    const lines: string[] = ['Here is what your agent will see:'];
+    if (constraints.length > 0) {
+      lines.push(`  Constraints: ${constraints.length} active`);
+      for (const c of constraints.slice(0, 3)) lines.push(`    - ${c.text}`);
+    }
+    if (traps.length > 0) {
+      lines.push(`  Traps: ${traps.length} known`);
+      for (const t of traps.slice(0, 3)) lines.push(`    - [${t.severity}] ${t.text}`);
+    }
+    if (plans.length > 0) {
+      lines.push(`  Plans: ${plans.length} active`);
+      for (const p of plans.slice(0, 3)) lines.push(`    - [${p.status}] ${p.text}`);
+    }
+    return lines.join('\n');
+  } catch {
+    return 'Memory is empty. Run bclaw_bootstrap to extract initial context from this repo.';
+  }
 }

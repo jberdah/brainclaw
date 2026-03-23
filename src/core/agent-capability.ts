@@ -87,7 +87,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasHooks: false,
     hasAutoApprove: true,
     hasSkills: false,
-    hasRules: false,
+    hasRules: true,
     instructionFile: '.clinerules/brainclaw.md',
     sharedInstructionFile: false,
     mcpConfigScope: 'project',

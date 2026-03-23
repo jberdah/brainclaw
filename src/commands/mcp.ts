@@ -50,7 +50,7 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
-import { probeForQuickSetup, buildQuickSetupProbeResponse, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
+import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
@@ -1867,19 +1867,21 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         }
         summary.push('✔ Reload your agent session to activate brainclaw MCP tools.');
 
-        // Check if bootstrap is available
+        // Check if bootstrap is available and generate preview
         const probe = probeForQuickSetup(cwd);
         const bootstrapAvailable = probe.hasContent;
+        const preview = buildOnboardingPreview(cwd);
 
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: summary.join('\n') + (bootstrapAvailable ? '\n\nThe repo has existing content. Run bclaw_bootstrap to extract initial project context.' : '') }],
+            content: [{ type: 'text', text: summary.join('\n') + (bootstrapAvailable ? '\n\nThe repo has existing content. Run bclaw_bootstrap to extract initial project context.' : '') + '\n\n' + preview }],
             structuredContent: {
               setup_complete: true,
               project_type: projectType,
               topology,
               detected_agent: detected?.name ?? null,
               bootstrap_available: bootstrapAvailable,
+              preview,
               summary,
             },
           }),
