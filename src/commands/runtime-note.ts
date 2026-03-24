@@ -23,6 +23,7 @@ export interface RuntimeNoteOptions {
   autoReflect?: boolean;
   cwd?: string;
   sessionId?: string;
+  model?: string;
 }
 
 export interface RuntimeNoteCommandResult {
@@ -101,6 +102,7 @@ export function createRuntimeNote(
     host_id: hostId,
     expires_at: expiresAt,
     note_type: 'observation',
+    model: options.model,
   };
 
   saveRuntimeNote(note, options.cwd);

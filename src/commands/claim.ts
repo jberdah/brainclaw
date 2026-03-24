@@ -5,7 +5,7 @@ import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
 import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
-import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
 import { validateCliTtl } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import type { OperationalIdentity } from '../core/identity.js';
@@ -89,6 +89,7 @@ export function runClaim(description: string, options: ClaimOptions): void {
     plan_id: options.plan,
     status: 'active',
     expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
+    model: resolveCurrentModel(options.cwd),
   };
 
   mutate({ cwd: options.cwd }, () => {

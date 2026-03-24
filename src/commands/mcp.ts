@@ -28,6 +28,7 @@ import {
   resolveAgentScope,
   resolveCurrentAgentIdentity,
   resolveCurrentAgentName,
+  resolveCurrentModel,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
@@ -1866,6 +1867,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       };
     }
 
+    // Resolve model once for all write operations
+    const currentModel = resolveCurrentModel(cwd);
+
     if (name === 'bclaw_setup') {
       const step = args.step as string | undefined;
       const choice = (args.choice as string | undefined) ?? '';
@@ -2058,6 +2062,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         autoReflect: args.autoReflect as boolean | undefined,
         cwd,
         sessionId: connectionSessionId,
+        model: currentModel,
       }, false);
       return {
         response: toolResponse({
@@ -2111,6 +2116,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         category: type === 'constraint' ? (args.category as string | undefined) : undefined,
         outcome: type === 'decision' ? (args.outcome as string | undefined) : undefined,
         plan_id: candidatePlanId,
+        model: currentModel,
         star_count: 0,
         starred_by: [],
         usage_count: 0,
@@ -2227,6 +2233,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         created_at: nowISO(),
         status: 'active',
         plan_id: args.planId as string | undefined,
+        model: currentModel,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
       const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
