@@ -465,3 +465,46 @@ export function renderAgentInventorySummary(inventory: AgentInventory): string {
   lines.push(`Inventory generated: ${inventory.generated_at}`);
   return lines.join('\n');
 }
+
+// ── Inventory Diff ──────────────────────────────────────────────────────────
+
+export interface InventoryDiff {
+  appeared: string[];
+  disappeared: string[];
+  version_changed: Array<{ name: string; from?: string; to?: string }>;
+}
+
+/**
+ * Compare two agent inventories and return what changed.
+ * Only considers agents that are `installed` in either snapshot.
+ */
+export function diffInventory(previous: AgentInventory | undefined, current: AgentInventory): InventoryDiff {
+  const prevMap = new Map(
+    (previous?.agents ?? []).filter(a => a.installed).map(a => [a.name, a]),
+  );
+  const currMap = new Map(
+    current.agents.filter(a => a.installed).map(a => [a.name, a]),
+  );
+
+  const appeared: string[] = [];
+  const disappeared: string[] = [];
+  const version_changed: InventoryDiff['version_changed'] = [];
+
+  for (const [name, entry] of currMap) {
+    if (!prevMap.has(name)) {
+      appeared.push(name);
+    } else {
+      const prev = prevMap.get(name)!;
+      if (prev.version !== entry.version && (prev.version || entry.version)) {
+        version_changed.push({ name, from: prev.version, to: entry.version });
+      }
+    }
+  }
+  for (const name of prevMap.keys()) {
+    if (!currMap.has(name)) {
+      disappeared.push(name);
+    }
+  }
+
+  return { appeared, disappeared, version_changed };
+}

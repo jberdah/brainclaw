@@ -42,13 +42,17 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
   }
 
   // Claude Code — tested BEFORE Copilot because both can be present in VS Code.
-  // CLAUDE_CODE_VERSION is set by Claude Code itself, not by VS Code passively.
-  if (env.CLAUDE_CODE_VERSION || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
+  // CLAUDE_CODE_VERSION is set by Claude Code CLI; CLAUDECODE is set by the VS Code extension.
+  if (env.CLAUDE_CODE_VERSION || env.CLAUDECODE || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
     return {
       name: 'claude-code',
       kind: 'agent',
       trust_level: 'trusted',
-      detection_source: env.CLAUDE_CODE_VERSION ? 'CLAUDE_CODE_VERSION env var' : 'ANTHROPIC_AI_PRODUCT env var',
+      detection_source: env.CLAUDE_CODE_VERSION
+        ? 'CLAUDE_CODE_VERSION env var'
+        : env.CLAUDECODE
+          ? 'CLAUDECODE env var'
+          : 'ANTHROPIC_AI_PRODUCT env var',
     };
   }
 
@@ -88,7 +92,7 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
   // We only match if no higher-priority agent was detected above.
   if (
     env.GITHUB_COPILOT_PRODUCT ||
-    (env.GITHUB_COPILOT_TOKEN && !env.CLAUDE_CODE_VERSION && !env.CURSOR_TRACE_ID && !env.WINDSURF_SESSION_ID) ||
+    (env.GITHUB_COPILOT_TOKEN && !env.CLAUDE_CODE_VERSION && !env.CLAUDECODE && !env.CURSOR_TRACE_ID && !env.WINDSURF_SESSION_ID) ||
     (env.VSCODE_GIT_IPC_HANDLE && (env.AGENT_NAME?.toLowerCase().includes('copilot') || env.GH_COPILOT_AGENT))
   ) {
     return {
