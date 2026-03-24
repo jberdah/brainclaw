@@ -79,6 +79,8 @@ import { runExplore } from './commands/explore.js';
 import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
 import { cleanOrphanFiles, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
+import { resolveEffectiveCwd } from './core/store-resolution.js';
+import { runSwitch } from './commands/switch.js';
 
 const program = new Command();
 
@@ -92,12 +94,21 @@ program
   .version(getInstalledBrainclawVersion())
   .option('--verbose', 'Show info-level log messages on stderr')
   .option('--debug', 'Show debug-level log messages on stderr')
+  .option('--cwd <path>', 'Override working directory for this invocation')
   .hook('preAction', (_thisCommand, actionCommand) => {
     const root = actionCommand.optsWithGlobals();
     initLogLevel({ verbose: root.verbose, debug: root.debug });
-    const removed = cleanOrphanFiles(memoryDir());
+
+    // Resolve effective cwd (--cwd > BRAINCLAW_PROJECT > active-project > process.cwd)
+    const effectiveCwd = resolveEffectiveCwd({ explicitCwd: root.cwd });
+    if (effectiveCwd !== process.cwd()) {
+      // Store resolved cwd so commands can read it via optsWithGlobals().cwd
+      actionCommand.setOptionValue('cwd', effectiveCwd);
+    }
+
+    const removed = cleanOrphanFiles(memoryDir(effectiveCwd));
     if (removed > 0) {
-      logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
+      logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir(effectiveCwd)}`);
     }
   });
 
@@ -1163,6 +1174,22 @@ program
   .option('--query <q>', 'Search for specific capability or tool')
   .action((options) => {
     runExplore({ query: options.query });
+  });
+
+program
+  .command('switch [project]')
+  .description('Set the active project for subsequent commands')
+  .option('--list', 'List available projects in the workspace')
+  .option('--clear', 'Clear the active project (revert to cwd)')
+  .option('--json', 'Output as JSON')
+  .action((project: string | undefined, options) => {
+    const globalOpts = options.parent?.parent ? program.opts() : {};
+    runSwitch(project, {
+      list: options.list,
+      clear: options.clear,
+      json: options.json,
+      cwd: globalOpts.cwd,
+    });
   });
 
 program.parseAsync(process.argv).catch((err) => {

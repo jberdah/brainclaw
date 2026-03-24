@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
 import { MEMORY_DIR } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
@@ -128,6 +129,118 @@ export function resolveTargetStore(
   // user: prefer declared role, otherwise os.homedir()
   const match = chain.find((s) => s.role === 'user');
   return match?.cwd ?? os.homedir();
+}
+
+export interface ResolveEffectiveCwdOptions {
+  /** Explicit --cwd flag value (highest priority). */
+  explicitCwd?: string;
+  /** Store chain options passed through to resolveStoreChain. */
+  storeChainOptions?: ResolveStoreChainOptions;
+}
+
+/**
+ * Single source of truth for the effective working directory.
+ *
+ * Priority:
+ * 1. explicitCwd (--cwd flag)
+ * 2. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
+ * 3. active-project.json in workspace root
+ * 4. process.cwd()
+ */
+export function resolveEffectiveCwd(
+  options: ResolveEffectiveCwdOptions = {},
+): string {
+  // 1. Explicit --cwd flag
+  if (options.explicitCwd) {
+    return path.resolve(options.explicitCwd);
+  }
+
+  // 2. BRAINCLAW_PROJECT env var
+  const envProject = process.env.BRAINCLAW_PROJECT;
+  if (envProject) {
+    const resolved = resolveProjectRef(envProject, process.cwd(), options.storeChainOptions);
+    if (resolved) return resolved;
+  }
+
+  // 3. active-project.json from workspace root
+  const wsRoot = resolveWorkspaceRoot(process.cwd(), options.storeChainOptions);
+  if (wsRoot) {
+    const active = loadActiveProject(wsRoot);
+    if (active && fs.existsSync(path.join(active.path, MEMORY_DIR, 'config.yaml'))) {
+      return active.path;
+    }
+  }
+
+  // 4. Default
+  return process.cwd();
+}
+
+/**
+ * Find the workspace root (farthest store in the chain, or the one with
+ * role=workspace). Returns undefined when no store exists.
+ */
+export function resolveWorkspaceRoot(
+  cwd: string = process.cwd(),
+  options: ResolveStoreChainOptions = {},
+): string | undefined {
+  const chain = resolveStoreChain(cwd, options);
+  if (chain.length === 0) return undefined;
+  const ws = chain.find((s) => s.role === 'workspace');
+  return ws?.cwd ?? chain[chain.length - 1]!.cwd;
+}
+
+/**
+ * Resolve a project reference (name or relative path) to an absolute path.
+ * Returns undefined when the reference cannot be resolved to a valid brainclaw project.
+ */
+export function resolveProjectRef(
+  ref: string,
+  cwd: string = process.cwd(),
+  storeChainOptions?: ResolveStoreChainOptions,
+): string | undefined {
+  const wsRoot = resolveWorkspaceRoot(cwd, storeChainOptions);
+  if (!wsRoot) return undefined;
+
+  // Try as absolute path
+  if (path.isAbsolute(ref)) {
+    return fs.existsSync(path.join(ref, MEMORY_DIR, 'config.yaml')) ? ref : undefined;
+  }
+
+  // Try as relative path from workspace root
+  const asPath = path.resolve(wsRoot, ref);
+  if (fs.existsSync(path.join(asPath, MEMORY_DIR, 'config.yaml'))) {
+    return asPath;
+  }
+
+  // Try by project name: scan child stores for matching project_name
+  const chain = resolveStoreChain(wsRoot, storeChainOptions);
+  for (const store of chain) {
+    if (store.cwd === wsRoot) continue; // skip workspace itself
+    try {
+      const config = loadConfig(store.cwd);
+      if (config.project_name === ref) return store.cwd;
+    } catch {
+      // skip unreadable configs
+    }
+  }
+
+  // Try discovering child projects by scanning filesystem
+  try {
+    const wsConfig = loadConfig(wsRoot);
+    const summary = summarizeWorkspaceProjects(wsRoot, wsConfig);
+    for (const project of summary.discovered_projects) {
+      const projectPath = path.resolve(wsRoot, project.path);
+      if (project.project_name === ref) {
+        if (fs.existsSync(path.join(projectPath, MEMORY_DIR, 'config.yaml'))) {
+          return projectPath;
+        }
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  return undefined;
 }
 
 /**

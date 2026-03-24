@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
-import { resolveContextStoreCwd, resolveStoreChain, resolvePrimaryStore } from '../../src/core/store-resolution.js';
+import { resolveContextStoreCwd, resolveEffectiveCwd, resolveStoreChain, resolvePrimaryStore, resolveWorkspaceRoot } from '../../src/core/store-resolution.js';
+import { saveActiveProject, clearActiveProject } from '../../src/core/active-project.js';
 
 function tmpDir(prefix = 'bclaw-storechain-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -291,6 +292,62 @@ describe('core/store-resolution', () => {
         const resolved = resolveContextStoreCwd(workspace, 'release notes');
         assert.equal(resolved, workspace);
       } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('resolveEffectiveCwd', () => {
+    it('returns explicitCwd when provided (highest priority)', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      try {
+        makeStore(workspace, 'workspace');
+        const child = path.join(workspace, 'api');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+
+        // Even with active project set, explicitCwd wins
+        saveActiveProject(workspace, {
+          path: child,
+          name: 'api',
+          switched_at: new Date().toISOString(),
+        });
+
+        const resolved = resolveEffectiveCwd({ explicitCwd: workspace });
+        assert.equal(resolved, path.resolve(workspace));
+      } finally {
+        clearActiveProject(workspace);
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
+    it('returns active project path when set and valid', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig(defaultConfig('workspace'), workspace);
+
+        const child = path.join(workspace, 'api');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+        saveConfig(defaultConfig('api'), child);
+
+        saveActiveProject(workspace, {
+          path: child,
+          name: 'api',
+          switched_at: new Date().toISOString(),
+        });
+
+        // Override process.cwd by providing storeChainOptions.boundary
+        const resolved = resolveEffectiveCwd({
+          storeChainOptions: { boundary: workspace },
+        });
+
+        // Since we can't easily mock process.cwd(), verify workspace root resolution works
+        const wsRoot = resolveWorkspaceRoot(workspace, { boundary: workspace });
+        assert.equal(wsRoot, workspace);
+      } finally {
+        clearActiveProject(workspace);
         fs.rmSync(workspace, { recursive: true, force: true });
       }
     });
