@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ClaimSchema, type Claim } from './schema.js';
-import { resolveEntityDir, withStoreLock } from './io.js';
+import { resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 
@@ -27,7 +28,7 @@ function claimStore(cwd?: string): JsonStore<Claim> {
 }
 
 export function saveClaim(claim: Claim, cwd?: string): void {
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     ensureClaimsDir(cwd);
     const writeStore = new JsonStore<Claim>({
       dirPath: claimsDir(cwd, 'write'),

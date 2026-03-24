@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { JsonStore } from './json-store.js';
 import { generateId, generateIdWithLabel, nowISO } from './ids.js';
-import { memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
+import { memoryPath, resolveEntityDir, writeFileAtomic } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import {
   BootstrapApplicationReceiptSchema,
   BootstrapInterviewAnswerSchema,
@@ -1594,7 +1595,7 @@ export function applyBootstrapImport(options: ApplyBootstrapOptions = {}): Boots
   let createdCount = 0;
   let skippedCount = 0;
 
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     const state = loadState(cwd);
     const activeInstructionKeys = new Set(
       loadInstructions(cwd)
@@ -1778,7 +1779,7 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
   let deletedCount = 0;
   let skippedCount = 0;
 
-  withStoreLock(resolvedCwd, () => {
+  mutate({ cwd: resolvedCwd }, () => {
     const state = loadState(resolvedCwd);
     const instructions = loadInstructions(resolvedCwd);
     let stateChanged = false;

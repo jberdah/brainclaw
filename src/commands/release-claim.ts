@@ -1,5 +1,6 @@
 import { memoryExists } from '../core/io.js';
-import { memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
+import { memoryPath, writeFileAtomic } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { loadClaim, listClaims, releaseClaim } from '../core/claims.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
@@ -17,7 +18,7 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
 
   try {
     let claim = loadClaim(id, options.cwd);
-    withStoreLock(options.cwd, () => {
+    mutate({ cwd: options.cwd }, () => {
       const existing = loadClaim(id, options.cwd);
       claim = releaseClaim(id, options.cwd);
       let state = loadState(options.cwd);

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { withLock, cleanStaleLocks } from './lock.js';
 
+export { mutate } from './mutation-pipeline.js';
+
 export const MEMORY_DIR = '.brainclaw';
 const STORE_LOCK_BASENAME = '.store-mutation';
 const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);

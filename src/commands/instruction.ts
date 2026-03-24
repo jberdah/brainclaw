@@ -1,7 +1,8 @@
 import { resolveAgentScope, resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { createInstruction } from '../core/instructions.js';
-import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
+import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState } from '../core/state.js';
 import { scanText } from '../core/security.js';
@@ -43,7 +44,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
   }
 
   let entry: InstructionEntry | undefined;
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     entry = createInstruction(text, {
       layer,
       scope,

@@ -1,5 +1,6 @@
 import { buildOperationalIdentity } from '../core/identity.js';
-import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
+import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
@@ -90,7 +91,7 @@ export function runClaim(description: string, options: ClaimOptions): void {
     expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
   };
 
-  withStoreLock(options.cwd, () => {
+  mutate({ cwd: options.cwd }, () => {
     if (plan) {
       if (!plan.assignee) {
         plan.assignee = actor.agent;

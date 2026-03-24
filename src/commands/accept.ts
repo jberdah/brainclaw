@@ -1,4 +1,5 @@
-import { memoryExists, withStoreLock } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
 import { loadState, persistState } from '../core/state.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
@@ -50,7 +51,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
 
   let promotedItemId = '';
 
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     const state = loadState(cwd);
 
     switch (candidate.type) {
