@@ -243,6 +243,10 @@ export const MCP_READ_TOOLS = [
         type: { type: 'string', description: 'Filter by plan type.' },
         assignee: { type: 'string', description: 'Filter by assignee name.' },
         project: { type: 'string', description: 'Filter by project namespace.' },
+        id: { type: 'string', description: 'Get a single plan by ID (exact match).' },
+        limit: { type: 'number', description: 'Maximum number of plans to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of plans to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields (id, short_label, text, status, priority) to reduce output size.' },
       },
     },
   },
@@ -1527,6 +1531,20 @@ export function handleMcpReadToolCall(
 
   if (name === 'bclaw_list_plans') {
     let plans = loadState(cwd).plan_items;
+
+    // Direct lookup by ID
+    if (args.id) {
+      const plan = plans.find((p) => p.id === String(args.id) || p.short_label === String(args.id));
+      if (!plan) {
+        return { content: [{ type: 'text', text: `Plan '${args.id}' not found.` }], structuredContent: { total: 0, plans: [] } };
+      }
+      return {
+        content: [{ type: 'text', text: `[${plan.id}] ${plan.text} (${plan.status}, ${plan.priority})` }],
+        structuredContent: { total: 1, plans: [plan] },
+      };
+    }
+
+    // Filters
     if (!args.all) {
       plans = plans.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
     }
@@ -1545,11 +1563,18 @@ export function handleMcpReadToolCall(
       plans = plans.filter((plan) => plan.project?.toLowerCase() === project);
     }
 
-    const lines = plans.length === 0
+    const totalFiltered = plans.length;
+
+    // Pagination
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const paginated = plans.slice(offset, offset + limit);
+
+    const lines = paginated.length === 0
       ? ['No plan items found.']
       : [
-          `${plans.length} plan item(s):`,
-          ...plans.map((plan) => {
+          `${totalFiltered} plan(s)${totalFiltered > paginated.length ? ` (showing ${offset + 1}-${offset + paginated.length})` : ''}:`,
+          ...paginated.map((plan) => {
             const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
             if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
             if (plan.project) meta.push(`project ${plan.project}`);
@@ -1559,9 +1584,16 @@ export function handleMcpReadToolCall(
           }),
         ];
 
+    // Compact mode: strip heavy fields
+    const outputPlans = args.compact
+      ? paginated.map(({ id, short_label, text, status, priority, tags, assignee, type }) => ({
+          id, short_label, text, status, priority, tags, assignee, type,
+        }))
+      : paginated;
+
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { total: plans.length, plans },
+      structuredContent: { total: totalFiltered, offset, limit, plans: outputPlans },
     };
   }
 
