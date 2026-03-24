@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 function tmpDir(): string {
@@ -19,6 +19,8 @@ function extractId(stdout: string): string {
 }
 
 function run(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
+  const fakeHome = path.join(cwd, '.fake-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -31,8 +33,8 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
       USERNAME: 'testuser',
       USER: 'testuser',
       BRAINCLAW_STORE_BOUNDARY: cwd,
-      HOME: cwd,
-      USERPROFILE: cwd,
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
     },
   });
   return {

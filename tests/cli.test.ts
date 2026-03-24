@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { getInstalledBrainclawVersion } from '../src/core/brainclaw-version.js';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 const DEFAULT_STORAGE_DIR = '.brainclaw';
 
@@ -21,6 +21,9 @@ function run(
   envOverrides: Record<string, string> = {},
   timeoutMs: number = 20000,
 ): { stdout: string; stderr: string; exitCode: number } {
+  // Use a separate fake home so ensureUserStore() doesn't create .brainclaw/ in cwd
+  const fakeHome = path.join(cwd, '.fake-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -33,9 +36,9 @@ function run(
       USERNAME: 'testuser',
       USER: 'testuser',
       BRAINCLAW_STORE_BOUNDARY: cwd,
-      // Isolate home directory so ~/.codex (and similar) don't trigger AI agent detection
-      HOME: cwd,
-      USERPROFILE: cwd,
+      // Isolate home to a subdirectory so user store doesn't pollute project dir
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
       ...envOverrides,
     },
   });

@@ -10,13 +10,15 @@ import { loadConfig, saveConfig } from '../../src/core/config.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { State } from '../../src/core/schema.js';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 function initProject(dir: string): void {
+  const fakeHome = path.join(dir, '.fake-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
   spawnSync(NODE, [CLI_PATH, 'init', '-y', '--no-analyze-repo'], {
     cwd: dir, encoding: 'utf-8', timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', HOME: dir, USERPROFILE: dir },
+    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', HOME: fakeHome, USERPROFILE: fakeHome },
   });
 }
 

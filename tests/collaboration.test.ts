@@ -12,7 +12,7 @@ import { defaultConfig, saveConfig } from '../src/core/config.js';
 import { buildProjectIdentity, saveProjectIdentity } from '../src/core/project-registry.js';
 import { generateMarkdown } from '../src/core/markdown.js';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 function tmpDir(): string {
@@ -26,6 +26,8 @@ function extractId(stdout: string): string {
 }
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
+  const fakeHome = path.join(cwd, '.fake-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -38,8 +40,8 @@ function run(args: string[], cwd: string, envOverrides: Record<string, string> =
       USERNAME: 'testuser',
       USER: 'testuser',
       BRAINCLAW_STORE_BOUNDARY: cwd,
-      HOME: cwd,
-      USERPROFILE: cwd,
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
       ...envOverrides,
     },
   });
