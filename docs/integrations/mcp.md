@@ -42,7 +42,7 @@ This keeps session continuity inside Brainclaw instead of pushing the agent back
 | `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
 | `bclaw_read_handoff` | Read active handoffs |
 | `bclaw_get_agent_board` | Coordination snapshot |
-| `bclaw_list_plans` | Structured plan listing with CLI-equivalent filters |
+| `bclaw_list_plans` | Structured plan listing with filters, pagination (`limit`/`offset`), `compact` mode, and `id` lookup |
 | `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
 | `bclaw_list_agents` | Registered agent inventory, optionally with bounded reputation |
 | `bclaw_list_instructions` | Raw or resolved instruction listing |

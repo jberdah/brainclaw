@@ -83,7 +83,8 @@ brainclaw export --detect --write          # auto-detect and write all formats
 When brainclaw memory changes (new constraints, resolved traps, updated plans), regenerate instruction files:
 
 ```bash
-brainclaw export --detect --write
+brainclaw export --all              # all 9 agent formats at once
+brainclaw export --detect --write   # only the detected agent
 ```
 
 For agents without MCP (Copilot), this is especially important — the instruction file is their only source of project context.
