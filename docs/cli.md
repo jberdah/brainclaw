@@ -86,7 +86,7 @@ brainclaw setup --roots ~/Projects,~/work --agents all  # all agents, multiple r
 
 ### `brainclaw init`
 
-Initialize workspace state for the current project root. Detects the AI agent environment and writes to its native instruction file. `brainclaw setup` must have been run first on this machine. Do not run `init` from inside `.brainclaw/`; that directory is Brainclaw's own memory store, not a project root.
+Initialize workspace state for the current project root. Detects the AI agent environment, writes to its native instruction file, and installs a git post-merge hook for automatic claim release. `brainclaw setup` must have been run first on this machine. Do not run `init` from inside `.brainclaw/`; that directory is Brainclaw's own memory store, not a project root.
 
 | Option | Description |
 |---|---|
@@ -993,13 +993,13 @@ brainclaw context --since-session --max-items 20
 
 ### `brainclaw context-diff`
 
-Show what has changed in shared memory since a reference point.
+Hybrid context view for subsequent prompts: always includes **critical anchors** (active claims, resolved instructions, top 5 traps) plus the memory delta since a reference point. Used by the Claude Code UserPromptSubmit hook after the first prompt.
 
 | Option | Description |
 |---|---|
 | `--since <date>` | Start date for the diff |
 | `--session <id>` | Compare against a specific session start |
-| `--json` | Output as JSON |
+| `--json` | Output as JSON (includes anchors + changed items) |
 
 ```bash
 brainclaw context-diff --session sess_42
@@ -1127,6 +1127,7 @@ Export memory as a native agent instruction file.
 |---|---|
 | `--format <format>` | Target format: `copilot-instructions`, `cursor-rules`, `agents-md`, `claude-md`, `gemini-md`, `windsurf`, `cline`, `roo`, or `continue` |
 | `--detect` | Auto-detect the running agent and write to its native file |
+| `--all` | Write all known agent instruction files at once (deduplicates by format) |
 | `--write` | Write output to the native file path (instead of stdout); generated workspace files are treated as local and added to `.gitignore` |
 | `--shared` | Keep the main exported instruction file versionable when used with `--write`; companion MCP/settings files stay local |
 | `--output <path>` | Write to a custom output path |
@@ -1146,6 +1147,7 @@ brainclaw export --format roo --write                    # .roo/rules/brainclaw.
 brainclaw export --format continue --write               # .continue/rules/brainclaw.md
 brainclaw export --format claude-md --write --shared     # publish CLAUDE.md intentionally
 brainclaw export --format claude-md                      # stdout
+brainclaw export --all                                   # all 9 agent files at once
 ```
 
 `brainclaw export --write` is local-first by default: the generated workspace file and any companion MCP/settings files are added to `.gitignore`. Use `--shared` only when you intentionally want the main instruction file to be committed. `brainclaw export --detect` also writes companion MCP config where relevant, including `opencode.json` for OpenCode and `.gemini/antigravity/mcp_config.json` for Antigravity/Gemini when the local environment is available.
@@ -1174,7 +1176,7 @@ See [adapters/openclaw.md](adapters/openclaw.md).
 
 ### `brainclaw install-hooks`
 
-Install Git hooks for constraint checking.
+Install Git hooks: pre-commit (constraint checking, sensitive content detection) and post-merge (auto-release of claims whose scope overlaps merged files).
 
 | Option | Description |
 |---|---|
@@ -1391,7 +1393,7 @@ brainclaw mcp
 | `bclaw_get_agent_board` | Live plan + claim board with active sessions |
 | `bclaw_search` | Full-text BM25 search across all memory items |
 | `bclaw_estimation_report` | Estimation accuracy report for completed plans |
-| `bclaw_list_plans` | List plan items with the same filters as `brainclaw plan list` |
+| `bclaw_list_plans` | List plan items with filters, pagination (`limit`/`offset`), `compact` mode, and direct `id` lookup |
 | `bclaw_list_claims` | List claims with the same filters as `brainclaw claim list` |
 | `bclaw_list_agents` | List registered agents, optionally with bounded reputation summaries |
 | `bclaw_list_instructions` | List raw or resolved shared instructions |

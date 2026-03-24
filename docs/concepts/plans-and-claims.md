@@ -106,6 +106,16 @@ brainclaw claim release <id>
 
 `claim list` shows who holds each claim and whether it is still active. If a claim has a `session_id`, the last 8 characters are shown so you can correlate with the agent session that created it.
 
+### Automatic claim release
+
+Claims are automatically released after a `git merge` if the post-merge hook is installed (default since `brainclaw init` v0.25.3+). The hook matches merged file paths against active claim scopes and releases overlapping claims.
+
+You can also install or reinstall the hook manually:
+
+```bash
+brainclaw install-hooks
+```
+
 ## Why claims matter
 
 Without claims, multiple agents can easily touch the same area at once and generate conflicting changes.
