@@ -1,5 +1,9 @@
 import { buildContextDiff, resolveContextDiffSince } from '../core/context-diff.js';
+import { listClaims, isClaimExpired } from '../core/claims.js';
+import { loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { memoryExists } from '../core/io.js';
+import { loadState } from '../core/state.js';
+import { isTrapActive } from '../core/traps.js';
 
 export interface ContextDiffOptions {
   since?: string;
@@ -8,6 +12,11 @@ export interface ContextDiffOptions {
   cwd?: string;
 }
 
+/**
+ * Hybrid context-diff: always includes critical anchors (active claims,
+ * top traps, instructions) so the agent stays grounded, plus the memory
+ * delta since last context read.
+ */
 export function runContextDiff(options: ContextDiffOptions = {}): void {
   if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
@@ -31,14 +40,77 @@ export function runContextDiff(options: ContextDiffOptions = {}): void {
   }
 
   if (options.json) {
-    console.log(JSON.stringify(diff, null, 2));
+    const anchors = buildCriticalAnchors(options.cwd);
+    console.log(JSON.stringify({ ...diff, anchors }, null, 2));
     return;
   }
 
+  const lines: string[] = [];
+
+  // --- Critical anchors (always present) ---
+  const anchors = buildCriticalAnchors(options.cwd);
+
+  if (anchors.claims.length > 0) {
+    lines.push('Active claims:');
+    for (const c of anchors.claims) {
+      lines.push(`- [${c.id}] ${c.agent} → ${c.scope}: ${c.description}`);
+    }
+    lines.push('');
+  }
+
+  if (anchors.instructions.length > 0) {
+    lines.push('Instructions:');
+    for (const ins of anchors.instructions) {
+      const scope = ins.scope ? `:${ins.scope}` : '';
+      lines.push(`- [${ins.id}] <${ins.layer}${scope}> ${ins.text}`);
+    }
+    lines.push('');
+  }
+
+  if (anchors.traps.length > 0) {
+    lines.push('Active traps:');
+    for (const t of anchors.traps) {
+      lines.push(`- [${t.id}] (${t.severity}) ${t.text}`);
+    }
+    lines.push('');
+  }
+
+  // --- Memory delta ---
   if (diff.counts.total === 0) {
-    console.log(`${diff.summary} since ${diff.since}.`);
-    return;
+    lines.push(`Memory: no changes since ${diff.since?.slice(0, 16).replace('T', ' ')}.`);
+  } else {
+    lines.push(`Memory delta (${diff.summary}):`);
+    for (const item of diff.changed_items ?? []) {
+      lines.push(`- [${item.section}] [${item.id}] ${item.text}`);
+    }
   }
 
-  console.log(`${diff.summary} since ${diff.since}.`);
+  console.log(lines.join('\n'));
+}
+
+interface CriticalAnchors {
+  claims: Array<{ id: string; agent: string; scope: string; description: string }>;
+  instructions: Array<{ id: string; layer: string; scope?: string; text: string }>;
+  traps: Array<{ id: string; severity: string; text: string }>;
+}
+
+function buildCriticalAnchors(cwd?: string): CriticalAnchors {
+  const activeClaims = listClaims(cwd)
+    .filter((c) => c.status === 'active' && !isClaimExpired(c))
+    .map((c) => ({ id: c.id, agent: c.agent, scope: c.scope, description: c.description }));
+
+  const instructions = resolveInstructions(loadInstructions(cwd))
+    .map((ins) => ({ id: ins.id, layer: ins.layer, scope: ins.scope, text: ins.text }));
+
+  const state = loadState(cwd);
+  const traps = state.known_traps
+    .filter((t) => isTrapActive(t))
+    .sort((a, b) => {
+      const severityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+      return (severityOrder[a.severity] ?? 1) - (severityOrder[b.severity] ?? 1);
+    })
+    .slice(0, 5)
+    .map((t) => ({ id: t.id, severity: t.severity, text: t.text }));
+
+  return { claims: activeClaims, instructions, traps };
 }
