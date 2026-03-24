@@ -14,7 +14,7 @@ brainclaw export --format agents-md --write
 
 - use MCP as the default runtime path for fresh context, plans, claims, and runtime notes
 - keep `AGENTS.md` lightweight and behavioral: it should remind Codex how to use Brainclaw, not duplicate live state
-- use `.brainclaw/project.md` only as a readable fallback when MCP is unavailable or when a human wants a simple snapshot
+- use `.brainclaw/project.md` only as a readable fallback (derived view, regenerated best-effort — run `brainclaw rebuild` if stale)
 - encourage plans, claims, and handoffs during multi-step work
 
 ## Good role for brainclaw here

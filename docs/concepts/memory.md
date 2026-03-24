@@ -32,7 +32,7 @@ Examples: constraints, decisions, traps, completed plans, handoffs.
 
 Shared traps now have a lifecycle too: `active`, `resolved`, or `expired`. Active views such as generated context, status, and `project.md` prioritize only active traps so old machine-setup issues stop polluting the current working set, while the canonical memory still keeps resolved traps for audit and search.
 
-These live in `.brainclaw/store.json` and are shared via Git (or by reading the same file).
+These live as individual JSON files under `.brainclaw/memory/` (constraints, decisions, traps, instructions) and `.brainclaw/coordination/` (plans, claims, handoffs). They are versioned in `.brainclaw/.git` and shared via Git.
 
 ### Runtime memory
 Operational observations that may be short-lived, host-specific, or private.
@@ -59,8 +59,9 @@ brainclaw makes this context visible and versionable.
 
 brainclaw keeps:
 
-- canonical structured JSON as the source of truth (`.brainclaw/store.json`)
-- a generated readable view in each agent's native format (`CLAUDE.md`, `.cursor/rules/brainclaw.md`, etc.)
+- canonical structured JSON as the source of truth (individual files under `.brainclaw/memory/` and `.brainclaw/coordination/`)
+- a derived readable view (`project.md`) regenerated best-effort from canonical state
+- native agent instruction files (`CLAUDE.md`, `.cursor/rules/brainclaw.md`, etc.) generated via `brainclaw export`
 
 This balances machine reliability with human readability.
 
