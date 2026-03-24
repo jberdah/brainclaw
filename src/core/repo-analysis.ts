@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import YAML from 'yaml';
 import { MEMORY_DIR } from './io.js';
 import type { ProjectMode } from './schema.js';
 
@@ -21,6 +22,36 @@ const MULTI_PROJECT_DIRS = ['apps', 'packages', 'services'];
 export function analyzeRepository(cwd: string): RepoAnalysisResult {
   const reasons: string[] = [];
 
+  // ── Signal 1: Existing brainclaw config already declares multi-project ──
+  const configPath = path.join(cwd, MEMORY_DIR, 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    try {
+      const raw = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> | null;
+      if (raw) {
+        const mode = raw.project_mode as string | undefined;
+        const projects = raw.projects as { strategy?: string; known?: unknown[] } | undefined;
+        const strategy = projects?.strategy ?? 'manual';
+        const knownCount = Array.isArray(projects?.known) ? projects.known.length : 0;
+
+        if (mode === 'multi-project' || strategy === 'folder' || knownCount > 0) {
+          reasons.push(
+            `Existing brainclaw config: project_mode=${mode ?? 'auto'}, strategy=${strategy}` +
+              (knownCount > 0 ? `, ${knownCount} known project(s)` : ''),
+          );
+        }
+      }
+    } catch {
+      // Config unreadable — fall through to heuristic detection.
+    }
+  }
+
+  // ── Signal 2: Child brainclaw stores (subdirectories with .brainclaw/) ──
+  const scan = scanChildStoresShallow(cwd);
+  if (scan.length > 0) {
+    reasons.push(`Found ${scan.length} child brainclaw store(s): ${scan.join(', ')}`);
+  }
+
+  // ── Signal 3: Classic monorepo / workspace markers ──
   for (const marker of MULTI_PROJECT_MARKERS) {
     if (fs.existsSync(path.join(cwd, marker))) {
       reasons.push(`Found workspace marker: ${marker}`);
@@ -60,6 +91,30 @@ export function analyzeRepository(cwd: string): RepoAnalysisResult {
     recommendedMode: 'single-project',
     reasons: ['No monorepo or multi-project markers detected'],
   };
+}
+
+/**
+ * Quick depth-1 scan for subdirectories that contain a .brainclaw/ store.
+ * Returns relative paths of child stores found.
+ */
+function scanChildStoresShallow(cwd: string): string[] {
+  const childStores: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    return childStores;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.name.startsWith('.')) continue;
+    const childBrainclaw = path.join(cwd, entry.name, MEMORY_DIR);
+    if (fs.existsSync(childBrainclaw)) {
+      childStores.push(entry.name);
+    }
+  }
+  return childStores;
 }
 
 /** Markers whose presence indicates a service/project boundary worth initialising. */

@@ -156,6 +156,14 @@ export function resolveContextStoreCwd(
     return cwd;
   }
 
+  // ── Fast path: walk from target upward to cwd looking for a child store ──
+  // This works regardless of project_mode or strategy configuration.
+  const childStore = findClosestStoreBelow(absoluteTarget, primary.cwd);
+  if (childStore) {
+    return childStore;
+  }
+
+  // ── Fallback: use workspace project discovery (folder mode, registry, etc.) ──
   let config;
   try {
     config = loadConfig(primary.cwd);
@@ -181,6 +189,40 @@ export function resolveContextStoreCwd(
   }
 
   return cwd;
+}
+
+/**
+ * Walk from `target` upward toward `ceiling` (exclusive), returning the first
+ * directory that contains a `.brainclaw/config.yaml`.  Returns undefined when
+ * no child store is found between target and ceiling.
+ *
+ * This deliberately bypasses workspace project discovery so that child stores
+ * are resolved even when the parent config is set to auto/manual mode.
+ */
+function findClosestStoreBelow(target: string, ceiling: string): string | undefined {
+  const resolvedCeiling = path.resolve(ceiling);
+
+  // If target is a file, start from its parent directory
+  let current: string;
+  try {
+    current = fs.statSync(target).isDirectory() ? path.resolve(target) : path.resolve(path.dirname(target));
+  } catch {
+    // Target doesn't exist on disk — try its parent as a directory
+    current = path.resolve(path.dirname(target));
+  }
+
+  while (current !== resolvedCeiling) {
+    const configPath = path.join(current, MEMORY_DIR, 'config.yaml');
+    if (fs.existsSync(configPath)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) break; // filesystem root
+    current = parent;
+  }
+
+  return undefined;
 }
 
 /**
