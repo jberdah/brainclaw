@@ -239,6 +239,34 @@ describe('core/store-resolution', () => {
       }
     });
 
+    it('switches to child store even when parent is in auto/manual mode (not folder)', () => {
+      const workspace = tmpDir('bclaw-context-store-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig({
+          ...defaultConfig('workspace', {
+            projectId: 'prj_workspace',
+            projectMode: 'auto',
+            projectStrategy: 'manual',
+          }),
+        }, workspace);
+
+        const child = path.join(workspace, 'api');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+        saveConfig({
+          ...defaultConfig('api', {
+            projectId: 'prj_api',
+          }),
+        }, child);
+
+        const resolved = resolveContextStoreCwd(workspace, 'api/src/server.ts');
+        assert.equal(resolved, child);
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
     it('keeps the current store when target is not a path into a child project', () => {
       const workspace = tmpDir('bclaw-context-store-');
       try {

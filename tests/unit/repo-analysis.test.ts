@@ -48,4 +48,64 @@ describe('core/repo-analysis', () => {
     assert.equal(result.recommendedMode, 'multi-project');
     assert.ok(result.reasons.some((reason) => reason.includes('workspace configuration')));
   });
+
+  it('recommends multi-project when brainclaw config has project_mode=multi-project', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+    const brainclawDir = path.join(dir, '.brainclaw');
+    fs.mkdirSync(brainclawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(brainclawDir, 'config.yaml'),
+      'schema_version: 2\nversion: 1\nproject_name: test\nproject_mode: multi-project\nprojects:\n  strategy: folder\n  known: []\n',
+      'utf-8',
+    );
+
+    const result = analyzeRepository(dir);
+    assert.equal(result.recommendedMode, 'multi-project');
+    assert.ok(result.reasons.some((reason) => reason.includes('brainclaw config')));
+  });
+
+  it('recommends multi-project when brainclaw config has known projects', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+    const brainclawDir = path.join(dir, '.brainclaw');
+    fs.mkdirSync(brainclawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(brainclawDir, 'config.yaml'),
+      'schema_version: 2\nversion: 1\nproject_name: test\nproject_mode: auto\nprojects:\n  strategy: manual\n  known:\n    - name: api\n      path: ./api\n',
+      'utf-8',
+    );
+
+    const result = analyzeRepository(dir);
+    assert.equal(result.recommendedMode, 'multi-project');
+    assert.ok(result.reasons.some((reason) => reason.includes('1 known project')));
+  });
+
+  it('recommends multi-project when child brainclaw stores exist', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+    // Create a child directory with its own .brainclaw store
+    const childDir = path.join(dir, 'api');
+    fs.mkdirSync(path.join(childDir, '.brainclaw'), { recursive: true });
+
+    const result = analyzeRepository(dir);
+    assert.equal(result.recommendedMode, 'multi-project');
+    assert.ok(result.reasons.some((reason) => reason.includes('child brainclaw store')));
+  });
+
+  it('recommends multi-project with folder strategy even without classic monorepo markers', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+    const brainclawDir = path.join(dir, '.brainclaw');
+    fs.mkdirSync(brainclawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(brainclawDir, 'config.yaml'),
+      'schema_version: 2\nversion: 1\nproject_name: test\nproject_mode: auto\nprojects:\n  strategy: folder\n  known: []\n',
+      'utf-8',
+    );
+
+    const result = analyzeRepository(dir);
+    assert.equal(result.recommendedMode, 'multi-project');
+    assert.ok(result.reasons.some((reason) => reason.includes('strategy=folder')));
+  });
 });
