@@ -3,22 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { resolveCrossProjectLinks, detectCrossProjectCycles, loadCrossProjectState, resolveCrossProjectTarget } from '../../src/core/cross-project.js';
 import { saveState } from '../../src/core/state.js';
-import { loadConfig, saveConfig } from '../../src/core/config.js';
+import { defaultConfig, loadConfig, saveConfig } from '../../src/core/config.js';
+import { ensureMemoryDir } from '../../src/core/io.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { State } from '../../src/core/schema.js';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
-const NODE = process.execPath;
-
 function initProject(dir: string): void {
-  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
-  spawnSync(NODE, [CLI_PATH, 'init', '-y', '--no-analyze-repo'], {
-    cwd: dir, encoding: 'utf-8', timeout: 10000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', HOME: fakeHome, USERPROFILE: fakeHome },
-  });
+  ensureMemoryDir(dir);
+  saveConfig(defaultConfig('linked-project', { projectId: 'prj_linked' }), dir);
 }
 
 function tmpDir(): string {
