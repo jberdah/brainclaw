@@ -1,7 +1,9 @@
 import type { State } from './schema.js';
 import { listClaims } from './claims.js';
 import { loadInstructions } from './instructions.js';
+import { memoryPath, writeFileAtomic } from './io.js';
 import { isTrapActive } from './traps.js';
+import { logger } from './logger.js';
 
 export function generateMarkdown(state: State, cwd?: string): string {
   const lines: string[] = ['# Project Memory', ''];
@@ -113,4 +115,20 @@ export function generateMarkdown(state: State, cwd?: string): string {
   lines.push('');
 
   return lines.join('\n');
+}
+
+/**
+ * Rebuild `.brainclaw/project.md` from canonical state.
+ *
+ * This is a **derived view** — it can always be regenerated from the
+ * canonical JSON files. Call this once at the end of a top-level mutation,
+ * not inside every nested helper. Best-effort: failures are logged but
+ * never propagate to the caller.
+ */
+export function rebuildProjectMd(state: State, cwd?: string): void {
+  try {
+    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(state, cwd));
+  } catch (err) {
+    logger.debug('Failed to rebuild project.md:', err);
+  }
 }

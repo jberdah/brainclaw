@@ -1,8 +1,9 @@
 import { resolveAgentScope, resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { createInstruction } from '../core/instructions.js';
-import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { memoryExists } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -43,7 +44,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
   }
 
   let entry: InstructionEntry | undefined;
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     entry = createInstruction(text, {
       layer,
       scope,
@@ -51,7 +52,7 @@ export function runInstruction(text: string, options: InstructionOptions = {}): 
       author: options.author ?? resolveCurrentAgentName(cwd),
       supersedes: options.supersedes,
     }, cwd);
-    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd)));
+    rebuildProjectMd(loadState(cwd), cwd);
   });
   if (!entry) {
     console.error('Error: failed to persist instruction.');

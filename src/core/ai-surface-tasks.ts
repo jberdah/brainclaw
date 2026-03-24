@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { JsonStore } from './json-store.js';
-import { resolveEntityDir, withStoreLock } from './io.js';
+import { resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { AiSurfaceTaskRequestSchema, type AiSurfaceTaskRequest } from './schema.js';
 
 function surfaceTasksDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
@@ -24,7 +25,7 @@ export function ensureAiSurfaceTasksDir(cwd?: string): void {
 }
 
 export function saveAiSurfaceTask(task: AiSurfaceTaskRequest, cwd?: string): void {
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     ensureAiSurfaceTasksDir(cwd);
     const writeStore = new JsonStore<AiSurfaceTaskRequest>({
       dirPath: surfaceTasksDir(cwd, 'write'),

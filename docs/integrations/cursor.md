@@ -14,7 +14,7 @@ brainclaw export --format cursor-rules --write
 
 - use MCP as the default dynamic path for context, board state, plans, and claims
 - let the generated `.cursor/rules/brainclaw.md` tell Cursor when to consult Brainclaw and how to stay inside the workflow
-- use `.brainclaw/project.md` only as readable fallback shared state
+- use `.brainclaw/project.md` only as readable fallback (derived view, may be stale — run `brainclaw rebuild` to refresh)
 - rely on claims and plans when multiple agents or humans are active in the same repo
 
 ## Key point

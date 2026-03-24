@@ -1,7 +1,7 @@
 import { memoryExists } from '../core/io.js';
-import { memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { loadClaim, listClaims, releaseClaim } from '../core/claims.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 
 export interface ReleaseClaimOptions {
@@ -17,7 +17,7 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
 
   try {
     let claim = loadClaim(id, options.cwd);
-    withStoreLock(options.cwd, () => {
+    mutate({ cwd: options.cwd }, () => {
       const existing = loadClaim(id, options.cwd);
       claim = releaseClaim(id, options.cwd);
       let state = loadState(options.cwd);
@@ -37,7 +37,7 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
           saveState(state, options.cwd);
         }
       }
-      writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+      rebuildProjectMd(state, options.cwd);
     });
     console.log(`✔ Claim [${id}] released (was: ${claim.agent} → ${claim.scope})`);
   } catch (e: unknown) {

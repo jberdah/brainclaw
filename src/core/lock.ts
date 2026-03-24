@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DEFAULT_TIMEOUT_MS = 2000;
+const DEFAULT_TIMEOUT_MS = 5000;
 const LOCK_RETRY_INTERVAL_MS = 50;
-const LOCK_EXPIRY_MS = 5000;
+const LOCK_EXPIRY_MS = 10000;
 const heldLocks = new Map<string, number>();
 
 interface LockData {

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { memoryExists } from '../core/io.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadConfig } from '../core/config.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { loadState, persistState } from '../core/state.js';
@@ -321,6 +322,7 @@ function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
     }
   }
   persistState(state, cwd);
+  rebuildProjectMd(loadState(cwd), cwd);
   return promotedItemId;
 }
 

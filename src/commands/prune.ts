@@ -1,6 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { memoryExists } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
 import { expireStaleActiveClaims } from '../core/claims.js';
 
@@ -20,7 +21,7 @@ export function runPrune(options: PruneOptions = {}): void {
   let expiredClaimsCount = 0;
   let expiredNotesCount = 0;
 
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     const state = loadState(cwd);
     const originalLength = state.active_constraints.length;
 
@@ -48,7 +49,7 @@ export function runPrune(options: PruneOptions = {}): void {
       }
     }
 
-    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd), cwd));
+    rebuildProjectMd(loadState(cwd), cwd);
   });
 
   if (options.expired) {

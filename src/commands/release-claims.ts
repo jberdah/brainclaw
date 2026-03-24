@@ -1,7 +1,8 @@
 import { execSync } from 'node:child_process';
-import { memoryExists, memoryPath, withStoreLock, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 
 export interface ReleaseClaimsOptions {
@@ -52,7 +53,7 @@ export function runReleaseClaims(options: ReleaseClaimsOptions = {}): void {
 
   let released = 0;
 
-  withStoreLock(options.cwd, () => {
+  mutate({ cwd: options.cwd }, () => {
     let state = loadState(options.cwd);
 
     for (const claim of toRelease) {
@@ -78,7 +79,7 @@ export function runReleaseClaims(options: ReleaseClaimsOptions = {}): void {
     }
 
     state = loadState(options.cwd);
-    writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(state, options.cwd));
+    rebuildProjectMd(state, options.cwd);
   });
 
   if (released > 0) {

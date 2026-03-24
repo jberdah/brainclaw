@@ -58,7 +58,7 @@ This keeps session continuity inside Brainclaw instead of pushing the agent back
 | Runtime writes with session continuity | MCP |
 | Local behavioral reminders inside the agent UI | native agent files |
 | Human inspection or scripting | CLI |
-| Simple readable fallback | `.brainclaw/project.md` |
+| Simple readable fallback | `.brainclaw/project.md` (derived view, may be stale) |
 
 ## Starting The Server
 
@@ -87,16 +87,26 @@ Interview answers are keyed by question ID and may contain:
 - `response_boolean`
 - optional explicit `suggestions` when the agent wants to confirm exact canonical memory items
 
+## Mutation Safety
+
+The MCP server serializes all mutations through a single-writer queue (`McpTaskRunner`). When an agent calls a write tool (e.g. `bclaw_claim`, `bclaw_write_note`, `bclaw_create_plan`), the request is enqueued and executed one at a time. This guarantees:
+
+- no concurrent writes from the same MCP connection
+- no partial state from interleaved mutations
+- deterministic ordering of operations
+
+A secondary file-based lock (`mutate()`) provides cross-process safety in case CLI commands run alongside MCP. But for agents, MCP is the safe path by design — no extra precautions needed.
+
 ## Important Rule
 
-If the agent has MCP available, do not treat the CLI as the primary runtime interface.
+If the agent has MCP available, do not treat the CLI as the primary runtime interface. All agent mutations MUST go through MCP tools.
 
 The CLI remains valuable for:
 
-- setup
+- setup and initialization
 - bootstrap by a human operator
-- scripting
+- scripting and automation
 - release and packaging
 - debugging and fallback access
 
-But for capable agents, MCP should be the first-class path for dynamic state.
+But for capable agents, MCP is the first-class path for both reads and writes.

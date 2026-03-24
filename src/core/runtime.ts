@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveCurrentHostId, sanitizeHostId } from './host.js';
-import { resolveEntityDir, withStoreLock } from './io.js';
+import { resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
@@ -58,7 +59,7 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
     ? { ...note, visibility, host_id: hostId }
     : { ...note, visibility, host_id: hostId };
 
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     ensureRuntimeDir(note.agent, cwd, visibility, hostId);
     const filepath = visibility === 'shared'
       ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
@@ -78,7 +79,7 @@ export function runtimeNotePath(note: RuntimeNote, cwd?: string): string {
 }
 
 export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
-  return withStoreLock(cwd, () => {
+  return mutate({ cwd }, () => {
     const filepath = runtimeNotePath(note, cwd);
     if (!fs.existsSync(filepath)) {
       return false;

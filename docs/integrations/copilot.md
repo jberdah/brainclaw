@@ -14,7 +14,7 @@ brainclaw export --format copilot-instructions --write
 
 - use MCP whenever the Copilot surface supports it for fresh context and coordination views
 - keep `.github/copilot-instructions.md` lightweight and behavioral
-- use `.brainclaw/project.md` as readable fallback, not as the only live context source
+- use `.brainclaw/project.md` as readable fallback (derived view, regenerated best-effort — may need `brainclaw rebuild` if stale)
 - use plans, claims, and handoffs to reduce ambiguity across sessions
 
 ## Why this matters

@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ZodType, type ZodTypeDef } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
-import { memoryDir, ensureMemoryDir, memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
+import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent } from './event-log.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
-import { generateMarkdown } from './markdown.js';
+import { rebuildProjectMd } from './markdown.js';
 export function emptyState(): State {
   return {
     version: 1,
@@ -109,10 +110,10 @@ function writeStateDirectories(state: State, cwd?: string): void {
 
 export function persistState(state: State, cwd?: string, options: PersistStateOptions = {}): void {
   const effectiveCwd = cwd ?? process.cwd();
-  withStoreLock(effectiveCwd, () => {
+  mutate({ cwd: effectiveCwd }, () => {
     writeStateDirectories(state, effectiveCwd);
     if (options.writeProjectMarkdown ?? true) {
-      writeFileAtomic(memoryPath('project.md', effectiveCwd), generateMarkdown(state, effectiveCwd));
+      rebuildProjectMd(state, effectiveCwd);
     }
     appendEvent({
       action: options.eventAction ?? 'update',

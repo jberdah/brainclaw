@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveEntityDir, withStoreLock } from './io.js';
+import { resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { generateId } from './ids.js';
 import { InstructionEntrySchema, type Config, type InstructionEntry, type InstructionLayer } from './schema.js';
 import { JsonStore } from './json-store.js';
@@ -36,7 +37,7 @@ export function loadInstructions(cwd?: string): InstructionEntry[] {
 }
 
 export function saveInstruction(entry: InstructionEntry, cwd?: string): void {
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     instructionStore(cwd, 'write').save(InstructionEntrySchema.parse(entry));
   });
 }

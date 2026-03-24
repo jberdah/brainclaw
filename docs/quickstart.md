@@ -74,7 +74,9 @@ This keeps non-code work visible to the project without overloading the active c
 
 ## Important: one agent at a time
 
-For now, use brainclaw for sequential collaboration. One agent works, finishes, and the next one picks up from shared context. Running multiple agents in parallel on the same checkout will cause conflicts.
+brainclaw serializes all store mutations (file lock + MCP single-writer queue), so writes are safe. But running multiple agents in parallel on the same checkout can still cause Git conflicts and confusing state transitions.
+
+Use brainclaw for sequential collaboration: one agent works, finishes, and the next one picks up from shared context. Use `bclaw_session_end` to hand off cleanly.
 
 ## Next reads
 

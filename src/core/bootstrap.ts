@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { JsonStore } from './json-store.js';
 import { generateId, generateIdWithLabel, nowISO } from './ids.js';
-import { memoryPath, resolveEntityDir, withStoreLock, writeFileAtomic } from './io.js';
+import { resolveEntityDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import {
   BootstrapApplicationReceiptSchema,
   BootstrapInterviewAnswerSchema,
@@ -39,7 +40,7 @@ import { buildAgentToolingContext } from './agent-context.js';
 import { createInstruction, loadInstructions, saveInstruction } from './instructions.js';
 import { resolveCurrentAgentName } from './agent-registry.js';
 import { loadState, persistState } from './state.js';
-import { generateMarkdown } from './markdown.js';
+import { rebuildProjectMd } from './markdown.js';
 
 const README_CANDIDATES = ['README.md', 'README', 'README.txt', 'README.mdx'];
 const DOC_HINTS = ['docs', 'doc'];
@@ -1594,7 +1595,7 @@ export function applyBootstrapImport(options: ApplyBootstrapOptions = {}): Boots
   let createdCount = 0;
   let skippedCount = 0;
 
-  withStoreLock(cwd, () => {
+  mutate({ cwd }, () => {
     const state = loadState(cwd);
     const activeInstructionKeys = new Set(
       loadInstructions(cwd)
@@ -1739,7 +1740,7 @@ export function applyBootstrapImport(options: ApplyBootstrapOptions = {}): Boots
       persistState(state, cwd, { writeProjectMarkdown: false });
     }
     if (createdCount > 0) {
-      writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd), cwd));
+      rebuildProjectMd(loadState(cwd), cwd);
     }
   });
 
@@ -1778,7 +1779,7 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
   let deletedCount = 0;
   let skippedCount = 0;
 
-  withStoreLock(resolvedCwd, () => {
+  mutate({ cwd: resolvedCwd }, () => {
     const state = loadState(resolvedCwd);
     const instructions = loadInstructions(resolvedCwd);
     let stateChanged = false;
@@ -1821,7 +1822,7 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
       persistState(state, resolvedCwd, { writeProjectMarkdown: false });
     }
     if (deactivatedCount > 0 || deletedCount > 0) {
-      writeFileAtomic(memoryPath('project.md', resolvedCwd), generateMarkdown(loadState(resolvedCwd), resolvedCwd));
+      rebuildProjectMd(loadState(resolvedCwd), resolvedCwd);
     }
   });
 

@@ -14,7 +14,7 @@ brainclaw export --format claude-md --write
 
 - use MCP as the default runtime path for dynamic retrieval and writes
 - keep `CLAUDE.md` lightweight and behavioral: it should tell Claude Code when to call Brainclaw, not carry all mutable workspace state
-- use `.brainclaw/project.md` as a readable fallback baseline, not as the primary live source of truth
+- use `.brainclaw/project.md` as a readable fallback (it is a derived view, regenerated best-effort — run `brainclaw rebuild` if stale)
 - use hooks or workflow checks when a stronger reminder is needed
 
 ## Key idea

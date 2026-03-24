@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryDir, withStoreLock } from './io.js';
+import { memoryDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { logger } from './logger.js';
 import { appendEvent } from './event-log.js';
@@ -54,7 +55,7 @@ function auditLogPath(cwd?: string): string {
 
 export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAction; actor: string }, cwd?: string): void {
   try {
-    withStoreLock(cwd, () => {
+    mutate({ cwd }, () => {
       const full: AuditEntry = {
         timestamp: nowISO(),
         actor: entry.actor,
