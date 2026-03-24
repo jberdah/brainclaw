@@ -57,7 +57,7 @@ describe('init first-agent curator', () => {
 
     it('fresh init succeeds when detected agent export needs config state', async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-init-gemini-'));
-      const initModuleUrl = pathToFileURL(path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'commands', 'init.js')).href;
+      const initModuleUrl = pathToFileURL(path.resolve(import.meta.dirname, '..', '..', 'src', 'commands', 'init.js')).href;
       try {
         const script = [
           `import { runInit } from ${JSON.stringify(initModuleUrl)};`,
