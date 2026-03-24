@@ -49,7 +49,7 @@ import {
   readSetupState,
   ALL_KNOWN_AGENTS,
 } from './setup.js';
-import { resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
@@ -1047,7 +1047,7 @@ export class McpServerConnection {
 }
 
 export function runMcp(): void {
-  const cwd = process.cwd();
+  const cwd = resolveEffectiveCwd();
 
   if (!memoryExists(cwd)) {
     console.error('Project memory not initialized. Run `brainclaw init` first.');
@@ -1175,7 +1175,7 @@ export function handleMcpReadToolCall(
   args: Record<string, unknown> = {},
   context: McpReadToolContext = {},
 ): McpToolResponse {
-  const cwd = context.cwd ?? process.cwd();
+  const cwd = context.cwd ?? resolveEffectiveCwd();
 
   if (name === 'bclaw_get_context') {
     const result = buildContext({
