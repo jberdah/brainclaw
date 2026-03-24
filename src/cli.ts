@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import path from 'node:path';
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
@@ -99,16 +100,24 @@ program
     const root = actionCommand.optsWithGlobals();
     initLogLevel({ verbose: root.verbose, debug: root.debug });
 
-    // Resolve effective cwd (--cwd > BRAINCLAW_PROJECT > active-project > process.cwd)
-    const effectiveCwd = resolveEffectiveCwd({ explicitCwd: root.cwd });
-    if (effectiveCwd !== process.cwd()) {
-      // Store resolved cwd so commands can read it via optsWithGlobals().cwd
-      actionCommand.setOptionValue('cwd', effectiveCwd);
-    }
+    // Skip effective cwd resolution for commands that create the store
+    const cmdName = actionCommand.name();
+    const skipResolution = cmdName === 'init' || cmdName === 'setup';
 
-    const removed = cleanOrphanFiles(memoryDir(effectiveCwd));
-    if (removed > 0) {
-      logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir(effectiveCwd)}`);
+    if (!skipResolution) {
+      // Resolve effective cwd (--cwd > BRAINCLAW_PROJECT > active-project > process.cwd)
+      const effectiveCwd = resolveEffectiveCwd({ explicitCwd: root.cwd });
+      if (effectiveCwd !== process.cwd()) {
+        actionCommand.setOptionValue('cwd', effectiveCwd);
+      }
+
+      const removed = cleanOrphanFiles(memoryDir(effectiveCwd));
+      if (removed > 0) {
+        logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir(effectiveCwd)}`);
+      }
+    } else if (root.cwd) {
+      // For init/setup, still respect explicit --cwd but nothing else
+      actionCommand.setOptionValue('cwd', path.resolve(root.cwd));
     }
   });
 

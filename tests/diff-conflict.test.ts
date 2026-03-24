@@ -6,12 +6,12 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 // Absolute URL to the compiled state module for inline script tests
 const DIST_STATE_URL = pathToFileURL(
-  path.resolve(import.meta.dirname, '..', 'src', 'core', 'state.js')
+  path.resolve(import.meta.dirname, '..', '..', 'dist', 'core', 'state.js')
 ).href;
 
 function tmpDir(): string {

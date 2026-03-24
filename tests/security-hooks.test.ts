@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 function tmpDir(): string {

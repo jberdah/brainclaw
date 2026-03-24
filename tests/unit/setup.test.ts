@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { scanGitRepos } from '../../src/commands/setup.js';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'src', 'cli.js');
+const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 const CLI_TIMEOUT_MS = 60000;
 let testHomeDir = '';
