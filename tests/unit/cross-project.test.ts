@@ -14,8 +14,7 @@ const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cl
 const NODE = process.execPath;
 
 function initProject(dir: string): void {
-  const fakeHome = path.join(dir, '.fake-home');
-  fs.mkdirSync(fakeHome, { recursive: true });
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   spawnSync(NODE, [CLI_PATH, 'init', '-y', '--no-analyze-repo'], {
     cwd: dir, encoding: 'utf-8', timeout: 10000,
     env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', HOME: fakeHome, USERPROFILE: fakeHome },

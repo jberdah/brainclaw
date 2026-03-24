@@ -15,8 +15,7 @@ function tmpDir(): string {
 }
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
-  const fakeHome = path.join(cwd, '.fake-home');
-  fs.mkdirSync(fakeHome, { recursive: true });
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -59,8 +58,7 @@ function enableReputation(dir: string): void {
 }
 
 function startMcp(cwd: string, envOverrides: Record<string, string> = {}): ChildProcessWithoutNullStreams {
-  const fakeHome = path.join(cwd, '.fake-home');
-  fs.mkdirSync(fakeHome, { recursive: true });
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   return spawn(NODE, [CLI_PATH, 'mcp'], {
     cwd,
     stdio: 'pipe',

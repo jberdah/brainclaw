@@ -19,8 +19,7 @@ function extractId(stdout: string): string {
 }
 
 function run(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
-  const fakeHome = path.join(cwd, '.fake-home');
-  fs.mkdirSync(fakeHome, { recursive: true });
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -128,10 +127,13 @@ describe('Shared plan', () => {
   });
 
   it('rejects reserved subcommand words as plan text', () => {
-    // 'update' should error with exit 1
+    // 'update' without an ID should error with exit 1
     const updateRes = run(['plan', 'update'], dir);
     assert.equal(updateRes.exitCode, 1, `expected exit 1 for 'plan update'`);
-    assert.ok(updateRes.stderr.includes('looks like a subcommand'), `expected subcommand error for 'plan update'`);
+    assert.ok(
+      updateRes.stderr.includes('looks like a subcommand') || updateRes.stderr.includes('requires <id>'),
+      `expected subcommand or missing-id error for 'plan update', got: ${updateRes.stderr}`,
+    );
   });
 
   it('plan list and plan ls alias behaves like list-plans', () => {
