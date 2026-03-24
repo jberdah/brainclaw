@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstruction } from '../../src/core/instructions.js';
 import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
@@ -583,6 +584,9 @@ describe('core/context', () => {
   });
 
   it('resolves a child project store when a workspace target path points into a nested project', () => {
+    // Init a git repo so store chain resolution can discover the parent workspace
+    try { execSync('git init', { cwd: workspace.dir, stdio: 'ignore' }); } catch { /* skip if git unavailable */ }
+
     workspace.updateConfig((config) => {
       config.project_mode = 'multi-project';
       config.projects.strategy = 'folder';
