@@ -7,6 +7,7 @@ import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../co
 import { resolveInstructions, loadInstructions } from '../core/instructions.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import {
+  AGENT_EXPORT_REGISTRY,
   resolveExportTarget,
   resolveExportTargetByFormat,
   writeExportFile,
@@ -32,6 +33,7 @@ export interface ExportOptions {
   detect?: boolean;
   write?: boolean;
   shared?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
@@ -40,6 +42,11 @@ export function runExport(options: ExportOptions): void {
   if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  if (options.all) {
+    runExportAll(cwd, options);
+    return;
   }
 
   if (options.detect) {
@@ -52,7 +59,7 @@ export function runExport(options: ExportOptions): void {
   }
 
   if (!options.format) {
-    console.error('Error: --format or --detect is required.');
+    console.error('Error: --format, --detect, or --all is required.');
     process.exit(1);
   }
 
@@ -115,6 +122,43 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
       console.log(message);
     }
   }
+}
+
+function runExportAll(cwd: string, options: ExportOptions): void {
+  // Deduplicate by format (e.g. codex and opencode both use agents-md)
+  const seen = new Set<ExportFormat>();
+  const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
+    if (seen.has(t.format)) return false;
+    seen.add(t.format);
+    return true;
+  });
+
+  let written = 0;
+  const allGitignoreEntries: string[] = [];
+
+  for (const target of targets) {
+    try {
+      const content = generateExport(target.format, options, cwd);
+      const result = writeExportFile(content, target.relativePath, cwd);
+      const autoConfigs = writeExportCompanionFiles(target.format, cwd);
+      const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
+      allGitignoreEntries.push(...gitignoreEntries);
+      declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
+      console.log(`✔ ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+      written++;
+    } catch (err) {
+      logger.debug(`Failed to export ${target.format}:`, err);
+      console.warn(`⚠ Skipped ${target.format}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Consolidate gitignore entries
+  if (allGitignoreEntries.length > 0) {
+    ensureGitignoreEntries(cwd, [...new Set(allGitignoreEntries)]);
+    console.log('✔ Updated .gitignore');
+  }
+
+  console.log(`✔ Exported ${written} agent file(s)`);
 }
 
 export function writeAgentExportForAgent(
