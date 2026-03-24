@@ -257,9 +257,28 @@ Likely persisted fields:
 
 This should stay clearly separate from canonical memory items such as decisions and constraints.
 
+## Current Implementation (v0.23.0)
+
+`brainclaw switch` provides the first layer of project navigation:
+
+- `brainclaw switch <name-or-path>` — set active project by name or relative path
+- `brainclaw switch --list` — discover available projects in workspace
+- `resolveProjectRef()` — shared resolver for CLI and MCP (name, path, registry lookup)
+- `resolveEffectiveCwd()` — single source of truth: `--cwd` > `BRAINCLAW_PROJECT` env > active-project > cwd
+- MCP tools automatically resolve the active project
+
+This covers the most common agent friction (cwd-dependent resolution) without requiring the full `project_ref` model yet.
+
 ## Migration Strategy
 
 The migration should be low-risk and incremental.
+
+Phase 0 (done):
+
+- `brainclaw switch` with name/path resolution
+- global `--cwd` option
+- `BRAINCLAW_PROJECT` environment variable
+- `resolveEffectiveCwd()` used by CLI and MCP
 
 Phase 1:
 

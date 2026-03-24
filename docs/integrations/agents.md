@@ -101,6 +101,41 @@ brainclaw adds all generated files to `.gitignore` automatically during init.
 
 Exception: use `--shared` if you intentionally want the main instruction file (e.g., CLAUDE.md) versioned for the whole team.
 
+## Multi-project workspaces
+
+When a workspace contains multiple brainclaw-initialized child projects, agents need to target the correct project store. There are three mechanisms (from most to least ergonomic):
+
+### 1. `brainclaw switch` (persistent)
+
+An operator or agent sets the active project once, and all subsequent commands resolve against it:
+
+```bash
+brainclaw switch apps/lodestar    # set active project
+brainclaw plan list               # targets lodestar
+bclaw_get_context()               # MCP also targets lodestar
+brainclaw switch --clear          # back to workspace root
+```
+
+### 2. `BRAINCLAW_PROJECT` environment variable
+
+Set in the shell or agent configuration. Useful for CI/CD or when the agent can control its environment:
+
+```bash
+export BRAINCLAW_PROJECT=lodestar
+```
+
+### 3. `--cwd` flag (one-off override)
+
+For a single command without changing the active project:
+
+```bash
+brainclaw --cwd apps/lodestar plan list
+```
+
+**Priority**: `--cwd` > `BRAINCLAW_PROJECT` > active project > shell cwd.
+
+**Discovery**: use `brainclaw switch --list` to see all available projects in the workspace.
+
 ## Session lifecycle
 
 ### Starting work

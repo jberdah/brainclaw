@@ -11,6 +11,53 @@ For capable coding agents, prefer MCP for dynamic runtime state:
 
 Use the CLI when a human operator is driving the workflow, when you are scripting setup or release operations, or when MCP is not the integration path.
 
+## Global Options
+
+All commands support these global options:
+
+| Option | Description |
+|---|---|
+| `--cwd <path>` | Override working directory for this invocation. Bypasses active project and env var resolution. |
+| `--verbose` | Show info-level log messages on stderr |
+| `--debug` | Show debug-level log messages on stderr |
+
+**Effective cwd resolution priority** (highest wins):
+
+1. `--cwd` flag
+2. `BRAINCLAW_PROJECT` environment variable (project name or path)
+3. Active project set via `brainclaw switch`
+4. `process.cwd()` (shell working directory)
+
+---
+
+## Multi-Project Navigation
+
+### `brainclaw switch [project]`
+
+Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces. The active project is persisted per-workspace in `.brainclaw/active-project.json`.
+
+| Option | Description |
+|---|---|
+| `--list` | List all available projects in the workspace |
+| `--clear` | Clear the active project (revert to cwd default) |
+| `--json` | Output as JSON |
+
+The `<project>` argument accepts:
+- **Project name** — matched against the global registry and workspace config
+- **Relative path** — resolved from the workspace root (e.g. `apps/lodestar`)
+- **Absolute path** — used directly
+
+```bash
+brainclaw switch --list              # discover available projects
+brainclaw switch lodestar            # switch by project name
+brainclaw switch apps/lodestar       # switch by relative path
+brainclaw switch                     # show current active project
+brainclaw switch --clear             # clear, revert to cwd
+brainclaw --cwd /other/path status   # one-off override without switching
+```
+
+**MCP usage:** The active project also affects MCP tools. When `bclaw_get_context()` is called without an explicit path, it resolves context from the active project's store. Agents can also use `BRAINCLAW_PROJECT=<name>` environment variable for the same effect.
+
 ---
 
 ## Initialize and Inspect
