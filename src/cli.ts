@@ -108,16 +108,19 @@ program
       // Resolve effective cwd (--cwd > BRAINCLAW_PROJECT > active-project > process.cwd)
       const effectiveCwd = resolveEffectiveCwd({ explicitCwd: root.cwd });
       if (effectiveCwd !== process.cwd()) {
-        actionCommand.setOptionValue('cwd', effectiveCwd);
+        // Change process.cwd() so all commands resolve the correct store
+        // without needing individual --cwd plumbing
+        process.chdir(effectiveCwd);
+        logger.info(`Resolved effective cwd: ${effectiveCwd}`);
       }
 
-      const removed = cleanOrphanFiles(memoryDir(effectiveCwd));
+      const removed = cleanOrphanFiles(memoryDir());
       if (removed > 0) {
-        logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir(effectiveCwd)}`);
+        logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
       }
     } else if (root.cwd) {
       // For init/setup, still respect explicit --cwd but nothing else
-      actionCommand.setOptionValue('cwd', path.resolve(root.cwd));
+      process.chdir(path.resolve(root.cwd));
     }
   });
 
