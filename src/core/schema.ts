@@ -184,6 +184,7 @@ export const InstructionEntrySchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   author: z.string(),
+  model: z.string().optional(),
   tags: z.array(z.string()).default([]),
   active: z.boolean().default(true),
   supersedes: z.string().optional(),
@@ -208,6 +209,7 @@ export const ProjectCapabilitySchema = z.object({
   created_at: z.string(),
   author: z.string(),
   author_id: z.string().optional(),
+  model: z.string().optional(),
 });
 export type ProjectCapability = z.infer<typeof ProjectCapabilitySchema>;
 
@@ -232,6 +234,7 @@ export const ProjectToolSchema = z.object({
   created_at: z.string(),
   author: z.string(),
   author_id: z.string().optional(),
+  model: z.string().optional(),
 });
 export type ProjectTool = z.infer<typeof ProjectToolSchema>;
 
@@ -306,6 +309,7 @@ export const CandidateSchema = z.object({
   created_at: z.string(),
   author: z.string(),
   author_id: z.string().optional(),
+  model: z.string().optional(),
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),
@@ -383,6 +387,7 @@ export const ClaimSchema = z.object({
   status: ClaimStatusSchema,
   released_at: z.string().optional(),
   expires_at: z.string().optional(),
+  model: z.string().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 
@@ -404,6 +409,7 @@ export const RuntimeNoteSchema = z.object({
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
   note_type: z.enum(['observation', 'session_start', 'session_end']).default('observation'),
+  model: z.string().optional(),
 });
 export type RuntimeNote = z.infer<typeof RuntimeNoteSchema>;
 
@@ -436,6 +442,7 @@ export const AiSurfaceTaskRequestSchema = z.object({
   claimed_at: z.string().optional(),
   completed_at: z.string().optional(),
   result_note: z.string().optional(),
+  model: z.string().optional(),
 });
 export type AiSurfaceTaskRequest = z.infer<typeof AiSurfaceTaskRequestSchema>;
 
@@ -470,6 +477,7 @@ export const RuntimeEventSchema = z.object({
   to: z.string().optional(),
   related_paths: z.array(z.string()).optional(),
   metadata: z.record(z.unknown()).optional(),
+  model: z.string().optional(),
 });
 export type RuntimeEvent = z.infer<typeof RuntimeEventSchema>;
 
