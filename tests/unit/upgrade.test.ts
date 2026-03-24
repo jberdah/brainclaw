@@ -159,7 +159,8 @@ Run \`brainclaw list-claims\`
 
     const claudeExport = fs.readFileSync(path.join(workspace.dir, 'CLAUDE.md'), 'utf-8');
     const claudeCommand = fs.readFileSync(path.join(workspace.dir, '.claude', 'commands', 'brainclaw.md'), 'utf-8');
-    assert.ok(claudeExport.includes('brainclaw claim list'));
+    // Adaptive template for Claude Code (Full tier) uses MCP tool names, not CLI aliases
+    assert.ok(claudeExport.includes('bclaw_claim') || claudeExport.includes('brainclaw claim'));
     assert.ok(!claudeExport.includes('brainclaw list-claims'));
     assert.ok(claudeCommand.includes('brainclaw claim create'));
     assert.ok(!claudeCommand.includes('brainclaw claim "desc"'));
