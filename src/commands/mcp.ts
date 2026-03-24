@@ -589,6 +589,26 @@ interface TaskRecord {
   payload: McpToolExecutionPayload;
   controller: AbortController;
   cancelled: boolean;
+  enqueuedAt: number;
+}
+
+/**
+ * Lightweight metrics for the single-writer mutation queue.
+ * Exposed via McpTaskRunner.metrics for observability.
+ */
+export interface McpTaskRunnerMetrics {
+  /** Total tasks executed since server start. */
+  totalExecuted: number;
+  /** Total tasks cancelled before execution. */
+  totalCancelled: number;
+  /** Current queue depth (waiting tasks). */
+  queueDepth: number;
+  /** Peak queue depth observed. */
+  peakQueueDepth: number;
+  /** Last task execution duration in ms. */
+  lastDurationMs: number;
+  /** Last task queue wait time in ms (time between enqueue and start). */
+  lastWaitMs: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -802,6 +822,12 @@ export class McpTaskRunner {
   private active: TaskRecord | undefined;
   private queue: TaskRecord[] = [];
 
+  private _totalExecuted = 0;
+  private _totalCancelled = 0;
+  private _peakQueueDepth = 0;
+  private _lastDurationMs = 0;
+  private _lastWaitMs = 0;
+
   constructor(options: McpTaskRunnerOptions) {
     this.executeTool = options.executeTool;
     this.onResult = options.onResult;
@@ -816,13 +842,29 @@ export class McpTaskRunner {
     return this.queue.map((task) => task.requestId);
   }
 
+  /** Current single-writer queue metrics. */
+  get metrics(): McpTaskRunnerMetrics {
+    return {
+      totalExecuted: this._totalExecuted,
+      totalCancelled: this._totalCancelled,
+      queueDepth: this.queue.length,
+      peakQueueDepth: this._peakQueueDepth,
+      lastDurationMs: this._lastDurationMs,
+      lastWaitMs: this._lastWaitMs,
+    };
+  }
+
   enqueue(requestId: JsonRpcId, payload: McpToolExecutionPayload): void {
     this.queue.push({
       requestId,
       payload,
       controller: new AbortController(),
       cancelled: false,
+      enqueuedAt: performance.now(),
     });
+    if (this.queue.length > this._peakQueueDepth) {
+      this._peakQueueDepth = this.queue.length;
+    }
     this.drain();
   }
 
@@ -830,6 +872,7 @@ export class McpTaskRunner {
     if (this.active && this.active.requestId === requestId) {
       this.active.cancelled = true;
       this.active.controller.abort();
+      this._totalCancelled++;
       return 'active';
     }
 
@@ -838,6 +881,7 @@ export class McpTaskRunner {
       const [task] = this.queue.splice(index, 1);
       task.cancelled = true;
       task.controller.abort();
+      this._totalCancelled++;
       return 'queued';
     }
 
@@ -865,6 +909,7 @@ export class McpTaskRunner {
       return;
     }
     if (next.cancelled) {
+      this._totalCancelled++;
       this.drain();
       return;
     }
@@ -873,6 +918,8 @@ export class McpTaskRunner {
   }
 
   private async runTask(task: TaskRecord): Promise<void> {
+    const startedAt = performance.now();
+    this._lastWaitMs = startedAt - task.enqueuedAt;
     try {
       const outcome = await this.executeTool(task.payload, task.controller.signal);
       if (!task.cancelled) {
@@ -883,6 +930,8 @@ export class McpTaskRunner {
         this.onInternalError(task.requestId, error);
       }
     } finally {
+      this._lastDurationMs = performance.now() - startedAt;
+      this._totalExecuted++;
       if (this.active === task) {
         this.active = undefined;
       }
