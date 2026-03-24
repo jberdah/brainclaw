@@ -1,7 +1,7 @@
 import { loadState, saveState } from '../core/state.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
 import { expireStaleActiveClaims } from '../core/claims.js';
 
@@ -49,7 +49,7 @@ export function runPrune(options: PruneOptions = {}): void {
       }
     }
 
-    writeFileAtomic(memoryPath('project.md', cwd), generateMarkdown(loadState(cwd), cwd));
+    rebuildProjectMd(loadState(cwd), cwd);
   });
 
   if (options.expired) {

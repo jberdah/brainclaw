@@ -1,5 +1,6 @@
 import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
 import { loadState, persistState } from '../core/state.js';
 import { generateIdWithLabel, nowISO } from '../core/ids.js';
@@ -154,6 +155,8 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
       after: { type: candidate.type, text: candidate.text },
       reason: 'trusted-agent',
     }, cwd);
+
+    rebuildProjectMd(loadState(cwd), cwd);
   });
 
   return {

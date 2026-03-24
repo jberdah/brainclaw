@@ -1,8 +1,8 @@
 import { buildOperationalIdentity } from '../core/identity.js';
-import { memoryExists, memoryPath, writeFileAtomic } from '../core/io.js';
+import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
 import { saveClaim, generateClaimId, listClaims } from '../core/claims.js';
-import { generateMarkdown } from '../core/markdown.js';
+import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, saveState } from '../core/state.js';
 import { nowISO } from '../core/ids.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
@@ -104,7 +104,7 @@ export function runClaim(description: string, options: ClaimOptions): void {
     }
 
     saveClaim(claim, options.cwd);
-    writeFileAtomic(memoryPath('project.md', options.cwd), generateMarkdown(plan ? state : loadState(options.cwd), options.cwd));
+    rebuildProjectMd(plan ? state : loadState(options.cwd), options.cwd);
   });
   const planInfo = claim.plan_id ? ` [plan ${claim.plan_id}]` : '';
   const ttlInfo = claim.expires_at ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
