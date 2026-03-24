@@ -283,6 +283,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('✔ Initialized memory git repo for versioning');
   }
 
+  // Install post-merge hook for auto-release of claims after merge
+  installPostMergeHookIfMissing(cwd);
+
   const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
   console.log('');
   console.log('Onboarding preflight:');
@@ -305,6 +308,40 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   console.log('');
   console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);
+}
+
+function installPostMergeHookIfMissing(cwd: string): void {
+  try {
+    let dir = path.resolve(cwd);
+    let gitRoot: string | undefined;
+    while (true) {
+      if (fs.existsSync(path.join(dir, '.git'))) { gitRoot = dir; break; }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    if (!gitRoot) return;
+
+    const hooksDir = path.join(gitRoot, '.git', 'hooks');
+    const hookPath = path.join(hooksDir, 'post-merge');
+    if (fs.existsSync(hookPath)) return; // don't overwrite existing hooks
+
+    if (!fs.existsSync(hooksDir)) fs.mkdirSync(hooksDir, { recursive: true });
+    const script = [
+      '#!/bin/sh',
+      '# brainclaw post-merge hook — auto-release claims on merged files',
+      'BCLAW_CMD=""',
+      'if command -v brainclaw >/dev/null 2>&1; then BCLAW_CMD="brainclaw"',
+      'elif command -v bclaw >/dev/null 2>&1; then BCLAW_CMD="bclaw"',
+      'else BCLAW_CMD="npx --no brainclaw"; fi',
+      '$BCLAW_CMD release-claims --from-git-diff 2>/dev/null || true',
+      '',
+    ].join('\n');
+    fs.writeFileSync(hookPath, script, { encoding: 'utf-8', mode: 0o755 });
+    console.log('✔ Installed post-merge hook for auto-release of claims');
+  } catch {
+    // Non-critical — skip silently
+  }
 }
 
 function resolveStorageDir(storageDir?: string): string {
