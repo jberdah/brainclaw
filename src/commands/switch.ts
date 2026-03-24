@@ -126,8 +126,8 @@ function listProjects(wsRoot: string, json: boolean): void {
     }
   }
 
-  // Discover child projects
-  const children = scanNestedBrainclawProjects(wsRoot, 4);
+  // Discover child projects (depth 7 covers deep workspace layouts like /srv/dev/repos/global/applications/*/...)
+  const children = scanNestedBrainclawProjects(wsRoot, 7);
   for (const child of children) {
     const childPath = path.resolve(child.path);
     if (childPath === wsRoot) continue;
