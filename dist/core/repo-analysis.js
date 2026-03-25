@@ -50,6 +50,16 @@ export function analyzeRepository(cwd) {
     if (matchedDirs.length > 0) {
         reasons.push(`Found top-level project folders: ${matchedDirs.join(', ')}`);
     }
+    // ── Signal 4: Multiple AGENTS.md files in the tree ──
+    const agentsFiles = findNestedAgentsFiles(cwd, 4);
+    if (agentsFiles.length > 1) {
+        reasons.push(`Found ${agentsFiles.length} AGENTS.md files: ${agentsFiles.slice(0, 5).join(', ')}`);
+    }
+    // ── Signal 5: Multiple Dockerfiles or docker-compose files (service-oriented workspace) ──
+    const dockerComposeFiles = findFilesShallow(cwd, ['docker-compose.yml', 'docker-compose.yaml'], 3);
+    if (dockerComposeFiles.length > 1) {
+        reasons.push(`Found ${dockerComposeFiles.length} docker-compose files: ${dockerComposeFiles.slice(0, 5).join(', ')}`);
+    }
     const packageJsonPath = path.join(cwd, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
         try {
@@ -183,5 +193,62 @@ export function scanWorkspaceBoundaries(rootDir, maxDepth = 3) {
     }
     walk(rootDir, 1);
     return { suggestions, alreadyInitialised };
+}
+/**
+ * Find AGENTS.md files up to maxDepth levels deep.
+ * Returns relative paths from cwd.
+ */
+function findNestedAgentsFiles(cwd, maxDepth) {
+    const results = [];
+    function walk(dir, depth) {
+        if (depth > maxDepth || results.length > 10)
+            return;
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry.isFile() && entry.name === 'AGENTS.md') {
+                results.push(path.relative(cwd, path.join(dir, entry.name)));
+            }
+            if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+                walk(path.join(dir, entry.name), depth + 1);
+            }
+        }
+    }
+    walk(cwd, 0);
+    return results;
+}
+/**
+ * Find specific filenames up to maxDepth levels deep.
+ * Returns relative paths from cwd.
+ */
+function findFilesShallow(cwd, filenames, maxDepth) {
+    const nameSet = new Set(filenames);
+    const results = [];
+    function walk(dir, depth) {
+        if (depth > maxDepth || results.length > 10)
+            return;
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry.isFile() && nameSet.has(entry.name)) {
+                results.push(path.relative(cwd, path.join(dir, entry.name)));
+            }
+            if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+                walk(path.join(dir, entry.name), depth + 1);
+            }
+        }
+    }
+    walk(cwd, 0);
+    return results;
 }
 //# sourceMappingURL=repo-analysis.js.map
