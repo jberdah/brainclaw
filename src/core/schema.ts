@@ -610,6 +610,10 @@ export const CurrentSessionStateSchema = z.object({
   agent: z.string(),
   agent_id: z.string(),
   host_id: z.string(),
+  /** OS user who started this session. */
+  user: z.string().optional(),
+  /** Process ID of the agent process (for liveness detection). */
+  pid: z.number().int().positive().optional(),
   /** Session-scoped active project (overrides global active-project.json). */
   active_project: SessionActiveProjectSchema.optional(),
 });

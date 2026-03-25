@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
@@ -30,7 +31,10 @@ export interface OperationalIdentityOptions {
   persistImplicitSession?: boolean;
 }
 
-const CURRENT_SESSION_FILE = '.current-session';
+const SESSIONS_DIR = 'sessions';
+const LEGACY_SESSION_FILE = '.current-session';
+
+// --- Public API ---
 
 export function resolveCurrentSessionId(
   env: NodeJS.ProcessEnv = process.env,
@@ -101,45 +105,175 @@ export function resolveEventSessionId(event: { session_id?: string; metadata?: R
     : undefined;
 }
 
+/**
+ * Load the current session for this agent+user combo.
+ * Checks sessions/ directory first, falls back to legacy .current-session.
+ */
 export function loadCurrentSession(cwd?: string): CurrentSessionState | undefined {
-  const filepath = currentSessionPath(cwd);
-  if (!fs.existsSync(filepath)) {
-    return undefined;
-  }
+  const dir = sessionsDir(cwd);
+  const currentUser = resolveCurrentUser();
+  const currentAgent = resolveCurrentAgentName();
 
-  try {
-    return CurrentSessionStateSchema.parse(loadVersionedJsonFile<CurrentSessionState>('current_session', filepath).document);
-  } catch {
-    return undefined;
-  }
-}
+  // 1. Look in sessions/ directory for a matching session
+  if (fs.existsSync(dir)) {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
+    const now = Date.now();
 
-export function saveCurrentSession(session: CurrentSessionState, cwd?: string): void {
-  saveVersionedJsonFile('current_session', currentSessionPath(cwd), CurrentSessionStateSchema.parse(session));
-}
-
-export function clearCurrentSession(cwd?: string, sessionId?: string): void {
-  const filepath = currentSessionPath(cwd);
-  if (!fs.existsSync(filepath)) {
-    return;
-  }
-
-  if (sessionId) {
-    const current = loadCurrentSession(cwd);
-    if (!current || current.session_id !== sessionId) {
-      return;
+    for (const file of files) {
+      try {
+        const session = CurrentSessionStateSchema.parse(
+          loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
+        );
+        // Match by agent+user (or agent only if user not set in old sessions)
+        const userMatch = !session.user || !currentUser || session.user === currentUser;
+        const agentMatch = !currentAgent || session.agent === currentAgent;
+        const alive = (now - Date.parse(session.last_seen_at)) <= ttlMs;
+        if (userMatch && agentMatch && alive) {
+          return session;
+        }
+      } catch {
+        // skip invalid session files
+      }
     }
   }
 
+  // 2. Legacy fallback: .current-session
+  const legacyPath = path.join(memoryDir(cwd), LEGACY_SESSION_FILE);
+  if (fs.existsSync(legacyPath)) {
+    try {
+      return CurrentSessionStateSchema.parse(
+        loadVersionedJsonFile<CurrentSessionState>('current_session', legacyPath).document
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Load a specific session by ID.
+ */
+export function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined {
+  const filepath = sessionFilePath(sessionId, cwd);
+  if (!fs.existsSync(filepath)) return undefined;
   try {
-    fs.unlinkSync(filepath);
+    return CurrentSessionStateSchema.parse(
+      loadVersionedJsonFile<CurrentSessionState>('current_session', filepath).document
+    );
   } catch {
-    // Ignore cleanup races.
+    return undefined;
   }
 }
 
-function currentSessionPath(cwd?: string): string {
-  return path.join(memoryDir(cwd), CURRENT_SESSION_FILE);
+/**
+ * Load ALL sessions (active + stale) from the sessions/ directory.
+ */
+export function loadAllSessions(cwd?: string): CurrentSessionState[] {
+  const dir = sessionsDir(cwd);
+  if (!fs.existsSync(dir)) return [];
+
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  const sessions: CurrentSessionState[] = [];
+  for (const file of files) {
+    try {
+      sessions.push(CurrentSessionStateSchema.parse(
+        loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
+      ));
+    } catch {
+      // skip invalid
+    }
+  }
+  return sessions.sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
+}
+
+/**
+ * Save a session to the sessions/ directory.
+ */
+export function saveCurrentSession(session: CurrentSessionState, cwd?: string): void {
+  const dir = sessionsDir(cwd);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const filepath = sessionFilePath(session.session_id, cwd);
+  saveVersionedJsonFile('current_session', filepath, CurrentSessionStateSchema.parse(session));
+}
+
+/**
+ * Clear a session. If sessionId is provided, only clear that specific session.
+ */
+export function clearCurrentSession(cwd?: string, sessionId?: string): void {
+  if (sessionId) {
+    // Remove specific session file
+    const filepath = sessionFilePath(sessionId, cwd);
+    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+    return;
+  }
+
+  // Clear the session for the current agent+user
+  const session = loadCurrentSession(cwd);
+  if (session) {
+    const filepath = sessionFilePath(session.session_id, cwd);
+    try { fs.unlinkSync(filepath); } catch { /* ignore */ }
+  }
+
+  // Also clean legacy file
+  const legacyPath = path.join(memoryDir(cwd), LEGACY_SESSION_FILE);
+  try { fs.unlinkSync(legacyPath); } catch { /* ignore */ }
+}
+
+/**
+ * Remove stale sessions that have exceeded the TTL.
+ * Returns the number of sessions removed.
+ */
+export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
+  const dir = sessionsDir(cwd);
+  if (!fs.existsSync(dir)) return 0;
+
+  const ttlMs = parseDurationToMs(ttlOverride ?? loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
+  const now = Date.now();
+  let removed = 0;
+
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  for (const file of files) {
+    try {
+      const session = CurrentSessionStateSchema.parse(
+        loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
+      );
+      if (now - Date.parse(session.last_seen_at) > ttlMs) {
+        fs.unlinkSync(path.join(dir, file));
+        removed++;
+      }
+    } catch {
+      // Remove unparseable files too
+      try { fs.unlinkSync(path.join(dir, file)); removed++; } catch { /* ignore */ }
+    }
+  }
+  return removed;
+}
+
+// --- Internal helpers ---
+
+function sessionsDir(cwd?: string): string {
+  return path.join(memoryDir(cwd), SESSIONS_DIR);
+}
+
+function sessionFilePath(sessionId: string, cwd?: string): string {
+  return path.join(sessionsDir(cwd), `${sessionId}.json`);
+}
+
+function resolveCurrentUser(): string | undefined {
+  return process.env.USER || process.env.USERNAME || os.userInfo().username || undefined;
+}
+
+function resolveCurrentAgentName(): string | undefined {
+  return process.env.BRAINCLAW_AGENT_NAME || process.env.CLAUDE_CODE_VERSION ? 'claude-code' : undefined;
+}
+
+function loadConfigSafe(cwd?: string): { implicit_session_ttl?: string } | undefined {
+  try { return loadConfig(cwd); } catch { return undefined; }
 }
 
 function resolveImplicitSession(
@@ -148,19 +282,23 @@ function resolveImplicitSession(
 ): CurrentSessionState {
   const current = loadCurrentSession(cwd);
   const persistImplicit = options.persistImplicit ?? true;
-  const ttlMs = parseDurationToMs(loadConfig(cwd).implicit_session_ttl ?? '4h');
+  const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
   const now = new Date();
+  const currentUser = resolveCurrentUser();
 
   if (
     current
     && current.agent === options.agentName
     && current.agent_id === options.agentId
     && current.host_id === options.hostId
+    && (!current.user || !currentUser || current.user === currentUser)
     && now.getTime() - Date.parse(current.last_seen_at) <= ttlMs
   ) {
     const refreshed: CurrentSessionState = {
       ...current,
       last_seen_at: now.toISOString(),
+      user: current.user || currentUser,
+      pid: process.pid,
     };
     if (persistImplicit) {
       saveCurrentSession(refreshed, cwd);
@@ -175,6 +313,8 @@ function resolveImplicitSession(
     agent: options.agentName,
     agent_id: options.agentId,
     host_id: options.hostId,
+    user: currentUser,
+    pid: process.pid,
   };
   if (persistImplicit) {
     saveCurrentSession(created, cwd);
