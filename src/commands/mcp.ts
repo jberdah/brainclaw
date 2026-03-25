@@ -30,7 +30,7 @@ import {
   resolveCurrentAgentName,
   resolveCurrentModel,
 } from '../core/agent-registry.js';
-import { appendAuditEntry } from '../core/audit.js';
+import { appendAuditEntry, readAuditLog, type AuditAction } from '../core/audit.js';
 import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
@@ -38,6 +38,7 @@ import { search } from '../core/search.js';
 import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { buildEstimationReport } from './estimation-report.js';
+import { runDoctor } from './doctor.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import {
   checkGitPresence,
@@ -335,6 +336,40 @@ export const MCP_READ_TOOLS = [
       required: ['query'],
     },
   },
+  {
+    name: 'bclaw_doctor',
+    description: 'Run health checks on the brainclaw memory store. Returns structured check results with ok/warn/error status and metrics.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        migrationCheck: { type: 'boolean', description: 'Include detailed schema migration status.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_history',
+    description: 'Show full mutation history of a memory item from the audit log.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Item ID to retrieve history for.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'bclaw_audit',
+    description: 'View the append-only audit log of all memory mutations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'Show entries since this ISO date.' },
+        actor: { type: 'string', description: 'Filter by actor name or agent ID.' },
+        action: { type: 'string', description: 'Filter by action type (create, accept, reject, etc.).' },
+        limit: { type: 'number', description: 'Show last N entries (default 20).' },
+      },
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
@@ -570,6 +605,52 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['id', 'type'],
+    },
+  },
+  {
+    name: 'bclaw_add_capability',
+    description: 'Register a new project capability. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Capability name.' },
+        description: { type: 'string', description: 'Capability description.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Additional tags.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['name', 'description'],
+    },
+  },
+  {
+    name: 'bclaw_add_tool',
+    description: 'Register a new project tool. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Tool name.' },
+        description: { type: 'string', description: 'Tool description.' },
+        type: { type: 'string', description: 'Tool type: workflow, validator, generator, utility, explorer (default: utility).' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Additional tags.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['name', 'description'],
+    },
+  },
+  {
+    name: 'bclaw_update_handoff',
+    description: 'Update the status or recipient of an open handoff. Requires contributor trust level or above.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Handoff ID to update.' },
+        status: { type: 'string', description: 'New status: open, closed.' },
+        to: { type: 'string', description: 'New recipient agent name.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id'],
     },
   },
 ] as const;
@@ -1886,6 +1967,74 @@ export function handleMcpReadToolCall(
     };
   }
 
+  if (name === 'bclaw_doctor') {
+    // Capture doctor JSON output by redirecting console.log
+    const captured: string[] = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    console.log = (...a: unknown[]) => captured.push(a.join(' '));
+    console.warn = (...a: unknown[]) => captured.push(a.join(' '));
+    console.error = (...a: unknown[]) => captured.push(a.join(' '));
+    try {
+      runDoctor({ json: true, cwd, migrationCheck: args.migrationCheck as boolean | undefined });
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+    }
+    const jsonStr = captured.join('\n');
+    let structured: Record<string, unknown> = {};
+    try { structured = JSON.parse(jsonStr) as Record<string, unknown>; } catch { /* non-JSON fallback */ }
+    const ok = structured.ok as boolean | undefined;
+    const checks = (structured.checks as Array<{ name: string; status: string; message: string }>) ?? [];
+    const errors = checks.filter(c => c.status === 'error');
+    const warns = checks.filter(c => c.status === 'warn');
+    const summary = ok
+      ? `✔ All ${checks.length} checks passed.`
+      : `${errors.length} error(s), ${warns.length} warning(s) out of ${checks.length} checks.`;
+    return {
+      content: [{ type: 'text', text: summary }],
+      structuredContent: { ...structured, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_history') {
+    const id = String(args.id ?? '').trim();
+    if (!id) throw new Error('Missing required argument: id');
+    const entries = readAuditLog({ itemId: id }, cwd);
+    const lines = [`History for ${id} — ${entries.length} event(s):`];
+    for (const e of entries) {
+      const reason = e.reason ? ` | ${e.reason}` : '';
+      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${reason}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { id, total: entries.length, entries, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_audit') {
+    const limit = (args.limit as number | undefined) ?? 20;
+    const entries = readAuditLog({
+      since: args.since as string | undefined,
+      actor: args.actor as string | undefined,
+      action: args.action as AuditAction | undefined,
+    }, cwd);
+    const sliced = entries.slice(-limit);
+    const lines = [`Audit log — showing ${sliced.length} of ${entries.length} entries:`];
+    for (const e of sliced) {
+      const itemInfo = e.item_id ? ` → ${e.item_id}` : '';
+      const typeInfo = e.item_type ? ` (${e.item_type})` : '';
+      const reason = e.reason ? ` | ${e.reason}` : '';
+      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${itemInfo}${typeInfo}${reason}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: entries.length, returned: sliced.length, entries: sliced, schema_version: SCHEMA_VERSION },
+    };
+  }
+
   throw new Error(`Unknown read tool: ${name}`);
 }
 
@@ -2756,6 +2905,108 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           item_type: itemType,
           previous_store: previousStore,
           new_store: moveToStore,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_add_capability') {
+      const capName = String(args.name ?? '').trim();
+      const capDesc = String(args.description ?? '').trim();
+      if (!capName || !capDesc) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const state = loadState(cwd);
+      const idObj = generateIdWithLabel('dec');
+      const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
+      const entry: Decision = {
+        id: idObj.id,
+        short_label: idObj.short_label,
+        text: `${capName}\n${capDesc}`,
+        created_at: nowISO(),
+        author: resolvedIdentity.agent_name,
+        tags: ['capability', ...extraTags],
+      };
+      state.recent_decisions.push(entry);
+      saveState(state, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `capability: ${capName}` }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Capability registered: [${idObj.id}] ${capName}` }],
+          id: idObj.id,
+          name: capName,
+          schema_version: SCHEMA_VERSION,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_add_tool') {
+      const toolName = String(args.name ?? '').trim();
+      const toolDesc = String(args.description ?? '').trim();
+      if (!toolName || !toolDesc) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const state = loadState(cwd);
+      const idObj = generateIdWithLabel('dec');
+      const toolType = String(args.type ?? 'utility');
+      const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
+      const entry: Decision = {
+        id: idObj.id,
+        short_label: idObj.short_label,
+        text: `${toolName}\n${toolDesc}`,
+        created_at: nowISO(),
+        author: resolvedIdentity.agent_name,
+        tags: ['tool', toolType, ...extraTags],
+      };
+      state.recent_decisions.push(entry);
+      saveState(state, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `tool: ${toolName}` }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Tool registered: [${idObj.id}] ${toolName} (${toolType})` }],
+          id: idObj.id,
+          name: toolName,
+          type: toolType,
+          schema_version: SCHEMA_VERSION,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_update_handoff') {
+      const handoffId = String(args.id ?? '').trim();
+      if (!handoffId) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const state = loadState(cwd);
+      const handoff = state.open_handoffs.find((h) => h.id === handoffId);
+      if (!handoff) {
+        return { response: createToolErrorResponse('not_found', `Handoff not found: ${handoffId}`) };
+      }
+      if (args.status) handoff.status = args.status as 'open' | 'closed';
+      if (args.to) handoff.to = String(args.to);
+      saveState(state, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'update', item_id: handoffId, item_type: 'handoff' }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ Handoff updated: [${handoffId}] ${handoff.from} → ${handoff.to} (${handoff.status})` }],
+          handoff_id: handoffId,
+          status: handoff.status,
+          to: handoff.to,
+          schema_version: SCHEMA_VERSION,
         }),
       };
     }
