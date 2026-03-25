@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff } from './context-diff.js';
@@ -502,6 +503,7 @@ export function buildContext(options = {}) {
                 return undefined;
             }
         })(),
+        active_project: findActiveProjectInChain(contextCwd, storeChain),
         cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
         claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
         workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
@@ -550,6 +552,12 @@ export function renderContextMarkdown(result, explain = false) {
         lines.push(`Agent ID: ${result.agent_id}`);
     }
     lines.push(`Project mode: ${result.project_mode} (${result.project_strategy})`);
+    if (result.active_project) {
+        const ap = result.active_project;
+        const age = Math.floor((Date.now() - Date.parse(ap.switched_at)) / 3_600_000);
+        lines.push(`Active project: ${ap.name ?? ap.path} (switched ${age}h ago by ${ap.switched_by ?? 'unknown'})`);
+        lines.push(`  All commands target this project. Use \`brainclaw switch --clear\` to return to workspace root or \`brainclaw switch <project>\` to change.`);
+    }
     lines.push(`Current host: ${result.current_host}`);
     lines.push(`Memory version: ${result.memory_version}`);
     lines.push(`Memory density: ${result.memory_density}`);
@@ -758,6 +766,10 @@ export function renderContextPromptTemplate(result, compact = false) {
         }
         lines.push(`project_mode: ${result.project_mode}`);
         lines.push(`project_strategy: ${result.project_strategy}`);
+        if (result.active_project) {
+            lines.push(`active_project: ${result.active_project.name ?? result.active_project.path}`);
+            lines.push(`active_project_switched: ${result.active_project.switched_at}`);
+        }
         lines.push(`current_host: ${result.current_host}`);
         lines.push(`memory_version: ${result.memory_version}`);
         lines.push(`memory_density: ${result.memory_density}`);
@@ -1302,6 +1314,23 @@ function scopesOverlap(a, b) {
         }
     }
     return null;
+}
+// --- Active project resolution ---
+function findActiveProjectInChain(contextCwd, _storeChain) {
+    // Walk up from contextCwd looking for .brainclaw/active-project.json
+    let dir = path.resolve(contextCwd);
+    const root = path.parse(dir).root;
+    const home = process.env.HOME || process.env.USERPROFILE || root;
+    while (dir !== root && dir !== home) {
+        const ap = loadActiveProject(dir);
+        if (ap)
+            return ap;
+        const parent = path.dirname(dir);
+        if (parent === dir)
+            break;
+        dir = parent;
+    }
+    return undefined;
 }
 // --- Workflow hints ---
 function buildWorkflowHints(myClaims, openWork, plans) {

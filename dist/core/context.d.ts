@@ -1,3 +1,4 @@
+import { type ActiveProject } from './active-project.js';
 import { type ContextDiffResult } from './context-diff.js';
 import { type StoreRef } from './store-resolution.js';
 import { type DerivedContextSignal } from './bootstrap.js';
@@ -75,6 +76,7 @@ export interface ContextResult {
     estimation_calibration?: string;
     stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
     cross_project_items?: ContextItem[];
+    active_project?: ActiveProject;
     claim_conflicts?: ClaimConflict[];
     workflow_hints?: string[];
     selected: ContextItem[];

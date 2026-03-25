@@ -629,7 +629,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
       } catch { return undefined; }
     })(),
-    active_project: loadActiveProject(contextCwd),
+    active_project: findActiveProjectInChain(contextCwd, storeChain),
     cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
     claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
     workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
@@ -1484,6 +1484,23 @@ function scopesOverlap(a: string, b: string): string | null {
     }
   }
   return null;
+}
+
+// --- Active project resolution ---
+
+function findActiveProjectInChain(contextCwd: string, _storeChain: StoreRef[]): ActiveProject | undefined {
+  // Walk up from contextCwd looking for .brainclaw/active-project.json
+  let dir = path.resolve(contextCwd);
+  const root = path.parse(dir).root;
+  const home = process.env.HOME || process.env.USERPROFILE || root;
+  while (dir !== root && dir !== home) {
+    const ap = loadActiveProject(dir);
+    if (ap) return ap;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
 }
 
 // --- Workflow hints ---
