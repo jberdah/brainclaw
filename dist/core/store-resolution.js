@@ -155,27 +155,29 @@ export function resolveProjectRef(ref, cwd = process.cwd(), storeChainOptions) {
     if (fs.existsSync(path.join(asPath, MEMORY_DIR, 'config.yaml'))) {
         return asPath;
     }
-    // Try by project name: scan child stores for matching project_name
+    // Try by project name or project ID: scan child stores
     const chain = resolveStoreChain(wsRoot, storeChainOptions);
     for (const store of chain) {
         if (store.cwd === wsRoot)
-            continue; // skip workspace itself
+            continue;
         try {
             const config = loadConfig(store.cwd);
-            if (config.project_name === ref)
+            if (config.project_name === ref || config.project_id === ref)
                 return store.cwd;
         }
         catch {
             // skip unreadable configs
         }
     }
-    // Try discovering child projects by scanning filesystem
+    // Try discovering child projects by scanning filesystem (deep scan for monorepos)
     try {
         const wsConfig = loadConfig(wsRoot);
         const summary = summarizeWorkspaceProjects(wsRoot, wsConfig);
         for (const project of summary.discovered_projects) {
             const projectPath = path.resolve(wsRoot, project.path);
-            if (project.project_name === ref) {
+            if (project.project_name === ref
+                || project.project_id === ref
+                || path.basename(project.path) === ref) {
                 if (fs.existsSync(path.join(projectPath, MEMORY_DIR, 'config.yaml'))) {
                     return projectPath;
                 }

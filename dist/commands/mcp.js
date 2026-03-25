@@ -33,7 +33,7 @@ import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, rend
 import { listCapabilities, listTools as listRegistryTools, createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import { checkGitPresence, scanGitRepos, parseRoots, parseRepoSelection, parseAgentSelection, runGlobalInstall, initReposAndConfigureAgents, readSetupState, ALL_KNOWN_AGENTS, } from './setup.js';
-import { resolveEffectiveCwd, resolveTargetStore, resolveStoreChain } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, resolveStoreChain } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
@@ -1141,11 +1141,19 @@ function getReviewAssignee(tags) {
     return undefined;
 }
 export function handleMcpReadToolCall(name, args = {}, context = {}) {
-    const cwd = context.cwd ?? resolveEffectiveCwd();
+    let cwd = context.cwd ?? resolveEffectiveCwd();
+    // If a project param is provided, resolve it to an actual cwd override
+    const projectArg = args.project;
+    if (projectArg) {
+        const resolvedProject = resolveProjectRef(projectArg, cwd);
+        if (resolvedProject) {
+            cwd = resolvedProject;
+        }
+    }
     if (name === 'bclaw_get_context') {
         const result = buildContext({
             target: args.path,
-            project: args.project,
+            project: projectArg,
             agent: args.agent,
             host: args.host,
             allHosts: args.allHosts,

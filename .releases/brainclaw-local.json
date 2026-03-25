@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.29.2",
-  "published_at": "2026-03-25T15:31:24.270Z",
-  "artifact_path": "./brainclaw-0.29.2.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.29.2.tgz\"",
-  "release_notes": "fix: show brainclaw update notice in context output automatically"
+  "latest_installable_version": "0.29.3",
+  "published_at": "2026-03-25T16:34:58.139Z",
+  "artifact_path": "./brainclaw-0.29.3.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.29.3.tgz\"",
+  "release_notes": "fix: project param resolves cwd for real multi-project context, switch accepts names/IDs/folder names"
 }
