@@ -27,9 +27,9 @@ describe('agent-capability', () => {
     assert.equal(getAgentCapabilityProfile(''), undefined);
   });
 
-  it('getAllAgentCapabilityProfiles returns 11 agents', () => {
+  it('getAllAgentCapabilityProfiles returns 15 agents', () => {
     const all = getAllAgentCapabilityProfiles();
-    assert.equal(all.length, 11);
+    assert.equal(all.length, 15);
   });
 
   it('isKnownAgent validates known names', () => {
