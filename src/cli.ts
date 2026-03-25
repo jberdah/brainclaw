@@ -83,6 +83,7 @@ import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
 import { runCheckEvents } from './commands/check-events.js';
+import { runDiscover } from './commands/discover.js';
 
 const program = new Command();
 
@@ -1198,6 +1199,16 @@ program
   .option('--query <q>', 'Search for specific capability or tool')
   .action((options) => {
     runExplore({ query: options.query });
+  });
+
+// --- discover ---
+program
+  .command('discover')
+  .description('Scan workspace for MCP configs, instruction files, skills, hooks, and agent integrations')
+  .option('--json', 'Output as JSON')
+  .option('--no-save', 'Do not persist discovery profile to .brainclaw/discovery/')
+  .action((options) => {
+    runDiscover({ json: options.json, save: options.save });
   });
 
 program

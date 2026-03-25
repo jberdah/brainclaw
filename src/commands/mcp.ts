@@ -39,6 +39,7 @@ import { buildOperationalIdentity } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { buildEstimationReport } from './estimation-report.js';
 import { runDoctor } from './doctor.js';
+import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import {
   checkGitPresence,
@@ -367,6 +368,17 @@ export const MCP_READ_TOOLS = [
         actor: { type: 'string', description: 'Filter by actor name or agent ID.' },
         action: { type: 'string', description: 'Filter by action type (create, accept, reject, etc.).' },
         limit: { type: 'number', description: 'Show last N entries (default 20).' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_get_discovery',
+    description: 'Scan workspace for MCP configs, instruction files, skills, hooks, and agent integrations. Returns a structured discovery profile. Saves result to .brainclaw/discovery/ by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        refresh: { type: 'boolean', description: 'Force a fresh scan even if a cached profile exists (default: true).' },
+        noSave: { type: 'boolean', description: 'Do not persist the discovery profile.' },
       },
     },
   },
@@ -1964,6 +1976,27 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
       structuredContent: { query, total: filtered.length, tools: filtered },
+    };
+  }
+
+  if (name === 'bclaw_get_discovery') {
+    const refresh = args.refresh !== false; // default: true
+    const noSave = args.noSave as boolean | undefined;
+
+    let profile;
+    if (!refresh) {
+      profile = loadDiscoveryProfile(cwd);
+    }
+    if (!profile) {
+      profile = buildProjectDiscovery({ cwd });
+      if (!noSave) {
+        saveDiscoveryProfile(profile, cwd);
+      }
+    }
+
+    return {
+      content: [{ type: 'text', text: renderDiscoverySummary(profile) }],
+      structuredContent: { ...profile, schema_version: SCHEMA_VERSION },
     };
   }
 
