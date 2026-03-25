@@ -1157,6 +1157,17 @@ program
         cwd: globalOpts.cwd,
     });
 });
+program
+    .command('who')
+    .description('Show active agent sessions on this workspace')
+    .option('--json', 'Output as JSON')
+    .option('--all', 'Include stale sessions')
+    .option('--gc', 'Remove stale sessions')
+    .action(async (options) => {
+    const globalOpts = program.opts();
+    const { runWho } = await import('./commands/who.js');
+    runWho({ json: options.json, all: options.all, gc: options.gc, cwd: globalOpts.cwd });
+});
 program.parseAsync(process.argv).catch((err) => {
     console.error(err);
     process.exit(1);

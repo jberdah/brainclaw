@@ -9,6 +9,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
+import { loadAllSessions, gcStaleSessions } from '../core/identity.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
@@ -304,6 +305,17 @@ export const MCP_READ_TOOLS = [
             properties: {
                 agent: { type: 'string', description: 'Agent name to check conflicts for (default: current agent).' },
                 agentId: { type: 'string', description: 'Registered agent id.' },
+            },
+        },
+    },
+    {
+        name: 'bclaw_who',
+        description: 'List all active agent sessions on this workspace. Shows user, agent, active project, claims, and last activity for each session.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                all: { type: 'boolean', description: 'Include stale sessions (default: false).' },
+                gc: { type: 'boolean', description: 'Remove stale sessions and return count.' },
             },
         },
     },
@@ -1767,6 +1779,42 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             structuredContent: { agent: currentAgentName, conflicts, total: conflicts.length, schema_version: SCHEMA_VERSION },
         };
     }
+    if (name === 'bclaw_who') {
+        // loadAllSessions and gcStaleSessions imported at top of file
+        const doGc = args.gc === true;
+        const showAll = args.all === true;
+        if (doGc) {
+            const removed = gcStaleSessions(cwd);
+            return {
+                content: [{ type: 'text', text: `✔ Removed ${removed} stale session(s).` }],
+                structuredContent: { gc: true, removed, schema_version: SCHEMA_VERSION },
+            };
+        }
+        const allSessions = loadAllSessions(cwd);
+        const ttlMs = 4 * 60 * 60 * 1000;
+        const now = Date.now();
+        const sessions = showAll
+            ? allSessions
+            : allSessions.filter((s) => (now - Date.parse(s.last_seen_at)) <= ttlMs);
+        const activeClaims = listClaims(cwd).filter((c) => c.status === 'active');
+        const output = sessions.map((s) => ({
+            session_id: s.session_id,
+            user: s.user ?? 'unknown',
+            agent: s.agent,
+            agent_id: s.agent_id,
+            project: s.active_project?.name ?? s.active_project?.path ?? null,
+            claims: activeClaims.filter((c) => c.agent_id === s.agent_id).length,
+            last_seen_at: s.last_seen_at,
+            stale: (now - Date.parse(s.last_seen_at)) > ttlMs,
+        }));
+        const lines = sessions.length === 0
+            ? 'No active sessions.'
+            : output.map((s) => `${s.user} | ${s.agent} | ${s.project ?? '(root)'} | ${s.claims} claims | ${s.stale ? 'stale' : 'active'}`).join('\n');
+        return {
+            content: [{ type: 'text', text: lines }],
+            structuredContent: { sessions: output, total: output.length, schema_version: SCHEMA_VERSION },
+        };
+    }
     if (name === 'bclaw_doctor') {
         // Capture doctor JSON output by redirecting console.log
         const captured = [];
@@ -2188,6 +2236,7 @@ export async function executeMcpToolCall(payload) {
                 id: claimId,
                 agent: identity.agent,
                 agent_id: identity.agent_id,
+                user: process.env.USER || process.env.USERNAME || undefined,
                 project_id: identity.project_id,
                 host_id: identity.host_id,
                 session_id: identity.session_id,

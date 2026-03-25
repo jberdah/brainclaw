@@ -4,6 +4,8 @@ export interface MemoryEvent {
     ts: string;
     agent: string;
     agent_id?: string;
+    /** OS user who triggered this event. */
+    user?: string;
     action: EventAction;
     item_type: EventItemType;
     item_id?: string;

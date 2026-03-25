@@ -28,6 +28,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
             agent: string;
             description: string;
             project?: string | undefined;
+            user?: string | undefined;
             schema_version?: number | undefined;
             model?: string | undefined;
             project_id?: string | undefined;
@@ -75,6 +76,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         agent: string;
         description: string;
         project?: string | undefined;
+        user?: string | undefined;
         schema_version?: number | undefined;
         model?: string | undefined;
         project_id?: string | undefined;

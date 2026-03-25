@@ -24,7 +24,30 @@ export declare function resolveEventSessionId(event: {
     session_id?: string;
     metadata?: Record<string, unknown> | undefined;
 }): string | undefined;
+/**
+ * Load the current session for this agent+user combo.
+ * Checks sessions/ directory first, falls back to legacy .current-session.
+ */
 export declare function loadCurrentSession(cwd?: string): CurrentSessionState | undefined;
+/**
+ * Load a specific session by ID.
+ */
+export declare function loadSessionById(sessionId: string, cwd?: string): CurrentSessionState | undefined;
+/**
+ * Load ALL sessions (active + stale) from the sessions/ directory.
+ */
+export declare function loadAllSessions(cwd?: string): CurrentSessionState[];
+/**
+ * Save a session to the sessions/ directory.
+ */
 export declare function saveCurrentSession(session: CurrentSessionState, cwd?: string): void;
+/**
+ * Clear a session. If sessionId is provided, only clear that specific session.
+ */
 export declare function clearCurrentSession(cwd?: string, sessionId?: string): void;
+/**
+ * Remove stale sessions that have exceeded the TTL.
+ * Returns the number of sessions removed.
+ */
+export declare function gcStaleSessions(cwd?: string, ttlOverride?: string): number;
 //# sourceMappingURL=identity.d.ts.map

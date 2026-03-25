@@ -552,6 +552,22 @@ export declare const MCP_READ_TOOLS: readonly [{
             };
         };
     };
+}, {
+    readonly name: "bclaw_who";
+    readonly description: "List all active agent sessions on this workspace. Shows user, agent, active project, claims, and last activity for each session.";
+    readonly inputSchema: {
+        readonly type: "object";
+        readonly properties: {
+            readonly all: {
+                readonly type: "boolean";
+                readonly description: "Include stale sessions (default: false).";
+            };
+            readonly gc: {
+                readonly type: "boolean";
+                readonly description: "Remove stale sessions and return count.";
+            };
+        };
+    };
 }];
 /**
  * Lightweight metrics for the single-writer mutation queue.

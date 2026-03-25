@@ -12,6 +12,7 @@ export function appendEvent(event, cwd) {
             ts: event.ts ?? nowISO(),
             agent: event.agent ?? 'unknown',
             agent_id: event.agent_id,
+            user: event.user ?? process.env.USER ?? process.env.USERNAME,
             action: event.action,
             item_type: event.item_type,
             item_id: event.item_id,
