@@ -18,6 +18,25 @@ function coerceEffortToMinutes(val: unknown): unknown {
   return undefined;
 }
 
+/** Coerce tags from JSON string to array when MCP clients serialize arrays as strings.
+ *  Accepts: string[] (passthrough), '["a","b"]' (JSON parse), 'a,b' (comma split). */
+function coerceTags(val: unknown): unknown {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed.startsWith('[')) {
+      try { const parsed = JSON.parse(trimmed); if (Array.isArray(parsed)) return parsed; } catch { /* fall through */ }
+    }
+    if (trimmed.length > 0) return trimmed.split(',').map(t => t.trim()).filter(Boolean);
+    return [];
+  }
+  return val;
+}
+
+/** Resilient tags schema that accepts string[] or JSON-serialized string. */
+export const TagsSchema = z.preprocess(coerceTags, z.array(z.string()));
+export const TagsWithDefaultSchema = z.preprocess(coerceTags, z.array(z.string()).default([]));
+
 // --- Entry schemas ---
 
 export const ConstraintStatusSchema = z.enum(['active', 'resolved', 'expired']);
@@ -62,7 +81,7 @@ export const ConstraintSchema = z.object({
   status: ConstraintStatusSchema,
   category: ConstraintCategorySchema.optional(),
   scope: MemoryScopeSchema.optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   expires_at: z.string().optional(),
 });
@@ -84,7 +103,7 @@ export const DecisionSchema = z.object({
   scope: MemoryScopeSchema.optional(),
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
 });
 export type Decision = z.infer<typeof DecisionSchema>;
 
@@ -102,7 +121,7 @@ export const TrapSchema = z.object({
   status: TrapStatusSchema.default('active'),
   severity: SeveritySchema,
   scope: MemoryScopeSchema.optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   visibility: MemoryVisibilitySchema.default('shared'),
@@ -129,7 +148,7 @@ export const HandoffSchema = z.object({
   status: HandoffStatusSchema,
   project: z.string().optional(),
   plan_id: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   snapshot: z.object({
     diff: z.string().optional(),
@@ -170,7 +189,7 @@ export const PlanItemSchema = z.object({
   priority: PrioritySchema,
   assignee: z.string().optional(),
   project: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   depends_on: z.array(z.string()).default([]),
   steps: z.array(PlanStepSchema).optional(),
@@ -194,7 +213,7 @@ export const InstructionEntrySchema = z.object({
   updated_at: z.string(),
   author: z.string(),
   model: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   active: z.boolean().default(true),
   supersedes: z.string().optional(),
 });
@@ -211,7 +230,7 @@ export const ProjectCapabilitySchema = z.object({
   category: z.string(), // e.g. "auth", "api", "storage", "testing"
   provided_by: z.string().optional(), // path to implementation
   requires: z.array(z.string()).optional(), // capability IDs this depends on
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   example_usage: z.string().optional(),
   status: CapabilityStatusSchema.default('stable'),
   related_paths: z.array(z.string()).optional(),
@@ -237,7 +256,7 @@ export const ProjectToolSchema = z.object({
   requires: z.array(z.string()).optional(), // tool IDs this depends on
   suggests_for: z.array(z.string()).optional(), // agent types or domains
   invocation_example: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   status: CapabilityStatusSchema.default('stable'),
   related_paths: z.array(z.string()).optional(),
   created_at: z.string(),
@@ -323,7 +342,7 @@ export const CandidateSchema = z.object({
   host_id: z.string().optional(),
   session_id: z.string().optional(),
   source: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   status: CandidateStatusSchema,
   // type-specific optional fields
   severity: SeveritySchema.optional(),
@@ -413,7 +432,7 @@ export const RuntimeNoteSchema = z.object({
   created_at: z.string(),
   project: z.string().optional(),
   plan_id: z.string().optional(),
-  tags: z.array(z.string()),
+  tags: TagsSchema,
   visibility: MemoryVisibilitySchema.default('shared'),
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
@@ -447,7 +466,7 @@ export const AiSurfaceTaskRequestSchema = z.object({
   status: AiSurfaceTaskStatusSchema.default('queued'),
   requested_outputs: z.array(z.string()).default([]),
   related_paths: z.array(z.string()).optional(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   claimed_at: z.string().optional(),
   completed_at: z.string().optional(),
   result_note: z.string().optional(),
@@ -478,7 +497,7 @@ export const RuntimeEventSchema = z.object({
   event_type: RuntimeEventTypeSchema,
   created_at: z.string(),
   text: z.string(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   // Optional routing and type hints for candidate generation
   candidate_type: CandidateTypeSchema.optional(),
   severity: SeveritySchema.optional(),
@@ -641,7 +660,7 @@ export const MemorySeedDocumentSchema = z.object({
   source_ref: z.string(),
   confidence: MemorySeedConfidenceSchema,
   related_paths: z.array(z.string()).optional(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   promotion_hint: z.enum(['constraint', 'decision', 'trap']).optional(),
 });
 export type MemorySeedDocument = z.infer<typeof MemorySeedDocumentSchema>;
@@ -678,7 +697,7 @@ export const BootstrapSuggestionDocumentSchema = z.object({
   source_refs: z.array(z.string()).default([]),
   layer: z.enum(['global', 'project', 'agent']).optional(),
   scope: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   related_paths: z.array(z.string()).optional(),
   category: ConstraintCategorySchema.optional(),
   outcome: DecisionOutcomeSchema.optional(),
@@ -720,7 +739,7 @@ export const BootstrapInterviewAnswerSuggestionSchema = z.object({
   confidence: MemorySeedConfidenceSchema.optional(),
   layer: z.enum(['global', 'project', 'agent']).optional(),
   scope: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: TagsWithDefaultSchema,
   related_paths: z.array(z.string()).optional(),
   category: ConstraintCategorySchema.optional(),
   outcome: DecisionOutcomeSchema.optional(),
