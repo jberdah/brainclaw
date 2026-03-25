@@ -17,8 +17,10 @@ export interface SwitchOptions {
 }
 
 export function runSwitch(projectRef: string | undefined, options: SwitchOptions = {}): void {
+  // Use real cwd, not effective cwd — switch must see the full workspace
   const cwd = options.cwd ?? process.cwd();
-  const wsRoot = resolveWorkspaceRoot(cwd);
+  // Walk up from real cwd to find the outermost .brainclaw/ (workspace root)
+  const wsRoot = findOutermostWorkspaceRoot(cwd);
 
   if (!wsRoot) {
     console.error('Error: no brainclaw workspace found. Run `brainclaw init` first.');
@@ -185,4 +187,26 @@ function listProjects(wsRoot: string, json: boolean): void {
   if (!active) {
     console.log('\nNo active project. Use `brainclaw switch <project>` to set one.');
   }
+}
+
+/**
+ * Find the outermost .brainclaw/ workspace root by walking UP from cwd.
+ * Unlike resolveWorkspaceRoot which may return the closest store,
+ * this returns the farthest one — the true multi-project workspace root.
+ */
+function findOutermostWorkspaceRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+  const home = process.env.HOME || process.env.USERPROFILE || root;
+  let outermost: string | undefined;
+
+  while (dir !== root && dir !== home) {
+    if (memoryExists(dir)) {
+      outermost = dir; // keep going — we want the outermost
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return outermost;
 }

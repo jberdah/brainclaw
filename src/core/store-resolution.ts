@@ -209,7 +209,10 @@ export function resolveProjectRef(
   cwd: string = process.cwd(),
   storeChainOptions?: ResolveStoreChainOptions,
 ): string | undefined {
-  const wsRoot = resolveWorkspaceRoot(cwd, storeChainOptions);
+  // Walk UP from real cwd to find the outermost .brainclaw/ — this avoids
+  // circular resolution when an active project narrows the workspace view.
+  const wsRoot = findOutermostBrainclawRoot(process.cwd())
+    ?? resolveWorkspaceRoot(cwd, storeChainOptions);
   if (!wsRoot) return undefined;
 
   // Try as absolute path
@@ -256,6 +259,27 @@ export function resolveProjectRef(
   }
 
   return undefined;
+}
+
+/**
+ * Walk UP from a directory and return the outermost .brainclaw/ root found.
+ * This bypasses resolveEffectiveCwd / active project to find the true workspace root.
+ */
+export function findOutermostBrainclawRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+  const home = os.homedir();
+  let outermost: string | undefined;
+
+  while (dir !== root && dir !== home) {
+    if (fs.existsSync(path.join(dir, MEMORY_DIR, 'config.yaml'))) {
+      outermost = dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return outermost;
 }
 
 /**
