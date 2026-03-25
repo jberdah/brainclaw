@@ -54,7 +54,7 @@ import {
   readSetupState,
   ALL_KNOWN_AGENTS,
 } from './setup.js';
-import { resolveEffectiveCwd, resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, resolveStoreChain, type StoreTarget } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
@@ -1348,12 +1348,21 @@ export function handleMcpReadToolCall(
   args: Record<string, unknown> = {},
   context: McpReadToolContext = {},
 ): McpToolResponse {
-  const cwd = context.cwd ?? resolveEffectiveCwd();
+  let cwd = context.cwd ?? resolveEffectiveCwd();
+
+  // If a project param is provided, resolve it to an actual cwd override
+  const projectArg = args.project as string | undefined;
+  if (projectArg) {
+    const resolvedProject = resolveProjectRef(projectArg, cwd);
+    if (resolvedProject) {
+      cwd = resolvedProject;
+    }
+  }
 
   if (name === 'bclaw_get_context') {
     const result = buildContext({
       target: args.path as string | undefined,
-      project: args.project as string | undefined,
+      project: projectArg,
       agent: args.agent as string | undefined,
       host: args.host as string | undefined,
       allHosts: args.allHosts as boolean | undefined,
