@@ -66,6 +66,18 @@ export function analyzeRepository(cwd: string): RepoAnalysisResult {
     reasons.push(`Found top-level project folders: ${matchedDirs.join(', ')}`);
   }
 
+  // ── Signal 4: Multiple AGENTS.md files in the tree ──
+  const agentsFiles = findNestedAgentsFiles(cwd, 4);
+  if (agentsFiles.length > 1) {
+    reasons.push(`Found ${agentsFiles.length} AGENTS.md files: ${agentsFiles.slice(0, 5).join(', ')}`);
+  }
+
+  // ── Signal 5: Multiple Dockerfiles or docker-compose files (service-oriented workspace) ──
+  const dockerComposeFiles = findFilesShallow(cwd, ['docker-compose.yml', 'docker-compose.yaml'], 3);
+  if (dockerComposeFiles.length > 1) {
+    reasons.push(`Found ${dockerComposeFiles.length} docker-compose files: ${dockerComposeFiles.slice(0, 5).join(', ')}`);
+  }
+
   const packageJsonPath = path.join(cwd, 'package.json');
   if (fs.existsSync(packageJsonPath)) {
     try {
@@ -218,4 +230,57 @@ export function scanWorkspaceBoundaries(
 
   walk(rootDir, 1);
   return { suggestions, alreadyInitialised };
+}
+
+/**
+ * Find AGENTS.md files up to maxDepth levels deep.
+ * Returns relative paths from cwd.
+ */
+function findNestedAgentsFiles(cwd: string, maxDepth: number): string[] {
+  const results: string[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (depth > maxDepth || results.length > 10) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === 'AGENTS.md') {
+        results.push(path.relative(cwd, path.join(dir, entry.name)));
+      }
+      if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+        walk(path.join(dir, entry.name), depth + 1);
+      }
+    }
+  }
+
+  walk(cwd, 0);
+  return results;
+}
+
+/**
+ * Find specific filenames up to maxDepth levels deep.
+ * Returns relative paths from cwd.
+ */
+function findFilesShallow(cwd: string, filenames: string[], maxDepth: number): string[] {
+  const nameSet = new Set(filenames);
+  const results: string[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (depth > maxDepth || results.length > 10) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
+    for (const entry of entries) {
+      if (entry.isFile() && nameSet.has(entry.name)) {
+        results.push(path.relative(cwd, path.join(dir, entry.name)));
+      }
+      if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+        walk(path.join(dir, entry.name), depth + 1);
+      }
+    }
+  }
+
+  walk(cwd, 0);
+  return results;
 }
