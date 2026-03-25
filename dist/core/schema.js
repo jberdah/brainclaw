@@ -418,7 +418,7 @@ export const ProjectModeSchema = z.enum(['single-project', 'multi-project', 'aut
 export const ProjectStrategySchema = z.enum(['manual', 'folder']);
 export const TopologyModeSchema = z.enum(['embedded', 'sidecar', 'local-only']);
 export const IgnoreStrategySchema = z.enum(['project-gitignore', 'none']);
-export const AgentKindSchema = z.enum(['agent', 'human', 'unknown']);
+export const AgentKindSchema = z.enum(['agent', 'autonomous', 'human', 'unknown']);
 export const AgentTrustLevelSchema = z.enum(['observer', 'contributor', 'trusted', 'curator']);
 export const AgentIdentityKeySchema = z.object({
     algorithm: z.literal('ed25519'),
@@ -638,6 +638,10 @@ export const AgentIntegrationNameSchema = z.enum([
     'continue',
     'roo',
     'openclaw',
+    'nanoclaw',
+    'nemoclaw',
+    'picoclaw',
+    'zeroclaw',
 ]);
 export const AgentIntegrationSurfaceKindSchema = z.enum(['instructions', 'mcp', 'skill', 'rule', 'hook']);
 export const AgentIntegrationLocationSchema = z.enum(['workspace', 'machine']);

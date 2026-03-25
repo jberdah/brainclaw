@@ -1688,7 +1688,7 @@ export declare const TopologyModeSchema: z.ZodEnum<["embedded", "sidecar", "loca
 export type TopologyMode = z.infer<typeof TopologyModeSchema>;
 export declare const IgnoreStrategySchema: z.ZodEnum<["project-gitignore", "none"]>;
 export type IgnoreStrategy = z.infer<typeof IgnoreStrategySchema>;
-export declare const AgentKindSchema: z.ZodEnum<["agent", "human", "unknown"]>;
+export declare const AgentKindSchema: z.ZodEnum<["agent", "autonomous", "human", "unknown"]>;
 export type AgentKind = z.infer<typeof AgentKindSchema>;
 export declare const AgentTrustLevelSchema: z.ZodEnum<["observer", "contributor", "trusted", "curator"]>;
 export type AgentTrustLevel = z.infer<typeof AgentTrustLevelSchema>;
@@ -1741,7 +1741,7 @@ export declare const AgentIdentityDocumentSchema: z.ZodObject<{
     agent_id: z.ZodString;
     agent_name: z.ZodString;
     created_at: z.ZodString;
-    kind: z.ZodDefault<z.ZodEnum<["agent", "human", "unknown"]>>;
+    kind: z.ZodDefault<z.ZodEnum<["agent", "autonomous", "human", "unknown"]>>;
     trust_level: z.ZodDefault<z.ZodEnum<["observer", "contributor", "trusted", "curator"]>>;
     capabilities: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
     identity_key: z.ZodOptional<z.ZodObject<{
@@ -1764,7 +1764,7 @@ export declare const AgentIdentityDocumentSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     created_at: string;
     version: 1;
-    kind: "unknown" | "agent" | "human";
+    kind: "unknown" | "agent" | "autonomous" | "human";
     agent_id: string;
     agent_name: string;
     trust_level: "observer" | "contributor" | "trusted" | "curator";
@@ -1784,7 +1784,7 @@ export declare const AgentIdentityDocumentSchema: z.ZodObject<{
     agent_name: string;
     schema_version?: number | undefined;
     model?: string | undefined;
-    kind?: "unknown" | "agent" | "human" | undefined;
+    kind?: "unknown" | "agent" | "autonomous" | "human" | undefined;
     trust_level?: "observer" | "contributor" | "trusted" | "curator" | undefined;
     capabilities?: string[] | undefined;
     identity_key?: {
@@ -2553,7 +2553,7 @@ export declare const BootstrapApplicationReceiptSchema: z.ZodObject<{
     uninstalled_at?: string | undefined;
 }>;
 export type BootstrapApplicationReceipt = z.infer<typeof BootstrapApplicationReceiptSchema>;
-export declare const AgentIntegrationNameSchema: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw"]>;
+export declare const AgentIntegrationNameSchema: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw", "nanoclaw", "nemoclaw", "picoclaw", "zeroclaw"]>;
 export type AgentIntegrationName = z.infer<typeof AgentIntegrationNameSchema>;
 export declare const AgentIntegrationSurfaceKindSchema: z.ZodEnum<["instructions", "mcp", "skill", "rule", "hook"]>;
 export type AgentIntegrationSurfaceKind = z.infer<typeof AgentIntegrationSurfaceKindSchema>;
@@ -2578,7 +2578,7 @@ export type AgentIntegrationSurface = z.infer<typeof AgentIntegrationSurfaceSche
 export declare const AgentIntegrationLevelSchema: z.ZodEnum<["full", "standard", "limited", "custom"]>;
 export type AgentIntegrationLevel = z.infer<typeof AgentIntegrationLevelSchema>;
 export declare const AgentIntegrationDeclarationSchema: z.ZodObject<{
-    agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw"]>;
+    agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw", "nanoclaw", "nemoclaw", "picoclaw", "zeroclaw"]>;
     declaration_source: z.ZodDefault<z.ZodEnum<["manual", "detected"]>>;
     level: z.ZodOptional<z.ZodEnum<["full", "standard", "limited", "custom"]>>;
     surfaces: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -2596,7 +2596,7 @@ export declare const AgentIntegrationDeclarationSchema: z.ZodObject<{
     }>, "many">>;
     notes: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+    agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
     declaration_source: "manual" | "detected";
     surfaces: {
         kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -2606,7 +2606,7 @@ export declare const AgentIntegrationDeclarationSchema: z.ZodObject<{
     level?: "custom" | "full" | "standard" | "limited" | undefined;
     notes?: string | undefined;
 }, {
-    agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+    agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
     declaration_source?: "manual" | "detected" | undefined;
     level?: "custom" | "full" | "standard" | "limited" | undefined;
     surfaces?: {
@@ -2619,7 +2619,7 @@ export declare const AgentIntegrationDeclarationSchema: z.ZodObject<{
 export type AgentIntegrationDeclaration = z.infer<typeof AgentIntegrationDeclarationSchema>;
 export declare const AgentIntegrationsConfigSchema: z.ZodObject<{
     declarations: z.ZodDefault<z.ZodArray<z.ZodObject<{
-        agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw"]>;
+        agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw", "nanoclaw", "nemoclaw", "picoclaw", "zeroclaw"]>;
         declaration_source: z.ZodDefault<z.ZodEnum<["manual", "detected"]>>;
         level: z.ZodOptional<z.ZodEnum<["full", "standard", "limited", "custom"]>>;
         surfaces: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -2637,7 +2637,7 @@ export declare const AgentIntegrationsConfigSchema: z.ZodObject<{
         }>, "many">>;
         notes: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
-        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
         declaration_source: "manual" | "detected";
         surfaces: {
             kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -2647,7 +2647,7 @@ export declare const AgentIntegrationsConfigSchema: z.ZodObject<{
         level?: "custom" | "full" | "standard" | "limited" | undefined;
         notes?: string | undefined;
     }, {
-        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
         declaration_source?: "manual" | "detected" | undefined;
         level?: "custom" | "full" | "standard" | "limited" | undefined;
         surfaces?: {
@@ -2659,7 +2659,7 @@ export declare const AgentIntegrationsConfigSchema: z.ZodObject<{
     }>, "many">>;
 }, "strip", z.ZodTypeAny, {
     declarations: {
-        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
         declaration_source: "manual" | "detected";
         surfaces: {
             kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -2671,7 +2671,7 @@ export declare const AgentIntegrationsConfigSchema: z.ZodObject<{
     }[];
 }, {
     declarations?: {
-        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+        agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
         declaration_source?: "manual" | "detected" | undefined;
         level?: "custom" | "full" | "standard" | "limited" | undefined;
         surfaces?: {
@@ -2950,7 +2950,7 @@ export declare const ConfigSchema: z.ZodObject<{
     }>>;
     agent_integrations: z.ZodDefault<z.ZodObject<{
         declarations: z.ZodDefault<z.ZodArray<z.ZodObject<{
-            agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw"]>;
+            agent_name: z.ZodEnum<["github-copilot", "claude-code", "cursor", "windsurf", "cline", "codex", "opencode", "antigravity", "continue", "roo", "openclaw", "nanoclaw", "nemoclaw", "picoclaw", "zeroclaw"]>;
             declaration_source: z.ZodDefault<z.ZodEnum<["manual", "detected"]>>;
             level: z.ZodOptional<z.ZodEnum<["full", "standard", "limited", "custom"]>>;
             surfaces: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -2968,7 +2968,7 @@ export declare const ConfigSchema: z.ZodObject<{
             }>, "many">>;
             notes: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source: "manual" | "detected";
             surfaces: {
                 kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -2978,7 +2978,7 @@ export declare const ConfigSchema: z.ZodObject<{
             level?: "custom" | "full" | "standard" | "limited" | undefined;
             notes?: string | undefined;
         }, {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source?: "manual" | "detected" | undefined;
             level?: "custom" | "full" | "standard" | "limited" | undefined;
             surfaces?: {
@@ -2990,7 +2990,7 @@ export declare const ConfigSchema: z.ZodObject<{
         }>, "many">>;
     }, "strip", z.ZodTypeAny, {
         declarations: {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source: "manual" | "detected";
             surfaces: {
                 kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -3002,7 +3002,7 @@ export declare const ConfigSchema: z.ZodObject<{
         }[];
     }, {
         declarations?: {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source?: "manual" | "detected" | undefined;
             level?: "custom" | "full" | "standard" | "limited" | undefined;
             surfaces?: {
@@ -3050,7 +3050,7 @@ export declare const ConfigSchema: z.ZodObject<{
     sensitive_paths: string[];
     agent_integrations: {
         declarations: {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source: "manual" | "detected";
             surfaces: {
                 kind: "instructions" | "skill" | "mcp" | "rule" | "hook";
@@ -3204,7 +3204,7 @@ export declare const ConfigSchema: z.ZodObject<{
     } | undefined;
     agent_integrations?: {
         declarations?: {
-            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo";
+            agent_name: "openclaw" | "github-copilot" | "claude-code" | "cursor" | "windsurf" | "cline" | "codex" | "opencode" | "antigravity" | "continue" | "roo" | "nanoclaw" | "nemoclaw" | "picoclaw" | "zeroclaw";
             declaration_source?: "manual" | "detected" | undefined;
             level?: "custom" | "full" | "standard" | "limited" | undefined;
             surfaces?: {

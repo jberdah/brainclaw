@@ -1,5 +1,5 @@
 <!-- brainclaw:start -->
-> Managed by brainclaw v0.27.0 — do not edit manually.
+> Managed by brainclaw v0.28.0 — do not edit manually.
 > Regenerate: brainclaw export --format claude-md --write
 
 ## brainclaw — why this matters

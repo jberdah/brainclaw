@@ -12,6 +12,11 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set([
     'antigravity',
     'continue',
     'roo',
+    'openclaw',
+    'nanoclaw',
+    'nemoclaw',
+    'picoclaw',
+    'zeroclaw',
 ]);
 const DEFAULT_SURFACES = {
     'github-copilot': [
@@ -59,6 +64,18 @@ const DEFAULT_SURFACES = {
     ],
     'openclaw': [
         { kind: 'skill', location: 'machine', path: '.openclaw/workspace/skills/brainclaw/SKILL.md' },
+    ],
+    'nanoclaw': [
+        { kind: 'skill', location: 'workspace', path: 'skills/nanoclaw/SKILL.md' },
+    ],
+    'nemoclaw': [
+        { kind: 'skill', location: 'workspace', path: 'skills/nemoclaw/SKILL.md' },
+    ],
+    'picoclaw': [
+        { kind: 'skill', location: 'workspace', path: 'skills/picoclaw/SKILL.md' },
+    ],
+    'zeroclaw': [
+        { kind: 'skill', location: 'workspace', path: 'skills/zeroclaw/SKILL.md' },
     ],
 };
 function mergeSurfaces(current, next) {

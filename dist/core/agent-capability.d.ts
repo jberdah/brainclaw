@@ -8,9 +8,15 @@
  *   B (standard) — MCP, no hooks → directive instructions with top traps
  *   C (limited) — no MCP → rich static content (plans, traps, decisions)
  */
+export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
+export type WorkflowModel = 'interactive' | 'task-based' | 'scheduled';
 export interface AgentCapabilityProfile {
     /** Agent identifier (matches ALL_KNOWN_AGENTS in setup.ts) */
     name: string;
+    /** Agent category: code-agent (IDE-driven), autonomous-agent (headless), desktop-ai (app) */
+    category: AgentCategory;
+    /** Workflow model: interactive (human-in-loop), task-based (receive→execute→report), scheduled (cron) */
+    workflowModel: WorkflowModel;
     /** Agent supports MCP tool calling */
     hasMcp: boolean;
     /** Agent supports lifecycle hooks (pre-prompt injection, stop cleanup) */
@@ -30,7 +36,7 @@ export interface AgentCapabilityProfile {
     /** Template tier: A (full), B (standard), C (limited) */
     templateTier: 'A' | 'B' | 'C';
 }
-export type AgentName = 'claude-code' | 'cursor' | 'windsurf' | 'cline' | 'roo' | 'continue' | 'opencode' | 'codex' | 'antigravity' | 'github-copilot' | 'openclaw';
+export type AgentName = 'claude-code' | 'cursor' | 'windsurf' | 'cline' | 'roo' | 'continue' | 'opencode' | 'codex' | 'antigravity' | 'github-copilot' | 'openclaw' | 'nanoclaw' | 'nemoclaw' | 'picoclaw' | 'zeroclaw';
 /**
  * Get the capability profile for a known agent.
  * Returns undefined for unknown agent names.
