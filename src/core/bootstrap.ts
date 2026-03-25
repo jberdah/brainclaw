@@ -340,16 +340,23 @@ function buildBootstrapArtifacts(input: {
 }): BuildBootstrapArtifactsResult {
   const sourcesScanned: string[] = [];
   const seeds: MemorySeedDocument[] = [];
-  const workspace = classifyWorkspace(input.cwd);
-  const nativeInstructionFiles = discoverNativeInstructionFiles(input.cwd);
 
-  const readmePath = findFirstExisting(input.cwd, README_CANDIDATES);
+  // When target is an absolute directory path, use it as the scan root
+  // so that instruction files, README, and AGENTS.md are discovered from
+  // the target scope — not from the workspace root. This fixes bootstrap
+  // returning wrong signals for monorepo sub-projects.
+  const scanRoot = resolveBootstrapScanRoot(input.cwd, input.target);
+
+  const workspace = classifyWorkspace(scanRoot);
+  const nativeInstructionFiles = discoverNativeInstructionFiles(scanRoot);
+
+  const readmePath = findFirstExisting(scanRoot, README_CANDIDATES);
   if (readmePath) {
     sourcesScanned.push('README');
     seeds.push(...extractReadmeSeeds(readmePath, input.target));
   }
 
-  const agentsPath = path.join(input.cwd, 'AGENTS.md');
+  const agentsPath = path.join(scanRoot, 'AGENTS.md');
   const agentsPresent = fs.existsSync(agentsPath);
   if (agentsPresent) {
     sourcesScanned.push('AGENTS.md');
@@ -359,13 +366,13 @@ function buildBootstrapArtifacts(input: {
   if (nativeInstructionFiles.length > 0) {
     sourcesScanned.push('native_instructions');
     seeds.push(...extractNativeInstructionSeeds(
-      nativeInstructionFiles.map((relativePath) => path.join(input.cwd, relativePath)),
-      input.cwd,
+      nativeInstructionFiles.map((relativePath) => path.join(scanRoot, relativePath)),
+      scanRoot,
       input.target,
     ));
   }
 
-  const manifestResult = extractManifestSeeds(input.cwd, input.target);
+  const manifestResult = extractManifestSeeds(scanRoot, input.target);
   if (manifestResult.seeds.length > 0) {
     sourcesScanned.push(...manifestResult.sources);
     seeds.push(...manifestResult.seeds);
@@ -385,18 +392,18 @@ function buildBootstrapArtifacts(input: {
     seeds.push(...extractMcpSeeds(agentTooling.mcp_servers, input.target));
   }
 
-  const repoAnalysis = analyzeRepository(input.cwd);
+  const repoAnalysis = analyzeRepository(scanRoot);
   sourcesScanned.push('repo-analysis');
   seeds.push(...extractRepoAnalysisSeeds(repoAnalysis, input.target));
 
   // Additional brownfield sources (step 12)
-  const additionalSeeds = extractAdditionalBrownfieldSeeds(input.cwd, input.target);
+  const additionalSeeds = extractAdditionalBrownfieldSeeds(scanRoot, input.target);
   if (additionalSeeds.seeds.length > 0) {
     sourcesScanned.push(...additionalSeeds.sources);
     seeds.push(...additionalSeeds.seeds);
   }
 
-  const gitProbe = probeGit(input.cwd, input.target);
+  const gitProbe = probeGit(scanRoot, input.target);
   if (gitProbe.available) {
     sourcesScanned.push('git');
     seeds.push(...gitProbe.hotspotSeeds);
@@ -2029,6 +2036,25 @@ function capitalize(value: string): string {
 function normalizeTarget(target?: string): string | undefined {
   const trimmed = target?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Resolve where to scan for project files (README, AGENTS.md, manifests).
+ * If target is an absolute directory path, scan from there.
+ * Otherwise fall back to cwd (the workspace/store root).
+ */
+function resolveBootstrapScanRoot(cwd: string, target?: string): string {
+  if (!target) return cwd;
+  const resolved = path.isAbsolute(target) ? target : path.resolve(cwd, target);
+  try {
+    if (fs.statSync(resolved).isDirectory()) return resolved;
+  } catch { /* not a directory or doesn't exist */ }
+  // Target is a file path or glob — use its parent directory if it exists
+  const parent = path.dirname(resolved);
+  try {
+    if (fs.statSync(parent).isDirectory()) return parent;
+  } catch { /* fall back to cwd */ }
+  return cwd;
 }
 
 // ─── Step 12: Additional brownfield sources ──────────────────────────────────
