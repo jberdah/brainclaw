@@ -1,0 +1,204 @@
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+const TOOLCHAINS = [
+    { name: 'node', command: 'node', args: ['--version'] },
+    { name: 'npm', command: 'npm', args: ['--version'] },
+    { name: 'pnpm', command: 'pnpm', args: ['--version'] },
+    { name: 'python', command: 'python', args: ['--version'] },
+    { name: 'pip', command: 'pip', args: ['--version'] },
+    { name: 'cargo', command: 'cargo', args: ['--version'] },
+    { name: 'go', command: 'go', args: ['version'] },
+];
+const ENV_WHITELIST = [
+    'BRAINCLAW_AGENT',
+    'BRAINCLAW_HOST_ID',
+    'BRAINCLAW_SESSION_ID',
+    'OPENCLAW_AGENT',
+    'OPENCLAW_SESSION_ID',
+    'CI',
+    'NODE_ENV',
+    'VIRTUAL_ENV',
+    'CONDA_DEFAULT_ENV',
+    'npm_config_user_agent',
+];
+let cachedToolchains;
+export function buildExecutionContext(options = {}) {
+    const cwd = options.cwd ?? process.cwd();
+    const env = options.env ?? process.env;
+    const runner = options.runner ?? defaultRunner;
+    const workspaceRoot = detectWorkspaceRoot(cwd, runner);
+    const branch = detectGitBranch(cwd, runner);
+    const gitStatus = detectGitStatus(cwd, runner);
+    const hasRemote = detectGitRemote(cwd, runner);
+    return {
+        platform: process.platform,
+        shell: detectShell(env),
+        cwd,
+        workspace_root: workspaceRoot,
+        branch,
+        git_status: gitStatus,
+        has_remote: hasRemote,
+        toolchains: detectToolchains(cwd, runner),
+        env_signals: captureEnvSignals(env),
+    };
+}
+export function compactExecutionContext(snapshot) {
+    return {
+        platform: snapshot.platform,
+        shell: snapshot.shell,
+        workspace_root: snapshot.workspace_root,
+        branch: snapshot.branch,
+        git_status: snapshot.git_status,
+        has_remote: snapshot.has_remote,
+        toolchains: snapshot.toolchains.filter((tool) => tool.available),
+    };
+}
+export function renderExecutionContextSummary(snapshot, includeEnvSignals = false) {
+    const lines = [];
+    lines.push(`Platform: ${snapshot.platform}`);
+    if (snapshot.shell) {
+        lines.push(`Shell: ${snapshot.shell}`);
+    }
+    lines.push(`Workspace: ${snapshot.workspace_root}`);
+    if (snapshot.branch) {
+        lines.push(`Git branch: ${snapshot.branch}`);
+    }
+    lines.push(`Git status: ${snapshot.git_status}`);
+    lines.push(`Git remote: ${snapshot.has_remote ? 'configured' : 'none'}`);
+    const availableToolchains = snapshot.toolchains.filter((tool) => tool.available);
+    if (availableToolchains.length > 0) {
+        lines.push(`Toolchains: ${availableToolchains.map((tool) => `${tool.name}${tool.version ? ` ${tool.version}` : ''}`).join(', ')}`);
+    }
+    else {
+        lines.push('Toolchains: none detected');
+    }
+    if (includeEnvSignals && 'env_signals' in snapshot && snapshot.env_signals.length > 0) {
+        lines.push('Environment signals:');
+        for (const signal of snapshot.env_signals) {
+            lines.push(`- ${signal.name}=${signal.value}`);
+        }
+    }
+    return lines.join('\n');
+}
+function detectWorkspaceRoot(cwd, runner) {
+    const result = runner('git', ['rev-parse', '--show-toplevel'], cwd);
+    if (result.status === 0) {
+        return result.stdout.trim();
+    }
+    return cwd;
+}
+function detectGitBranch(cwd, runner) {
+    const result = runner('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+    if (result.status !== 0) {
+        return undefined;
+    }
+    const branch = result.stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : undefined;
+}
+function detectGitStatus(cwd, runner) {
+    const result = runner('git', ['status', '--porcelain'], cwd);
+    if (result.status !== 0) {
+        return 'unavailable';
+    }
+    return result.stdout.trim().length > 0 ? 'dirty' : 'clean';
+}
+function detectGitRemote(cwd, runner) {
+    const result = runner('git', ['remote'], cwd);
+    if (result.status !== 0) {
+        return false;
+    }
+    return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length > 0;
+}
+function detectToolchains(cwd, runner) {
+    if (runner === defaultRunner && cachedToolchains) {
+        return cachedToolchains;
+    }
+    const detected = TOOLCHAINS.map((tool) => {
+        const result = runner(tool.command, tool.args, cwd);
+        if (result.status !== 0) {
+            return { name: tool.name, available: false };
+        }
+        const version = firstNonEmptyLine(result.stdout || result.stderr);
+        return {
+            name: tool.name,
+            available: true,
+            version,
+        };
+    });
+    if (runner === defaultRunner) {
+        cachedToolchains = detected;
+    }
+    return detected;
+}
+function captureEnvSignals(env) {
+    const signals = [];
+    for (const name of ENV_WHITELIST) {
+        const raw = env[name]?.trim();
+        if (!raw) {
+            continue;
+        }
+        signals.push({
+            name,
+            value: normalizeEnvValue(name, raw),
+            redacted: isRedactedEnv(name),
+        });
+    }
+    return signals;
+}
+function normalizeEnvValue(name, value) {
+    if (name === 'CI') {
+        return value.toLowerCase() === 'true' ? 'true' : 'set';
+    }
+    if (name === 'VIRTUAL_ENV') {
+        return path.basename(value);
+    }
+    if (name === 'BRAINCLAW_SESSION_ID' || name === 'OPENCLAW_SESSION_ID') {
+        return redactValue(value);
+    }
+    if (name === 'npm_config_user_agent') {
+        return value.split(' ')[0] ?? value;
+    }
+    return value;
+}
+function isRedactedEnv(name) {
+    return name === 'BRAINCLAW_SESSION_ID' || name === 'OPENCLAW_SESSION_ID';
+}
+function redactValue(value) {
+    if (value.length <= 10) {
+        return 'set';
+    }
+    return `${value.slice(0, 5)}...${value.slice(-3)}`;
+}
+function detectShell(env) {
+    const shell = env.SHELL?.trim();
+    if (shell) {
+        return path.basename(shell).replace(/\.exe$/i, '');
+    }
+    if (env.PSModulePath) {
+        return 'powershell';
+    }
+    const comspec = env.ComSpec?.trim() ?? env.COMSPEC?.trim();
+    if (comspec) {
+        return path.basename(comspec).replace(/\.exe$/i, '');
+    }
+    return process.platform === 'win32' ? 'unknown-windows-shell' : 'unknown-shell';
+}
+function firstNonEmptyLine(value) {
+    return value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+}
+function defaultRunner(command, args, cwd) {
+    const result = spawnSync(command, args, {
+        cwd,
+        encoding: 'utf-8',
+        timeout: 5000,
+    });
+    return {
+        status: result.status,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+    };
+}
+//# sourceMappingURL=execution-context.js.map

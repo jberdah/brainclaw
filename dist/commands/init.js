@@ -1,0 +1,434 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline/promises';
+import { registerAgentIdentity, resolveDefaultAgentName, resolveExistingCurrentAgent } from '../core/agent-registry.js';
+import { MEMORY_DIR, memoryExists, ensureMemoryDir, memoryPath, writeFileAtomic } from '../core/io.js';
+import { emptyState, loadState, saveState } from '../core/state.js';
+import { defaultConfig, saveConfig } from '../core/config.js';
+import { generateMarkdown } from '../core/markdown.js';
+import { initMemoryRepo } from '../core/memory-git.js';
+import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
+import { scanProject, upsertProject } from '../core/global-registry.js';
+import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
+import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
+import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
+import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
+import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
+import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
+import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
+import { writeDetectedAgentExport } from './export.js';
+import { writeDetectedAgentHooks } from './hooks.js';
+export async function runInit(options = {}) {
+    const cwd = options.cwd ?? process.cwd();
+    const containingMemoryStore = resolveContainingMemoryStore(cwd);
+    // Auto-create user store if absent (replaces the old "setup required" guard).
+    // The skipSetupRequirement flag and BRAINCLAW_SKIP_SETUP_REQUIREMENT env var
+    // are kept for backward compatibility but are now effectively no-ops —
+    // init always ensures the user store exists before proceeding.
+    if (!hasCompletedSetup()) {
+        ensureUserStore();
+    }
+    if (containingMemoryStore) {
+        console.error(`Error: cannot run \`brainclaw init\` from inside an existing project memory store (${containingMemoryStore}).`);
+        console.error('Run `brainclaw init` from the project root directory instead.');
+        process.exit(1);
+    }
+    // --scan: detect service boundaries and suggest init targets, then exit
+    if (options.scan) {
+        const { suggestions, alreadyInitialised } = scanWorkspaceBoundaries(cwd);
+        if (alreadyInitialised.length > 0) {
+            console.log(`Already initialised (${alreadyInitialised.length}):`);
+            for (const { relativePath } of alreadyInitialised) {
+                console.log(`  ✔ ./${relativePath}`);
+            }
+            console.log('');
+        }
+        if (suggestions.length === 0) {
+            console.log('No service boundaries detected in subdirectories.');
+        }
+        else {
+            console.log(`Detected ${suggestions.length} service boundary candidate(s):`);
+            for (const { relativePath, markers } of suggestions) {
+                console.log(`  → ./${relativePath}  [${markers.join(', ')}]`);
+                console.log(`    cd ${relativePath} && brainclaw init -y`);
+            }
+        }
+        return;
+    }
+    const existingIdentity = resolveExistingProjectIdentity(cwd);
+    const existingCurrentAgent = resolveExistingCurrentAgent(cwd);
+    const storageDir = resolveStorageDir(options.storageDir);
+    const topology = resolveTopology(options.topology);
+    const ignoreStrategy = topology === 'embedded' ? 'none' : 'project-gitignore';
+    const skipAgentBootstrap = options.skipAgentBootstrap === true || process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
+    if (memoryExists(cwd) && !options.force) {
+        console.error('Error: project memory already exists. Use --force to overwrite.');
+        process.exit(1);
+    }
+    // Derive project name from directory
+    const projectName = path.basename(cwd);
+    const shouldAnalyzeRepo = options.analyzeRepo !== false
+        && process.env.BRAINCLAW_SKIP_REPO_ANALYSIS !== '1';
+    const analysis = shouldAnalyzeRepo ? analyzeRepository(cwd) : undefined;
+    const projectMode = await resolveProjectMode(options, analysis);
+    const projectStrategy = await resolveProjectStrategy(options, projectMode);
+    ensureMemoryDir(cwd, storageDir);
+    const currentAgent = registerAgentIdentity({
+        agentName: existingCurrentAgent?.agent_name ?? resolveDefaultAgentName(),
+        kind: existingCurrentAgent?.kind ?? 'human',
+        trustLevel: 'curator',
+        cwd,
+        preferredDirName: storageDir,
+    });
+    // Auto-detect and register the AI coding agent running in this environment
+    const detectedAi = skipAgentBootstrap ? undefined : detectAiAgent();
+    let registeredAiAgent = detectedAi
+        ? registerAgentIdentity({
+            agentName: detectedAi.name,
+            kind: detectedAi.kind,
+            trustLevel: detectedAi.trust_level,
+            cwd,
+            preferredDirName: storageDir,
+        })
+        : undefined;
+    // Only write empty state if no data exists yet.
+    // When --force is used on an existing project, preserve the data
+    // and only refresh config/agent registration/directory structure.
+    const existingState = loadState(cwd);
+    const hasExistingData = existingState.active_constraints.length > 0 ||
+        existingState.recent_decisions.length > 0 ||
+        existingState.known_traps.length > 0 ||
+        existingState.open_handoffs.length > 0 ||
+        existingState.plan_items.length > 0;
+    if (!hasExistingData) {
+        saveState(emptyState(), cwd);
+    }
+    // Create config
+    const projectIdentity = buildProjectIdentity({
+        existing: existingIdentity,
+        projectName,
+        storageDir,
+        topology,
+    });
+    const config = defaultConfig(projectName, {
+        projectId: projectIdentity.project_id,
+        currentAgent: currentAgent.agent_name,
+        currentAgentId: currentAgent.agent_id,
+        projectMode,
+        projectStrategy,
+        storageDir,
+        topology,
+        ignoreStrategy,
+    });
+    if (options.compact) {
+        config.markdown = { max_items_per_section: 20, compact_mode: true };
+    }
+    if (detectedAi && isAgentIntegrationName(detectedAi.name)) {
+        upsertAgentIntegrationDeclaration(config, detectedAi.name, 'detected');
+    }
+    saveConfig(config, cwd, storageDir);
+    saveProjectIdentity(projectIdentity, cwd, storageDir);
+    // Write to the detected agent's native instruction file after config exists.
+    const detectedExport = detectedAi ? writeDetectedAgentExport(detectedAi.name, cwd) : undefined;
+    // Write deterministic session-trigger hooks for Cursor / Windsurf
+    const detectedHooks = detectedAi
+        ? (detectedAi.name === 'windsurf'
+            ? []
+            : writeDetectedAgentHooks(detectedAi.name, projectName, cwd)
+                .filter((hook) => hook.relativePath !== detectedExport?.relativePath))
+        : [];
+    const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
+    // Register in global project registry
+    try {
+        const entry = scanProject(cwd);
+        if (entry)
+            upsertProject(entry);
+    }
+    catch {
+        // Non-fatal: global registry is optional
+    }
+    // Create project.md
+    const md = generateMarkdown(loadState(cwd));
+    writeFileAtomic(memoryPath('project.md', cwd, storageDir), md);
+    if (ignoreStrategy === 'project-gitignore') {
+        ensureProjectGitignore(cwd, storageDir);
+    }
+    // Create or update AGENTS.md and .github/copilot-instructions.md
+    const agentFiles = skipAgentBootstrap
+        ? {
+            agentsMdCreated: false,
+            agentsMdUpdated: false,
+            copilotInstructionsCreated: false,
+            copilotInstructionsUpdated: false,
+        }
+        : ensureAgentFiles(cwd, storageDir);
+    // Add agent instruction files to .gitignore (they are generated, not source)
+    if (!skipAgentBootstrap) {
+        const generatedWorkspacePaths = detectedAutoConfig
+            .map((item) => item.relativePath)
+            .filter((item) => item !== undefined)
+            .filter((item) => !item.startsWith('.codeium/'));
+        ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md', ...generatedWorkspacePaths]);
+    }
+    console.log(`✔ Initialized project memory in ${storageDir}/`);
+    console.log('✔ Created project.md, config.yaml, and split state directories');
+    console.log(`✔ Project ID: ${projectIdentity.project_id}`);
+    console.log(`✔ Current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
+    if (registeredAiAgent) {
+        console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi.detection_source}] (${registeredAiAgent.agent_id})`);
+    }
+    if (detectedExport) {
+        console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
+    }
+    const visibleSurfaces = buildAiSurfaceInventory().filter((surface) => surface.status !== 'not_detected');
+    if (visibleSurfaces.length > 0) {
+        console.log('✔ Other AI work surfaces detected on this machine:');
+        for (const surface of visibleSurfaces) {
+            console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
+        }
+        const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
+        if (usageHints.length > 0) {
+            console.log('  Suggested uses:');
+            for (const line of usageHints) {
+                console.log(`    ${line}`);
+            }
+        }
+    }
+    for (const hook of detectedHooks) {
+        console.log(`\u2714 Session hook written to ${hook.relativePath} (${hook.created ? 'created' : 'updated'})`);
+    }
+    console.log(`\u2714 Topology: ${topology}`);
+    console.log(`✔ Storage dir: ${storageDir}`);
+    console.log(`✔ Project mode: ${projectMode}`);
+    if (projectMode === 'multi-project') {
+        console.log(`✔ Project strategy: ${projectStrategy}`);
+    }
+    if (ignoreStrategy === 'project-gitignore') {
+        console.log(`✔ Added ${storageDir}/ to .gitignore`);
+    }
+    if (agentFiles.agentsMdCreated) {
+        console.log('✔ Created AGENTS.md with brainclaw bootstrap section');
+    }
+    else if (agentFiles.agentsMdUpdated) {
+        console.log('✔ Updated AGENTS.md with brainclaw bootstrap section');
+    }
+    if (agentFiles.copilotInstructionsCreated) {
+        console.log('✔ Created .github/copilot-instructions.md with brainclaw bootstrap section');
+    }
+    else if (agentFiles.copilotInstructionsUpdated) {
+        console.log('✔ Updated .github/copilot-instructions.md with brainclaw bootstrap section');
+    }
+    for (const autoConfig of detectedAutoConfig) {
+        const message = describeAutoConfigWrite(autoConfig);
+        if (message) {
+            console.log(message);
+        }
+    }
+    if (!skipAgentBootstrap) {
+        console.log('✔ Added generated agent files to .gitignore');
+    }
+    if (analysis) {
+        console.log('');
+        console.log(`Recommended project mode: ${analysis.recommendedMode}`);
+        for (const reason of analysis.reasons) {
+            console.log(`  - ${reason}`);
+        }
+    }
+    const wsl = detectWslEnvironment();
+    if (wsl) {
+        console.log('');
+        console.log(`⚠  WSL detected (${wsl.distro}). brainclaw is installed in this WSL environment only.`);
+        console.log(`   To use brainclaw from a Windows terminal (PowerShell/cmd), run inside this project:`);
+        console.log(`     npm link    (in PowerShell, with Node.js for Windows)`);
+    }
+    // Initialize internal git repo for memory versioning
+    if (initMemoryRepo(cwd)) {
+        console.log('✔ Initialized memory git repo for versioning');
+    }
+    // Install post-merge hook for auto-release of claims after merge
+    installPostMergeHookIfMissing(cwd);
+    const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
+    console.log('');
+    console.log('Onboarding preflight:');
+    for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
+        console.log(`  ${line}`);
+    }
+    if (onboardingPreflight.importPlan.suggestion_count > 0) {
+        console.log('');
+        console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
+        console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
+    }
+    if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
+        console.log('');
+        console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
+        console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
+    }
+    else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
+        console.log('');
+        console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+    }
+    console.log('');
+    console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);
+}
+function installPostMergeHookIfMissing(cwd) {
+    try {
+        let dir = path.resolve(cwd);
+        let gitRoot;
+        while (true) {
+            if (fs.existsSync(path.join(dir, '.git'))) {
+                gitRoot = dir;
+                break;
+            }
+            const parent = path.dirname(dir);
+            if (parent === dir)
+                break;
+            dir = parent;
+        }
+        if (!gitRoot)
+            return;
+        const hooksDir = path.join(gitRoot, '.git', 'hooks');
+        const hookPath = path.join(hooksDir, 'post-merge');
+        if (fs.existsSync(hookPath))
+            return; // don't overwrite existing hooks
+        if (!fs.existsSync(hooksDir))
+            fs.mkdirSync(hooksDir, { recursive: true });
+        const script = [
+            '#!/bin/sh',
+            '# brainclaw post-merge hook — auto-release claims on merged files',
+            'BCLAW_CMD=""',
+            'if command -v brainclaw >/dev/null 2>&1; then BCLAW_CMD="brainclaw"',
+            'elif command -v bclaw >/dev/null 2>&1; then BCLAW_CMD="bclaw"',
+            'else BCLAW_CMD="npx --no brainclaw"; fi',
+            '$BCLAW_CMD release-claims --from-git-diff 2>/dev/null || true',
+            '',
+        ].join('\n');
+        fs.writeFileSync(hookPath, script, { encoding: 'utf-8', mode: 0o755 });
+        console.log('✔ Installed post-merge hook for auto-release of claims');
+    }
+    catch {
+        // Non-critical — skip silently
+    }
+}
+function resolveStorageDir(storageDir) {
+    const candidate = (storageDir ?? MEMORY_DIR).trim();
+    if (candidate !== MEMORY_DIR) {
+        console.error(`Error: custom storage directories are no longer supported. Use "${MEMORY_DIR}".`);
+        process.exit(1);
+    }
+    return candidate;
+}
+function resolveContainingMemoryStore(cwd) {
+    let current = path.resolve(cwd);
+    while (true) {
+        if (path.basename(current) === MEMORY_DIR && looksLikeBrainclawStore(current)) {
+            return current;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return undefined;
+        }
+        current = parent;
+    }
+}
+function looksLikeBrainclawStore(storePath) {
+    return fs.existsSync(path.join(storePath, 'config.yaml'))
+        || fs.existsSync(path.join(storePath, 'project.identity.json'))
+        || fs.existsSync(path.join(storePath, '.git'));
+}
+function resolveTopology(topology) {
+    return topology ?? 'embedded';
+}
+function ensureProjectGitignore(cwd, storageDir) {
+    const gitignorePath = path.join(cwd, '.gitignore');
+    const ignoreLine = `${storageDir}/`;
+    const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : '';
+    const lines = current.split(/\r?\n/).filter((line) => line.length > 0);
+    if (lines.includes(ignoreLine)) {
+        return;
+    }
+    const next = current.length === 0
+        ? `${ignoreLine}\n`
+        : `${current.replace(/\s*$/, '')}\n${ignoreLine}\n`;
+    fs.writeFileSync(gitignorePath, next, 'utf-8');
+}
+async function resolveProjectMode(options, analysis) {
+    if (options.projectMode) {
+        return options.projectMode;
+    }
+    if (options.yes || !process.stdin.isTTY || !process.stdout.isTTY) {
+        return 'auto';
+    }
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+    try {
+        console.log('How is this repository organized?');
+        console.log('  1) single-project - Use one shared memory space for the whole repository.');
+        console.log('  2) multi-project  - Segment memory across multiple projects or domains in this repository.');
+        console.log('  3) auto           - Start simple now and allow project segmentation later.');
+        if (analysis) {
+            console.log(`Suggested mode: ${analysis.recommendedMode}`);
+        }
+        const answer = (await rl.question('Select project mode [auto]: ')).trim().toLowerCase();
+        return parseProjectMode(answer) ?? 'auto';
+    }
+    finally {
+        rl.close();
+    }
+}
+async function resolveProjectStrategy(options, projectMode) {
+    if (options.projectStrategy) {
+        return options.projectStrategy;
+    }
+    if (projectMode !== 'multi-project') {
+        return 'manual';
+    }
+    if (options.yes || !process.stdin.isTTY || !process.stdout.isTTY) {
+        return 'manual';
+    }
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+    try {
+        console.log('How should project boundaries be managed?');
+        console.log('  1) manual - Projects are named explicitly and assigned later.');
+        console.log('  2) folder - Use folder paths as the default way to infer project boundaries.');
+        const answer = (await rl.question('Select project strategy [manual]: ')).trim().toLowerCase();
+        return parseProjectStrategy(answer) ?? 'manual';
+    }
+    finally {
+        rl.close();
+    }
+}
+function parseProjectMode(value) {
+    switch (value) {
+        case '1':
+        case 'single-project':
+        case 'single':
+            return 'single-project';
+        case '2':
+        case 'multi-project':
+        case 'multi':
+            return 'multi-project';
+        case '3':
+        case 'auto':
+            return 'auto';
+        default:
+            return undefined;
+    }
+}
+function parseProjectStrategy(value) {
+    switch (value) {
+        case '1':
+        case 'manual':
+            return 'manual';
+        case '2':
+        case 'folder':
+            return 'folder';
+        default:
+            return undefined;
+    }
+}
+//# sourceMappingURL=init.js.map

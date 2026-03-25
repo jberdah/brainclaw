@@ -1,0 +1,1 @@
+{"version":3,"file":"use-candidate.d.ts","sourceRoot":"","sources":["../../src/commands/use-candidate.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,mBAAmB;IAClC,EAAE,CAAC,EAAE,MAAM,CAAC;IACZ,OAAO,CAAC,EAAE,MAAM,CAAC;CAClB;AAED,wBAAgB,eAAe,CAAC,EAAE,EAAE,MAAM,EAAE,OAAO,GAAE,mBAAwB,GAAG,IAAI,CAiCnF"}

@@ -1,0 +1,150 @@
+import { memoryExists } from '../core/io.js';
+import { mutate } from '../core/mutation-pipeline.js';
+import { rebuildProjectMd } from '../core/markdown.js';
+import { loadCandidate, archiveCandidate, resolveIdOrAlias } from '../core/candidates.js';
+import { loadState, persistState } from '../core/state.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
+import { generateTrapIdWithLabel } from '../core/traps.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
+import { appendAuditEntry } from '../core/audit.js';
+export function runAccept(id, by, cwd) {
+    try {
+        const result = acceptCandidate(id, by, cwd);
+        console.log(`✔ Promoted to ${result.candidate_type} [${result.promoted_item_id}]`);
+        console.log(`✔ Candidate [${id}] accepted and archived.`);
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`Error: ${msg}`);
+        process.exit(1);
+    }
+}
+export function acceptCandidate(id, by, cwd, byId) {
+    if (!memoryExists(cwd)) {
+        throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
+    }
+    const resolvedId = resolveIdOrAlias(id, cwd);
+    const candidate = loadCandidate(resolvedId, cwd);
+    if (candidate.status !== 'pending') {
+        throw new Error(`Candidate '${id}' is already ${candidate.status}.`);
+    }
+    const actorIdentity = requireRegisteredAgentIdentity({
+        agentName: by,
+        agentId: byId,
+        cwd,
+        allowCurrent: true,
+        allowEnv: true,
+    });
+    requireMinimumTrustLevel(actorIdentity, 'trusted');
+    const actor = actorIdentity.agent_name;
+    let promotedItemId = '';
+    mutate({ cwd }, () => {
+        const state = loadState(cwd);
+        switch (candidate.type) {
+            case 'constraint': {
+                const { id: entryId, short_label } = generateIdWithLabel('active_constraints', cwd);
+                const entry = {
+                    id: entryId,
+                    short_label,
+                    text: candidate.text,
+                    created_at: candidate.created_at,
+                    author: candidate.author,
+                    author_id: candidate.author_id,
+                    project_id: candidate.project_id,
+                    host_id: candidate.host_id,
+                    session_id: candidate.session_id,
+                    status: 'active',
+                    tags: candidate.tags,
+                };
+                state.active_constraints.push(entry);
+                promotedItemId = entryId;
+                break;
+            }
+            case 'decision': {
+                const { id: entryId, short_label } = generateIdWithLabel('recent_decisions', cwd);
+                const entry = {
+                    id: entryId,
+                    short_label,
+                    text: candidate.text,
+                    created_at: candidate.created_at,
+                    author: candidate.author,
+                    author_id: candidate.author_id,
+                    project_id: candidate.project_id,
+                    host_id: candidate.host_id,
+                    session_id: candidate.session_id,
+                    related_paths: candidate.related_paths,
+                    plan_id: candidate.plan_id,
+                    tags: candidate.tags,
+                };
+                state.recent_decisions.push(entry);
+                promotedItemId = entryId;
+                break;
+            }
+            case 'trap': {
+                const { id: entryId, short_label } = generateTrapIdWithLabel(cwd);
+                const entry = {
+                    id: entryId,
+                    short_label,
+                    text: candidate.text,
+                    created_at: candidate.created_at,
+                    author: candidate.author,
+                    author_id: candidate.author_id,
+                    project_id: candidate.project_id,
+                    host_id: candidate.host_id,
+                    session_id: candidate.session_id,
+                    status: 'active',
+                    severity: candidate.severity ?? 'medium',
+                    tags: candidate.tags,
+                    plan_id: candidate.plan_id,
+                    visibility: 'shared',
+                };
+                state.known_traps.push(entry);
+                promotedItemId = entryId;
+                break;
+            }
+            case 'handoff': {
+                const { id: entryId, short_label } = generateIdWithLabel('open_handoffs', cwd);
+                const entry = {
+                    id: entryId,
+                    short_label,
+                    from: candidate.from ?? 'unknown',
+                    to: candidate.to ?? 'unknown',
+                    text: candidate.text,
+                    created_at: candidate.created_at,
+                    author: candidate.author,
+                    author_id: candidate.author_id,
+                    project_id: candidate.project_id,
+                    host_id: candidate.host_id,
+                    session_id: candidate.session_id,
+                    status: 'open',
+                    tags: candidate.tags,
+                };
+                state.open_handoffs.push(entry);
+                promotedItemId = entryId;
+                break;
+            }
+        }
+        persistState(state, cwd);
+        candidate.status = 'accepted';
+        candidate.resolved_at = nowISO();
+        candidate.resolved_by = actor;
+        archiveCandidate(candidate, 'accepted', cwd);
+        appendAuditEntry({
+            actor,
+            actor_id: actorIdentity.agent_id,
+            action: 'accept',
+            item_id: resolvedId,
+            item_type: candidate.type,
+            after: { type: candidate.type, text: candidate.text },
+            reason: 'trusted-agent',
+        }, cwd);
+        rebuildProjectMd(loadState(cwd), cwd);
+    });
+    return {
+        candidate_id: resolvedId,
+        candidate_type: candidate.type,
+        promoted_item_id: promotedItemId,
+        actor,
+    };
+}
+//# sourceMappingURL=accept.js.map

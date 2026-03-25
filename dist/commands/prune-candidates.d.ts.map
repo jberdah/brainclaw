@@ -1,0 +1,1 @@
+{"version":3,"file":"prune-candidates.d.ts","sourceRoot":"","sources":["../../src/commands/prune-candidates.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,YAAY;IAC3B,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,MAAM,CAAC,EAAE,OAAO,CAAC;CAClB;AAED,wBAAgB,kBAAkB,CAAC,OAAO,GAAE,YAAiB,GAAG,IAAI,CAqCnE"}

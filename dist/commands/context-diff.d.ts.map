@@ -1,0 +1,1 @@
+{"version":3,"file":"context-diff.d.ts","sourceRoot":"","sources":["../../src/commands/context-diff.ts"],"names":[],"mappings":"AAOA,MAAM,WAAW,kBAAkB;IACjC,KAAK,CAAC,EAAE,MAAM,CAAC;IACf,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,IAAI,CAAC,EAAE,OAAO,CAAC;IACf,GAAG,CAAC,EAAE,MAAM,CAAC;CACd;AAED;;;;GAIG;AACH,wBAAgB,cAAc,CAAC,OAAO,GAAE,kBAAuB,GAAG,IAAI,CAqErE"}

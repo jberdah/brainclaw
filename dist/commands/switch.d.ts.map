@@ -1,0 +1,1 @@
+{"version":3,"file":"switch.d.ts","sourceRoot":"","sources":["../../src/commands/switch.ts"],"names":[],"mappings":"AAQA,MAAM,WAAW,aAAa;IAC5B,IAAI,CAAC,EAAE,OAAO,CAAC;IACf,KAAK,CAAC,EAAE,OAAO,CAAC;IAChB,IAAI,CAAC,EAAE,OAAO,CAAC;IACf,GAAG,CAAC,EAAE,MAAM,CAAC;CACd;AAED,wBAAgB,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,SAAS,EAAE,OAAO,GAAE,aAAkB,GAAG,IAAI,CA6D3F"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"check-events.d.ts","sourceRoot":"","sources":["../../src/commands/check-events.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,kBAAkB;IACjC,KAAK,CAAC,EAAE,MAAM,CAAC;IACf,IAAI,CAAC,EAAE,OAAO,CAAC;CAChB;AAED,wBAAgB,cAAc,CAAC,OAAO,GAAE,kBAAuB,GAAG,IAAI,CAmCrE"}
