@@ -143,7 +143,10 @@ export function resolveWorkspaceRoot(cwd = process.cwd(), options = {}) {
  * Returns undefined when the reference cannot be resolved to a valid brainclaw project.
  */
 export function resolveProjectRef(ref, cwd = process.cwd(), storeChainOptions) {
-    const wsRoot = resolveWorkspaceRoot(cwd, storeChainOptions);
+    // Walk UP from real cwd to find the outermost .brainclaw/ — this avoids
+    // circular resolution when an active project narrows the workspace view.
+    const wsRoot = findOutermostBrainclawRoot(process.cwd())
+        ?? resolveWorkspaceRoot(cwd, storeChainOptions);
     if (!wsRoot)
         return undefined;
     // Try as absolute path
@@ -188,6 +191,26 @@ export function resolveProjectRef(ref, cwd = process.cwd(), storeChainOptions) {
         // fall through
     }
     return undefined;
+}
+/**
+ * Walk UP from a directory and return the outermost .brainclaw/ root found.
+ * This bypasses resolveEffectiveCwd / active project to find the true workspace root.
+ */
+export function findOutermostBrainclawRoot(startDir) {
+    let dir = path.resolve(startDir);
+    const root = path.parse(dir).root;
+    const home = os.homedir();
+    let outermost;
+    while (dir !== root && dir !== home) {
+        if (fs.existsSync(path.join(dir, MEMORY_DIR, 'config.yaml'))) {
+            outermost = dir;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir)
+            break;
+        dir = parent;
+    }
+    return outermost;
 }
 /**
  * Resolve the most specific child store that should answer a context request.

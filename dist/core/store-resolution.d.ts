@@ -76,6 +76,11 @@ export declare function resolveWorkspaceRoot(cwd?: string, options?: ResolveStor
  */
 export declare function resolveProjectRef(ref: string, cwd?: string, storeChainOptions?: ResolveStoreChainOptions): string | undefined;
 /**
+ * Walk UP from a directory and return the outermost .brainclaw/ root found.
+ * This bypasses resolveEffectiveCwd / active project to find the true workspace root.
+ */
+export declare function findOutermostBrainclawRoot(startDir: string): string | undefined;
+/**
  * Resolve the most specific child store that should answer a context request.
  *
  * This keeps the current cwd by default, but when `target` clearly points inside
