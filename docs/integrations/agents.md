@@ -44,13 +44,20 @@ More directive:
 - The top 5 most critical traps (the agent won't see them otherwise)
 - Explicit step-by-step protocol with all MCP calls listed
 
-### For agents without MCP (Copilot)
+### For agents without MCP (Copilot, autonomous agents)
 
-Full static context:
+Full static context via instruction file or SKILL.md:
 - All of the above
 - Active plans with status and assignees
 - All shared traps
 - Recent architectural decisions
+
+### For autonomous agents (OpenClaw, NanoClaw, NemoClaw, PicoClaw, ZeroClaw)
+
+Skill-based integration via `skills/<agent>/SKILL.md`:
+- Compact brainclaw usage instructions adapted to the agent's workflow
+- Uses `--profile compact` by default (short sessions, constrained resources)
+- Supports task-based and scheduled workflow models
 
 ## Setting up agent integration
 
@@ -83,7 +90,7 @@ brainclaw export --detect --write          # auto-detect and write all formats
 When brainclaw memory changes (new constraints, resolved traps, updated plans), regenerate instruction files:
 
 ```bash
-brainclaw export --all              # all 9 agent formats at once
+brainclaw export --all              # all 15 agent formats at once
 brainclaw export --detect --write   # only the detected agent
 ```
 

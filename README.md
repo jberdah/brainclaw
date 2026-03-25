@@ -66,6 +66,8 @@ If you are documenting or integrating an agent workflow, treat MCP as the primar
 
 brainclaw is designed to sit alongside the coding agents teams are already using, not behind a separate hosted control plane.
 
+### Code Agents
+
 | Logo | Agent | Integration | What brainclaw configures |
 |---|---|---|---|
 | [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | Full | MCP + CLAUDE.md + hooks + permissions + /brainclaw command |
@@ -78,9 +80,20 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 | [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | Standard | MCP + .continue/rules/ |
 | [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Standard | MCP + GEMINI.md |
 | [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | Limited | copilot-instructions.md + brainclaw-context skill |
-| [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw) | **[OpenClaw](https://github.com/openclaw/openclaw)** | Limited | brainclaw skill (SKILL.md) for structured project memory |
 
 **Full** = MCP + hooks + auto-approve (context injected every prompt). **Standard** = MCP + instruction file (agent must call tools explicitly). **Limited** = skill-based (agent calls brainclaw CLI via skill instructions).
+
+### Autonomous Agents
+
+| Logo | Agent | Workflow | What brainclaw configures |
+|---|---|---|---|
+| [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw) | **[OpenClaw](https://github.com/openclaw/openclaw)** | Task-based | brainclaw skill (SKILL.md) for structured project memory |
+| [![NanoClaw](https://img.shields.io/badge/NanoClaw-4A90D9?logoColor=white)](https://github.com/qwibitai/nanoclaw) | **[NanoClaw](https://github.com/qwibitai/nanoclaw)** | Task-based | brainclaw skill — messaging agent (WhatsApp, Telegram, Slack) |
+| [![NemoClaw](https://img.shields.io/badge/NemoClaw-76B900?logo=nvidia&logoColor=white)](https://github.com/NVIDIA/NemoClaw) | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | Task-based | brainclaw skill — NVIDIA enterprise agent stack |
+| [![PicoClaw](https://img.shields.io/badge/PicoClaw-00ADD8?logo=go&logoColor=white)](https://github.com/sipeed/picoclaw) | **[PicoClaw](https://github.com/sipeed/picoclaw)** | Scheduled | brainclaw skill — edge/IoT agent (Go, <10MB RAM) |
+| [![ZeroClaw](https://img.shields.io/badge/ZeroClaw-B7410E?logoColor=white)](https://github.com/zeroclaw-labs/zeroclaw) | **[ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)** | Task-based | brainclaw skill — ultra-lightweight Rust agent (20+ channels) |
+
+Autonomous agents use brainclaw via CLI skills with `--profile compact` for short sessions and constrained resources.
 
 brainclaw is most effective today when one agent works at a time in a given checkout and the next agent resumes from shared context, claims, and handoffs.
 
