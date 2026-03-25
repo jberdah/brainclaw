@@ -383,6 +383,17 @@ export const MCP_READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'bclaw_conflict_check',
+    description: 'Check for claim conflicts between the current agent and other agents. Returns overlapping scopes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Agent name to check conflicts for (default: current agent).' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
@@ -1578,6 +1589,12 @@ export function handleMcpReadToolCall(
     for (const instruction of board.resolved_instructions.slice(0, 10)) {
       lines.push(`- [${instruction.id}] <${instruction.layer}${instruction.scope ? `:${instruction.scope}` : ''}> ${instruction.text}`);
     }
+    if (board.other_agents && board.other_agents.length > 0) {
+      lines.push(`Other agents: ${board.other_agents.length}`);
+      for (const other of board.other_agents) {
+        lines.push(`- ${other.name}: ${other.claim_count} claim(s) on ${other.scopes.join(', ')}`);
+      }
+    }
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: { ...board },
@@ -1970,6 +1987,47 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: renderDiscoverySummary(profile) }],
       structuredContent: { ...profile, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_conflict_check') {
+    const agentNameArg = args.agent as string | undefined;
+    const agentIdArg = args.agentId as string | undefined;
+    const currentAgentName = agentNameArg ?? resolveCurrentAgentName(cwd);
+    const allClaimsForCheck = listClaims(cwd).filter((c) => c.status === 'active');
+    const myClaimsForCheck = allClaimsForCheck.filter((c) =>
+      agentIdArg ? c.agent_id === agentIdArg : c.agent === currentAgentName
+    );
+    const otherClaimsForCheck = allClaimsForCheck.filter((c) =>
+      agentIdArg ? c.agent_id !== agentIdArg : c.agent !== currentAgentName
+    );
+
+    const conflicts: Array<{ my_claim: string; my_scope: string; other_claim: string; other_agent: string; other_scope: string; reason: string }> = [];
+    for (const mine of myClaimsForCheck) {
+      const myScopes = mine.scope.replace(/\\/g, '/').split(/\s+/);
+      for (const other of otherClaimsForCheck) {
+        const otherScopes = other.scope.replace(/\\/g, '/').split(/\s+/);
+        for (const ms of myScopes) {
+          for (const os of otherScopes) {
+            if (ms === os || ms.startsWith(os + '/') || os.startsWith(ms + '/')) {
+              conflicts.push({
+                my_claim: mine.id, my_scope: mine.scope,
+                other_claim: other.id, other_agent: other.agent, other_scope: other.scope,
+                reason: ms === os ? `exact: ${ms}` : `overlap: ${ms} ↔ ${os}`,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const text = conflicts.length === 0
+      ? `No claim conflicts for ${currentAgentName}.`
+      : `${conflicts.length} conflict(s) found:\n${conflicts.map((c) => `  ${c.my_scope} ↔ ${c.other_agent}:${c.other_scope} (${c.reason})`).join('\n')}`;
+
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: { agent: currentAgentName, conflicts, total: conflicts.length, schema_version: SCHEMA_VERSION },
     };
   }
 
