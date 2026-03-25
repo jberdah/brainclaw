@@ -9,9 +9,16 @@
  *   C (limited) — no MCP → rich static content (plans, traps, decisions)
  */
 
+export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
+export type WorkflowModel = 'interactive' | 'task-based' | 'scheduled';
+
 export interface AgentCapabilityProfile {
   /** Agent identifier (matches ALL_KNOWN_AGENTS in setup.ts) */
   name: string;
+  /** Agent category: code-agent (IDE-driven), autonomous-agent (headless), desktop-ai (app) */
+  category: AgentCategory;
+  /** Workflow model: interactive (human-in-loop), task-based (receive→execute→report), scheduled (cron) */
+  workflowModel: WorkflowModel;
   /** Agent supports MCP tool calling */
   hasMcp: boolean;
   /** Agent supports lifecycle hooks (pre-prompt injection, stop cleanup) */
@@ -43,140 +50,90 @@ export type AgentName =
   | 'codex'
   | 'antigravity'
   | 'github-copilot'
-  | 'openclaw';
+  | 'openclaw'
+  | 'nanoclaw'
+  | 'nemoclaw'
+  | 'picoclaw'
+  | 'zeroclaw';
 
 const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
+  // --- Code agents (interactive, IDE-driven) ---
   'claude-code': {
-    name: 'claude-code',
-    hasMcp: true,
-    hasHooks: true,
-    hasAutoApprove: true,
-    hasSkills: true,
-    hasRules: true,
-    instructionFile: 'CLAUDE.md',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'both',
-    templateTier: 'A',
+    name: 'claude-code', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
+    instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
   },
   cursor: {
-    name: 'cursor',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: '.cursor/rules/brainclaw.md',
-    sharedInstructionFile: false,
-    mcpConfigScope: 'machine',
-    templateTier: 'B',
+    name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: '.cursor/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
   },
   windsurf: {
-    name: 'windsurf',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: '.windsurfrules',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'machine',
-    templateTier: 'B',
+    name: 'windsurf', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
   },
   cline: {
-    name: 'cline',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: true,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: '.clinerules/brainclaw.md',
-    sharedInstructionFile: false,
-    mcpConfigScope: 'project',
-    templateTier: 'B',
+    name: 'cline', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
+    instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
   },
   roo: {
-    name: 'roo',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: true,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: '.roo/rules/brainclaw.md',
-    sharedInstructionFile: false,
-    mcpConfigScope: 'project',
-    templateTier: 'B',
+    name: 'roo', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
+    instructionFile: '.roo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
   },
   continue: {
-    name: 'continue',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: '.continue/rules/brainclaw.md',
-    sharedInstructionFile: false,
-    mcpConfigScope: 'both',
-    templateTier: 'B',
+    name: 'continue', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: '.continue/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'both', templateTier: 'B',
   },
   opencode: {
-    name: 'opencode',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: 'AGENTS.md',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'project',
-    templateTier: 'B',
+    name: 'opencode', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
   },
   codex: {
-    name: 'codex',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: 'AGENTS.md',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'machine',
-    templateTier: 'B',
+    name: 'codex', category: 'code-agent', workflowModel: 'task-based',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
   },
   antigravity: {
-    name: 'antigravity',
-    hasMcp: true,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: false,
-    hasRules: true,
-    instructionFile: 'GEMINI.md',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'machine',
-    templateTier: 'B',
+    name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
+    instructionFile: 'GEMINI.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
   },
   'github-copilot': {
-    name: 'github-copilot',
-    hasMcp: false,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: true,
-    hasRules: true,
-    instructionFile: '.github/copilot-instructions.md',
-    sharedInstructionFile: true,
-    mcpConfigScope: 'none',
-    templateTier: 'C',
+    name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'none', templateTier: 'C',
   },
+
+  // --- Autonomous agents (headless, task-based or scheduled) ---
   openclaw: {
-    name: 'openclaw',
-    hasMcp: false,
-    hasHooks: false,
-    hasAutoApprove: false,
-    hasSkills: true,
-    hasRules: false,
-    instructionFile: 'skills/openclaw/SKILL.md',
-    sharedInstructionFile: false,
-    mcpConfigScope: 'none',
-    templateTier: 'C',
+    name: 'openclaw', category: 'autonomous-agent', workflowModel: 'task-based',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+  },
+  nanoclaw: {
+    name: 'nanoclaw', category: 'autonomous-agent', workflowModel: 'task-based',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/nanoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+  },
+  nemoclaw: {
+    name: 'nemoclaw', category: 'autonomous-agent', workflowModel: 'task-based',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/nemoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+  },
+  picoclaw: {
+    name: 'picoclaw', category: 'autonomous-agent', workflowModel: 'scheduled',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/picoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+  },
+  zeroclaw: {
+    name: 'zeroclaw', category: 'autonomous-agent', workflowModel: 'task-based',
+    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/zeroclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
   },
 };
 

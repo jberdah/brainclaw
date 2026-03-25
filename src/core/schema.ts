@@ -507,7 +507,7 @@ export type TopologyMode = z.infer<typeof TopologyModeSchema>;
 export const IgnoreStrategySchema = z.enum(['project-gitignore', 'none']);
 export type IgnoreStrategy = z.infer<typeof IgnoreStrategySchema>;
 
-export const AgentKindSchema = z.enum(['agent', 'human', 'unknown']);
+export const AgentKindSchema = z.enum(['agent', 'autonomous', 'human', 'unknown']);
 export type AgentKind = z.infer<typeof AgentKindSchema>;
 
 export const AgentTrustLevelSchema = z.enum(['observer', 'contributor', 'trusted', 'curator']);
@@ -775,6 +775,10 @@ export const AgentIntegrationNameSchema = z.enum([
   'continue',
   'roo',
   'openclaw',
+  'nanoclaw',
+  'nemoclaw',
+  'picoclaw',
+  'zeroclaw',
 ]);
 export type AgentIntegrationName = z.infer<typeof AgentIntegrationNameSchema>;
 
