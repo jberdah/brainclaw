@@ -573,6 +573,16 @@ export const SessionSnapshotSchema = z.object({
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
+export const SessionActiveProjectSchema = z.object({
+  /** Absolute path to the project directory. */
+  path: z.string(),
+  /** Project name from config.yaml (when available). */
+  name: z.string().optional(),
+  /** ISO timestamp of the switch. */
+  switched_at: z.string(),
+}).strict();
+export type SessionActiveProject = z.infer<typeof SessionActiveProjectSchema>;
+
 export const CurrentSessionStateSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   session_id: z.string(),
@@ -581,6 +591,8 @@ export const CurrentSessionStateSchema = z.object({
   agent: z.string(),
   agent_id: z.string(),
   host_id: z.string(),
+  /** Session-scoped active project (overrides global active-project.json). */
+  active_project: SessionActiveProjectSchema.optional(),
 });
 export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
 

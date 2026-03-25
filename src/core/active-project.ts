@@ -13,6 +13,8 @@ export interface ActiveProject {
   switched_at: string;
   /** Agent or user who performed the switch. */
   switched_by?: string;
+  /** Where this switch was resolved from. */
+  source?: 'session' | 'global';
 }
 
 /**

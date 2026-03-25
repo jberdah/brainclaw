@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { loadActiveProject, type ActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
+import { loadCurrentSession } from './identity.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
 import { resolveContextStoreCwd, resolveStoreChain, type StoreRef } from './store-resolution.js';
@@ -684,7 +685,11 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   if (result.active_project) {
     const ap = result.active_project;
     const age = Math.floor((Date.now() - Date.parse(ap.switched_at)) / 3_600_000);
-    lines.push(`Active project: ${ap.name ?? ap.path} (switched ${age}h ago by ${ap.switched_by ?? 'unknown'})`);
+    const sourceHint = ap.source === 'session' ? ', session-scoped' : ', global';
+    lines.push(`Active project: ${ap.name ?? ap.path} (switched ${age}h ago by ${ap.switched_by ?? 'unknown'}${sourceHint})`);
+    if (ap.source === 'global') {
+      lines.push(`  ⚠ This is a global switch — all agents on this host see the same project. Use \`brainclaw switch <project>\` during a session for agent-scoped switching.`);
+    }
     lines.push(`  All commands target this project. Use \`brainclaw switch --clear\` to return to workspace root or \`brainclaw switch <project>\` to change.`);
   }
   lines.push(`Current host: ${result.current_host}`);
@@ -900,6 +905,7 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     if (result.active_project) {
       lines.push(`active_project: ${result.active_project.name ?? result.active_project.path}`);
       lines.push(`active_project_switched: ${result.active_project.switched_at}`);
+      lines.push(`active_project_source: ${result.active_project.source ?? 'global'}`);
     }
     lines.push(`current_host: ${result.current_host}`);
     lines.push(`memory_version: ${result.memory_version}`);
@@ -1489,13 +1495,25 @@ function scopesOverlap(a: string, b: string): string | null {
 // --- Active project resolution ---
 
 function findActiveProjectInChain(contextCwd: string, _storeChain: StoreRef[]): ActiveProject | undefined {
-  // Walk up from contextCwd looking for .brainclaw/active-project.json
+  // 1. Session-scoped active project (per-agent, highest priority)
+  const session = loadCurrentSession(contextCwd);
+  if (session?.active_project) {
+    return {
+      path: session.active_project.path,
+      name: session.active_project.name,
+      switched_at: session.active_project.switched_at,
+      switched_by: session.agent,
+      source: 'session',
+    };
+  }
+
+  // 2. Global active-project.json (walk up from contextCwd)
   let dir = path.resolve(contextCwd);
   const root = path.parse(dir).root;
   const home = process.env.HOME || process.env.USERPROFILE || root;
   while (dir !== root && dir !== home) {
     const ap = loadActiveProject(dir);
-    if (ap) return ap;
+    if (ap) return { ...ap, source: 'global' };
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;

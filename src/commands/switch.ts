@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
+import { loadCurrentSession, saveCurrentSession } from '../core/identity.js';
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
@@ -9,6 +10,8 @@ import { loadConfig } from '../core/config.js';
 export interface SwitchOptions {
   list?: boolean;
   clear?: boolean;
+  /** Scope switch to session only (default: true when a session is active). */
+  session?: boolean;
   json?: boolean;
   cwd?: string;
 }
@@ -30,6 +33,11 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
 
   // --clear: remove active project
   if (options.clear) {
+    const session = loadCurrentSession(cwd);
+    if (session?.active_project) {
+      const { active_project: _removed, ...rest } = session;
+      saveCurrentSession(rest, cwd);
+    }
     clearActiveProject(wsRoot);
     if (options.json) {
       console.log(JSON.stringify({ cleared: true }));
@@ -61,18 +69,35 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
     // name is optional
   }
 
-  saveActiveProject(wsRoot, {
-    path: resolved,
-    name: projectName,
-    switched_at: new Date().toISOString(),
-    switched_by: process.env.BRAINCLAW_AGENT_NAME ?? process.env.USER ?? 'unknown',
-  });
+  const now = new Date().toISOString();
+  const session = loadCurrentSession(cwd);
+  const scopedToSession = options.session ?? !!session;
+  let scope: 'session' | 'global';
+
+  if (scopedToSession && session) {
+    // Write to session state — only this agent sees this switch
+    saveCurrentSession({
+      ...session,
+      active_project: { path: resolved, name: projectName, switched_at: now },
+    }, cwd);
+    scope = 'session';
+  } else {
+    // Fall back to global active-project.json
+    saveActiveProject(wsRoot, {
+      path: resolved,
+      name: projectName,
+      switched_at: now,
+      switched_by: process.env.BRAINCLAW_AGENT_NAME ?? process.env.USER ?? 'unknown',
+    });
+    scope = 'global';
+  }
 
   if (options.json) {
-    console.log(JSON.stringify({ switched: true, path: resolved, name: projectName }));
+    console.log(JSON.stringify({ switched: true, path: resolved, name: projectName, scope }));
   } else {
     const rel = path.relative(wsRoot, resolved) || '.';
-    console.log(`✔ Switched to ${projectName ? `"${projectName}" (${rel})` : rel}`);
+    const scopeHint = scope === 'session' ? ' (session-scoped)' : '';
+    console.log(`✔ Switched to ${projectName ? `"${projectName}" (${rel})` : rel}${scopeHint}`);
   }
 }
 
