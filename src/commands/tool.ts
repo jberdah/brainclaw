@@ -1,12 +1,10 @@
-import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { memoryExists } from '../core/io.js';
-import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { loadConfig } from '../core/config.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { ProjectTool } from '../core/schema.js';
+import { listTools, createTool } from '../core/registries.js';
 
 export interface ToolOptions {
   tag?: string[];
@@ -55,10 +53,7 @@ export function runTool(subcommand: string, args: string[], options: ToolOptions
 }
 
 function runToolList(cwd: string): void {
-  const state = loadState(cwd);
-  const tools = state.recent_decisions
-    .filter((d) => d.tags.includes('tool'))
-    .map((d) => ({ id: d.id, name: d.text.split('\n')[0], type: d.tags.find((t) => t !== 'tool') }));
+  const tools = listTools(cwd);
 
   if (tools.length === 0) {
     console.log('No tools registered yet.');
@@ -68,9 +63,7 @@ function runToolList(cwd: string): void {
   console.log(`\n${tools.length} tool(s):\n`);
   tools.forEach((tool) => {
     console.log(`  [${tool.id}] ${tool.name}`);
-    if (tool.type) {
-      console.log(`      type: ${tool.type}`);
-    }
+    console.log(`      type: ${tool.type}`);
   });
   console.log('');
 }
@@ -88,53 +81,47 @@ function runToolAdd(name: string, description: string, options: ToolOptions, cwd
     }
   }
 
-  const state = loadState(cwd);
-  const { id, short_label } = generateIdWithLabel('recent_decisions');
-
-  const toolType = options.type ?? 'utility';
-  const entry: any = {
-    id,
-    short_label,
-    text: name,
-    created_at: nowISO(),
+  const tool = createTool({
+    name,
+    description,
+    type: options.type,
+    tags: options.tag,
     author: options.author ?? resolveCurrentAgentName(cwd),
-    tags: ['tool', toolType, ...(options.tag ?? [])],
-  };
+  }, cwd);
 
-  // For now, store as decision to avoid schema migration
-  // Will migrate to separate tool storage in v0.16
-  state.recent_decisions.push(entry);
-  persistState(state, cwd);
-
-  console.log(`✔ Tool added: [${id}] ${name}`);
-  console.log('  (Stored in decisions for now; will move to dedicated registry in v0.16)');
+  console.log(`✔ Tool added: [${tool.id}] ${name} (${tool.type})`);
 }
 
 function runToolDescribe(toolId: string, cwd: string): void {
-  const state = loadState(cwd);
-  const decision = state.recent_decisions.find((d) => d.id === toolId || d.short_label === toolId);
+  const tools = listTools(cwd);
+  const tool = tools.find((t) => t.id === toolId || t.id.startsWith(toolId));
 
-  if (!decision) {
+  if (!tool) {
     console.error(`Error: tool '${toolId}' not found`);
     process.exit(1);
   }
 
-  console.log(`\nTool: ${decision.text}`);
-  console.log(`ID: ${decision.id}`);
-  console.log(`Type: ${decision.tags.find((t) => t !== 'tool')}`);
-  console.log(`Author: ${decision.author}`);
-  console.log(`Created: ${decision.created_at}`);
+  console.log(`\nTool: ${tool.name}`);
+  console.log(`Description: ${tool.description}`);
+  console.log(`ID: ${tool.id}`);
+  console.log(`Type: ${tool.type}`);
+  console.log(`Author: ${tool.author}`);
+  console.log(`Created: ${tool.created_at}`);
+  if (tool.tags.length > 0) {
+    console.log(`Tags: ${tool.tags.join(', ')}`);
+  }
   console.log('');
 }
 
 function runToolSearch(query: string, cwd: string): void {
-  const state = loadState(cwd);
-  const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+  const tools = listTools(cwd);
+  const queryLower = query.toLowerCase();
 
   const results = tools.filter(
     (tool) =>
-      tool.text.toLowerCase().includes(query.toLowerCase()) ||
-      tool.tags.some((tag) => tag.toLowerCase().includes(query.toLowerCase())),
+      tool.name.toLowerCase().includes(queryLower) ||
+      tool.description.toLowerCase().includes(queryLower) ||
+      tool.tags.some((tag) => tag.toLowerCase().includes(queryLower)),
   );
 
   if (results.length === 0) {
@@ -143,8 +130,8 @@ function runToolSearch(query: string, cwd: string): void {
   }
 
   console.log(`\n${results.length} tool(s) matching '${query}':\n`);
-  results.forEach((result) => {
-    console.log(`  [${result.id}] ${result.text.split('\n')[0]}`);
+  results.forEach((tool) => {
+    console.log(`  [${tool.id}] ${tool.name} (${tool.type})`);
   });
   console.log('');
 }

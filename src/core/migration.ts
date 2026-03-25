@@ -23,6 +23,8 @@ import {
   SessionSnapshotSchema,
   TrapSchema,
   AiSurfaceTaskRequestSchema,
+  ProjectCapabilitySchema,
+  ProjectToolSchema,
 } from './schema.js';
 
 export type VersionedDocumentType =
@@ -44,6 +46,8 @@ export type VersionedDocumentType =
   | 'runtime_note'
   | 'ai_surface_task'
   | 'session_snapshot'
+  | 'capability'
+  | 'tool'
   | 'trap';
 
 export type MigrationErrorKind =
@@ -111,6 +115,8 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   runtime_note: createRegistryEntry(RuntimeNoteSchema),
   ai_surface_task: createRegistryEntry(AiSurfaceTaskRequestSchema),
   session_snapshot: createRegistryEntry(SessionSnapshotSchema),
+  capability: createRegistryEntry(ProjectCapabilitySchema),
+  tool: createRegistryEntry(ProjectToolSchema),
   trap: createRegistryEntry(TrapSchema),
 };
 

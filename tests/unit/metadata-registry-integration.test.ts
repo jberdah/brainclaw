@@ -7,7 +7,7 @@ import { runCapability } from '../../src/commands/capability.js';
 import { runTool } from '../../src/commands/tool.js';
 import { runExplore } from '../../src/commands/explore.js';
 import { handleMcpReadToolCall } from '../../src/commands/mcp.js';
-import { loadState } from '../../src/core/state.js';
+import { listCapabilities, listTools } from '../../src/core/registries.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 function captureConsole(fn: () => void): { logs: string[]; errors: string[] } {
@@ -59,11 +59,10 @@ describe('metadata registry integration', () => {
     });
     assert.equal(errors.length, 0);
 
-    const state = loadState(workspace.dir);
-    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
+    const capabilities = listCapabilities(workspace.dir);
     assert.equal(capabilities.length, 2);
-    assert.ok(capabilities.some((c) => c.text.includes('Performance Monitoring')));
-    assert.ok(capabilities.some((c) => c.text.includes('Security Scanning')));
+    assert.ok(capabilities.some((c) => c.name.includes('Performance Monitoring')));
+    assert.ok(capabilities.some((c) => c.name.includes('Security Scanning')));
   });
 
   it('creates and lists tools via CLI', () => {
@@ -73,11 +72,10 @@ describe('metadata registry integration', () => {
     });
     assert.equal(errors.length, 0);
 
-    const state = loadState(workspace.dir);
-    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+    const tools = listTools(workspace.dir);
     assert.equal(tools.length, 2);
-    assert.ok(tools.some((t) => t.text.includes('npm-runner')));
-    assert.ok(tools.some((t) => t.text.includes('linter')));
+    assert.ok(tools.some((t) => t.name.includes('npm-runner')));
+    assert.ok(tools.some((t) => t.name.includes('linter')));
   });
 
   it('discover capabilities via explore command', () => {

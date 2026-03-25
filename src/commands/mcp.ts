@@ -40,6 +40,7 @@ import { validateMcpInput, validateMcpField } from '../core/input-validation.js'
 import { buildEstimationReport } from './estimation-report.js';
 import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
+import { listCapabilities, listTools as listRegistryTools, createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import {
   checkGitPresence,
@@ -1342,10 +1343,9 @@ export function handleMcpReadToolCall(
       cwd,
     });
 
-    // Load available capabilities and tools
-    const state = loadState(cwd);
-    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
-    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+    // Load available capabilities and tools from dedicated registries
+    const capabilities = listCapabilities(cwd);
+    const tools = listRegistryTools(cwd);
 
     const format = normaliseFormat(args.format);
     const content = renderContextForMcp(result, format, {
@@ -1360,8 +1360,7 @@ export function handleMcpReadToolCall(
       if (capabilities.length > 0) {
         suggestions.push(`\n## Available Capabilities (${capabilities.length})`);
         capabilities.slice(0, 5).forEach((cap) => {
-          const category = cap.tags.find((t) => t !== 'capability') || 'general';
-          suggestions.push(`- [${cap.id}] ${cap.text.split('\n')[0]} (${category})`);
+          suggestions.push(`- [${cap.id}] ${cap.name} (${cap.category})`);
         });
         if (capabilities.length > 5) {
           suggestions.push(`- ... and ${capabilities.length - 5} more`);
@@ -1370,8 +1369,7 @@ export function handleMcpReadToolCall(
       if (tools.length > 0) {
         suggestions.push(`\n## Available Tools (${tools.length})`);
         tools.slice(0, 5).forEach((tool) => {
-          const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-          suggestions.push(`- [${tool.id}] ${tool.text.split('\n')[0]} (${type})`);
+          suggestions.push(`- [${tool.id}] ${tool.name} (${tool.type})`);
         });
         if (tools.length > 5) {
           suggestions.push(`- ... and ${tools.length - 5} more`);
@@ -1392,13 +1390,13 @@ export function handleMcpReadToolCall(
         ...result,
         available_capabilities: capabilities.map((cap) => ({
           id: cap.id,
-          name: cap.text.split('\n')[0],
-          category: cap.tags.find((t) => t !== 'capability') || 'general',
+          name: cap.name,
+          category: cap.category,
         })),
         available_tools: tools.map((tool) => ({
           id: tool.id,
-          name: tool.text.split('\n')[0],
-          type: tool.tags.find((t) => t !== 'tool') || 'utility',
+          name: tool.name,
+          type: tool.type,
         })),
         ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEvents.length } : {}),
       },
@@ -1856,35 +1854,26 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_get_capabilities') {
-    const state = loadState(cwd);
-    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
+    const allCapabilities = listCapabilities(cwd);
 
-    const filtered = capabilities.filter((cap) => {
+    const filtered = allCapabilities.filter((cap) => {
       const categoryFilter = args.category as string | undefined;
       const tagsFilter = args.tags as string[] | undefined;
 
-      if (categoryFilter) {
-        const capCategory = cap.tags.find((t) => t !== 'capability');
-        if (capCategory !== categoryFilter) return false;
-      }
-
+      if (categoryFilter && cap.category !== categoryFilter) return false;
       if (tagsFilter && tagsFilter.length > 0) {
-        const hasAllTags = tagsFilter.every((tag) => cap.tags.includes(tag));
-        if (!hasAllTags) return false;
+        if (!tagsFilter.every((tag) => cap.tags.includes(tag))) return false;
       }
-
       return true;
     });
 
     const lines: string[] = [`Capabilities (${filtered.length}):`];
     filtered.forEach((cap) => {
-      const category = cap.tags.find((t) => t !== 'capability') || 'general';
-      const otherTags = cap.tags.filter((t) => t !== 'capability' && t !== category);
-      lines.push(`\n[${cap.id}] ${cap.text.split('\n')[0]}`);
-      lines.push(`    Category: ${category}`);
+      lines.push(`\n[${cap.id}] ${cap.name}`);
+      lines.push(`    Category: ${cap.category}`);
       lines.push(`    Author: ${cap.author}`);
-      if (otherTags.length > 0) {
-        lines.push(`    Tags: ${otherTags.join(', ')}`);
+      if (cap.tags.length > 0) {
+        lines.push(`    Tags: ${cap.tags.join(', ')}`);
       }
     });
 
@@ -1895,35 +1884,26 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_list_tools') {
-    const state = loadState(cwd);
-    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+    const allTools = listRegistryTools(cwd);
 
-    const filtered = tools.filter((tool) => {
+    const filtered = allTools.filter((tool) => {
       const typeFilter = args.type as string | undefined;
       const tagsFilter = args.tags as string[] | undefined;
 
-      if (typeFilter) {
-        const toolType = tool.tags.find((t) => t !== 'tool');
-        if (toolType !== typeFilter) return false;
-      }
-
+      if (typeFilter && tool.type !== typeFilter) return false;
       if (tagsFilter && tagsFilter.length > 0) {
-        const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
-        if (!hasAllTags) return false;
+        if (!tagsFilter.every((tag) => tool.tags.includes(tag))) return false;
       }
-
       return true;
     });
 
     const lines: string[] = [`Tools (${filtered.length}):`];
     filtered.forEach((tool) => {
-      const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-      const otherTags = tool.tags.filter((t) => t !== 'tool' && t !== type);
-      lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
-      lines.push(`    Type: ${type}`);
+      lines.push(`\n[${tool.id}] ${tool.name}`);
+      lines.push(`    Type: ${tool.type}`);
       lines.push(`    Author: ${tool.author}`);
-      if (otherTags.length > 0) {
-        lines.push(`    Tags: ${otherTags.join(', ')}`);
+      if (tool.tags.length > 0) {
+        lines.push(`    Tags: ${tool.tags.join(', ')}`);
       }
     });
 
@@ -1939,38 +1919,29 @@ export function handleMcpReadToolCall(
       throw new Error('Missing required argument: query');
     }
 
-    const state = loadState(cwd);
-    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+    const allTools = listRegistryTools(cwd);
+    const queryLower = query.toLowerCase();
 
-    const filtered = tools.filter((tool) => {
+    const filtered = allTools.filter((tool) => {
       const typeFilter = args.type as string | undefined;
       const tagsFilter = args.tags as string[] | undefined;
 
-      // Type filter
-      if (typeFilter) {
-        const toolType = tool.tags.find((t) => t !== 'tool');
-        if (toolType !== typeFilter) return false;
-      }
-
-      // Tags filter (all must match)
+      if (typeFilter && tool.type !== typeFilter) return false;
       if (tagsFilter && tagsFilter.length > 0) {
-        const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
-        if (!hasAllTags) return false;
+        if (!tagsFilter.every((tag) => tool.tags.includes(tag))) return false;
       }
 
-      // Query search (name, description, tags)
-      const queryLower = query.toLowerCase();
       return (
-        tool.text.toLowerCase().includes(queryLower) ||
+        tool.name.toLowerCase().includes(queryLower) ||
+        tool.description.toLowerCase().includes(queryLower) ||
         tool.tags.some((tag) => tag.toLowerCase().includes(queryLower))
       );
     });
 
     const lines: string[] = [`Search results for '${query}' (${filtered.length} tool(s)):`];
     filtered.forEach((tool) => {
-      const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-      lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
-      lines.push(`    Type: ${type}`);
+      lines.push(`\n[${tool.id}] ${tool.name}`);
+      lines.push(`    Type: ${tool.type}`);
     });
 
     return {
@@ -2953,24 +2924,20 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const resolvedIdentity = resolved.identity!;
-      const state = loadState(cwd);
-      const idObj = generateIdWithLabel('dec');
       const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
-      const entry: Decision = {
-        id: idObj.id,
-        short_label: idObj.short_label,
-        text: `${capName}\n${capDesc}`,
-        created_at: nowISO(),
+      const cap = createCapability({
+        name: capName,
+        description: capDesc,
+        tags: extraTags,
         author: resolvedIdentity.agent_name,
-        tags: ['capability', ...extraTags],
-      };
-      state.recent_decisions.push(entry);
-      saveState(state, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `capability: ${capName}` }, cwd);
+        authorId: resolvedIdentity.agent_id,
+        model: currentModel,
+      }, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: cap.id, item_type: 'capability', reason: `capability: ${capName}` }, cwd);
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Capability registered: [${idObj.id}] ${capName}` }],
-          id: idObj.id,
+          content: [{ type: 'text', text: `✔ Capability registered: [${cap.id}] ${capName}` }],
+          id: cap.id,
           name: capName,
           schema_version: SCHEMA_VERSION,
         }),
@@ -2988,25 +2955,22 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const resolvedIdentity = resolved.identity!;
-      const state = loadState(cwd);
-      const idObj = generateIdWithLabel('dec');
       const toolType = String(args.type ?? 'utility');
       const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
-      const entry: Decision = {
-        id: idObj.id,
-        short_label: idObj.short_label,
-        text: `${toolName}\n${toolDesc}`,
-        created_at: nowISO(),
+      const tool = createRegistryTool({
+        name: toolName,
+        description: toolDesc,
+        type: toolType,
+        tags: extraTags,
         author: resolvedIdentity.agent_name,
-        tags: ['tool', toolType, ...extraTags],
-      };
-      state.recent_decisions.push(entry);
-      saveState(state, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `tool: ${toolName}` }, cwd);
+        authorId: resolvedIdentity.agent_id,
+        model: currentModel,
+      }, cwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: tool.id, item_type: 'tool', reason: `tool: ${toolName}` }, cwd);
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Tool registered: [${idObj.id}] ${toolName} (${toolType})` }],
-          id: idObj.id,
+          content: [{ type: 'text', text: `✔ Tool registered: [${tool.id}] ${toolName} (${toolType})` }],
+          id: tool.id,
           name: toolName,
           type: toolType,
           schema_version: SCHEMA_VERSION,
