@@ -140,10 +140,13 @@ export type Handoff = z.infer<typeof HandoffSchema>;
 export const PlanStatusSchema = z.enum(['todo', 'in_progress', 'blocked', 'done', 'dropped']);
 export type PlanStatus = z.infer<typeof PlanStatusSchema>;
 
+export const PlanStepStatusSchema = z.enum(['todo', 'in_progress', 'testing', 'done', 'blocked']);
+export type PlanStepStatus = z.infer<typeof PlanStepStatusSchema>;
+
 export const PlanStepSchema = z.object({
   id: z.string(),
   text: z.string(),
-  status: z.enum(['todo', 'done']),
+  status: PlanStepStatusSchema.default('todo'),
   assignee: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),

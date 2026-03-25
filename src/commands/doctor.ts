@@ -1283,6 +1283,38 @@ export function runDoctor(options: DoctorOptions = {}): void {
         }
       }
     } catch { /* non-fatal */ }
+
+    // Workflow hygiene check (Phase 9)
+    try {
+      const activeClaims = listClaims(options.cwd).filter((c) => c.status === 'active');
+      const inProgressPlans = state.plan_items.filter((p) => p.status === 'in_progress');
+      const workflowIssues: string[] = [];
+
+      if (activeClaims.length > 3) {
+        workflowIssues.push(`${activeClaims.length} active claims — consider releasing finished ones`);
+      }
+      const unclaimedInProgress = inProgressPlans.filter(
+        (p) => !activeClaims.some((c) => c.plan_id === p.id)
+      );
+      if (unclaimedInProgress.length > 0) {
+        workflowIssues.push(`${unclaimedInProgress.length} in-progress plan(s) without a claim`);
+      }
+
+      if (workflowIssues.length > 0) {
+        checks.push({
+          name: 'workflow_hygiene',
+          status: 'warn',
+          message: `Workflow hygiene: ${workflowIssues.join('; ')}`,
+          details: workflowIssues,
+        });
+        if (!options.json) {
+          console.warn(`⚠ Workflow hygiene: ${workflowIssues.join('; ')}`);
+        }
+      } else {
+        checks.push({ name: 'workflow_hygiene', status: 'ok', message: 'Workflow hygiene OK' });
+        if (!options.json) console.log('✔ Workflow hygiene: OK');
+      }
+    } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
 
   if (options.json) {
