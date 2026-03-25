@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { loadActiveProject, type ActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
-import { loadCurrentSession } from './identity.js';
+import { loadCurrentSession, loadAllSessions } from './identity.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
 import { resolveContextStoreCwd, resolveStoreChain, type StoreRef } from './store-resolution.js';
@@ -693,6 +693,25 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
     lines.push(`  All commands target this project. Use \`brainclaw switch --clear\` to return to workspace root or \`brainclaw switch <project>\` to change.`);
   }
   lines.push(`Current host: ${result.current_host}`);
+
+  // Show other active sessions
+  try {
+    const allSessions = loadAllSessions();
+    const ttlMs = 4 * 60 * 60 * 1000;
+    const now = Date.now();
+    const otherSessions = allSessions.filter(s =>
+      s.agent_id !== result.agent_id
+      && (now - Date.parse(s.last_seen_at)) <= ttlMs
+    );
+    if (otherSessions.length > 0) {
+      const summaries = otherSessions.map(s => {
+        const proj = s.active_project?.name ?? s.active_project?.path;
+        return `${s.user ?? 'unknown'}/${s.agent}${proj ? ` on ${proj}` : ''}`;
+      });
+      lines.push(`Other active agents: ${summaries.join(', ')}`);
+    }
+  } catch { /* ignore — sessions dir may not exist yet */ }
+
   lines.push(`Memory version: ${result.memory_version}`);
   lines.push(`Memory density: ${result.memory_density}`);
   lines.push(`Bootstrap available: ${result.bootstrap_available ? 'yes' : 'no'}`);

@@ -404,6 +404,8 @@ export const ClaimSchema = z.object({
   id: z.string(),
   agent: z.string(),
   agent_id: z.string().optional(),
+  /** OS user who created this claim. */
+  user: z.string().optional(),
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),

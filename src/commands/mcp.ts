@@ -2531,6 +2531,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         id: claimId,
         agent: identity.agent,
         agent_id: identity.agent_id,
+        user: process.env.USER || process.env.USERNAME || undefined,
         project_id: identity.project_id,
         host_id: identity.host_id,
         session_id: identity.session_id,

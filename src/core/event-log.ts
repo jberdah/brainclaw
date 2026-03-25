@@ -39,6 +39,8 @@ export interface MemoryEvent {
   ts: string;
   agent: string;
   agent_id?: string;
+  /** OS user who triggered this event. */
+  user?: string;
   action: EventAction;
   item_type: EventItemType;
   item_id?: string;
@@ -53,6 +55,7 @@ export function appendEvent(event: Partial<MemoryEvent> & { action: EventAction;
       ts: event.ts ?? nowISO(),
       agent: event.agent ?? 'unknown',
       agent_id: event.agent_id,
+      user: event.user ?? process.env.USER ?? process.env.USERNAME,
       action: event.action,
       item_type: event.item_type,
       item_id: event.item_id,
