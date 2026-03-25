@@ -435,6 +435,8 @@ const MCP_WRITE_TOOLS = [
         outcome: { type: 'string', description: 'Outcome for decisions: approved, rejected, deferred, pending.' },
         severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
         planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
+        scope: { type: 'string', description: 'Memory scope: project (default), machine, or user. Machine-scoped items apply to all projects on this machine.' },
+        store: { type: 'string', description: 'Target store level: local (default), repo, workspace, user. Use "user" to write to ~/.brainclaw/ (visible across all projects).' },
       },
       required: ['text', 'type'],
     },
@@ -2284,6 +2286,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const type = String(args.type ?? 'decision') as CandidateType;
       const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const candidatePlanId = args.planId as string | undefined;
+      const candidateScope = args.scope as string | undefined;
+      const targetStore = args.store as string | undefined;
+      const effectiveCwd = targetStore ? resolveTargetStore(cwd, targetStore as StoreTarget) : cwd;
       const candidate: any = {
         id: candId.id,
         short_label: candId.short_label,
@@ -2300,6 +2305,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
         category: type === 'constraint' ? (args.category as string | undefined) : undefined,
         outcome: type === 'decision' ? (args.outcome as string | undefined) : undefined,
+        scope: candidateScope,
         plan_id: candidatePlanId,
         model: currentModel,
         star_count: 0,
@@ -2310,22 +2316,25 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const planPrompt = (type === 'decision' || type === 'trap') && !candidatePlanId
         ? `\n💡 Does this ${type} relate to an active plan item? If so, re-run with planId: 'pln_xxx' to link it.`
         : '';
+      const storeLabel = targetStore && targetStore !== 'local' ? ` [store: ${targetStore}]` : '';
       if (writeThrough) {
-        saveCandidate(candidate, cwd);
-        const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
-        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, cwd);
+        saveCandidate(candidate, effectiveCwd);
+        const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, effectiveCwd, resolvedIdentity.agent_id);
+        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, effectiveCwd);
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${planPrompt}` }],
+            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${storeLabel}${planPrompt}` }],
             candidate_id: candId.id,
             promoted_item_id: accepted.promoted_item_id,
             write_through: true,
+            store: targetStore ?? 'local',
+            scope: candidateScope,
           }),
           nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
         };
       }
-      saveCandidate(candidate, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
+      saveCandidate(candidate, effectiveCwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, effectiveCwd);
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)${planPrompt}` }],

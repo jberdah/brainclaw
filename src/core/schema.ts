@@ -44,6 +44,9 @@ export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
 export const DecisionOutcomeSchema = z.enum(['approved', 'rejected', 'deferred', 'pending']);
 export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
 
+export const MemoryScopeSchema = z.enum(['project', 'machine', 'user']).default('project');
+export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
+
 export const ConstraintSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -58,6 +61,7 @@ export const ConstraintSchema = z.object({
   session_id: z.string().optional(),
   status: ConstraintStatusSchema,
   category: ConstraintCategorySchema.optional(),
+  scope: MemoryScopeSchema.optional(),
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),
   expires_at: z.string().optional(),
@@ -77,6 +81,7 @@ export const DecisionSchema = z.object({
   host_id: z.string().optional(),
   session_id: z.string().optional(),
   outcome: DecisionOutcomeSchema.optional(),
+  scope: MemoryScopeSchema.optional(),
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   tags: z.array(z.string()),
@@ -96,6 +101,7 @@ export const TrapSchema = z.object({
   session_id: z.string().optional(),
   status: TrapStatusSchema.default('active'),
   severity: SeveritySchema,
+  scope: MemoryScopeSchema.optional(),
   tags: z.array(z.string()),
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),

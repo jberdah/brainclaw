@@ -1257,6 +1257,32 @@ export function runDoctor(options: DoctorOptions = {}): void {
         }
       }
     } catch { /* non-fatal */ }
+
+    // Check for machine-scoped items in project store (should be in user store)
+    try {
+      const machineInProject = [
+        ...state.active_constraints.filter((c) => c.scope === 'machine'),
+        ...state.recent_decisions.filter((d) => d.scope === 'machine'),
+        ...state.known_traps.filter((t) => t.scope === 'machine'),
+      ];
+      if (machineInProject.length > 0) {
+        const ids = machineInProject.map((i) => i.id).slice(0, 5);
+        checks.push({
+          name: 'machine_scope_placement',
+          status: 'warn',
+          message: `${machineInProject.length} machine-scoped item(s) in project store — consider promoting to user store with 'brainclaw migrate --promote-machine-items'`,
+          details: ids,
+        });
+        if (!options.json) {
+          console.warn(`⚠ ${machineInProject.length} machine-scoped item(s) in project store: ${ids.join(', ')}`);
+        }
+      } else {
+        checks.push({ name: 'machine_scope_placement', status: 'ok', message: 'No machine-scoped items misplaced in project store' });
+        if (!options.json) {
+          console.log('✔ Machine-scope placement: no misplaced items');
+        }
+      }
+    } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
 
   if (options.json) {
