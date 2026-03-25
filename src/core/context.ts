@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { loadActiveProject, type ActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
 import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
@@ -90,6 +91,7 @@ export interface ContextResult {
   estimation_calibration?: string;
   stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
   cross_project_items?: ContextItem[];
+  active_project?: ActiveProject;
   claim_conflicts?: ClaimConflict[];
   workflow_hints?: string[];
   selected: ContextItem[];
@@ -627,6 +629,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
       } catch { return undefined; }
     })(),
+    active_project: loadActiveProject(contextCwd),
     cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
     claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
     workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
@@ -678,6 +681,12 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
     lines.push(`Agent ID: ${result.agent_id}`);
   }
   lines.push(`Project mode: ${result.project_mode} (${result.project_strategy})`);
+  if (result.active_project) {
+    const ap = result.active_project;
+    const age = Math.floor((Date.now() - Date.parse(ap.switched_at)) / 3_600_000);
+    lines.push(`Active project: ${ap.name ?? ap.path} (switched ${age}h ago by ${ap.switched_by ?? 'unknown'})`);
+    lines.push(`  All commands target this project. Use \`brainclaw switch --clear\` to return to workspace root or \`brainclaw switch <project>\` to change.`);
+  }
   lines.push(`Current host: ${result.current_host}`);
   lines.push(`Memory version: ${result.memory_version}`);
   lines.push(`Memory density: ${result.memory_density}`);
@@ -888,6 +897,10 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
     lines.push(`project_mode: ${result.project_mode}`);
     lines.push(`project_strategy: ${result.project_strategy}`);
+    if (result.active_project) {
+      lines.push(`active_project: ${result.active_project.name ?? result.active_project.path}`);
+      lines.push(`active_project_switched: ${result.active_project.switched_at}`);
+    }
     lines.push(`current_host: ${result.current_host}`);
     lines.push(`memory_version: ${result.memory_version}`);
     lines.push(`memory_density: ${result.memory_density}`);
