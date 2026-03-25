@@ -8,7 +8,7 @@ import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { BootstrapApplicationReceiptSchema, BootstrapInterviewAnswerSchema, BootstrapInterviewPlanSchema, BootstrapInterviewQuestionSchema, BootstrapImportPlanDocumentSchema, BootstrapProfileDocumentSchema, BootstrapSuggestionDocumentSchema, MemorySeedDocumentSchema, } from './schema.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
-import { analyzeRepository } from './repo-analysis.js';
+import { analyzeRepository, findNestedAgentsFiles } from './repo-analysis.js';
 import { buildExecutionContext, compactExecutionContext } from './execution-context.js';
 import { buildAgentToolingContext } from './agent-context.js';
 import { createInstruction, loadInstructions, saveInstruction } from './instructions.js';
@@ -101,6 +101,7 @@ export function runBootstrapProfile(options = {}) {
         importPlan,
         lastApplication,
         reusedProfile: false,
+        subProjects: artifacts.subProjects,
     };
 }
 export function listBootstrapSeeds(cwd) {
@@ -182,6 +183,18 @@ export function renderBootstrapSummary(result) {
     }
     if (result.lastApplication && !result.lastApplication.uninstalled_at) {
         lines.push(`Last bootstrap import: ${result.lastApplication.managed_artifacts.length} managed artifact(s) from ${result.lastApplication.applied_at}`);
+    }
+    if (result.subProjects && result.subProjects.length > 0) {
+        lines.push('');
+        lines.push(`Sub-projects discovered (${result.subProjects.length}):`);
+        for (const sp of result.subProjects.slice(0, 20)) {
+            lines.push(`  ${sp}`);
+        }
+        if (result.subProjects.length > 20) {
+            lines.push(`  ... and ${result.subProjects.length - 20} more`);
+        }
+        lines.push('');
+        lines.push('Use: brainclaw bootstrap --for <sub-project-path> --refresh');
     }
     if (result.importPlan.suggestions.length > 0) {
         lines.push('');
@@ -347,6 +360,13 @@ function buildBootstrapArtifacts(input) {
             schema_version: DERIVED_SCHEMA_VERSION,
         })),
         importPlan,
+        // For multi-project workspaces without a target, list discovered sub-projects
+        subProjects: (!input.target && repoAnalysis.recommendedMode === 'multi-project')
+            ? findNestedAgentsFiles(scanRoot, 8)
+                .filter((p) => p !== 'AGENTS.md') // exclude root AGENTS.md
+                .map((p) => path.dirname(p))
+                .filter((d) => d !== '.')
+            : undefined,
     };
 }
 function extractReadmeSeeds(filepath, target) {
@@ -851,6 +871,9 @@ function buildSummary(input) {
     parts.push(`Onboarding mode: ${input.onboardingMode}.`);
     parts.push(`Confidence: ${input.confidence}.`);
     parts.push(`Repository mode looks ${input.repoAnalysis.recommendedMode}.`);
+    if (input.repoAnalysis.recommendedMode === 'multi-project' && !input.target) {
+        parts.push('This is a multi-project workspace — use --for <path> to bootstrap a specific sub-project.');
+    }
     if (input.agentsPresent) {
         parts.push('AGENTS.md detected and summarized.');
     }

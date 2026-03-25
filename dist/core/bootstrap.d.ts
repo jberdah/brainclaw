@@ -11,6 +11,7 @@ export interface BootstrapResult {
     importPlan: BootstrapImportPlanDocument;
     lastApplication?: BootstrapApplicationReceipt;
     reusedProfile: boolean;
+    subProjects?: string[];
 }
 export interface DerivedContextSignal {
     id: string;

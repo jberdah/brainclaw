@@ -51,14 +51,14 @@ export function analyzeRepository(cwd) {
         reasons.push(`Found top-level project folders: ${matchedDirs.join(', ')}`);
     }
     // ── Signal 4: Multiple AGENTS.md files in the tree ──
-    const agentsFiles = findNestedAgentsFiles(cwd, 4);
+    const agentsFiles = findNestedAgentsFiles(cwd, 8);
     if (agentsFiles.length > 1) {
-        reasons.push(`Found ${agentsFiles.length} AGENTS.md files: ${agentsFiles.slice(0, 5).join(', ')}`);
+        reasons.push(`Found ${agentsFiles.length} AGENTS.md files: ${agentsFiles.slice(0, 5).join(', ')}${agentsFiles.length > 5 ? ` (+${agentsFiles.length - 5} more)` : ''}`);
     }
     // ── Signal 5: Multiple Dockerfiles or docker-compose files (service-oriented workspace) ──
-    const dockerComposeFiles = findFilesShallow(cwd, ['docker-compose.yml', 'docker-compose.yaml'], 3);
+    const dockerComposeFiles = findFilesShallow(cwd, ['docker-compose.yml', 'docker-compose.yaml'], 6);
     if (dockerComposeFiles.length > 1) {
-        reasons.push(`Found ${dockerComposeFiles.length} docker-compose files: ${dockerComposeFiles.slice(0, 5).join(', ')}`);
+        reasons.push(`Found ${dockerComposeFiles.length} docker-compose files`);
     }
     const packageJsonPath = path.join(cwd, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
@@ -198,7 +198,7 @@ export function scanWorkspaceBoundaries(rootDir, maxDepth = 3) {
  * Find AGENTS.md files up to maxDepth levels deep.
  * Returns relative paths from cwd.
  */
-function findNestedAgentsFiles(cwd, maxDepth) {
+export function findNestedAgentsFiles(cwd, maxDepth) {
     const results = [];
     function walk(dir, depth) {
         if (depth > maxDepth || results.length > 10)

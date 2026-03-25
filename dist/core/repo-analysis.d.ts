@@ -24,4 +24,9 @@ export interface WorkspaceScanResult {
  * `rootDir` itself is excluded (the caller is presumably about to `init` it).
  */
 export declare function scanWorkspaceBoundaries(rootDir: string, maxDepth?: number): WorkspaceScanResult;
+/**
+ * Find AGENTS.md files up to maxDepth levels deep.
+ * Returns relative paths from cwd.
+ */
+export declare function findNestedAgentsFiles(cwd: string, maxDepth: number): string[];
 //# sourceMappingURL=repo-analysis.d.ts.map
