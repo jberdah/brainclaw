@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
+import { loadCurrentSession } from './identity.js';
 import { MEMORY_DIR } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
 /**
@@ -91,8 +92,9 @@ export function resolveTargetStore(cwd = process.cwd(), target = 'local', option
  * Priority:
  * 1. explicitCwd (--cwd flag)
  * 2. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
- * 3. active-project.json in workspace root
- * 4. process.cwd()
+ * 3. Session-scoped active project (from .current-session)
+ * 4. Global active-project.json in workspace root
+ * 5. process.cwd()
  */
 export function resolveEffectiveCwd(options = {}) {
     // 1. Explicit --cwd flag
@@ -106,7 +108,15 @@ export function resolveEffectiveCwd(options = {}) {
         if (resolved)
             return resolved;
     }
-    // 3. active-project.json from workspace root
+    // 3. Session-scoped active project (per-agent, no cross-agent interference)
+    const session = loadCurrentSession(process.cwd());
+    if (session?.active_project) {
+        const sp = session.active_project;
+        if (fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
+            return sp.path;
+        }
+    }
+    // 4. Global active-project.json from workspace root
     const wsRoot = resolveWorkspaceRoot(process.cwd(), options.storeChainOptions);
     if (wsRoot) {
         const active = loadActiveProject(wsRoot);
@@ -114,7 +124,7 @@ export function resolveEffectiveCwd(options = {}) {
             return active.path;
         }
     }
-    // 4. Default
+    // 5. Default
     return process.cwd();
 }
 /**

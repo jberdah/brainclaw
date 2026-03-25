@@ -468,6 +468,14 @@ export const SessionSnapshotSchema = z.object({
     initial_context_hash: z.string().optional(),
     git_sha: z.string().optional(),
 });
+export const SessionActiveProjectSchema = z.object({
+    /** Absolute path to the project directory. */
+    path: z.string(),
+    /** Project name from config.yaml (when available). */
+    name: z.string().optional(),
+    /** ISO timestamp of the switch. */
+    switched_at: z.string(),
+}).strict();
 export const CurrentSessionStateSchema = z.object({
     schema_version: z.number().int().positive().optional(),
     session_id: z.string(),
@@ -476,6 +484,8 @@ export const CurrentSessionStateSchema = z.object({
     agent: z.string(),
     agent_id: z.string(),
     host_id: z.string(),
+    /** Session-scoped active project (overrides global active-project.json). */
+    active_project: SessionActiveProjectSchema.optional(),
 });
 export const MemorySeedKindSchema = z.enum([
     'command',

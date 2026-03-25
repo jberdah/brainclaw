@@ -1855,6 +1855,23 @@ export declare const SessionSnapshotSchema: z.ZodObject<{
     git_sha?: string | undefined;
 }>;
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
+export declare const SessionActiveProjectSchema: z.ZodObject<{
+    /** Absolute path to the project directory. */
+    path: z.ZodString;
+    /** Project name from config.yaml (when available). */
+    name: z.ZodOptional<z.ZodString>;
+    /** ISO timestamp of the switch. */
+    switched_at: z.ZodString;
+}, "strict", z.ZodTypeAny, {
+    path: string;
+    switched_at: string;
+    name?: string | undefined;
+}, {
+    path: string;
+    switched_at: string;
+    name?: string | undefined;
+}>;
+export type SessionActiveProject = z.infer<typeof SessionActiveProjectSchema>;
 export declare const CurrentSessionStateSchema: z.ZodObject<{
     schema_version: z.ZodOptional<z.ZodNumber>;
     session_id: z.ZodString;
@@ -1863,6 +1880,23 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     agent: z.ZodString;
     agent_id: z.ZodString;
     host_id: z.ZodString;
+    /** Session-scoped active project (overrides global active-project.json). */
+    active_project: z.ZodOptional<z.ZodObject<{
+        /** Absolute path to the project directory. */
+        path: z.ZodString;
+        /** Project name from config.yaml (when available). */
+        name: z.ZodOptional<z.ZodString>;
+        /** ISO timestamp of the switch. */
+        switched_at: z.ZodString;
+    }, "strict", z.ZodTypeAny, {
+        path: string;
+        switched_at: string;
+        name?: string | undefined;
+    }, {
+        path: string;
+        switched_at: string;
+        name?: string | undefined;
+    }>>;
 }, "strip", z.ZodTypeAny, {
     host_id: string;
     session_id: string;
@@ -1871,6 +1905,11 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     agent_id: string;
     last_seen_at: string;
     schema_version?: number | undefined;
+    active_project?: {
+        path: string;
+        switched_at: string;
+        name?: string | undefined;
+    } | undefined;
 }, {
     host_id: string;
     session_id: string;
@@ -1879,6 +1918,11 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     agent_id: string;
     last_seen_at: string;
     schema_version?: number | undefined;
+    active_project?: {
+        path: string;
+        switched_at: string;
+        name?: string | undefined;
+    } | undefined;
 }>;
 export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
 export declare const MemorySeedKindSchema: z.ZodEnum<["command", "convention", "entrypoint", "hotspot", "agent_rule", "warning", "environment", "tooling"]>;

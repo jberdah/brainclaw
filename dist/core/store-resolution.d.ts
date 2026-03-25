@@ -60,8 +60,9 @@ export interface ResolveEffectiveCwdOptions {
  * Priority:
  * 1. explicitCwd (--cwd flag)
  * 2. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
- * 3. active-project.json in workspace root
- * 4. process.cwd()
+ * 3. Session-scoped active project (from .current-session)
+ * 4. Global active-project.json in workspace root
+ * 5. process.cwd()
  */
 export declare function resolveEffectiveCwd(options?: ResolveEffectiveCwdOptions): string;
 /**
