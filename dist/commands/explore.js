@@ -1,14 +1,13 @@
-import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
+import { listCapabilities, listTools } from '../core/registries.js';
 export function runExplore(options = {}) {
     const cwd = options.cwd ?? process.cwd();
     if (!memoryExists(cwd)) {
         console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
         process.exit(1);
     }
-    const state = loadState(cwd);
-    const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
-    const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+    const capabilities = listCapabilities(cwd);
+    const tools = listTools(cwd);
     console.log('\n╔════════════════════════════════════════════════════════╗');
     console.log('║          Project Capabilities & Tools                   ║');
     console.log('╚════════════════════════════════════════════════════════╝\n');
@@ -18,9 +17,8 @@ export function runExplore(options = {}) {
     }
     else {
         capabilities.forEach((cap) => {
-            const category = cap.tags.find((t) => t !== 'capability') || 'general';
-            console.log(`   [${cap.id}] ${cap.text.split('\n')[0]}`);
-            console.log(`       Category: ${category}\n`);
+            console.log(`   [${cap.id}] ${cap.name}`);
+            console.log(`       Category: ${cap.category}\n`);
         });
     }
     console.log(`🔧 Tools (${tools.length}):\n`);
@@ -29,9 +27,8 @@ export function runExplore(options = {}) {
     }
     else {
         tools.forEach((tool) => {
-            const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-            console.log(`   [${tool.id}] ${tool.text.split('\n')[0]}`);
-            console.log(`       Type: ${type}\n`);
+            console.log(`   [${tool.id}] ${tool.name}`);
+            console.log(`       Type: ${tool.type}\n`);
         });
     }
     if (capabilities.length === 0 && tools.length === 0) {

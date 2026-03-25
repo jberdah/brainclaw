@@ -75,7 +75,17 @@ export interface ContextResult {
     estimation_calibration?: string;
     stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
     cross_project_items?: ContextItem[];
+    claim_conflicts?: ClaimConflict[];
+    workflow_hints?: string[];
     selected: ContextItem[];
+}
+export interface ClaimConflict {
+    my_claim_id: string;
+    my_scope: string;
+    other_claim_id: string;
+    other_agent: string;
+    other_scope: string;
+    overlap_reason: string;
 }
 export interface ScopedActivityItemSummary {
     id: string;

@@ -13,7 +13,7 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildCurrentAgentResumeSummary, buildReputationRankingLookup } from './reputation.js';
 import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
-import { listClaims } from './claims.js';
+import { listClaims, isClaimExpired } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
 import { isTrapActive, listOperationalTraps } from './traps.js';
 import { buildEstimationReport } from '../commands/estimation-report.js';
@@ -67,6 +67,7 @@ export function buildContext(options = {}) {
             score: 0,
             reasons: [],
             extra: meta.join(', '),
+            provenance: { actor: plan.author },
         });
     }
     for (const c of state.active_constraints) {
@@ -316,15 +317,49 @@ export function buildContext(options = {}) {
         items.splice(0, items.length, ...items.filter((i) => allowed.includes(i.section)));
     }
     const queryTerms = tokenise(target);
+    // Agent-layer scoring: boost items related to the current agent's claims
+    const agentName = agent;
+    const agentId = currentAgentIdentity?.agent_id;
+    const allClaims = [...listClaims(contextCwd), ...parentStoreClaims];
+    const myClaims = allClaims.filter((c) => c.status === 'active' && (agentId ? c.agent_id === agentId : c.agent === agentName));
+    const myClaimScopes = myClaims.map((c) => c.scope);
+    const otherActiveClaims = allClaims.filter((c) => c.status === 'active' && !(agentId ? c.agent_id === agentId : c.agent === agentName));
     for (const item of items) {
         const relevance = computeRelevance(item, queryTerms, profile, target);
         item.score = relevance.score;
         item.reasons = relevance.reasons;
+        // Layer 1: boost items in my claimed scope (+6)
+        if (item.score >= 0 && myClaimScopes.length > 0 && item.related_paths) {
+            const overlaps = item.related_paths.some((p) => myClaimScopes.some((scope) => p.includes(scope) || scope.includes(p)));
+            if (overlaps) {
+                item.score += 6;
+                item.reasons = uniqueReasons([...item.reasons, 'agent-layer: my claimed scope']);
+            }
+        }
+        // Layer 1: boost plans assigned to me (+5)
+        if (item.score >= 0 && item.section === 'plan' && item.extra?.includes(`assignee:${agentName}`)) {
+            item.score += 5;
+            item.reasons = uniqueReasons([...item.reasons, 'agent-layer: my assigned plan']);
+        }
+        // Layer 2: boost items authored by me (+2)
+        if (item.score >= 0 && item.provenance?.actor === agentName) {
+            item.score += 2;
+            item.reasons = uniqueReasons([...item.reasons, 'agent-layer: my authored item']);
+        }
+        // Reputation signal
         if (item.score >= 0 && item.provenance) {
             const trustBonus = rankingLookup.getRankingBonus(item.provenance.actor_id, item.provenance.actor);
             if (trustBonus > 0) {
                 item.score += trustBonus;
                 item.reasons = uniqueReasons([...item.reasons, `reputation signal:+${trustBonus.toFixed(2)}`]);
+            }
+        }
+        // Layer 3: boost machine-scoped items for broader visibility (+1)
+        if (item.score >= 0) {
+            const itemScope = item.scope;
+            if (itemScope === 'machine') {
+                item.score += 1;
+                item.reasons = uniqueReasons([...item.reasons, 'machine-scope signal']);
             }
         }
     }
@@ -384,18 +419,15 @@ export function buildContext(options = {}) {
         ? summariseAgentTooling(rawAgentTooling)
         : undefined;
     // Build open_work: active claims and in_progress plans owned by the current agent
+    // Reuses myClaims computed in agent-layer scoring above
     let openWork;
     if (currentAgentIdentity || agent) {
-        const agentName = agent;
-        const agentId = currentAgentIdentity?.agent_id;
-        const allClaims = [...listClaims(contextCwd), ...parentStoreClaims];
-        const activeClaims = allClaims.filter((c) => c.status === 'active' && (agentId ? c.agent_id === agentId : c.agent === agentName));
-        const claimPlanIds = new Set(activeClaims.map((c) => c.plan_id).filter(Boolean));
+        const claimPlanIds = new Set(myClaims.map((c) => c.plan_id).filter(Boolean));
         const inProgressPlans = state.plan_items.filter((p) => p.status === 'in_progress' &&
             (p.assignee === agentName || claimPlanIds.has(p.id)));
-        if (activeClaims.length > 0 || inProgressPlans.length > 0) {
+        if (myClaims.length > 0 || inProgressPlans.length > 0) {
             openWork = {
-                active_claims: activeClaims.map(({ id, scope, description, created_at, plan_id, expires_at }) => ({ id, scope, description, created_at, plan_id, expires_at })),
+                active_claims: myClaims.map(({ id, scope, description, created_at, plan_id, expires_at }) => ({ id, scope, description, created_at, plan_id, expires_at })),
                 in_progress_plans: inProgressPlans.map(({ id, text, assignee }) => ({ id, text, assignee })),
             };
         }
@@ -471,6 +503,8 @@ export function buildContext(options = {}) {
             }
         })(),
         cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
+        claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
+        workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
         selected,
     };
     if (options.digest) {
@@ -1231,5 +1265,65 @@ function applyCharBudget(items, maxChars) {
         used += itemChars;
     }
     return selected;
+}
+// --- Claim conflict detection ---
+function detectClaimConflicts(myClaims, otherClaims) {
+    if (myClaims.length === 0 || otherClaims.length === 0)
+        return undefined;
+    const conflicts = [];
+    for (const mine of myClaims) {
+        for (const other of otherClaims) {
+            if (isClaimExpired(other))
+                continue;
+            const overlap = scopesOverlap(mine.scope, other.scope);
+            if (overlap) {
+                conflicts.push({
+                    my_claim_id: mine.id,
+                    my_scope: mine.scope,
+                    other_claim_id: other.id,
+                    other_agent: other.agent,
+                    other_scope: other.scope,
+                    overlap_reason: overlap,
+                });
+            }
+        }
+    }
+    return conflicts.length > 0 ? conflicts : undefined;
+}
+function scopesOverlap(a, b) {
+    const aParts = a.replace(/\\/g, '/').split(/\s+/);
+    const bParts = b.replace(/\\/g, '/').split(/\s+/);
+    for (const ap of aParts) {
+        for (const bp of bParts) {
+            if (ap === bp)
+                return `exact match: ${ap}`;
+            if (ap.startsWith(bp + '/') || bp.startsWith(ap + '/'))
+                return `path overlap: ${ap} ↔ ${bp}`;
+        }
+    }
+    return null;
+}
+// --- Workflow hints ---
+function buildWorkflowHints(myClaims, openWork, plans) {
+    const hints = [];
+    // No claims — suggest claiming before editing
+    if (myClaims.length === 0) {
+        const todoPlans = plans.filter((p) => p.status === 'todo' && p.priority === 'high');
+        if (todoPlans.length > 0) {
+            hints.push(`${todoPlans.length} high-priority plan(s) available — consider claiming one with bclaw_claim`);
+        }
+    }
+    // Multiple unclosed claims — suggest releasing finished ones
+    if (myClaims.length > 2) {
+        hints.push(`You have ${myClaims.length} active claims — consider releasing finished ones with bclaw_release_claim`);
+    }
+    // In-progress plans without claims
+    if (openWork) {
+        const unclaimedInProgress = openWork.in_progress_plans.filter((p) => !openWork.active_claims.some((c) => c.plan_id === p.id));
+        if (unclaimedInProgress.length > 0) {
+            hints.push(`${unclaimedInProgress.length} in-progress plan(s) without a claim — consider claiming the scope you're editing`);
+        }
+    }
+    return hints.length > 0 ? hints : undefined;
 }
 //# sourceMappingURL=context.js.map

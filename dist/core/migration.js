@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { memoryDir, memoryPath, readFileSync, writeFileAtomic, resolveEntityDir } from './io.js';
-import { BootstrapApplicationReceiptSchema, BootstrapImportPlanDocumentSchema, AgentIdentityDocumentSchema, BootstrapProfileDocumentSchema, CandidateSchema, ClaimSchema, ConfigSchema, MemorySeedDocumentSchema, ConstraintSchema, CurrentSessionStateSchema, DecisionSchema, HandoffSchema, InstructionEntrySchema, PlanItemSchema, ProjectIdentityDocumentSchema, RuntimeNoteSchema, SessionSnapshotSchema, TrapSchema, AiSurfaceTaskRequestSchema, } from './schema.js';
+import { BootstrapApplicationReceiptSchema, BootstrapImportPlanDocumentSchema, AgentIdentityDocumentSchema, BootstrapProfileDocumentSchema, CandidateSchema, ClaimSchema, ConfigSchema, MemorySeedDocumentSchema, ConstraintSchema, CurrentSessionStateSchema, DecisionSchema, HandoffSchema, InstructionEntrySchema, PlanItemSchema, ProjectIdentityDocumentSchema, RuntimeNoteSchema, SessionSnapshotSchema, TrapSchema, AiSurfaceTaskRequestSchema, ProjectCapabilitySchema, ProjectToolSchema, } from './schema.js';
 export class MigrationError extends Error {
     kind;
     documentType;
@@ -33,6 +33,8 @@ const registry = {
     runtime_note: createRegistryEntry(RuntimeNoteSchema),
     ai_surface_task: createRegistryEntry(AiSurfaceTaskRequestSchema),
     session_snapshot: createRegistryEntry(SessionSnapshotSchema),
+    capability: createRegistryEntry(ProjectCapabilitySchema),
+    tool: createRegistryEntry(ProjectToolSchema),
     trap: createRegistryEntry(TrapSchema),
 };
 function createRegistryEntry(schema) {

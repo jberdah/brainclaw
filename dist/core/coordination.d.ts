@@ -24,9 +24,10 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
             status: "active" | "released" | "stale";
             id: string;
             created_at: string;
-            agent: string;
             scope: string;
+            agent: string;
             description: string;
+            project?: string | undefined;
             schema_version?: number | undefined;
             model?: string | undefined;
             project_id?: string | undefined;
@@ -34,7 +35,6 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
             session_id?: string | undefined;
             expires_at?: string | undefined;
             plan_id?: string | undefined;
-            project?: string | undefined;
             agent_id?: string | undefined;
             released_at?: string | undefined;
         }[];
@@ -48,14 +48,14 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         priority: "low" | "medium" | "high";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         model?: string | undefined;
         related_paths?: string[] | undefined;
-        project?: string | undefined;
         assignee?: string | undefined;
         steps?: {
-            status: "todo" | "done";
+            status: "todo" | "in_progress" | "blocked" | "done" | "testing";
             id: string;
             text: string;
             created_at: string;
@@ -71,9 +71,10 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         status: "active" | "released" | "stale";
         id: string;
         created_at: string;
-        agent: string;
         scope: string;
+        agent: string;
         description: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         model?: string | undefined;
         project_id?: string | undefined;
@@ -81,7 +82,6 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         session_id?: string | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         agent_id?: string | undefined;
         released_at?: string | undefined;
     }[];
@@ -93,6 +93,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         visibility: "shared" | "machine" | "private";
         agent: string;
         note_type: "observation" | "session_start" | "session_end";
+        project?: string | undefined;
         schema_version?: number | undefined;
         model?: string | undefined;
         project_id?: string | undefined;
@@ -100,7 +101,6 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         session_id?: string | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         agent_id?: string | undefined;
     }[];
     session_meta_hidden: number;
@@ -113,6 +113,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         tags: string[];
         from: string;
         to: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         author_id?: string | undefined;
@@ -122,7 +123,6 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -143,5 +143,13 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
     }[];
     reputation_summary: import("./reputation.js").ReputationSummary | undefined;
     agent_reputation: import("./reputation.js").ReputationAgentPublicSummary | undefined;
+    other_agents: OtherAgentSummary[] | undefined;
 };
+interface OtherAgentSummary {
+    name: string;
+    claim_count: number;
+    scopes: string[];
+    last_active?: string;
+}
+export {};
 //# sourceMappingURL=coordination.d.ts.map

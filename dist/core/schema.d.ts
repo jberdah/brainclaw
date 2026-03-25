@@ -15,6 +15,8 @@ export declare const HandoffStatusSchema: z.ZodEnum<["open", "accepted", "closed
 export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
 export declare const DecisionOutcomeSchema: z.ZodEnum<["approved", "rejected", "deferred", "pending"]>;
 export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
+export declare const MemoryScopeSchema: z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>;
+export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
 export declare const ConstraintSchema: z.ZodObject<{
     schema_version: z.ZodOptional<z.ZodNumber>;
     id: z.ZodString;
@@ -29,6 +31,7 @@ export declare const ConstraintSchema: z.ZodObject<{
     session_id: z.ZodOptional<z.ZodString>;
     status: z.ZodEnum<["active", "resolved", "expired"]>;
     category: z.ZodOptional<z.ZodEnum<["architecture", "performance", "security", "reliability", "compatibility", "process", "other"]>>;
+    scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
     tags: z.ZodArray<z.ZodString, "many">;
     related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     expires_at: z.ZodOptional<z.ZodString>;
@@ -47,6 +50,7 @@ export declare const ConstraintSchema: z.ZodObject<{
     host_id?: string | undefined;
     session_id?: string | undefined;
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     expires_at?: string | undefined;
 }, {
@@ -64,6 +68,7 @@ export declare const ConstraintSchema: z.ZodObject<{
     host_id?: string | undefined;
     session_id?: string | undefined;
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     expires_at?: string | undefined;
 }>;
@@ -81,6 +86,7 @@ export declare const DecisionSchema: z.ZodObject<{
     host_id: z.ZodOptional<z.ZodString>;
     session_id: z.ZodOptional<z.ZodString>;
     outcome: z.ZodOptional<z.ZodEnum<["approved", "rejected", "deferred", "pending"]>>;
+    scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
     related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     plan_id: z.ZodOptional<z.ZodString>;
     tags: z.ZodArray<z.ZodString, "many">;
@@ -97,6 +103,7 @@ export declare const DecisionSchema: z.ZodObject<{
     project_id?: string | undefined;
     host_id?: string | undefined;
     session_id?: string | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     plan_id?: string | undefined;
@@ -113,6 +120,7 @@ export declare const DecisionSchema: z.ZodObject<{
     project_id?: string | undefined;
     host_id?: string | undefined;
     session_id?: string | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     plan_id?: string | undefined;
@@ -131,6 +139,7 @@ export declare const TrapSchema: z.ZodObject<{
     session_id: z.ZodOptional<z.ZodString>;
     status: z.ZodDefault<z.ZodEnum<["active", "resolved", "expired"]>>;
     severity: z.ZodEnum<["low", "medium", "high"]>;
+    scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
     tags: z.ZodArray<z.ZodString, "many">;
     related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     plan_id: z.ZodOptional<z.ZodString>;
@@ -154,6 +163,7 @@ export declare const TrapSchema: z.ZodObject<{
     project_id?: string | undefined;
     host_id?: string | undefined;
     session_id?: string | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     expires_at?: string | undefined;
     plan_id?: string | undefined;
@@ -173,6 +183,7 @@ export declare const TrapSchema: z.ZodObject<{
     project_id?: string | undefined;
     host_id?: string | undefined;
     session_id?: string | undefined;
+    scope?: "machine" | "project" | "user" | undefined;
     related_paths?: string[] | undefined;
     expires_at?: string | undefined;
     plan_id?: string | undefined;
@@ -215,6 +226,7 @@ export declare const HandoffSchema: z.ZodObject<{
     tags: string[];
     from: string;
     to: string;
+    project?: string | undefined;
     schema_version?: number | undefined;
     short_label?: string | undefined;
     author_id?: string | undefined;
@@ -224,7 +236,6 @@ export declare const HandoffSchema: z.ZodObject<{
     session_id?: string | undefined;
     related_paths?: string[] | undefined;
     plan_id?: string | undefined;
-    project?: string | undefined;
     snapshot?: {
         diff?: string | undefined;
     } | undefined;
@@ -237,6 +248,7 @@ export declare const HandoffSchema: z.ZodObject<{
     tags: string[];
     from: string;
     to: string;
+    project?: string | undefined;
     schema_version?: number | undefined;
     short_label?: string | undefined;
     author_id?: string | undefined;
@@ -246,7 +258,6 @@ export declare const HandoffSchema: z.ZodObject<{
     session_id?: string | undefined;
     related_paths?: string[] | undefined;
     plan_id?: string | undefined;
-    project?: string | undefined;
     snapshot?: {
         diff?: string | undefined;
     } | undefined;
@@ -254,26 +265,28 @@ export declare const HandoffSchema: z.ZodObject<{
 export type Handoff = z.infer<typeof HandoffSchema>;
 export declare const PlanStatusSchema: z.ZodEnum<["todo", "in_progress", "blocked", "done", "dropped"]>;
 export type PlanStatus = z.infer<typeof PlanStatusSchema>;
+export declare const PlanStepStatusSchema: z.ZodEnum<["todo", "in_progress", "testing", "done", "blocked"]>;
+export type PlanStepStatus = z.infer<typeof PlanStepStatusSchema>;
 export declare const PlanStepSchema: z.ZodObject<{
     id: z.ZodString;
     text: z.ZodString;
-    status: z.ZodEnum<["todo", "done"]>;
+    status: z.ZodDefault<z.ZodEnum<["todo", "in_progress", "testing", "done", "blocked"]>>;
     assignee: z.ZodOptional<z.ZodString>;
     created_at: z.ZodString;
     updated_at: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    status: "todo" | "done";
+    status: "todo" | "in_progress" | "blocked" | "done" | "testing";
     id: string;
     text: string;
     created_at: string;
     updated_at: string;
     assignee?: string | undefined;
 }, {
-    status: "todo" | "done";
     id: string;
     text: string;
     created_at: string;
     updated_at: string;
+    status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
     assignee?: string | undefined;
 }>;
 export type PlanStep = z.infer<typeof PlanStepSchema>;
@@ -299,23 +312,23 @@ export declare const PlanItemSchema: z.ZodObject<{
     steps: z.ZodOptional<z.ZodArray<z.ZodObject<{
         id: z.ZodString;
         text: z.ZodString;
-        status: z.ZodEnum<["todo", "done"]>;
+        status: z.ZodDefault<z.ZodEnum<["todo", "in_progress", "testing", "done", "blocked"]>>;
         assignee: z.ZodOptional<z.ZodString>;
         created_at: z.ZodString;
         updated_at: z.ZodString;
     }, "strip", z.ZodTypeAny, {
-        status: "todo" | "done";
+        status: "todo" | "in_progress" | "blocked" | "done" | "testing";
         id: string;
         text: string;
         created_at: string;
         updated_at: string;
         assignee?: string | undefined;
     }, {
-        status: "todo" | "done";
         id: string;
         text: string;
         created_at: string;
         updated_at: string;
+        status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
         assignee?: string | undefined;
     }>, "many">>;
     estimated_effort: z.ZodEffects<z.ZodOptional<z.ZodNumber>, number | undefined, unknown>;
@@ -333,14 +346,14 @@ export declare const PlanItemSchema: z.ZodObject<{
     priority: "low" | "medium" | "high";
     depends_on: string[];
     type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+    project?: string | undefined;
     schema_version?: number | undefined;
     short_label?: string | undefined;
     model?: string | undefined;
     related_paths?: string[] | undefined;
-    project?: string | undefined;
     assignee?: string | undefined;
     steps?: {
-        status: "todo" | "done";
+        status: "todo" | "in_progress" | "blocked" | "done" | "testing";
         id: string;
         text: string;
         created_at: string;
@@ -361,19 +374,19 @@ export declare const PlanItemSchema: z.ZodObject<{
     updated_at: string;
     priority: "low" | "medium" | "high";
     type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+    project?: string | undefined;
     schema_version?: number | undefined;
     short_label?: string | undefined;
     model?: string | undefined;
     related_paths?: string[] | undefined;
-    project?: string | undefined;
     assignee?: string | undefined;
     depends_on?: string[] | undefined;
     steps?: {
-        status: "todo" | "done";
         id: string;
         text: string;
         created_at: string;
         updated_at: string;
+        status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
         assignee?: string | undefined;
     }[] | undefined;
     estimated_effort?: unknown;
@@ -420,8 +433,8 @@ export declare const InstructionEntrySchema: z.ZodObject<{
     active?: boolean | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
-    tags?: string[] | undefined;
     scope?: string | undefined;
+    tags?: string[] | undefined;
     supersedes?: string | undefined;
 }>;
 export type InstructionEntry = z.infer<typeof InstructionEntrySchema>;
@@ -555,6 +568,7 @@ export declare const StateSchema: z.ZodObject<{
         session_id: z.ZodOptional<z.ZodString>;
         status: z.ZodEnum<["active", "resolved", "expired"]>;
         category: z.ZodOptional<z.ZodEnum<["architecture", "performance", "security", "reliability", "compatibility", "process", "other"]>>;
+        scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
         tags: z.ZodArray<z.ZodString, "many">;
         related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         expires_at: z.ZodOptional<z.ZodString>;
@@ -573,6 +587,7 @@ export declare const StateSchema: z.ZodObject<{
         host_id?: string | undefined;
         session_id?: string | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
     }, {
@@ -590,6 +605,7 @@ export declare const StateSchema: z.ZodObject<{
         host_id?: string | undefined;
         session_id?: string | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
     }>, "many">;
@@ -606,6 +622,7 @@ export declare const StateSchema: z.ZodObject<{
         host_id: z.ZodOptional<z.ZodString>;
         session_id: z.ZodOptional<z.ZodString>;
         outcome: z.ZodOptional<z.ZodEnum<["approved", "rejected", "deferred", "pending"]>>;
+        scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
         related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         plan_id: z.ZodOptional<z.ZodString>;
         tags: z.ZodArray<z.ZodString, "many">;
@@ -622,6 +639,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         plan_id?: string | undefined;
@@ -638,6 +656,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         plan_id?: string | undefined;
@@ -655,6 +674,7 @@ export declare const StateSchema: z.ZodObject<{
         session_id: z.ZodOptional<z.ZodString>;
         status: z.ZodDefault<z.ZodEnum<["active", "resolved", "expired"]>>;
         severity: z.ZodEnum<["low", "medium", "high"]>;
+        scope: z.ZodOptional<z.ZodDefault<z.ZodEnum<["project", "machine", "user"]>>>;
         tags: z.ZodArray<z.ZodString, "many">;
         related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         plan_id: z.ZodOptional<z.ZodString>;
@@ -678,6 +698,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
@@ -697,6 +718,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
@@ -738,6 +760,7 @@ export declare const StateSchema: z.ZodObject<{
         tags: string[];
         from: string;
         to: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         author_id?: string | undefined;
@@ -747,7 +770,6 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -760,6 +782,7 @@ export declare const StateSchema: z.ZodObject<{
         tags: string[];
         from: string;
         to: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         author_id?: string | undefined;
@@ -769,7 +792,6 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -794,23 +816,23 @@ export declare const StateSchema: z.ZodObject<{
         steps: z.ZodOptional<z.ZodArray<z.ZodObject<{
             id: z.ZodString;
             text: z.ZodString;
-            status: z.ZodEnum<["todo", "done"]>;
+            status: z.ZodDefault<z.ZodEnum<["todo", "in_progress", "testing", "done", "blocked"]>>;
             assignee: z.ZodOptional<z.ZodString>;
             created_at: z.ZodString;
             updated_at: z.ZodString;
         }, "strip", z.ZodTypeAny, {
-            status: "todo" | "done";
+            status: "todo" | "in_progress" | "blocked" | "done" | "testing";
             id: string;
             text: string;
             created_at: string;
             updated_at: string;
             assignee?: string | undefined;
         }, {
-            status: "todo" | "done";
             id: string;
             text: string;
             created_at: string;
             updated_at: string;
+            status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
             assignee?: string | undefined;
         }>, "many">>;
         estimated_effort: z.ZodEffects<z.ZodOptional<z.ZodNumber>, number | undefined, unknown>;
@@ -828,14 +850,14 @@ export declare const StateSchema: z.ZodObject<{
         priority: "low" | "medium" | "high";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         model?: string | undefined;
         related_paths?: string[] | undefined;
-        project?: string | undefined;
         assignee?: string | undefined;
         steps?: {
-            status: "todo" | "done";
+            status: "todo" | "in_progress" | "blocked" | "done" | "testing";
             id: string;
             text: string;
             created_at: string;
@@ -856,19 +878,19 @@ export declare const StateSchema: z.ZodObject<{
         updated_at: string;
         priority: "low" | "medium" | "high";
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         model?: string | undefined;
         related_paths?: string[] | undefined;
-        project?: string | undefined;
         assignee?: string | undefined;
         depends_on?: string[] | undefined;
         steps?: {
-            status: "todo" | "done";
             id: string;
             text: string;
             created_at: string;
             updated_at: string;
+            status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
             assignee?: string | undefined;
         }[] | undefined;
         estimated_effort?: unknown;
@@ -894,6 +916,7 @@ export declare const StateSchema: z.ZodObject<{
         host_id?: string | undefined;
         session_id?: string | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
     }[];
@@ -910,6 +933,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         plan_id?: string | undefined;
@@ -930,6 +954,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
@@ -944,6 +969,7 @@ export declare const StateSchema: z.ZodObject<{
         tags: string[];
         from: string;
         to: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         author_id?: string | undefined;
@@ -953,7 +979,6 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -969,14 +994,14 @@ export declare const StateSchema: z.ZodObject<{
         priority: "low" | "medium" | "high";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         model?: string | undefined;
         related_paths?: string[] | undefined;
-        project?: string | undefined;
         assignee?: string | undefined;
         steps?: {
-            status: "todo" | "done";
+            status: "todo" | "in_progress" | "blocked" | "done" | "testing";
             id: string;
             text: string;
             created_at: string;
@@ -1005,6 +1030,7 @@ export declare const StateSchema: z.ZodObject<{
         host_id?: string | undefined;
         session_id?: string | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
     }[];
@@ -1021,6 +1047,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         plan_id?: string | undefined;
@@ -1040,6 +1067,7 @@ export declare const StateSchema: z.ZodObject<{
         project_id?: string | undefined;
         host_id?: string | undefined;
         session_id?: string | undefined;
+        scope?: "machine" | "project" | "user" | undefined;
         related_paths?: string[] | undefined;
         expires_at?: string | undefined;
         plan_id?: string | undefined;
@@ -1055,6 +1083,7 @@ export declare const StateSchema: z.ZodObject<{
         tags: string[];
         from: string;
         to: string;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         author_id?: string | undefined;
@@ -1064,7 +1093,6 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
-        project?: string | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -1080,19 +1108,19 @@ export declare const StateSchema: z.ZodObject<{
         updated_at: string;
         priority: "low" | "medium" | "high";
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
+        project?: string | undefined;
         schema_version?: number | undefined;
         short_label?: string | undefined;
         model?: string | undefined;
         related_paths?: string[] | undefined;
-        project?: string | undefined;
         assignee?: string | undefined;
         depends_on?: string[] | undefined;
         steps?: {
-            status: "todo" | "done";
             id: string;
             text: string;
             created_at: string;
             updated_at: string;
+            status?: "todo" | "in_progress" | "blocked" | "done" | "testing" | undefined;
             assignee?: string | undefined;
         }[] | undefined;
         estimated_effort?: unknown;
@@ -1435,9 +1463,10 @@ export declare const ClaimSchema: z.ZodObject<{
     status: "active" | "released" | "stale";
     id: string;
     created_at: string;
-    agent: string;
     scope: string;
+    agent: string;
     description: string;
+    project?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
     project_id?: string | undefined;
@@ -1445,16 +1474,16 @@ export declare const ClaimSchema: z.ZodObject<{
     session_id?: string | undefined;
     expires_at?: string | undefined;
     plan_id?: string | undefined;
-    project?: string | undefined;
     agent_id?: string | undefined;
     released_at?: string | undefined;
 }, {
     status: "active" | "released" | "stale";
     id: string;
     created_at: string;
-    agent: string;
     scope: string;
+    agent: string;
     description: string;
+    project?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
     project_id?: string | undefined;
@@ -1462,7 +1491,6 @@ export declare const ClaimSchema: z.ZodObject<{
     session_id?: string | undefined;
     expires_at?: string | undefined;
     plan_id?: string | undefined;
-    project?: string | undefined;
     agent_id?: string | undefined;
     released_at?: string | undefined;
 }>;
@@ -1492,6 +1520,7 @@ export declare const RuntimeNoteSchema: z.ZodObject<{
     visibility: "shared" | "machine" | "private";
     agent: string;
     note_type: "observation" | "session_start" | "session_end";
+    project?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
     project_id?: string | undefined;
@@ -1499,7 +1528,6 @@ export declare const RuntimeNoteSchema: z.ZodObject<{
     session_id?: string | undefined;
     expires_at?: string | undefined;
     plan_id?: string | undefined;
-    project?: string | undefined;
     agent_id?: string | undefined;
 }, {
     id: string;
@@ -1507,6 +1535,7 @@ export declare const RuntimeNoteSchema: z.ZodObject<{
     created_at: string;
     tags: string[];
     agent: string;
+    project?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
     project_id?: string | undefined;
@@ -1515,7 +1544,6 @@ export declare const RuntimeNoteSchema: z.ZodObject<{
     expires_at?: string | undefined;
     plan_id?: string | undefined;
     visibility?: "shared" | "machine" | "private" | undefined;
-    project?: string | undefined;
     agent_id?: string | undefined;
     note_type?: "observation" | "session_start" | "session_end" | undefined;
 }>;
@@ -1975,11 +2003,11 @@ export declare const BootstrapSuggestionDocumentSchema: z.ZodObject<{
     reversible: boolean;
     schema_version?: number | undefined;
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: string | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     severity?: "low" | "medium" | "high" | undefined;
     layer?: "project" | "global" | "agent" | undefined;
-    scope?: string | undefined;
 }, {
     id: string;
     text: string;
@@ -1988,12 +2016,12 @@ export declare const BootstrapSuggestionDocumentSchema: z.ZodObject<{
     rationale: string;
     schema_version?: number | undefined;
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: string | undefined;
     tags?: string[] | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     severity?: "low" | "medium" | "high" | undefined;
     layer?: "project" | "global" | "agent" | undefined;
-    scope?: string | undefined;
     source_seed_ids?: string[] | undefined;
     source_refs?: string[] | undefined;
     reversible?: boolean | undefined;
@@ -2118,23 +2146,23 @@ export declare const BootstrapInterviewAnswerSuggestionSchema: z.ZodObject<{
     tags: string[];
     target: "constraint" | "decision" | "trap" | "instruction";
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: string | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     severity?: "low" | "medium" | "high" | undefined;
     layer?: "project" | "global" | "agent" | undefined;
-    scope?: string | undefined;
     confidence?: "low" | "medium" | "high" | undefined;
     rationale?: string | undefined;
 }, {
     text: string;
     target: "constraint" | "decision" | "trap" | "instruction";
     category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+    scope?: string | undefined;
     tags?: string[] | undefined;
     related_paths?: string[] | undefined;
     outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
     severity?: "low" | "medium" | "high" | undefined;
     layer?: "project" | "global" | "agent" | undefined;
-    scope?: string | undefined;
     confidence?: "low" | "medium" | "high" | undefined;
     rationale?: string | undefined;
 }>;
@@ -2161,23 +2189,23 @@ export declare const BootstrapInterviewAnswerSchema: z.ZodObject<{
         tags: string[];
         target: "constraint" | "decision" | "trap" | "instruction";
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         confidence?: "low" | "medium" | "high" | undefined;
         rationale?: string | undefined;
     }, {
         text: string;
         target: "constraint" | "decision" | "trap" | "instruction";
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         tags?: string[] | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         confidence?: "low" | "medium" | "high" | undefined;
         rationale?: string | undefined;
     }>, "many">>;
@@ -2189,11 +2217,11 @@ export declare const BootstrapInterviewAnswerSchema: z.ZodObject<{
         tags: string[];
         target: "constraint" | "decision" | "trap" | "instruction";
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         confidence?: "low" | "medium" | "high" | undefined;
         rationale?: string | undefined;
     }[];
@@ -2208,12 +2236,12 @@ export declare const BootstrapInterviewAnswerSchema: z.ZodObject<{
         text: string;
         target: "constraint" | "decision" | "trap" | "instruction";
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         tags?: string[] | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         confidence?: "low" | "medium" | "high" | undefined;
         rationale?: string | undefined;
     }[] | undefined;
@@ -2261,11 +2289,11 @@ export declare const BootstrapImportPlanDocumentSchema: z.ZodObject<{
         reversible: boolean;
         schema_version?: number | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
     }, {
         id: string;
         text: string;
@@ -2274,12 +2302,12 @@ export declare const BootstrapImportPlanDocumentSchema: z.ZodObject<{
         rationale: string;
         schema_version?: number | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         tags?: string[] | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         source_seed_ids?: string[] | undefined;
         source_refs?: string[] | undefined;
         reversible?: boolean | undefined;
@@ -2370,11 +2398,11 @@ export declare const BootstrapImportPlanDocumentSchema: z.ZodObject<{
         reversible: boolean;
         schema_version?: number | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
     }[];
     requires_confirmation: boolean;
     confirmed_suggestion_count: number;
@@ -2421,12 +2449,12 @@ export declare const BootstrapImportPlanDocumentSchema: z.ZodObject<{
         rationale: string;
         schema_version?: number | undefined;
         category?: "architecture" | "performance" | "security" | "reliability" | "compatibility" | "process" | "other" | undefined;
+        scope?: string | undefined;
         tags?: string[] | undefined;
         related_paths?: string[] | undefined;
         outcome?: "approved" | "rejected" | "deferred" | "pending" | undefined;
         severity?: "low" | "medium" | "high" | undefined;
         layer?: "project" | "global" | "agent" | undefined;
-        scope?: string | undefined;
         source_seed_ids?: string[] | undefined;
         source_refs?: string[] | undefined;
         reversible?: boolean | undefined;

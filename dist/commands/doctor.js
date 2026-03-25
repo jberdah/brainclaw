@@ -1,4 +1,5 @@
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
+import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { buildReputationSummary } from '../core/reputation.js';
 import { buildCircuitBreakerSnapshot } from '../core/circuit-breaker.js';
 import { loadState } from '../core/state.js';
@@ -1195,28 +1196,26 @@ export function runDoctor(options = {}) {
                     console.log('✔ Cross-level duplicates: no duplicates across store levels');
                 }
             }
-            // Metadata consistency checks
-            const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
-            const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+            // Metadata consistency checks (capabilities/tools from dedicated registries)
+            const capabilities = listRegistryCapabilities(options.cwd);
+            const tools = listRegistryTools(options.cwd);
             const metadataIssues = [];
             // Check capabilities completeness
             capabilities.forEach((cap) => {
-                const category = cap.tags.find((t) => t !== 'capability');
-                if (!category) {
+                if (!cap.category) {
                     metadataIssues.push(`Capability [${cap.id}] missing category`);
                 }
-                if (!cap.text || cap.text.trim().length === 0) {
-                    metadataIssues.push(`Capability [${cap.id}] has empty description`);
+                if (!cap.name || cap.name.trim().length === 0) {
+                    metadataIssues.push(`Capability [${cap.id}] has empty name`);
                 }
             });
             // Check tools completeness
             tools.forEach((tool) => {
-                const type = tool.tags.find((t) => t !== 'tool');
-                if (!type) {
+                if (!tool.type) {
                     metadataIssues.push(`Tool [${tool.id}] missing type`);
                 }
-                if (!tool.text || tool.text.trim().length === 0) {
-                    metadataIssues.push(`Tool [${tool.id}] has empty description`);
+                if (!tool.name || tool.name.trim().length === 0) {
+                    metadataIssues.push(`Tool [${tool.id}] has empty name`);
                 }
             });
             if (metadataIssues.length > 0) {
@@ -1242,6 +1241,63 @@ export function runDoctor(options = {}) {
                 if (!options.json) {
                     console.log(`✔ Metadata consistency: ${capabilities.length} capabilities, ${tools.length} tools registered`);
                 }
+            }
+        }
+        catch { /* non-fatal */ }
+        // Check for machine-scoped items in project store (should be in user store)
+        try {
+            const machineInProject = [
+                ...state.active_constraints.filter((c) => c.scope === 'machine'),
+                ...state.recent_decisions.filter((d) => d.scope === 'machine'),
+                ...state.known_traps.filter((t) => t.scope === 'machine'),
+            ];
+            if (machineInProject.length > 0) {
+                const ids = machineInProject.map((i) => i.id).slice(0, 5);
+                checks.push({
+                    name: 'machine_scope_placement',
+                    status: 'warn',
+                    message: `${machineInProject.length} machine-scoped item(s) in project store — consider promoting to user store with 'brainclaw migrate --promote-machine-items'`,
+                    details: ids,
+                });
+                if (!options.json) {
+                    console.warn(`⚠ ${machineInProject.length} machine-scoped item(s) in project store: ${ids.join(', ')}`);
+                }
+            }
+            else {
+                checks.push({ name: 'machine_scope_placement', status: 'ok', message: 'No machine-scoped items misplaced in project store' });
+                if (!options.json) {
+                    console.log('✔ Machine-scope placement: no misplaced items');
+                }
+            }
+        }
+        catch { /* non-fatal */ }
+        // Workflow hygiene check (Phase 9)
+        try {
+            const activeClaims = listClaims(options.cwd).filter((c) => c.status === 'active');
+            const inProgressPlans = state.plan_items.filter((p) => p.status === 'in_progress');
+            const workflowIssues = [];
+            if (activeClaims.length > 3) {
+                workflowIssues.push(`${activeClaims.length} active claims — consider releasing finished ones`);
+            }
+            const unclaimedInProgress = inProgressPlans.filter((p) => !activeClaims.some((c) => c.plan_id === p.id));
+            if (unclaimedInProgress.length > 0) {
+                workflowIssues.push(`${unclaimedInProgress.length} in-progress plan(s) without a claim`);
+            }
+            if (workflowIssues.length > 0) {
+                checks.push({
+                    name: 'workflow_hygiene',
+                    status: 'warn',
+                    message: `Workflow hygiene: ${workflowIssues.join('; ')}`,
+                    details: workflowIssues,
+                });
+                if (!options.json) {
+                    console.warn(`⚠ Workflow hygiene: ${workflowIssues.join('; ')}`);
+                }
+            }
+            else {
+                checks.push({ name: 'workflow_hygiene', status: 'ok', message: 'Workflow hygiene OK' });
+                if (!options.json)
+                    console.log('✔ Workflow hygiene: OK');
             }
         }
         catch { /* non-fatal */ }

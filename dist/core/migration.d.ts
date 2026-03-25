@@ -1,4 +1,4 @@
-export type VersionedDocumentType = 'agent_identity' | 'bootstrap_application' | 'bootstrap_import_plan' | 'bootstrap_profile' | 'candidate' | 'claim' | 'config' | 'constraint' | 'current_session' | 'decision' | 'handoff' | 'instruction' | 'memory_seed' | 'plan' | 'project_identity' | 'runtime_note' | 'ai_surface_task' | 'session_snapshot' | 'trap';
+export type VersionedDocumentType = 'agent_identity' | 'bootstrap_application' | 'bootstrap_import_plan' | 'bootstrap_profile' | 'candidate' | 'claim' | 'config' | 'constraint' | 'current_session' | 'decision' | 'handoff' | 'instruction' | 'memory_seed' | 'plan' | 'project_identity' | 'runtime_note' | 'ai_surface_task' | 'session_snapshot' | 'capability' | 'tool' | 'trap';
 export type MigrationErrorKind = 'parse' | 'unknown_version' | 'migration_failed' | 'validation_failed';
 export declare class MigrationError extends Error {
     readonly kind: MigrationErrorKind;

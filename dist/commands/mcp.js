@@ -29,6 +29,7 @@ import { validateMcpInput, validateMcpField } from '../core/input-validation.js'
 import { buildEstimationReport } from './estimation-report.js';
 import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
+import { listCapabilities, listTools as listRegistryTools, createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import { checkGitPresence, scanGitRepos, parseRoots, parseRepoSelection, parseAgentSelection, runGlobalInstall, initReposAndConfigureAgents, readSetupState, ALL_KNOWN_AGENTS, } from './setup.js';
 import { resolveEffectiveCwd, resolveTargetStore, resolveStoreChain } from '../core/store-resolution.js';
@@ -295,6 +296,17 @@ export const MCP_READ_TOOLS = [
             },
         },
     },
+    {
+        name: 'bclaw_conflict_check',
+        description: 'Check for claim conflicts between the current agent and other agents. Returns overlapping scopes.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                agent: { type: 'string', description: 'Agent name to check conflicts for (default: current agent).' },
+                agentId: { type: 'string', description: 'Registered agent id.' },
+            },
+        },
+    },
 ];
 const MCP_WRITE_TOOLS = [
     {
@@ -346,6 +358,8 @@ const MCP_WRITE_TOOLS = [
                 outcome: { type: 'string', description: 'Outcome for decisions: approved, rejected, deferred, pending.' },
                 severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
                 planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
+                scope: { type: 'string', description: 'Memory scope: project (default), machine, or user. Machine-scoped items apply to all projects on this machine.' },
+                store: { type: 'string', description: 'Target store level: local (default), repo, workspace, user. Use "user" to write to ~/.brainclaw/ (visible across all projects).' },
             },
             required: ['text', 'type'],
         },
@@ -1133,10 +1147,9 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             refreshBootstrap: args.refreshBootstrap,
             cwd,
         });
-        // Load available capabilities and tools
-        const state = loadState(cwd);
-        const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
-        const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
+        // Load available capabilities and tools from dedicated registries
+        const capabilities = listCapabilities(cwd);
+        const tools = listRegistryTools(cwd);
         const format = normaliseFormat(args.format);
         const content = renderContextForMcp(result, format, {
             explain: args.explain,
@@ -1149,8 +1162,7 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             if (capabilities.length > 0) {
                 suggestions.push(`\n## Available Capabilities (${capabilities.length})`);
                 capabilities.slice(0, 5).forEach((cap) => {
-                    const category = cap.tags.find((t) => t !== 'capability') || 'general';
-                    suggestions.push(`- [${cap.id}] ${cap.text.split('\n')[0]} (${category})`);
+                    suggestions.push(`- [${cap.id}] ${cap.name} (${cap.category})`);
                 });
                 if (capabilities.length > 5) {
                     suggestions.push(`- ... and ${capabilities.length - 5} more`);
@@ -1159,8 +1171,7 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             if (tools.length > 0) {
                 suggestions.push(`\n## Available Tools (${tools.length})`);
                 tools.slice(0, 5).forEach((tool) => {
-                    const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-                    suggestions.push(`- [${tool.id}] ${tool.text.split('\n')[0]} (${type})`);
+                    suggestions.push(`- [${tool.id}] ${tool.name} (${tool.type})`);
                 });
                 if (tools.length > 5) {
                     suggestions.push(`- ... and ${tools.length - 5} more`);
@@ -1179,13 +1190,13 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
                 ...result,
                 available_capabilities: capabilities.map((cap) => ({
                     id: cap.id,
-                    name: cap.text.split('\n')[0],
-                    category: cap.tags.find((t) => t !== 'capability') || 'general',
+                    name: cap.name,
+                    category: cap.category,
                 })),
                 available_tools: tools.map((tool) => ({
                     id: tool.id,
-                    name: tool.text.split('\n')[0],
-                    type: tool.tags.find((t) => t !== 'tool') || 'utility',
+                    name: tool.name,
+                    type: tool.type,
                 })),
                 ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEvents.length } : {}),
             },
@@ -1361,6 +1372,12 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         lines.push(`Resolved instructions: ${board.resolved_instructions.length}`);
         for (const instruction of board.resolved_instructions.slice(0, 10)) {
             lines.push(`- [${instruction.id}] <${instruction.layer}${instruction.scope ? `:${instruction.scope}` : ''}> ${instruction.text}`);
+        }
+        if (board.other_agents && board.other_agents.length > 0) {
+            lines.push(`Other agents: ${board.other_agents.length}`);
+            for (const other of board.other_agents) {
+                lines.push(`- ${other.name}: ${other.claim_count} claim(s) on ${other.scopes.join(', ')}`);
+            }
         }
         return {
             content: [{ type: 'text', text: lines.join('\n') }],
@@ -1616,32 +1633,25 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         };
     }
     if (name === 'bclaw_get_capabilities') {
-        const state = loadState(cwd);
-        const capabilities = state.recent_decisions.filter((d) => d.tags.includes('capability'));
-        const filtered = capabilities.filter((cap) => {
+        const allCapabilities = listCapabilities(cwd);
+        const filtered = allCapabilities.filter((cap) => {
             const categoryFilter = args.category;
             const tagsFilter = args.tags;
-            if (categoryFilter) {
-                const capCategory = cap.tags.find((t) => t !== 'capability');
-                if (capCategory !== categoryFilter)
-                    return false;
-            }
+            if (categoryFilter && cap.category !== categoryFilter)
+                return false;
             if (tagsFilter && tagsFilter.length > 0) {
-                const hasAllTags = tagsFilter.every((tag) => cap.tags.includes(tag));
-                if (!hasAllTags)
+                if (!tagsFilter.every((tag) => cap.tags.includes(tag)))
                     return false;
             }
             return true;
         });
         const lines = [`Capabilities (${filtered.length}):`];
         filtered.forEach((cap) => {
-            const category = cap.tags.find((t) => t !== 'capability') || 'general';
-            const otherTags = cap.tags.filter((t) => t !== 'capability' && t !== category);
-            lines.push(`\n[${cap.id}] ${cap.text.split('\n')[0]}`);
-            lines.push(`    Category: ${category}`);
+            lines.push(`\n[${cap.id}] ${cap.name}`);
+            lines.push(`    Category: ${cap.category}`);
             lines.push(`    Author: ${cap.author}`);
-            if (otherTags.length > 0) {
-                lines.push(`    Tags: ${otherTags.join(', ')}`);
+            if (cap.tags.length > 0) {
+                lines.push(`    Tags: ${cap.tags.join(', ')}`);
             }
         });
         return {
@@ -1650,32 +1660,25 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         };
     }
     if (name === 'bclaw_list_tools') {
-        const state = loadState(cwd);
-        const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
-        const filtered = tools.filter((tool) => {
+        const allTools = listRegistryTools(cwd);
+        const filtered = allTools.filter((tool) => {
             const typeFilter = args.type;
             const tagsFilter = args.tags;
-            if (typeFilter) {
-                const toolType = tool.tags.find((t) => t !== 'tool');
-                if (toolType !== typeFilter)
-                    return false;
-            }
+            if (typeFilter && tool.type !== typeFilter)
+                return false;
             if (tagsFilter && tagsFilter.length > 0) {
-                const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
-                if (!hasAllTags)
+                if (!tagsFilter.every((tag) => tool.tags.includes(tag)))
                     return false;
             }
             return true;
         });
         const lines = [`Tools (${filtered.length}):`];
         filtered.forEach((tool) => {
-            const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-            const otherTags = tool.tags.filter((t) => t !== 'tool' && t !== type);
-            lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
-            lines.push(`    Type: ${type}`);
+            lines.push(`\n[${tool.id}] ${tool.name}`);
+            lines.push(`    Type: ${tool.type}`);
             lines.push(`    Author: ${tool.author}`);
-            if (otherTags.length > 0) {
-                lines.push(`    Tags: ${otherTags.join(', ')}`);
+            if (tool.tags.length > 0) {
+                lines.push(`    Tags: ${tool.tags.join(', ')}`);
             }
         });
         return {
@@ -1688,33 +1691,25 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         if (!query) {
             throw new Error('Missing required argument: query');
         }
-        const state = loadState(cwd);
-        const tools = state.recent_decisions.filter((d) => d.tags.includes('tool'));
-        const filtered = tools.filter((tool) => {
+        const allTools = listRegistryTools(cwd);
+        const queryLower = query.toLowerCase();
+        const filtered = allTools.filter((tool) => {
             const typeFilter = args.type;
             const tagsFilter = args.tags;
-            // Type filter
-            if (typeFilter) {
-                const toolType = tool.tags.find((t) => t !== 'tool');
-                if (toolType !== typeFilter)
-                    return false;
-            }
-            // Tags filter (all must match)
+            if (typeFilter && tool.type !== typeFilter)
+                return false;
             if (tagsFilter && tagsFilter.length > 0) {
-                const hasAllTags = tagsFilter.every((tag) => tool.tags.includes(tag));
-                if (!hasAllTags)
+                if (!tagsFilter.every((tag) => tool.tags.includes(tag)))
                     return false;
             }
-            // Query search (name, description, tags)
-            const queryLower = query.toLowerCase();
-            return (tool.text.toLowerCase().includes(queryLower) ||
+            return (tool.name.toLowerCase().includes(queryLower) ||
+                tool.description.toLowerCase().includes(queryLower) ||
                 tool.tags.some((tag) => tag.toLowerCase().includes(queryLower)));
         });
         const lines = [`Search results for '${query}' (${filtered.length} tool(s)):`];
         filtered.forEach((tool) => {
-            const type = tool.tags.find((t) => t !== 'tool') || 'utility';
-            lines.push(`\n[${tool.id}] ${tool.text.split('\n')[0]}`);
-            lines.push(`    Type: ${type}`);
+            lines.push(`\n[${tool.id}] ${tool.name}`);
+            lines.push(`    Type: ${tool.type}`);
         });
         return {
             content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
@@ -1737,6 +1732,39 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         return {
             content: [{ type: 'text', text: renderDiscoverySummary(profile) }],
             structuredContent: { ...profile, schema_version: SCHEMA_VERSION },
+        };
+    }
+    if (name === 'bclaw_conflict_check') {
+        const agentNameArg = args.agent;
+        const agentIdArg = args.agentId;
+        const currentAgentName = agentNameArg ?? resolveCurrentAgentName(cwd);
+        const allClaimsForCheck = listClaims(cwd).filter((c) => c.status === 'active');
+        const myClaimsForCheck = allClaimsForCheck.filter((c) => agentIdArg ? c.agent_id === agentIdArg : c.agent === currentAgentName);
+        const otherClaimsForCheck = allClaimsForCheck.filter((c) => agentIdArg ? c.agent_id !== agentIdArg : c.agent !== currentAgentName);
+        const conflicts = [];
+        for (const mine of myClaimsForCheck) {
+            const myScopes = mine.scope.replace(/\\/g, '/').split(/\s+/);
+            for (const other of otherClaimsForCheck) {
+                const otherScopes = other.scope.replace(/\\/g, '/').split(/\s+/);
+                for (const ms of myScopes) {
+                    for (const os of otherScopes) {
+                        if (ms === os || ms.startsWith(os + '/') || os.startsWith(ms + '/')) {
+                            conflicts.push({
+                                my_claim: mine.id, my_scope: mine.scope,
+                                other_claim: other.id, other_agent: other.agent, other_scope: other.scope,
+                                reason: ms === os ? `exact: ${ms}` : `overlap: ${ms} ↔ ${os}`,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        const text = conflicts.length === 0
+            ? `No claim conflicts for ${currentAgentName}.`
+            : `${conflicts.length} conflict(s) found:\n${conflicts.map((c) => `  ${c.my_scope} ↔ ${c.other_agent}:${c.other_scope} (${c.reason})`).join('\n')}`;
+        return {
+            content: [{ type: 'text', text }],
+            structuredContent: { agent: currentAgentName, conflicts, total: conflicts.length, schema_version: SCHEMA_VERSION },
         };
     }
     if (name === 'bclaw_doctor') {
@@ -2040,6 +2068,9 @@ export async function executeMcpToolCall(payload) {
             const type = String(args.type ?? 'decision');
             const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
             const candidatePlanId = args.planId;
+            const candidateScope = args.scope;
+            const targetStore = args.store;
+            const effectiveCwd = targetStore ? resolveTargetStore(cwd, targetStore) : cwd;
             const candidate = {
                 id: candId.id,
                 short_label: candId.short_label,
@@ -2056,6 +2087,7 @@ export async function executeMcpToolCall(payload) {
                 severity: type === 'trap' ? (args.severity ?? 'medium') : undefined,
                 category: type === 'constraint' ? args.category : undefined,
                 outcome: type === 'decision' ? args.outcome : undefined,
+                scope: candidateScope,
                 plan_id: candidatePlanId,
                 model: currentModel,
                 star_count: 0,
@@ -2066,22 +2098,25 @@ export async function executeMcpToolCall(payload) {
             const planPrompt = (type === 'decision' || type === 'trap') && !candidatePlanId
                 ? `\n💡 Does this ${type} relate to an active plan item? If so, re-run with planId: 'pln_xxx' to link it.`
                 : '';
+            const storeLabel = targetStore && targetStore !== 'local' ? ` [store: ${targetStore}]` : '';
             if (writeThrough) {
-                saveCandidate(candidate, cwd);
-                const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, cwd, resolvedIdentity.agent_id);
-                appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, cwd);
+                saveCandidate(candidate, effectiveCwd);
+                const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, effectiveCwd, resolvedIdentity.agent_id);
+                appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, effectiveCwd);
                 return {
                     response: toolResponse({
-                        content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${planPrompt}` }],
+                        content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${storeLabel}${planPrompt}` }],
                         candidate_id: candId.id,
                         promoted_item_id: accepted.promoted_item_id,
                         write_through: true,
+                        store: targetStore ?? 'local',
+                        scope: candidateScope,
                     }),
                     nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
                 };
             }
-            saveCandidate(candidate, cwd);
-            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
+            saveCandidate(candidate, effectiveCwd);
+            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, effectiveCwd);
             return {
                 response: toolResponse({
                     content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)${planPrompt}` }],
@@ -2660,24 +2695,20 @@ export async function executeMcpToolCall(payload) {
                 return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
             }
             const resolvedIdentity = resolved.identity;
-            const state = loadState(cwd);
-            const idObj = generateIdWithLabel('dec');
             const extraTags = Array.isArray(args.tags) ? args.tags : [];
-            const entry = {
-                id: idObj.id,
-                short_label: idObj.short_label,
-                text: `${capName}\n${capDesc}`,
-                created_at: nowISO(),
+            const cap = createCapability({
+                name: capName,
+                description: capDesc,
+                tags: extraTags,
                 author: resolvedIdentity.agent_name,
-                tags: ['capability', ...extraTags],
-            };
-            state.recent_decisions.push(entry);
-            saveState(state, cwd);
-            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `capability: ${capName}` }, cwd);
+                authorId: resolvedIdentity.agent_id,
+                model: currentModel,
+            }, cwd);
+            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: cap.id, item_type: 'capability', reason: `capability: ${capName}` }, cwd);
             return {
                 response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Capability registered: [${idObj.id}] ${capName}` }],
-                    id: idObj.id,
+                    content: [{ type: 'text', text: `✔ Capability registered: [${cap.id}] ${capName}` }],
+                    id: cap.id,
                     name: capName,
                     schema_version: SCHEMA_VERSION,
                 }),
@@ -2694,25 +2725,22 @@ export async function executeMcpToolCall(payload) {
                 return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
             }
             const resolvedIdentity = resolved.identity;
-            const state = loadState(cwd);
-            const idObj = generateIdWithLabel('dec');
             const toolType = String(args.type ?? 'utility');
             const extraTags = Array.isArray(args.tags) ? args.tags : [];
-            const entry = {
-                id: idObj.id,
-                short_label: idObj.short_label,
-                text: `${toolName}\n${toolDesc}`,
-                created_at: nowISO(),
+            const tool = createRegistryTool({
+                name: toolName,
+                description: toolDesc,
+                type: toolType,
+                tags: extraTags,
                 author: resolvedIdentity.agent_name,
-                tags: ['tool', toolType, ...extraTags],
-            };
-            state.recent_decisions.push(entry);
-            saveState(state, cwd);
-            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: idObj.id, item_type: 'decision', reason: `tool: ${toolName}` }, cwd);
+                authorId: resolvedIdentity.agent_id,
+                model: currentModel,
+            }, cwd);
+            appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: tool.id, item_type: 'tool', reason: `tool: ${toolName}` }, cwd);
             return {
                 response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Tool registered: [${idObj.id}] ${toolName} (${toolType})` }],
-                    id: idObj.id,
+                    content: [{ type: 'text', text: `✔ Tool registered: [${tool.id}] ${toolName} (${toolType})` }],
+                    id: tool.id,
                     name: toolName,
                     type: toolType,
                     schema_version: SCHEMA_VERSION,

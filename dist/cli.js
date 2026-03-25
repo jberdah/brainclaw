@@ -83,6 +83,7 @@ import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
+import { runMigrate } from './commands/migrate.js';
 const program = new Command();
 function collect(value, previous) {
     return [...previous, value];
@@ -1131,6 +1132,15 @@ program
     .option('--no-save', 'Do not persist discovery profile to .brainclaw/discovery/')
     .action((options) => {
     runDiscover({ json: options.json, save: options.save });
+});
+// --- migrate ---
+program
+    .command('migrate')
+    .description('Migrate memory items between stores (e.g. promote machine-scoped items to user store)')
+    .option('--promote-machine-items', 'Move items with scope:machine from project store to user store (~/.brainclaw/)')
+    .option('--dry-run', 'Show what would be moved without actually moving')
+    .action((options) => {
+    runMigrate({ promoteMachineItems: options.promoteMachineItems, dryRun: options.dryRun });
 });
 program
     .command('switch [project]')

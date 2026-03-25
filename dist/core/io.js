@@ -35,6 +35,8 @@ const ENTITY_DIR_MAP = {
     // discovery/ — Project entity: what's available
     'bootstrap': 'discovery/bootstrap',
     'bootstrap/seeds': 'discovery/bootstrap/seeds',
+    'capabilities': 'discovery/capabilities',
+    'tools': 'discovery/tools',
     // agents/ — stays at top level (already entity-aligned)
     'agents': 'agents',
 };

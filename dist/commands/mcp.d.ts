@@ -536,6 +536,22 @@ export declare const MCP_READ_TOOLS: readonly [{
             };
         };
     };
+}, {
+    readonly name: "bclaw_conflict_check";
+    readonly description: "Check for claim conflicts between the current agent and other agents. Returns overlapping scopes.";
+    readonly inputSchema: {
+        readonly type: "object";
+        readonly properties: {
+            readonly agent: {
+                readonly type: "string";
+                readonly description: "Agent name to check conflicts for (default: current agent).";
+            };
+            readonly agentId: {
+                readonly type: "string";
+                readonly description: "Registered agent id.";
+            };
+        };
+    };
 }];
 /**
  * Lightweight metrics for the single-writer mutation queue.

@@ -1,5 +1,5 @@
 <!-- brainclaw:start -->
-> Managed by brainclaw v0.26.0 — do not edit manually.
+> Managed by brainclaw v0.27.0 — do not edit manually.
 > Regenerate: brainclaw export --format claude-md --write
 
 ## brainclaw — why this matters
@@ -54,6 +54,7 @@ Brainclaw updates may include new features, bug fixes, and improved coordination
 6. No session summary — session-end releases claims but creates no recap. Next agent has no quick overview of what happened.
 7. memory create decision vs decision command — confusing duality, unclear if same thing.
 8. User proposal: brainclaw switch <project> to set active project context for subsequent commands without cd.
+- Git commits must not include Co-Authored-By trailer lines. The user does not want agent attribution in the git history.
 
 ## brainclaw — active instructions
 

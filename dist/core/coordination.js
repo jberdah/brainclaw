@@ -81,6 +81,31 @@ export function buildCoordinationSnapshot(options = {}) {
         resolved_instructions: instructions,
         reputation_summary: reputationSummary,
         agent_reputation: agentReputation,
+        other_agents: buildOtherAgentsSummary(filteredClaims, filteredNotes, agent),
     };
+}
+function buildOtherAgentsSummary(claims, notes, currentAgent) {
+    const agentMap = new Map();
+    for (const claim of claims) {
+        if (claim.agent === currentAgent)
+            continue;
+        const existing = agentMap.get(claim.agent) ?? { name: claim.agent, claim_count: 0, scopes: [] };
+        existing.claim_count++;
+        existing.scopes.push(claim.scope);
+        if (!existing.last_active || claim.created_at > existing.last_active) {
+            existing.last_active = claim.created_at;
+        }
+        agentMap.set(claim.agent, existing);
+    }
+    for (const note of notes) {
+        if (note.agent === currentAgent)
+            continue;
+        const existing = agentMap.get(note.agent);
+        if (existing && (!existing.last_active || note.created_at > existing.last_active)) {
+            existing.last_active = note.created_at;
+        }
+    }
+    const result = [...agentMap.values()];
+    return result.length > 0 ? result : undefined;
 }
 //# sourceMappingURL=coordination.js.map

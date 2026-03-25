@@ -2,8 +2,8 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.26.0",
-  "published_at": "2026-03-25T00:25:42.491Z",
-  "artifact_path": "./brainclaw-0.26.0.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.26.0.tgz\""
+  "latest_installable_version": "0.27.0",
+  "published_at": "2026-03-25T08:40:55.566Z",
+  "artifact_path": "./brainclaw-0.27.0.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.27.0.tgz\""
 }

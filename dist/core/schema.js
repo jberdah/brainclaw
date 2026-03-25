@@ -42,6 +42,7 @@ export const PrioritySchema = z.enum(['low', 'medium', 'high']);
 export const MemoryVisibilitySchema = z.enum(['shared', 'machine', 'private']);
 export const HandoffStatusSchema = z.enum(['open', 'accepted', 'closed']);
 export const DecisionOutcomeSchema = z.enum(['approved', 'rejected', 'deferred', 'pending']);
+export const MemoryScopeSchema = z.enum(['project', 'machine', 'user']).default('project');
 export const ConstraintSchema = z.object({
     schema_version: z.number().int().positive().optional(),
     id: z.string(),
@@ -56,6 +57,7 @@ export const ConstraintSchema = z.object({
     session_id: z.string().optional(),
     status: ConstraintStatusSchema,
     category: ConstraintCategorySchema.optional(),
+    scope: MemoryScopeSchema.optional(),
     tags: z.array(z.string()),
     related_paths: z.array(z.string()).optional(),
     expires_at: z.string().optional(),
@@ -73,6 +75,7 @@ export const DecisionSchema = z.object({
     host_id: z.string().optional(),
     session_id: z.string().optional(),
     outcome: DecisionOutcomeSchema.optional(),
+    scope: MemoryScopeSchema.optional(),
     related_paths: z.array(z.string()).optional(),
     plan_id: z.string().optional(),
     tags: z.array(z.string()),
@@ -90,6 +93,7 @@ export const TrapSchema = z.object({
     session_id: z.string().optional(),
     status: TrapStatusSchema.default('active'),
     severity: SeveritySchema,
+    scope: MemoryScopeSchema.optional(),
     tags: z.array(z.string()),
     related_paths: z.array(z.string()).optional(),
     plan_id: z.string().optional(),
@@ -122,10 +126,11 @@ export const HandoffSchema = z.object({
     }).optional(),
 });
 export const PlanStatusSchema = z.enum(['todo', 'in_progress', 'blocked', 'done', 'dropped']);
+export const PlanStepStatusSchema = z.enum(['todo', 'in_progress', 'testing', 'done', 'blocked']);
 export const PlanStepSchema = z.object({
     id: z.string(),
     text: z.string(),
-    status: z.enum(['todo', 'done']),
+    status: PlanStepStatusSchema.default('todo'),
     assignee: z.string().optional(),
     created_at: z.string(),
     updated_at: z.string(),
