@@ -12,6 +12,10 @@
       {
         "command": "brainclaw.showBoard",
         "title": "Brainclaw: Show Agent Board"
+      },
+      {
+        "command": "brainclaw.clearNotifications",
+        "title": "Brainclaw: Clear Event Notifications"
       }
     ],
     "views": {

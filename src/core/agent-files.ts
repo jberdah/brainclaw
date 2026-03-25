@@ -562,6 +562,13 @@ function buildCommandHookEntry(command: string): JsonObject {
   };
 }
 
+function buildMatchedCommandHookEntry(matcher: string, command: string): JsonObject {
+  return {
+    matcher,
+    hooks: [{ type: 'command', command }],
+  };
+}
+
 function containsCommandHook(entries: unknown[], command: string): boolean {
   return entries.some(
     (entry) =>
@@ -725,6 +732,14 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
     stopHooks.push(buildCommandHookEntry(stopCommand));
   }
   hooks.Stop = stopHooks;
+
+  // PostToolUse — check for unseen events after any brainclaw MCP tool call
+  const checkEventsCommand = 'npx brainclaw check-events 2>/dev/null';
+  const postToolHooks = Array.isArray(hooks.PostToolUse) ? [...hooks.PostToolUse as unknown[]] : [];
+  if (!containsCommandHook(postToolHooks, checkEventsCommand)) {
+    postToolHooks.push(buildMatchedCommandHookEntry('mcp__brainclaw__', checkEventsCommand));
+  }
+  hooks.PostToolUse = postToolHooks;
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,

@@ -513,12 +513,16 @@ describe('core/agent-files — auto-config writers', () => {
       const filePath = path.join(dir, '.claude', 'settings.local.json');
       const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
         permissions?: { allow?: string[] };
-        hooks?: { UserPromptSubmit?: unknown[]; Stop?: unknown[] };
+        hooks?: { UserPromptSubmit?: unknown[]; Stop?: unknown[]; PostToolUse?: unknown[] };
       };
       assert.ok(content.permissions?.allow?.includes('Bash(npx brainclaw:*)'));
       assert.ok(content.permissions?.allow?.includes('mcp__brainclaw__*'), 'MCP tool whitelist should be present');
       assert.ok(Array.isArray(content.hooks?.UserPromptSubmit) && content.hooks.UserPromptSubmit.length > 0);
       assert.ok(Array.isArray(content.hooks?.Stop) && content.hooks.Stop.length > 0);
+      assert.ok(Array.isArray(content.hooks?.PostToolUse) && content.hooks.PostToolUse.length > 0, 'PostToolUse hook for check-events should be present');
+      const postToolEntry = content.hooks!.PostToolUse![0] as { matcher?: string; hooks?: Array<{ command?: string }> };
+      assert.equal(postToolEntry.matcher, 'mcp__brainclaw__');
+      assert.ok(postToolEntry.hooks?.[0]?.command?.includes('check-events'));
 
       const second = ensureClaudeCodeSettings(dir);
       assert.equal(second.created, false);

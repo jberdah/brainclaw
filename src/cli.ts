@@ -82,6 +82,7 @@ import { cleanOrphanFiles, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
+import { runCheckEvents } from './commands/check-events.js';
 
 const program = new Command();
 
@@ -1059,8 +1060,8 @@ program
 // --- hooks ---
 program
   .command('hooks')
-  .description('Write deterministic session-trigger hooks for Cursor (.cursor/rules/brainclaw-session.mdc) and Windsurf (.windsurfrules)')
-  .option('--target <target>', 'Which hooks to write: cursor, windsurf, all (default: all)')
+  .description('Write deterministic session-trigger hooks for Cursor, Windsurf, and Claude Code (PostToolUse event check)')
+  .option('--target <target>', 'Which hooks to write: cursor, windsurf, claude-code, all (default: all)')
   .action((options) => {
     runHooks(options);
   });
@@ -1074,6 +1075,16 @@ program
   .option('--agent <name>', 'Agent name for auto-claim')
   .action((options) => {
     runWatch({ ...options, autoClaim: options.autoClaim });
+  });
+
+// --- check-events ---
+program
+  .command('check-events')
+  .description('Show unseen events from the event bus (events.jsonl) for the current agent')
+  .option('--agent <name>', 'Agent name for cursor lookup (default: auto-detected)')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runCheckEvents(options);
   });
 
 // --- metrics ---

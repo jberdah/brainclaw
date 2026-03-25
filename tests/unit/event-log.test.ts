@@ -88,4 +88,58 @@ describe('event-log', () => {
     const events = readAllEvents(workspace.dir);
     assert.equal(events.length, 1);
   });
+
+  it('rotateEventLogIfNeeded rotates when log exceeds 10MB', () => {
+    const logPath = path.join(workspace.dir, '.brainclaw', 'events.jsonl');
+    // Write > 10MB of dummy data
+    const bigLine = JSON.stringify({ ts: '', agent: 'x', action: 'create', item_type: 'decision' }) + '\n';
+    const chunk = bigLine.repeat(1000);
+    const needed = Math.ceil((10 * 1024 * 1024) / chunk.length) + 1;
+    for (let i = 0; i < needed; i++) {
+      fs.appendFileSync(logPath, chunk, 'utf-8');
+    }
+
+    // Create a cursor that should be reset
+    readUnseenEvents('bob', workspace.dir);
+    const cursorFile = path.join(workspace.dir, '.brainclaw', '.cursors', 'bob.json');
+    assert.ok(fs.existsSync(cursorFile));
+
+    assert.equal(rotateEventLogIfNeeded(workspace.dir), true);
+
+    // Original file is gone (renamed), cursor is deleted
+    assert.equal(fs.existsSync(logPath), false);
+    assert.equal(fs.existsSync(cursorFile), false);
+
+    // Archive file was created
+    const brainclawDir = path.join(workspace.dir, '.brainclaw');
+    const archives = fs.readdirSync(brainclawDir).filter(f => f.startsWith('events.') && f !== 'events.jsonl');
+    assert.ok(archives.length > 0, 'archive file should exist');
+  });
+
+  it('readUnseenEvents handles missing events.jsonl gracefully', () => {
+    const events = readUnseenEvents('alice', workspace.dir);
+    assert.equal(events.length, 0);
+  });
+
+  it('readAllEvents handles missing events.jsonl gracefully', () => {
+    const events = readAllEvents(workspace.dir);
+    assert.equal(events.length, 0);
+  });
+
+  it('multiple agents have independent cursors', () => {
+    appendEvent({ action: 'create', item_type: 'decision', agent: 'charlie' }, workspace.dir);
+    appendEvent({ action: 'update', item_type: 'plan', agent: 'charlie' }, workspace.dir);
+
+    const aliceUnseen = readUnseenEvents('alice', workspace.dir);
+    assert.equal(aliceUnseen.length, 2);
+
+    // Bob hasn't read yet — should see same events
+    const bobUnseen = readUnseenEvents('bob', workspace.dir);
+    assert.equal(bobUnseen.length, 2);
+
+    // Now alice's cursor is advanced, new event only visible to both
+    appendEvent({ action: 'delete', item_type: 'trap', agent: 'charlie' }, workspace.dir);
+    assert.equal(readUnseenEvents('alice', workspace.dir).length, 1);
+    assert.equal(readUnseenEvents('bob', workspace.dir).length, 1);
+  });
 });

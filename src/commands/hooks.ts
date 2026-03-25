@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
-import { BRAINCLAW_SECTION_START, BRAINCLAW_SECTION_END, upsertBrainclawSection } from '../core/agent-files.js';
+import { BRAINCLAW_SECTION_START, BRAINCLAW_SECTION_END, upsertBrainclawSection, ensureClaudeCodeSettings } from '../core/agent-files.js';
 
-export type HookTarget = 'cursor' | 'windsurf' | 'all';
+export type HookTarget = 'cursor' | 'windsurf' | 'claude-code' | 'all';
 
 export interface HooksOptions {
   target?: HookTarget;
@@ -127,6 +127,15 @@ export function runHooks(options: HooksOptions = {}): void {
     results.push(writeHook(content, '.windsurfrules', cwd));
   }
 
+  if (target === 'claude-code' || target === 'all') {
+    const autoResult = ensureClaudeCodeSettings(cwd);
+    results.push({
+      target: 'claude-code',
+      relativePath: autoResult.relativePath ?? '.claude/settings.local.json',
+      created: autoResult.created,
+    });
+  }
+
   for (const r of results) {
     console.log(`✔ Hook written to ${r.relativePath} (${r.created ? 'created' : 'updated'})`);
   }
@@ -151,6 +160,15 @@ export function writeDetectedAgentHooks(
   if (agentName === 'windsurf') {
     const content = generateWindsurfHook(projectName);
     results.push(writeHook(content, '.windsurfrules', cwd));
+  }
+
+  if (agentName === 'claude-code') {
+    const autoResult = ensureClaudeCodeSettings(cwd);
+    results.push({
+      target: 'claude-code',
+      relativePath: autoResult.relativePath ?? '.claude/settings.local.json',
+      created: autoResult.created,
+    });
   }
 
   return results;
