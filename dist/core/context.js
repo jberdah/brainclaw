@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
+import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from './brainclaw-version.js';
 import { loadConfig } from './config.js';
 import { loadCurrentSession, loadAllSessions } from './identity.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
@@ -580,6 +581,16 @@ export function renderContextMarkdown(result, explain = false) {
         }
     }
     catch { /* ignore — sessions dir may not exist yet */ }
+    // Check for brainclaw update (lightweight local manifest read only)
+    try {
+        const config = loadConfig();
+        const updateCheck = checkBrainclawInstallableUpdate(config, process.cwd());
+        const notice = renderBrainclawInstallableUpdateNotice(updateCheck);
+        if (notice) {
+            lines.push(`⚠ ${notice}`);
+        }
+    }
+    catch { /* ignore — update check is best-effort */ }
     lines.push(`Memory version: ${result.memory_version}`);
     lines.push(`Memory density: ${result.memory_density}`);
     lines.push(`Bootstrap available: ${result.bootstrap_available ? 'yes' : 'no'}`);

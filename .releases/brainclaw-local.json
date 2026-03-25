@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.29.1",
-  "published_at": "2026-03-25T15:25:23.986Z",
-  "artifact_path": "./brainclaw-0.29.1.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.29.1.tgz\"",
-  "release_notes": "feat: multi-session directory storage, brainclaw who, user tracking in claims/events, PID liveness, other agents in context, tags coercion fix"
+  "latest_installable_version": "0.29.2",
+  "published_at": "2026-03-25T15:31:24.270Z",
+  "artifact_path": "./brainclaw-0.29.2.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.29.2.tgz\"",
+  "release_notes": "fix: show brainclaw update notice in context output automatically"
 }
