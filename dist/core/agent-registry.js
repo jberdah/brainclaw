@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
-import { loadCurrentSession } from './identity.js';
 import { nowISO } from './ids.js';
 import { MEMORY_DIR, resolveEntityDir } from './io.js';
 import { JsonStore } from './json-store.js';
@@ -207,32 +206,30 @@ export function resolveCurrentAgentIdentity(cwd, preferredDirName) {
         if (byEnvName)
             return byEnvName;
     }
-    // Active session: if a session was started with an explicit agent (via bclaw_session_start),
-    // trust it over env-based detection. This is critical for MCP servers where the process
-    // env belongs to VS Code (with Copilot vars) but the session was started by Claude Code.
-    try {
-        const activeSession = loadCurrentSession(cwd);
-        if (activeSession?.agent_id) {
-            const bySessionId = findAgentIdentityById(activeSession.agent_id, cwd, preferredDirName);
-            if (bySessionId)
-                return bySessionId;
-        }
-        if (activeSession?.agent) {
-            const bySessionName = findAgentIdentityByName(activeSession.agent, cwd, preferredDirName);
-            if (bySessionName)
-                return bySessionName;
-        }
-    }
-    catch {
-        // non-fatal — session resolution should not block identity resolution
-    }
-    // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID).
-    // Falls through to config if the detected agent is not registered.
+    // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID, CODEX_THREAD_ID).
+    // If detected agent is not registered, auto-register it as trusted agent.
+    // This is the primary identification path for MCP servers and CLI hooks.
     const detected = detectAiAgent();
     if (detected) {
         const byDetected = findAgentIdentityByName(detected.name, cwd, preferredDirName);
         if (byDetected)
             return byDetected;
+        // Auto-register detected agent so it's immediately usable.
+        // This avoids the "not registered" error for agents detected for the first time.
+        try {
+            const autoRegistered = registerAgentIdentity({
+                agentName: detected.name,
+                kind: detected.kind,
+                trustLevel: detected.trust_level,
+                cwd,
+                preferredDirName,
+            });
+            logger.debug(`Auto-registered detected agent: ${detected.name} (${autoRegistered.agent_id})`);
+            return autoRegistered;
+        }
+        catch {
+            // Non-fatal: registration may fail if store is read-only
+        }
     }
     // Config fallback (last resort — may not reflect the actual calling agent)
     const config = loadConfig(cwd, preferredDirName);
