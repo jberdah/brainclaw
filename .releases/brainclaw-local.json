@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.31.4",
-  "published_at": "2026-03-26T12:17:45.612Z",
-  "artifact_path": "./brainclaw-0.31.4.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.31.4.tgz\"",
-  "release_notes": "feat: doctor detects concurrent brainclaw installations in PATH"
+  "latest_installable_version": "0.31.5",
+  "published_at": "2026-03-26T12:23:58.649Z",
+  "artifact_path": "./brainclaw-0.31.5.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.31.5.tgz\"",
+  "release_notes": "test: multi-agent identity integration tests (7 tests covering DGX scenario)"
 }
