@@ -43,19 +43,18 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
 
   // Claude Code — tested BEFORE Copilot because both can be present in VS Code.
   // CLAUDE_CODE_VERSION is set by Claude Code CLI; CLAUDECODE is set by the VS Code extension;
-  // CLAUDE_AGENT_SDK_VERSION is set by Claude Code on remote/SSH (e.g. DGX via VS Code Server).
-  if (env.CLAUDE_CODE_VERSION || env.CLAUDECODE || env.CLAUDE_AGENT_SDK_VERSION || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
+  // CLAUDE_AGENT_SDK_VERSION is set on remote/SSH; CLAUDE_CODE_ENTRYPOINT indicates launch source.
+  if (env.CLAUDE_CODE_VERSION || env.CLAUDECODE || env.CLAUDE_AGENT_SDK_VERSION || env.CLAUDE_CODE_ENTRYPOINT || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
+    const source = env.CLAUDE_CODE_VERSION ? 'CLAUDE_CODE_VERSION env var'
+      : env.CLAUDECODE ? 'CLAUDECODE env var'
+      : env.CLAUDE_AGENT_SDK_VERSION ? 'CLAUDE_AGENT_SDK_VERSION env var'
+      : env.CLAUDE_CODE_ENTRYPOINT ? 'CLAUDE_CODE_ENTRYPOINT env var'
+      : 'ANTHROPIC_AI_PRODUCT env var';
     return {
       name: 'claude-code',
       kind: 'agent',
       trust_level: 'trusted',
-      detection_source: env.CLAUDE_CODE_VERSION
-        ? 'CLAUDE_CODE_VERSION env var'
-        : env.CLAUDECODE
-          ? 'CLAUDECODE env var'
-          : env.CLAUDE_AGENT_SDK_VERSION
-            ? 'CLAUDE_AGENT_SDK_VERSION env var'
-            : 'ANTHROPIC_AI_PRODUCT env var',
+      detection_source: source,
     };
   }
 
