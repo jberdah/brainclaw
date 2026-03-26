@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.32.0",
-  "published_at": "2026-03-26T12:34:37.862Z",
-  "artifact_path": "./brainclaw-0.32.0.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.32.0.tgz\"",
-  "release_notes": "feat: relay model — BRAINCLAW_AGENT env injection in all MCP configs, completing the 3-strategy identity cascade"
+  "latest_installable_version": "0.32.1",
+  "published_at": "2026-03-26T13:40:17.975Z",
+  "artifact_path": "./brainclaw-0.32.1.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.32.1.tgz\"",
+  "release_notes": "feat: session-end --reflect for structured post-session learning"
 }
