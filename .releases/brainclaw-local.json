@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.31.3",
-  "published_at": "2026-03-26T12:12:06.985Z",
-  "artifact_path": "./brainclaw-0.31.3.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.31.3.tgz\"",
-  "release_notes": "feat: MCP server detects stale code after upgrade and advises restart"
+  "latest_installable_version": "0.31.4",
+  "published_at": "2026-03-26T12:17:45.612Z",
+  "artifact_path": "./brainclaw-0.31.4.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.31.4.tgz\"",
+  "release_notes": "feat: doctor detects concurrent brainclaw installations in PATH"
 }
