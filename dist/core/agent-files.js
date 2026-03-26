@@ -1,6 +1,42 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+/**
+ * Resolve the brainclaw command for MCP configs.
+ * Prefers the absolute path to the installed binary to avoid PATH resolution issues
+ * in non-login shells (VS Code Server, MCP subprocesses).
+ * Falls back to 'npx brainclaw' if the binary can't be resolved.
+ */
+function resolveBrainclawMcpCommand() {
+    // 1. Try to resolve via which/where (finds the actual binary in PATH)
+    const whichCmd = os.platform() === 'win32' ? 'where' : 'which';
+    try {
+        const result = spawnSync(whichCmd, ['brainclaw'], { encoding: 'utf-8', timeout: 3000 });
+        if (result.status === 0) {
+            const resolved = result.stdout.trim().split(/\r?\n/)[0]?.trim();
+            if (resolved && fs.existsSync(resolved)) {
+                // On Windows, `where` returns the .cmd shim — use it directly
+                // On Unix, follow symlinks to get the real path
+                const absolutePath = os.platform() === 'win32' ? resolved : fs.realpathSync(resolved);
+                return { command: absolutePath, args: ['mcp'] };
+            }
+        }
+    }
+    catch {
+        // Non-fatal — fall through to npx
+    }
+    // 2. Fallback: npx (relies on PATH, may resolve wrong version)
+    return { command: 'npx', args: ['brainclaw', 'mcp'] };
+}
+/** Cached MCP command — resolved once per process. */
+let cachedMcpCommand;
+function getBrainclawMcpCommand() {
+    if (!cachedMcpCommand) {
+        cachedMcpCommand = resolveBrainclawMcpCommand();
+    }
+    return cachedMcpCommand;
+}
 export const BRAINCLAW_SECTION_START = '<!-- brainclaw:start -->';
 export const BRAINCLAW_SECTION_END = '<!-- brainclaw:end -->';
 export function buildBrainclawSection(storageDir) {
@@ -341,8 +377,7 @@ export function ensureClineMcpConfig(cwd) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
         disabled: false,
         autoApprove: ALL_BCLAW_TOOLS,
     };
@@ -367,8 +402,7 @@ export function ensureWindsurfMcpConfig(homeDir) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -474,6 +508,31 @@ function replaceOrAddCommandHook(entries, newCommand, legacyCommand) {
     // Neither new nor legacy found — add fresh
     entries.push(buildCommandHookEntry(newCommand));
 }
+/**
+ * Replace a hook matching any of the legacy patterns, or add fresh.
+ * Used for hooks where the command string changes across versions.
+ */
+function replaceOrAddCommandHookByPattern(entries, newCommand, legacyPatterns) {
+    // Already present with the exact new command
+    if (entries.some(entry => isJsonObject(entry) && Array.isArray(entry.hooks) &&
+        entry.hooks.some(h => isJsonObject(h) && typeof h.command === 'string' && h.command === newCommand)))
+        return;
+    // Find and replace any entry containing a legacy pattern substring
+    for (const entry of entries) {
+        if (!isJsonObject(entry) || !Array.isArray(entry.hooks))
+            continue;
+        for (const h of entry.hooks) {
+            if (!isJsonObject(h) || typeof h.command !== 'string')
+                continue;
+            if (legacyPatterns.some(p => h.command.includes(p))) {
+                h.command = newCommand;
+                return;
+            }
+        }
+    }
+    // No match — add fresh
+    entries.push(buildCommandHookEntry(newCommand));
+}
 export function ensureProjectDevDependency(cwd) {
     const filePath = path.join(cwd, 'package.json');
     if (!fs.existsSync(filePath))
@@ -508,8 +567,7 @@ export function ensureClaudeCodeMcpConfig(cwd) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -545,8 +603,7 @@ export function ensureClaudeCodeUserSettings(homeDir, env = process.env) {
     // MCP server
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
     };
     // Permissions
     const permissions = isJsonObject(existing.permissions) ? { ...existing.permissions } : {};
@@ -598,22 +655,36 @@ export function ensureClaudeCodeSettings(cwd) {
     permissions.allow = allow;
     // Merge hooks — UserPromptSubmit opens a session on first prompt, diff on subsequent
     const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-    const sessionCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw session-start --include-context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
-    const stopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release 2>/dev/null';
-    // Legacy commands to replace on upgrade
-    const legacyContextCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
-    const legacyStopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
+    const mcpCmd = getBrainclawMcpCommand();
+    // For shell hooks, normalize Windows backslashes to forward slashes and quote if needed
+    const bclawBin = mcpCmd.command === 'npx'
+        ? 'npx brainclaw'
+        : `"${mcpCmd.command.replace(/\\/g, '/')}"`;
+    const sessionCommand = `f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; ${bclawBin} session-start --include-context 2>/dev/null; else ${bclawBin} context-diff 2>/dev/null; fi`;
+    const stopCommand = `rm -f .claude/.bclaw-session; ${bclawBin} session-end --auto-release 2>/dev/null`;
+    // Legacy commands to replace on upgrade (substring patterns to match old hooks)
+    const legacyPatterns = [
+        'brainclaw context 2>/dev/null',
+        'brainclaw session-start --include-context 2>/dev/null',
+        'brainclaw session-end --auto-release',
+        'brainclaw context-diff 2>/dev/null',
+    ];
     const userPromptHooks = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit] : [];
-    replaceOrAddCommandHook(userPromptHooks, sessionCommand, legacyContextCommand);
+    replaceOrAddCommandHookByPattern(userPromptHooks, sessionCommand, legacyPatterns);
     hooks.UserPromptSubmit = userPromptHooks;
     const stopHooks = Array.isArray(hooks.Stop) ? [...hooks.Stop] : [];
-    replaceOrAddCommandHook(stopHooks, stopCommand, legacyStopCommand);
+    replaceOrAddCommandHookByPattern(stopHooks, stopCommand, legacyPatterns);
     hooks.Stop = stopHooks;
     // PostToolUse — check for unseen events after any brainclaw MCP tool call
-    const checkEventsCommand = 'npx brainclaw check-events 2>/dev/null';
+    const checkEventsCommand = `${bclawBin} check-events 2>/dev/null`;
     const postToolHooks = Array.isArray(hooks.PostToolUse) ? [...hooks.PostToolUse] : [];
-    if (!containsCommandHook(postToolHooks, checkEventsCommand)) {
-        postToolHooks.push(buildMatchedCommandHookEntry('mcp__brainclaw__', checkEventsCommand));
+    replaceOrAddCommandHookByPattern(postToolHooks, checkEventsCommand, ['npx brainclaw check-events']);
+    // Preserve matcher for PostToolUse — only fire on brainclaw MCP tool calls
+    for (const entry of postToolHooks) {
+        if (isJsonObject(entry) && Array.isArray(entry.hooks) &&
+            entry.hooks.some(h => isJsonObject(h) && typeof h.command === 'string' && h.command.includes('check-events'))) {
+            entry.matcher = 'mcp__brainclaw__';
+        }
     }
     hooks.PostToolUse = postToolHooks;
     const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -638,8 +709,7 @@ export function ensureCursorMcpConfig(homeDir) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -659,8 +729,7 @@ export function ensureRooMcpConfig(cwd) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
         alwaysAllow: ALL_BCLAW_TOOLS,
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -715,7 +784,7 @@ export function ensureContinueMcpConfig(cwd) {
     const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers] : [];
     const alreadyPresent = mcpServers.some((entry) => isJsonObject(entry) && entry.name === 'brainclaw');
     if (!alreadyPresent) {
-        mcpServers.push({ name: 'brainclaw', command: 'npx', args: ['brainclaw', 'mcp'] });
+        mcpServers.push({ name: 'brainclaw', ...getBrainclawMcpCommand() });
     }
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -738,7 +807,7 @@ export function ensureContinueUserMcpConfig(homeDir) {
     const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers] : [];
     const alreadyPresent = mcpServers.some((entry) => isJsonObject(entry) && entry.name === 'brainclaw');
     if (!alreadyPresent) {
-        mcpServers.push({ name: 'brainclaw', command: 'npx', args: ['brainclaw', 'mcp'] });
+        mcpServers.push({ name: 'brainclaw', ...getBrainclawMcpCommand() });
     }
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -756,9 +825,10 @@ export function ensureOpenCodeMcpConfig(cwd) {
     const filePath = path.join(cwd, 'opencode.json');
     const existing = readJsonObject(filePath);
     const mcp = isJsonObject(existing.mcp) ? { ...existing.mcp } : {};
+    const mcpCmd = getBrainclawMcpCommand();
     mcp.brainclaw = {
         type: 'local',
-        command: ['npx', 'brainclaw', 'mcp'],
+        command: [mcpCmd.command, ...mcpCmd.args],
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
@@ -781,8 +851,7 @@ export function ensureAntigravityMcpConfig(homeDir) {
     const existing = readJsonObject(filePath);
     const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
     mcpServers.brainclaw = {
-        command: 'npx',
-        args: ['brainclaw', 'mcp'],
+        ...getBrainclawMcpCommand(),
     };
     const { created, updated } = writeJsonFileIfChanged(filePath, {
         ...existing,
