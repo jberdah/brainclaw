@@ -63,6 +63,7 @@ import { runSetTrust } from './commands/set-trust.js';
 import { runSessionStart } from './commands/session-start.js';
 import { runSessionEnd } from './commands/session-end.js';
 import { runWhoami } from './commands/whoami.js';
+import { runUsage } from './commands/usage.js';
 import { runSearch } from './commands/search.js';
 import { runExport } from './commands/export.js';
 import { runHooks } from './commands/hooks.js';
@@ -1009,6 +1010,18 @@ program
   .option('--json', 'Output as JSON')
   .action((options) => {
     runWhoami(options);
+  });
+
+// --- usage ---
+program
+  .command('usage')
+  .description('Show brainclaw context volume stats (tokens injected per agent/tool)')
+  .option('--agent <name>', 'Filter by agent name')
+  .option('--tool <name>', 'Filter by tool name')
+  .option('--days <n>', 'Limit to last N days', parseInt)
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runUsage(options);
   });
 
 // --- search ---

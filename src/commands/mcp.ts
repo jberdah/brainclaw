@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
@@ -93,6 +95,8 @@ export interface McpToolExecutionPayload {
 export interface McpToolExecutionOutcome {
   response: McpToolResponse;
   nextConnectionSessionId?: string;
+  /** Tool name — used for usage tracking. */
+  toolName?: string;
 }
 
 export interface McpTaskRunnerOptions {
@@ -1060,6 +1064,7 @@ export class McpTaskRunner {
     this._lastWaitMs = startedAt - task.enqueuedAt;
     try {
       const outcome = await this.executeTool(task.payload, task.controller.signal);
+      outcome.toolName = task.payload.name;
       if (!task.cancelled) {
         this.onResult(task.requestId, outcome);
       }
@@ -1109,6 +1114,10 @@ export class McpServerConnection {
             ...outcome.response.content,
           ];
         }
+        // Track usage: append response size to usage.jsonl
+        if (outcome.toolName) {
+          this.trackUsage(outcome.toolName, outcome.response);
+        }
         this.sendResult(requestId, outcome.response);
       },
       onInternalError: (requestId, error) => {
@@ -1141,6 +1150,33 @@ export class McpServerConnection {
     }
 
     return this.versionMismatchAdvisory;
+  }
+
+  /**
+   * Append a usage record to .brainclaw/usage.jsonl.
+   * Fire-and-forget — usage tracking must never block tool responses.
+   */
+  private trackUsage(toolName: string, response: McpToolResponse): void {
+    try {
+      const responseChars = response.content
+        .filter(c => c.type === 'text')
+        .reduce((sum, c) => sum + c.text.length, 0);
+      const estimatedTokens = Math.ceil(responseChars / 4);
+
+      const record = JSON.stringify({
+        ts: new Date().toISOString(),
+        tool: toolName,
+        chars: responseChars,
+        tokens_est: estimatedTokens,
+        is_error: response.isError ?? false,
+        agent: process.env.BRAINCLAW_AGENT ?? undefined,
+      });
+
+      const usagePath = path.join(this.cwd, '.brainclaw', 'usage.jsonl');
+      fs.appendFileSync(usagePath, record + '\n', 'utf-8');
+    } catch {
+      // Non-fatal — usage tracking failure must never break MCP
+    }
   }
 
   handleLine(line: string): void {

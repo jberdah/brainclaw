@@ -28,6 +28,8 @@ export interface McpToolExecutionPayload {
 export interface McpToolExecutionOutcome {
     response: McpToolResponse;
     nextConnectionSessionId?: string;
+    /** Tool name — used for usage tracking. */
+    toolName?: string;
 }
 export interface McpTaskRunnerOptions {
     executeTool: McpToolExecutor;
@@ -631,6 +633,11 @@ export declare class McpServerConnection {
      * Throttled to one disk read per 60 seconds.
      */
     private checkVersionMismatch;
+    /**
+     * Append a usage record to .brainclaw/usage.jsonl.
+     * Fire-and-forget — usage tracking must never block tool responses.
+     */
+    private trackUsage;
     handleLine(line: string): void;
     close(): void;
     private handleCancellation;
