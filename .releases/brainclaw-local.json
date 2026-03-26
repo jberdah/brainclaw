@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.33.1",
-  "published_at": "2026-03-26T15:19:25.499Z",
-  "artifact_path": "./brainclaw-0.33.1.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.33.1.tgz\"",
-  "release_notes": "fix: export preserves manual edits in MCP configs (command path, custom env vars)"
+  "latest_installable_version": "0.34.0",
+  "published_at": "2026-03-26T16:29:02.515Z",
+  "artifact_path": "./brainclaw-0.34.0.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.34.0.tgz\"",
+  "release_notes": "feat: context volume monitoring — MCP response tracking + brainclaw usage CLI"
 }
