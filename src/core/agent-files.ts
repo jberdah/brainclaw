@@ -42,14 +42,24 @@ function getBrainclawMcpCommand(): { command: string; args: string[] } {
 
 /**
  * Build a complete MCP server entry with relay model env injection.
- * The BRAINCLAW_AGENT env var tells the MCP process which agent is calling,
- * solving the problem where the MCP process inherits the IDE's env vars
- * (e.g. COPILOT_*) instead of the calling agent's.
+ * Merges with the existing entry to preserve manual edits (e.g. custom command
+ * path, additional env vars, extra args). Only sets defaults for missing fields.
  */
-function brainclawMcpEntry(agentName: string): Record<string, unknown> {
+function brainclawMcpEntry(agentName: string, existing?: unknown): Record<string, unknown> {
+  const defaults = getBrainclawMcpCommand();
+  const ex = isJsonObject(existing) ? existing : {};
+  const exEnv = isJsonObject(ex.env) ? ex.env : {};
+
   return {
-    ...getBrainclawMcpCommand(),
-    env: { BRAINCLAW_AGENT: agentName },
+    // Preserve existing command if it's an absolute path (manual edit),
+    // otherwise use the resolved default
+    command: (typeof ex.command === 'string' && ex.command !== 'npx') ? ex.command : defaults.command,
+    args: defaults.args,
+    // Merge env: preserve user-added vars, ensure BRAINCLAW_AGENT is set
+    env: {
+      ...exEnv,
+      BRAINCLAW_AGENT: agentName,
+    },
   };
 }
 
@@ -501,7 +511,7 @@ export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...brainclawMcpEntry('cline'),
+    ...brainclawMcpEntry('cline', mcpServers.brainclaw),
     disabled: false,
     autoApprove: ALL_BCLAW_TOOLS,
   };
@@ -529,7 +539,7 @@ export function ensureWindsurfMcpConfig(homeDir: string | undefined): AutoConfig
   const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('windsurf');
+  mcpServers.brainclaw = brainclawMcpEntry('windsurf', mcpServers.brainclaw);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -713,7 +723,7 @@ export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.mcp.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('claude-code');
+  mcpServers.brainclaw = brainclawMcpEntry('claude-code', mcpServers.brainclaw);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -753,7 +763,7 @@ export function ensureClaudeCodeUserSettings(homeDir: string | undefined, env: N
 
   // MCP server
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('claude-code');
+  mcpServers.brainclaw = brainclawMcpEntry('claude-code', mcpServers.brainclaw);
 
   // Permissions
   const permissions = isJsonObject(existing.permissions) ? { ...existing.permissions } : {};
@@ -871,7 +881,7 @@ export function ensureCursorMcpConfig(homeDir: string | undefined): AutoConfigWr
   const filePath = path.join(homeDir, '.cursor', 'mcp.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('cursor');
+  mcpServers.brainclaw = brainclawMcpEntry('cursor', mcpServers.brainclaw);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -893,7 +903,7 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...brainclawMcpEntry('roo'),
+    ...brainclawMcpEntry('roo', mcpServers.brainclaw),
     alwaysAllow: ALL_BCLAW_TOOLS,
   };
 
@@ -959,10 +969,13 @@ export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
 
   // Continue uses an array for mcpServers, not a keyed object
   const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers as unknown[]] : [];
-  const alreadyPresent = mcpServers.some(
+  const existingIdx = mcpServers.findIndex(
     (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
   );
-  if (!alreadyPresent) {
+  if (existingIdx >= 0) {
+    // Update existing entry, preserving manual edits
+    mcpServers[existingIdx] = { name: 'brainclaw', ...brainclawMcpEntry('continue', mcpServers[existingIdx]) };
+  } else {
     mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue') });
   }
 
@@ -987,10 +1000,13 @@ export function ensureContinueUserMcpConfig(homeDir: string | undefined): AutoCo
   const filePath = path.join(homeDir, '.continue', 'config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = Array.isArray(existing.mcpServers) ? [...existing.mcpServers as unknown[]] : [];
-  const alreadyPresent = mcpServers.some(
+  const existingIdx = mcpServers.findIndex(
     (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
   );
-  if (!alreadyPresent) {
+  if (existingIdx >= 0) {
+    // Update existing entry, preserving manual edits
+    mcpServers[existingIdx] = { name: 'brainclaw', ...brainclawMcpEntry('continue', mcpServers[existingIdx]) };
+  } else {
     mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue') });
   }
 
@@ -1042,7 +1058,7 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   const filePath = path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('antigravity');
+  mcpServers.brainclaw = brainclawMcpEntry('antigravity', mcpServers.brainclaw);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
