@@ -32,8 +32,9 @@ export function detectAiAgent(env = process.env, homeDir = os.homedir()) {
         };
     }
     // Claude Code — tested BEFORE Copilot because both can be present in VS Code.
-    // CLAUDE_CODE_VERSION is set by Claude Code CLI; CLAUDECODE is set by the VS Code extension.
-    if (env.CLAUDE_CODE_VERSION || env.CLAUDECODE || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
+    // CLAUDE_CODE_VERSION is set by Claude Code CLI; CLAUDECODE is set by the VS Code extension;
+    // CLAUDE_AGENT_SDK_VERSION is set by Claude Code on remote/SSH (e.g. DGX via VS Code Server).
+    if (env.CLAUDE_CODE_VERSION || env.CLAUDECODE || env.CLAUDE_AGENT_SDK_VERSION || env.ANTHROPIC_AI_PRODUCT === 'claude-code') {
         return {
             name: 'claude-code',
             kind: 'agent',
@@ -42,7 +43,9 @@ export function detectAiAgent(env = process.env, homeDir = os.homedir()) {
                 ? 'CLAUDE_CODE_VERSION env var'
                 : env.CLAUDECODE
                     ? 'CLAUDECODE env var'
-                    : 'ANTHROPIC_AI_PRODUCT env var',
+                    : env.CLAUDE_AGENT_SDK_VERSION
+                        ? 'CLAUDE_AGENT_SDK_VERSION env var'
+                        : 'ANTHROPIC_AI_PRODUCT env var',
         };
     }
     // Cursor IDE
