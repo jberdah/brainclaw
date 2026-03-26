@@ -60,6 +60,12 @@ interface NpmDistTagLookupOptions {
     cacheTtlMs?: number;
 }
 type NpmDistTagLookup = (packageName: string, options: NpmDistTagLookupOptions) => NpmDistTagLookupResult;
+/**
+ * Read the brainclaw version from disk (package.json), bypassing the in-memory cache.
+ * Used by the MCP server to detect when a new version has been installed while the
+ * long-running MCP process is still running with old code.
+ */
+export declare function readDiskBrainclawVersion(): string;
 export declare function getInstalledBrainclawVersion(): string;
 export declare function assessBrainclawVersion(config?: Pick<Config, 'minimum_brainclaw_version' | 'recommended_brainclaw_version' | 'brainclaw_upgrade_message' | 'brainclaw_upgrade_command'>): BrainclawVersionAssessment;
 export declare function checkBrainclawInstallableUpdate(config: Pick<Config, 'brainclaw_update_source' | 'brainclaw_upgrade_command' | 'brainclaw_upgrade_message'> | undefined, cwd: string, options?: CheckBrainclawInstallableUpdateOptions): BrainclawInstallableUpdateCheck;

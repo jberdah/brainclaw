@@ -7,7 +7,7 @@ import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/age
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
-import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
+import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { loadAllSessions, gcStaleSessions } from '../core/identity.js';
 import { loadState, persistState, saveState } from '../core/state.js';
@@ -903,21 +903,60 @@ export class McpServerConnection {
     state = 'pre_init';
     protocolVersion;
     connectionSessionId;
+    /** Version of brainclaw code loaded in this process at boot time. */
+    bootVersion;
+    /** Throttle disk version checks — at most once per 60s. */
+    lastVersionCheckAt = 0;
+    versionMismatchAdvisory;
     send;
     taskRunner;
     constructor(options) {
         this.cwd = options.cwd;
         this.send = options.send;
+        this.bootVersion = getInstalledBrainclawVersion();
         this.taskRunner = new McpTaskRunner({
             executeTool: options.executeTool ?? createWorkerToolExecutor(),
             onResult: (requestId, outcome) => {
                 this.connectionSessionId = outcome.nextConnectionSessionId;
+                // Inject version mismatch advisory if stale
+                const advisory = this.checkVersionMismatch();
+                if (advisory && outcome.response.content.length > 0) {
+                    outcome.response.content = [
+                        { type: 'text', text: advisory },
+                        ...outcome.response.content,
+                    ];
+                }
                 this.sendResult(requestId, outcome.response);
             },
             onInternalError: (requestId, error) => {
                 this.sendError(requestId, -32603, error instanceof Error ? error.message : 'Internal error');
             },
         });
+    }
+    /**
+     * Compare the version loaded in memory with the version on disk.
+     * Returns an advisory string if they differ, undefined otherwise.
+     * Throttled to one disk read per 60 seconds.
+     */
+    checkVersionMismatch() {
+        const now = Date.now();
+        if (now - this.lastVersionCheckAt < 60_000) {
+            return this.versionMismatchAdvisory;
+        }
+        this.lastVersionCheckAt = now;
+        try {
+            const diskVersion = readDiskBrainclawVersion();
+            if (diskVersion !== '0.0.0' && diskVersion !== this.bootVersion) {
+                this.versionMismatchAdvisory = `⚠ Brainclaw MCP server is running v${this.bootVersion} but v${diskVersion} is installed on disk. Restart the MCP server to load the new version.\n  → In VS Code: Cmd/Ctrl+Shift+P → "MCP: List Servers" → restart brainclaw\n`;
+            }
+            else {
+                this.versionMismatchAdvisory = undefined;
+            }
+        }
+        catch {
+            this.versionMismatchAdvisory = undefined;
+        }
+        return this.versionMismatchAdvisory;
     }
     handleLine(line) {
         if (this.state === 'closed' || !line.trim()) {

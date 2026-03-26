@@ -16,6 +16,28 @@ const DEFAULT_NPM_UPDATE_SOURCE = {
     dist_tag: DEFAULT_NPM_UPDATE_DIST_TAG,
 };
 let cachedCliVersion;
+let cachedPackageJsonPath;
+/**
+ * Read the brainclaw version from disk (package.json), bypassing the in-memory cache.
+ * Used by the MCP server to detect when a new version has been installed while the
+ * long-running MCP process is still running with old code.
+ */
+export function readDiskBrainclawVersion() {
+    if (cachedPackageJsonPath === undefined) {
+        cachedPackageJsonPath = findOwnPackageJson() ?? '';
+    }
+    if (!cachedPackageJsonPath)
+        return '0.0.0';
+    try {
+        const parsed = JSON.parse(fs.readFileSync(cachedPackageJsonPath, 'utf-8'));
+        return typeof parsed.version === 'string' && parsed.version.trim().length > 0
+            ? parsed.version.trim()
+            : '0.0.0';
+    }
+    catch {
+        return '0.0.0';
+    }
+}
 export function getInstalledBrainclawVersion() {
     if (cachedCliVersion) {
         return cachedCliVersion;
