@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.32.2",
-  "published_at": "2026-03-26T13:50:08.198Z",
-  "artifact_path": "./brainclaw-0.32.2.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.32.2.tgz\"",
-  "release_notes": "feat: Stop hook includes --reflect by default for automatic session reflection"
+  "latest_installable_version": "0.33.0",
+  "published_at": "2026-03-26T14:33:36.929Z",
+  "artifact_path": "./brainclaw-0.33.0.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.33.0.tgz\"",
+  "release_notes": "feat: bclaw_switch MCP tool — session-scoped project switching for multi-agent workspaces"
 }
