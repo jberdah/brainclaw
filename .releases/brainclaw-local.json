@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.29.4",
-  "published_at": "2026-03-25T17:07:20.050Z",
-  "artifact_path": "./brainclaw-0.29.4.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.29.4.tgz\"",
-  "release_notes": "fix: outermost workspace root resolution for multi-project switch and context"
+  "latest_installable_version": "0.30.0",
+  "published_at": "2026-03-26T08:14:00.024Z",
+  "artifact_path": "./brainclaw-0.30.0.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.30.0.tgz\"",
+  "release_notes": "feat: identity hardening + worktree awareness for multi-agent collaboration — PID-aware session resolution, model/branch/worktree in session schema, shared checkout detection, codex false positive fix"
 }
