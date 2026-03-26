@@ -40,6 +40,19 @@ function getBrainclawMcpCommand(): { command: string; args: string[] } {
   return cachedMcpCommand;
 }
 
+/**
+ * Build a complete MCP server entry with relay model env injection.
+ * The BRAINCLAW_AGENT env var tells the MCP process which agent is calling,
+ * solving the problem where the MCP process inherits the IDE's env vars
+ * (e.g. COPILOT_*) instead of the calling agent's.
+ */
+function brainclawMcpEntry(agentName: string): Record<string, unknown> {
+  return {
+    ...getBrainclawMcpCommand(),
+    env: { BRAINCLAW_AGENT: agentName },
+  };
+}
+
 export const BRAINCLAW_SECTION_START = '<!-- brainclaw:start -->';
 export const BRAINCLAW_SECTION_END = '<!-- brainclaw:end -->';
 
@@ -488,7 +501,7 @@ export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
+    ...brainclawMcpEntry('cline'),
     disabled: false,
     autoApprove: ALL_BCLAW_TOOLS,
   };
@@ -516,9 +529,7 @@ export function ensureWindsurfMcpConfig(homeDir: string | undefined): AutoConfig
   const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
-  };
+  mcpServers.brainclaw = brainclawMcpEntry('windsurf');
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -702,9 +713,7 @@ export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.mcp.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
-  };
+  mcpServers.brainclaw = brainclawMcpEntry('claude-code');
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -744,9 +753,7 @@ export function ensureClaudeCodeUserSettings(homeDir: string | undefined, env: N
 
   // MCP server
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
-  };
+  mcpServers.brainclaw = brainclawMcpEntry('claude-code');
 
   // Permissions
   const permissions = isJsonObject(existing.permissions) ? { ...existing.permissions } : {};
@@ -864,9 +871,7 @@ export function ensureCursorMcpConfig(homeDir: string | undefined): AutoConfigWr
   const filePath = path.join(homeDir, '.cursor', 'mcp.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
-  };
+  mcpServers.brainclaw = brainclawMcpEntry('cursor');
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -888,7 +893,7 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
+    ...brainclawMcpEntry('roo'),
     alwaysAllow: ALL_BCLAW_TOOLS,
   };
 
@@ -912,10 +917,14 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
   if (!codexHome) return null;
 
   const filePath = path.join(codexHome, 'config.toml');
+  const mcpCmd = getBrainclawMcpCommand();
   const brainclawBlock = [
     '\n[mcp_servers.brainclaw]',
-    'command = "npx"',
-    'args = ["brainclaw", "mcp"]',
+    `command = "${mcpCmd.command.replace(/\\/g, '/')}"`,
+    `args = [${mcpCmd.args.map(a => `"${a}"`).join(', ')}]`,
+    '',
+    '[mcp_servers.brainclaw.env]',
+    'BRAINCLAW_AGENT = "codex"',
   ].join('\n');
 
   let existing = '';
@@ -954,7 +963,7 @@ export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
     (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
   );
   if (!alreadyPresent) {
-    mcpServers.push({ name: 'brainclaw', ...getBrainclawMcpCommand() });
+    mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue') });
   }
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -982,7 +991,7 @@ export function ensureContinueUserMcpConfig(homeDir: string | undefined): AutoCo
     (entry) => isJsonObject(entry) && entry.name === 'brainclaw',
   );
   if (!alreadyPresent) {
-    mcpServers.push({ name: 'brainclaw', ...getBrainclawMcpCommand() });
+    mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue') });
   }
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1007,6 +1016,7 @@ export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   mcp.brainclaw = {
     type: 'local',
     command: [mcpCmd.command, ...mcpCmd.args],
+    env: { BRAINCLAW_AGENT: 'opencode' },
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1032,9 +1042,7 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   const filePath = path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = {
-    ...getBrainclawMcpCommand(),
-  };
+  mcpServers.brainclaw = brainclawMcpEntry('antigravity');
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
