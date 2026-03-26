@@ -138,6 +138,7 @@ export const MCP_READ_TOOLS = [
                 section: { type: 'string', description: 'Filter by section (state, candidates, runtime).' },
                 since: { type: 'string', description: 'Filter items created after this ISO date.' },
                 limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
+                offset: { type: 'number', description: 'Number of results to skip (for pagination).' },
             },
             required: ['query'],
         },
@@ -180,6 +181,8 @@ export const MCP_READ_TOOLS = [
                 project: { type: 'string', description: 'Filter by project namespace.' },
                 plan: { type: 'string', description: 'Filter by linked plan id.' },
                 agent: { type: 'string', description: 'Filter by agent name.' },
+                limit: { type: 'number', description: 'Maximum number of claims to return (default: 20).' },
+                offset: { type: 'number', description: 'Number of claims to skip (for pagination).' },
             },
         },
     },
@@ -205,6 +208,8 @@ export const MCP_READ_TOOLS = [
                 active: { type: 'boolean', description: 'Only include active instructions.' },
                 resolved: { type: 'boolean', description: 'Resolve effective instructions for the given scope.' },
                 path: { type: 'string', description: 'Infer project namespace from a target path when strategy=folder.' },
+                limit: { type: 'number', description: 'Maximum number of instructions to return (default: 20).' },
+                offset: { type: 'number', description: 'Number of instructions to skip (for pagination).' },
             },
         },
     },
@@ -217,6 +222,9 @@ export const MCP_READ_TOOLS = [
                 status: { type: 'string', description: 'Candidate bucket: pending, accepted, rejected, or all.' },
                 type: { type: 'string', description: 'Filter by candidate type.' },
                 assignee: { type: 'string', description: 'Filter pending candidates by assignee tag (assignee:<name>).' },
+                limit: { type: 'number', description: 'Maximum number of candidates to return (default: 20).' },
+                offset: { type: 'number', description: 'Number of candidates to skip (for pagination).' },
+                compact: { type: 'boolean', description: 'Return only key fields (id, type, text, status) to reduce output size.' },
             },
         },
     },
@@ -1494,17 +1502,21 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         if (!query) {
             throw new Error('Missing required argument: query');
         }
-        const results = search({
+        const offset = Math.max(0, Number(args.offset) || 0);
+        const limit = typeof args.limit === 'number' ? args.limit : 10;
+        const allResults = search({
             query,
             section: (args.section ?? args.type),
             since: args.since,
-            maxResults: typeof args.limit === 'number' ? args.limit : 10,
+            maxResults: offset + limit,
             cwd,
         });
-        const lines = results.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
+        const total = allResults.length;
+        const page = allResults.slice(offset, offset + limit);
+        const lines = page.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
         return {
-            content: [{ type: 'text', text: results.length > 0 ? lines.join('\n') : 'No results found.' }],
-            structuredContent: { results, total: results.length },
+            content: [{ type: 'text', text: page.length > 0 ? lines.join('\n') : 'No results found.' }],
+            structuredContent: { total, offset, limit, results: page },
         };
     }
     if (name === 'bclaw_estimation_report') {
@@ -1602,12 +1614,16 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         if (args.agent) {
             claims = claims.filter((claim) => claim.agent === args.agent);
         }
+        const total = claims.length;
+        const offset = Math.max(0, Number(args.offset) || 0);
+        const limit = Math.max(1, Number(args.limit) || 20);
+        const page = claims.slice(offset, offset + limit);
         const label = args.all ? 'claim(s)' : 'active claim(s)';
-        const lines = claims.length === 0
+        const lines = page.length === 0
             ? ['No active claims.']
             : [
-                `${claims.length} ${label}:`,
-                ...claims.map((claim) => {
+                `${total} ${label}${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+                ...page.map((claim) => {
                     const status = claim.status !== 'active' ? ` (${claim.status})` : '';
                     const extras = [];
                     if (claim.session_id)
@@ -1622,7 +1638,7 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             ];
         return {
             content: [{ type: 'text', text: lines.join('\n') }],
-            structuredContent: { total: claims.length, claims },
+            structuredContent: { total, offset, limit, claims: page },
         };
     }
     if (name === 'bclaw_list_agents') {
@@ -1681,11 +1697,15 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
         if (args.agent) {
             entries = entries.filter((entry) => entry.layer !== 'agent' || entry.scope === args.agent);
         }
-        const lines = entries.length === 0
+        const total = entries.length;
+        const offset = Math.max(0, Number(args.offset) || 0);
+        const limit = Math.max(1, Number(args.limit) || 20);
+        const page = entries.slice(offset, offset + limit);
+        const lines = page.length === 0
             ? ['No instructions found.']
             : [
-                `${entries.length} instruction(s):`,
-                ...entries.map((entry) => {
+                `${total} instruction(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+                ...page.map((entry) => {
                     const scope = entry.scope ? `:${entry.scope}` : '';
                     const flags = [entry.layer];
                     if (!entry.active)
@@ -1698,7 +1718,7 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             ];
         return {
             content: [{ type: 'text', text: lines.join('\n') }],
-            structuredContent: { total: entries.length, instructions: entries },
+            structuredContent: { total, offset, limit, instructions: page },
         };
     }
     if (name === 'bclaw_list_candidates') {
@@ -1721,11 +1741,19 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             const assignee = String(args.assignee).toLowerCase();
             candidates = candidates.filter((candidate) => getReviewAssignee(candidate.tags)?.toLowerCase() === assignee);
         }
-        const lines = candidates.length === 0
+        const total = candidates.length;
+        const offset = Math.max(0, Number(args.offset) || 0);
+        const limit = Math.max(1, Number(args.limit) || 20);
+        const page = candidates.slice(offset, offset + limit);
+        const isCompact = args.compact === true;
+        const lines = page.length === 0
             ? ['No candidates found.']
             : [
-                `${candidates.length} candidate(s):`,
-                ...candidates.map((candidate) => {
+                `${total} candidate(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+                ...page.map((candidate) => {
+                    if (isCompact) {
+                        return `[${candidate.id}] ${candidate.type}/${candidate.status}: ${candidate.text.slice(0, 120)}${candidate.text.length > 120 ? '…' : ''}`;
+                    }
                     const assignee = getReviewAssignee(candidate.tags);
                     const tags = candidate.tags.length ? ` [${candidate.tags.join(', ')}]` : '';
                     const assigneeLabel = assignee ? ` assignee=${assignee}` : '';
@@ -1734,7 +1762,7 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             ];
         return {
             content: [{ type: 'text', text: lines.join('\n') }],
-            structuredContent: { total: candidates.length, candidates },
+            structuredContent: { total, offset, limit, candidates: page },
         };
     }
     if (name === 'bclaw_get_capabilities') {

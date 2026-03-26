@@ -264,6 +264,10 @@ export declare const MCP_READ_TOOLS: readonly [{
                 readonly type: "number";
                 readonly description: "Maximum number of results to return (default 10).";
             };
+            readonly offset: {
+                readonly type: "number";
+                readonly description: "Number of results to skip (for pagination).";
+            };
         };
         readonly required: readonly ["query"];
     };
@@ -345,6 +349,14 @@ export declare const MCP_READ_TOOLS: readonly [{
                 readonly type: "string";
                 readonly description: "Filter by agent name.";
             };
+            readonly limit: {
+                readonly type: "number";
+                readonly description: "Maximum number of claims to return (default: 20).";
+            };
+            readonly offset: {
+                readonly type: "number";
+                readonly description: "Number of claims to skip (for pagination).";
+            };
         };
     };
 }, {
@@ -389,6 +401,14 @@ export declare const MCP_READ_TOOLS: readonly [{
                 readonly type: "string";
                 readonly description: "Infer project namespace from a target path when strategy=folder.";
             };
+            readonly limit: {
+                readonly type: "number";
+                readonly description: "Maximum number of instructions to return (default: 20).";
+            };
+            readonly offset: {
+                readonly type: "number";
+                readonly description: "Number of instructions to skip (for pagination).";
+            };
         };
     };
 }, {
@@ -408,6 +428,18 @@ export declare const MCP_READ_TOOLS: readonly [{
             readonly assignee: {
                 readonly type: "string";
                 readonly description: "Filter pending candidates by assignee tag (assignee:<name>).";
+            };
+            readonly limit: {
+                readonly type: "number";
+                readonly description: "Maximum number of candidates to return (default: 20).";
+            };
+            readonly offset: {
+                readonly type: "number";
+                readonly description: "Number of candidates to skip (for pagination).";
+            };
+            readonly compact: {
+                readonly type: "boolean";
+                readonly description: "Return only key fields (id, type, text, status) to reduce output size.";
             };
         };
     };
