@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.33.0",
-  "published_at": "2026-03-26T14:33:36.929Z",
-  "artifact_path": "./brainclaw-0.33.0.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.33.0.tgz\"",
-  "release_notes": "feat: bclaw_switch MCP tool — session-scoped project switching for multi-agent workspaces"
+  "latest_installable_version": "0.33.1",
+  "published_at": "2026-03-26T15:19:25.499Z",
+  "artifact_path": "./brainclaw-0.33.1.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.33.1.tgz\"",
+  "release_notes": "fix: export preserves manual edits in MCP configs (command path, custom env vars)"
 }
