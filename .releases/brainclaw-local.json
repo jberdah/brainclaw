@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.30.4",
-  "published_at": "2026-03-26T08:59:59.923Z",
-  "artifact_path": "./brainclaw-0.30.4.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.30.4.tgz\"",
-  "release_notes": "fix: resolve agent identity from active session before env detection — fixes MCP server misidentification"
+  "latest_installable_version": "0.30.5",
+  "published_at": "2026-03-26T10:31:09.045Z",
+  "artifact_path": "./brainclaw-0.30.5.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.30.5.tgz\"",
+  "release_notes": "fix: revert session-based identity resolution, add auto-register for detected agents"
 }
