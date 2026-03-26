@@ -16,6 +16,109 @@ export interface SwitchOptions {
   cwd?: string;
 }
 
+export interface SwitchProjectOptions {
+  cwd?: string;
+  /** Force session-scoped switch (never write to global active-project.json). */
+  sessionOnly?: boolean;
+}
+
+export interface SwitchProjectResult {
+  switched: boolean;
+  path: string;
+  name?: string;
+  scope: 'session' | 'global';
+  workspace_root: string;
+}
+
+/**
+ * Switch to a project programmatically.
+ * When sessionOnly=true (default for MCP), ONLY writes to the session state.
+ * This prevents agents from cross-contaminating each other's active project.
+ */
+export function switchProject(projectRef: string, options: SwitchProjectOptions = {}): SwitchProjectResult {
+  const cwd = options.cwd ?? process.cwd();
+  const wsRoot = findOutermostWorkspaceRoot(cwd);
+  if (!wsRoot) {
+    throw new Error('No brainclaw workspace found. Run `brainclaw init` first.');
+  }
+
+  const resolved = resolveProjectRef(projectRef, cwd);
+  if (!resolved) {
+    throw new Error(`Cannot resolve project "${projectRef}". Use bclaw_switch with list=true to see available projects.`);
+  }
+
+  let projectName: string | undefined;
+  try {
+    const config = loadConfig(resolved);
+    projectName = config.project_name;
+  } catch { /* name is optional */ }
+
+  const now = new Date().toISOString();
+  const session = loadCurrentSession(cwd);
+  const sessionOnly = options.sessionOnly ?? true;
+
+  if (session && sessionOnly) {
+    saveCurrentSession({
+      ...session,
+      active_project: { path: resolved, name: projectName, switched_at: now },
+    }, cwd);
+    return { switched: true, path: resolved, name: projectName, scope: 'session', workspace_root: wsRoot };
+  }
+
+  if (session) {
+    // Also write to session even when not sessionOnly
+    saveCurrentSession({
+      ...session,
+      active_project: { path: resolved, name: projectName, switched_at: now },
+    }, cwd);
+  }
+
+  saveActiveProject(wsRoot, {
+    path: resolved,
+    name: projectName,
+    switched_at: now,
+    switched_by: process.env.BRAINCLAW_AGENT_NAME ?? process.env.USER ?? 'unknown',
+  });
+  return { switched: true, path: resolved, name: projectName, scope: 'global', workspace_root: wsRoot };
+}
+
+export interface ListProjectsResult {
+  workspace_root: string;
+  projects: Array<{ name?: string; path: string; relative_path: string; active: boolean }>;
+}
+
+/**
+ * List available projects in the workspace.
+ */
+export function listAvailableProjects(cwd?: string): ListProjectsResult {
+  const wsRoot = findOutermostWorkspaceRoot(cwd ?? process.cwd());
+  if (!wsRoot) {
+    throw new Error('No brainclaw workspace found.');
+  }
+
+  const active = loadActiveProject(wsRoot);
+  const projects: ListProjectsResult['projects'] = [];
+
+  if (memoryExists(wsRoot)) {
+    try {
+      const config = loadConfig(wsRoot);
+      projects.push({ name: config.project_name, path: wsRoot, relative_path: '.', active: active?.path === wsRoot });
+    } catch {
+      projects.push({ path: wsRoot, relative_path: '.', active: active?.path === wsRoot });
+    }
+  }
+
+  const children = scanNestedBrainclawProjects(wsRoot, 7);
+  for (const child of children) {
+    const childPath = path.resolve(child.path);
+    if (childPath === wsRoot) continue;
+    const rel = path.relative(wsRoot, childPath) || '.';
+    projects.push({ name: child.project_name, path: childPath, relative_path: rel, active: active?.path === childPath });
+  }
+
+  return { workspace_root: wsRoot, projects };
+}
+
 export function runSwitch(projectRef: string | undefined, options: SwitchOptions = {}): void {
   // Use real cwd, not effective cwd — switch must see the full workspace
   const cwd = options.cwd ?? process.cwd();

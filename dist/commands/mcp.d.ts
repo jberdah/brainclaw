@@ -617,9 +617,20 @@ export declare class McpServerConnection {
     state: McpConnectionState;
     protocolVersion?: McpProtocolVersion;
     connectionSessionId?: string;
+    /** Version of brainclaw code loaded in this process at boot time. */
+    private readonly bootVersion;
+    /** Throttle disk version checks — at most once per 60s. */
+    private lastVersionCheckAt;
+    private versionMismatchAdvisory;
     private readonly send;
     private readonly taskRunner;
     constructor(options: McpConnectionOptions);
+    /**
+     * Compare the version loaded in memory with the version on disk.
+     * Returns an advisory string if they differ, undefined otherwise.
+     * Throttled to one disk read per 60 seconds.
+     */
+    private checkVersionMismatch;
     handleLine(line: string): void;
     close(): void;
     private handleCancellation;

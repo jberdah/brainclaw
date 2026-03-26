@@ -9,7 +9,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadAllSessions, gcStaleSessions } from '../core/identity.js';
+import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
@@ -19,6 +19,7 @@ import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
 import { startSession } from './session-start.js';
 import { endSession } from './session-end.js';
+import { switchProject, listAvailableProjects } from './switch.js';
 import { agentCanWriteDirect, AgentIdentityResolutionError, AgentTrustError, listAgentIdentities, requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveAgentScope, resolveCurrentAgentIdentity, resolveCurrentAgentName, resolveCurrentModel, } from '../core/agent-registry.js';
 import { appendAuditEntry, readAuditLog } from '../core/audit.js';
 import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
@@ -321,6 +322,18 @@ export const MCP_READ_TOOLS = [
     },
 ];
 const MCP_WRITE_TOOLS = [
+    {
+        name: 'bclaw_switch',
+        description: 'Switch active project in a multi-project workspace. Session-scoped by default: only this agent sees the switch, other agents are unaffected. Use list=true to see available projects.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project: { type: 'string', description: 'Project reference: name, path, or project_id.' },
+                list: { type: 'boolean', description: 'List available projects instead of switching.' },
+                clear: { type: 'boolean', description: 'Clear active project (return to workspace root).' },
+            },
+        },
+    },
     {
         name: 'bclaw_setup',
         description: 'Interactive onboarding wizard. Two modes: (1) Quick mode (default): probes the current repo and asks project type + topology, then inits. (2) Batch mode: scan root directories and init multiple repos. Call without step to start — brainclaw auto-detects the best mode.',
@@ -1826,6 +1839,56 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             content: [{ type: 'text', text }],
             structuredContent: { agent: currentAgentName, conflicts, total: conflicts.length, schema_version: SCHEMA_VERSION },
         };
+    }
+    if (name === 'bclaw_switch') {
+        if (args.list === true) {
+            try {
+                const result = listAvailableProjects(cwd);
+                const lines = result.projects.map(p => {
+                    const marker = p.active ? '→' : ' ';
+                    const label = p.name ? `${p.name} (${p.relative_path})` : p.relative_path;
+                    return `${marker} ${label}`;
+                });
+                return {
+                    content: [{ type: 'text', text: lines.length > 0 ? `Projects in workspace:\n${lines.join('\n')}` : 'No projects found.' }],
+                    structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+                };
+            }
+            catch (err) {
+                return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+            }
+        }
+        if (args.clear === true) {
+            try {
+                const session = loadCurrentSession(cwd);
+                if (session?.active_project) {
+                    const { active_project: _removed, ...rest } = session;
+                    saveCurrentSession(rest, cwd);
+                }
+                return {
+                    content: [{ type: 'text', text: '✔ Active project cleared. Commands will use workspace root.' }],
+                    structuredContent: { cleared: true, schema_version: SCHEMA_VERSION },
+                };
+            }
+            catch (err) {
+                return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+            }
+        }
+        const projectRef = args.project;
+        if (!projectRef) {
+            return createToolErrorResponse('validation_error', 'Missing required argument: project (or use list=true / clear=true)');
+        }
+        try {
+            const result = switchProject(projectRef, { cwd, sessionOnly: true });
+            const text = `✔ Switched to ${result.name ? `"${result.name}"` : result.path} (${result.scope}-scoped)`;
+            return {
+                content: [{ type: 'text', text }],
+                structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+            };
+        }
+        catch (err) {
+            return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+        }
     }
     if (name === 'bclaw_who') {
         // loadAllSessions and gcStaleSessions imported at top of file
