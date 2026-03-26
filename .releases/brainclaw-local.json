@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.31.0",
-  "published_at": "2026-03-26T10:44:04.454Z",
-  "artifact_path": "./brainclaw-0.31.0.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.31.0.tgz\"",
-  "release_notes": "feat: session-first hook — session-start --include-context replaces brainclaw context at first prompt, enabling proper session tracking from the start"
+  "latest_installable_version": "0.31.1",
+  "published_at": "2026-03-26T11:39:41.174Z",
+  "artifact_path": "./brainclaw-0.31.1.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.31.1.tgz\"",
+  "release_notes": "fix: remove config.current_agent as identity source — use env detection only"
 }
