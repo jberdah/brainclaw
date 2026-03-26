@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.32.1",
-  "published_at": "2026-03-26T13:40:17.975Z",
-  "artifact_path": "./brainclaw-0.32.1.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.32.1.tgz\"",
-  "release_notes": "feat: session-end --reflect for structured post-session learning"
+  "latest_installable_version": "0.32.2",
+  "published_at": "2026-03-26T13:50:08.198Z",
+  "artifact_path": "./brainclaw-0.32.2.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.32.2.tgz\"",
+  "release_notes": "feat: Stop hook includes --reflect by default for automatic session reflection"
 }
