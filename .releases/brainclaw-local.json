@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.30.2",
-  "published_at": "2026-03-26T08:27:27.964Z",
-  "artifact_path": "./brainclaw-0.30.2.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.30.2.tgz\"",
-  "release_notes": "fix: detect Claude Code via CLAUDE_AGENT_SDK_VERSION on remote/SSH environments"
+  "latest_installable_version": "0.30.3",
+  "published_at": "2026-03-26T08:49:07.287Z",
+  "artifact_path": "./brainclaw-0.30.3.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.30.3.tgz\"",
+  "release_notes": "fix: add CLAUDE_CODE_ENTRYPOINT to detection signals for remote MCP environments"
 }
