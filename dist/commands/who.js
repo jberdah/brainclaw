@@ -30,8 +30,11 @@ export function runWho(options = {}) {
             agent: s.agent,
             agent_id: s.agent_id,
             host_id: s.host_id,
+            model: s.model ?? null,
             project: s.active_project?.name ?? s.active_project?.path ?? null,
-            claims: activeClaims.filter(c => c.agent_id === s.agent_id).length,
+            branch: s.branch ?? null,
+            isolation_mode: s.isolation_mode ?? 'shared-checkout',
+            claims: activeClaims.filter(c => c.session_id === s.session_id || (!c.session_id && c.agent_id === s.agent_id)).length,
             started_at: s.started_at,
             last_seen_at: s.last_seen_at,
             status,
@@ -47,15 +50,17 @@ export function runWho(options = {}) {
         return;
     }
     // Table header
-    const header = ['USER', 'AGENT', 'PROJECT', 'CLAIMS', 'STATUS', 'LAST SEEN'];
+    const header = ['USER', 'AGENT', 'MODEL', 'BRANCH', 'CLAIMS', 'STATUS', 'LAST SEEN'];
     const rows = [];
     for (const s of enriched) {
         const age = now - Date.parse(s.last_seen_at);
-        const project = s.project ?? '(workspace root)';
+        const model = s.model ?? '-';
+        const branch = s.branch ?? '-';
         rows.push([
             s.user,
             s.agent,
-            project.length > 25 ? project.slice(0, 22) + '...' : project,
+            model.length > 20 ? model.slice(0, 17) + '...' : model,
+            branch.length > 20 ? branch.slice(0, 17) + '...' : branch,
             String(s.claims),
             s.status,
             formatAge(age),

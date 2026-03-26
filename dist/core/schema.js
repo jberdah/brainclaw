@@ -502,6 +502,7 @@ export const SessionActiveProjectSchema = z.object({
     /** ISO timestamp of the switch. */
     switched_at: z.string(),
 }).strict();
+export const IsolationModeSchema = z.enum(['shared-checkout', 'dedicated-worktree']);
 export const CurrentSessionStateSchema = z.object({
     schema_version: z.number().int().positive().optional(),
     session_id: z.string(),
@@ -514,8 +515,16 @@ export const CurrentSessionStateSchema = z.object({
     user: z.string().optional(),
     /** Process ID of the agent process (for liveness detection). */
     pid: z.number().int().positive().optional(),
+    /** LLM model used in this session (e.g. "claude-opus-4-6", "gpt-4.1"). */
+    model: z.string().optional(),
     /** Session-scoped active project (overrides global active-project.json). */
     active_project: SessionActiveProjectSchema.optional(),
+    /** Git worktree path for this session (undefined = main worktree / shared checkout). */
+    worktree_path: z.string().optional(),
+    /** Git branch this session is working on. */
+    branch: z.string().optional(),
+    /** Isolation mode: shared-checkout (default) or dedicated-worktree. */
+    isolation_mode: IsolationModeSchema.optional(),
 });
 export const MemorySeedKindSchema = z.enum([
     'command',

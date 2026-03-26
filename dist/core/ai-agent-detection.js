@@ -86,13 +86,15 @@ export function detectAiAgent(env = process.env, homeDir = os.homedir()) {
             detection_source: env.GITHUB_COPILOT_PRODUCT ? 'GITHUB_COPILOT_PRODUCT env var' : 'GITHUB_COPILOT_TOKEN env var',
         };
     }
-    // OpenAI Codex CLI (~/.codex/ presence)
-    if (fs.existsSync(path.join(homeDir, '.codex'))) {
+    // OpenAI Codex CLI — require active env var, not just ~/.codex directory.
+    // The directory persists after install and would cause false positives for
+    // every non-detected agent on a machine where Codex was ever installed.
+    if (env.CODEX_AGENT || env.CODEX_SESSION_ID || env.CODEX_HOME) {
         return {
             name: 'codex',
             kind: 'agent',
             trust_level: 'trusted',
-            detection_source: '~/.codex directory',
+            detection_source: env.CODEX_AGENT ? 'CODEX_AGENT env var' : env.CODEX_SESSION_ID ? 'CODEX_SESSION_ID env var' : 'CODEX_HOME env var',
         };
     }
     // OpenCode

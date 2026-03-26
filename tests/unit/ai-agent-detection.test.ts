@@ -116,23 +116,33 @@ describe('detectAiAgent', () => {
     assert.equal(result.name, 'cline');
   });
 
-  it('detects Codex via ~/.codex directory', () => {
+  it('detects Codex via CODEX_AGENT env var', () => {
+    const env: NodeJS.ProcessEnv = { CODEX_AGENT: '1' };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'codex');
+    assert.equal(result.detection_source, 'CODEX_AGENT env var');
+  });
+
+  it('detects Codex via CODEX_SESSION_ID env var', () => {
+    const env: NodeJS.ProcessEnv = { CODEX_SESSION_ID: 'sess_abc' };
+    const result = detectAiAgent(env, '/home/user');
+    assert.ok(result);
+    assert.equal(result.name, 'codex');
+    assert.equal(result.detection_source, 'CODEX_SESSION_ID env var');
+  });
+
+  it('does not detect Codex from ~/.codex directory alone (false positive prevention)', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detect-test-'));
     const codexDir = path.join(tmpHome, '.codex');
     fs.mkdirSync(codexDir);
     try {
       const result = detectAiAgent({}, tmpHome);
-      assert.ok(result);
-      assert.equal(result.name, 'codex');
-      assert.equal(result.detection_source, '~/.codex directory');
+      // ~/.codex directory alone should NOT trigger detection — it persists after install
+      assert.equal(result, undefined);
     } finally {
       fs.rmSync(tmpHome, { recursive: true, force: true });
     }
-  });
-
-  it('does not detect Codex when ~/.codex is absent', () => {
-    const result = detectAiAgent({}, '/nonexistent-home-xyz');
-    assert.equal(result, undefined);
   });
 
   it('detects Continue via CONTINUE_AGENT', () => {

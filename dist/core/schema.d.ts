@@ -1879,6 +1879,8 @@ export declare const SessionActiveProjectSchema: z.ZodObject<{
     name?: string | undefined;
 }>;
 export type SessionActiveProject = z.infer<typeof SessionActiveProjectSchema>;
+export declare const IsolationModeSchema: z.ZodEnum<["shared-checkout", "dedicated-worktree"]>;
+export type IsolationMode = z.infer<typeof IsolationModeSchema>;
 export declare const CurrentSessionStateSchema: z.ZodObject<{
     schema_version: z.ZodOptional<z.ZodNumber>;
     session_id: z.ZodString;
@@ -1891,6 +1893,8 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     user: z.ZodOptional<z.ZodString>;
     /** Process ID of the agent process (for liveness detection). */
     pid: z.ZodOptional<z.ZodNumber>;
+    /** LLM model used in this session (e.g. "claude-opus-4-6", "gpt-4.1"). */
+    model: z.ZodOptional<z.ZodString>;
     /** Session-scoped active project (overrides global active-project.json). */
     active_project: z.ZodOptional<z.ZodObject<{
         /** Absolute path to the project directory. */
@@ -1908,6 +1912,12 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
         switched_at: string;
         name?: string | undefined;
     }>>;
+    /** Git worktree path for this session (undefined = main worktree / shared checkout). */
+    worktree_path: z.ZodOptional<z.ZodString>;
+    /** Git branch this session is working on. */
+    branch: z.ZodOptional<z.ZodString>;
+    /** Isolation mode: shared-checkout (default) or dedicated-worktree. */
+    isolation_mode: z.ZodOptional<z.ZodEnum<["shared-checkout", "dedicated-worktree"]>>;
 }, "strip", z.ZodTypeAny, {
     host_id: string;
     session_id: string;
@@ -1917,12 +1927,16 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     last_seen_at: string;
     user?: string | undefined;
     schema_version?: number | undefined;
+    model?: string | undefined;
     pid?: number | undefined;
     active_project?: {
         path: string;
         switched_at: string;
         name?: string | undefined;
     } | undefined;
+    worktree_path?: string | undefined;
+    branch?: string | undefined;
+    isolation_mode?: "shared-checkout" | "dedicated-worktree" | undefined;
 }, {
     host_id: string;
     session_id: string;
@@ -1932,12 +1946,16 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     last_seen_at: string;
     user?: string | undefined;
     schema_version?: number | undefined;
+    model?: string | undefined;
     pid?: number | undefined;
     active_project?: {
         path: string;
         switched_at: string;
         name?: string | undefined;
     } | undefined;
+    worktree_path?: string | undefined;
+    branch?: string | undefined;
+    isolation_mode?: "shared-checkout" | "dedicated-worktree" | undefined;
 }>;
 export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
 export declare const MemorySeedKindSchema: z.ZodEnum<["command", "convention", "entrypoint", "hotspot", "agent_rule", "warning", "environment", "tooling"]>;

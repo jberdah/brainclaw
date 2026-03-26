@@ -76,18 +76,19 @@ export function loadCurrentSession(cwd) {
     const currentUser = resolveCurrentUser();
     const currentAgent = resolveCurrentAgentName();
     // 1. Look in sessions/ directory for a matching session
-    if (fs.existsSync(dir)) {
+    if (fs.existsSync(dir) && currentAgent) {
         const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
         const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
         const now = Date.now();
         for (const file of files) {
             try {
                 const session = CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', path.join(dir, file)).document);
-                // Match by agent+user (or agent only if user not set in old sessions)
+                // Strict match: agent name must match, user must match (when both are known)
+                if (session.agent !== currentAgent)
+                    continue;
                 const userMatch = !session.user || !currentUser || session.user === currentUser;
-                const agentMatch = !currentAgent || session.agent === currentAgent;
                 const alive = (now - Date.parse(session.last_seen_at)) <= ttlMs;
-                if (userMatch && agentMatch && alive) {
+                if (userMatch && alive) {
                     return session;
                 }
             }
@@ -223,7 +224,11 @@ function resolveCurrentUser() {
     return process.env.USER || process.env.USERNAME || os.userInfo().username || undefined;
 }
 function resolveCurrentAgentName() {
-    return process.env.BRAINCLAW_AGENT_NAME || process.env.CLAUDE_CODE_VERSION ? 'claude-code' : undefined;
+    if (process.env.BRAINCLAW_AGENT_NAME)
+        return process.env.BRAINCLAW_AGENT_NAME;
+    if (process.env.CLAUDE_CODE_VERSION)
+        return 'claude-code';
+    return undefined;
 }
 function loadConfigSafe(cwd) {
     try {
@@ -233,29 +238,90 @@ function loadConfigSafe(cwd) {
         return undefined;
     }
 }
+function isPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Find the session matching the current process among all active sessions.
+ *
+ * Resolution order:
+ *  1. Preferred session ID (explicit env var / parameter) → exact match
+ *  2. Same agent + user + host + same PID → refresh (same process reconnecting)
+ *  3. Same agent + user + host + dead PID → reclaim stale session
+ *  4. No match → create new session
+ *
+ * Crucially, if another session exists for the same agent+user+host but with
+ * a LIVE different PID, it is left untouched — that's a parallel instance.
+ */
 function resolveImplicitSession(cwd, options) {
-    const current = loadCurrentSession(cwd);
     const persistImplicit = options.persistImplicit ?? true;
     const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
     const now = new Date();
     const currentUser = resolveCurrentUser();
-    if (current
-        && current.agent === options.agentName
-        && current.agent_id === options.agentId
-        && current.host_id === options.hostId
-        && (!current.user || !currentUser || current.user === currentUser)
-        && now.getTime() - Date.parse(current.last_seen_at) <= ttlMs) {
-        const refreshed = {
-            ...current,
-            last_seen_at: now.toISOString(),
-            user: current.user || currentUser,
-            pid: process.pid,
-        };
-        if (persistImplicit) {
-            saveCurrentSession(refreshed, cwd);
+    const currentPid = process.pid;
+    // 1. If a preferred session ID is given, try exact match first
+    if (options.preferredSessionId) {
+        const exact = loadSessionById(options.preferredSessionId, cwd);
+        if (exact && now.getTime() - Date.parse(exact.last_seen_at) <= ttlMs) {
+            const refreshed = {
+                ...exact,
+                last_seen_at: now.toISOString(),
+                user: exact.user || currentUser,
+                pid: currentPid,
+            };
+            if (persistImplicit)
+                saveCurrentSession(refreshed, cwd);
+            return refreshed;
         }
+    }
+    // 2. Scan all sessions for PID-aware matching
+    const allSessions = loadAllSessions(cwd);
+    let samePidSession;
+    let deadPidSession;
+    for (const session of allSessions) {
+        if (session.agent !== options.agentName)
+            continue;
+        if (session.agent_id !== options.agentId)
+            continue;
+        if (session.host_id !== options.hostId)
+            continue;
+        if (currentUser && session.user && session.user !== currentUser)
+            continue;
+        if (now.getTime() - Date.parse(session.last_seen_at) > ttlMs)
+            continue;
+        // Same PID = same process reconnecting (e.g. MCP server refreshing)
+        if (session.pid === currentPid) {
+            samePidSession = session;
+            break;
+        }
+        // Different PID but alive = parallel instance, do NOT reclaim
+        if (session.pid && isPidAlive(session.pid)) {
+            continue;
+        }
+        // Dead PID = stale session, candidate for reclaim
+        if (!deadPidSession) {
+            deadPidSession = session;
+        }
+    }
+    const toRefresh = samePidSession ?? deadPidSession;
+    if (toRefresh) {
+        const refreshed = {
+            ...toRefresh,
+            last_seen_at: now.toISOString(),
+            user: toRefresh.user || currentUser,
+            pid: currentPid,
+        };
+        if (persistImplicit)
+            saveCurrentSession(refreshed, cwd);
         return refreshed;
     }
+    // 3. No match — create new session
     const created = {
         session_id: options.preferredSessionId ?? generateImplicitSessionId(),
         started_at: now.toISOString(),
@@ -264,11 +330,10 @@ function resolveImplicitSession(cwd, options) {
         agent_id: options.agentId,
         host_id: options.hostId,
         user: currentUser,
-        pid: process.pid,
+        pid: currentPid,
     };
-    if (persistImplicit) {
+    if (persistImplicit)
         saveCurrentSession(created, cwd);
-    }
     return created;
 }
 function parseDurationToMs(value) {

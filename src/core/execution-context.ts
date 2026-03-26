@@ -14,6 +14,17 @@ export interface ExecutionEnvSignal {
   redacted: boolean;
 }
 
+export interface GitWorktreeInfo {
+  /** Absolute path to the .git directory (or gitdir file for linked worktrees). */
+  git_dir: string;
+  /** Absolute path to the current worktree root. */
+  worktree_path: string;
+  /** Absolute path to the main worktree root (same as worktree_path for non-linked worktrees). */
+  main_worktree_path: string;
+  /** True if this is a linked worktree (not the main one). */
+  is_linked_worktree: boolean;
+}
+
 export interface ExecutionContextSnapshot {
   platform: NodeJS.Platform;
   shell: string;
@@ -22,6 +33,8 @@ export interface ExecutionContextSnapshot {
   branch?: string;
   git_status: 'clean' | 'dirty' | 'unavailable';
   has_remote: boolean;
+  /** Git worktree details — undefined when not in a git repo. */
+  git_worktree?: GitWorktreeInfo;
   toolchains: ExecutionToolVersion[];
   env_signals: ExecutionEnvSignal[];
 }
@@ -93,6 +106,7 @@ export function buildExecutionContext(options: ExecutionContextOptions = {}): Ex
     branch,
     git_status: gitStatus,
     has_remote: hasRemote,
+    git_worktree: detectGitWorktree(cwd, runner),
     toolchains: detectToolchains(cwd, runner),
     env_signals: captureEnvSignals(env),
   };
@@ -124,6 +138,13 @@ export function renderExecutionContextSummary(
     lines.push(`Git branch: ${snapshot.branch}`);
   }
   lines.push(`Git status: ${snapshot.git_status}`);
+  if ('git_worktree' in snapshot && snapshot.git_worktree) {
+    const wt = snapshot.git_worktree;
+    lines.push(`Git worktree: ${wt.worktree_path}${wt.is_linked_worktree ? ' (linked)' : ' (main)'}`);
+    if (wt.is_linked_worktree) {
+      lines.push(`Main worktree: ${wt.main_worktree_path}`);
+    }
+  }
   lines.push(`Git remote: ${snapshot.has_remote ? 'configured' : 'none'}`);
 
   const availableToolchains = snapshot.toolchains.filter((tool) => tool.available);
@@ -158,6 +179,37 @@ function detectGitBranch(cwd: string, runner: CommandRunner): string | undefined
   }
   const branch = result.stdout.trim();
   return branch && branch !== 'HEAD' ? branch : undefined;
+}
+
+function detectGitWorktree(cwd: string, runner: CommandRunner): GitWorktreeInfo | undefined {
+  const gitDir = runner('git', ['rev-parse', '--git-dir'], cwd);
+  const toplevel = runner('git', ['rev-parse', '--show-toplevel'], cwd);
+  if (gitDir.status !== 0 || toplevel.status !== 0) return undefined;
+
+  const gitDirPath = path.resolve(cwd, gitDir.stdout.trim());
+  const worktreePath = toplevel.stdout.trim();
+
+  // Main worktree: resolve via git-common-dir (points to the shared .git for linked worktrees)
+  const commonDir = runner('git', ['rev-parse', '--git-common-dir'], cwd);
+  let mainWorktreePath = worktreePath;
+  let isLinked = false;
+
+  if (commonDir.status === 0) {
+    const commonDirPath = path.resolve(cwd, commonDir.stdout.trim());
+    // For linked worktrees, git-common-dir !== git-dir
+    if (path.normalize(commonDirPath) !== path.normalize(gitDirPath)) {
+      isLinked = true;
+      // The main worktree is the parent of the common .git directory
+      mainWorktreePath = path.dirname(commonDirPath);
+    }
+  }
+
+  return {
+    git_dir: gitDirPath,
+    worktree_path: worktreePath,
+    main_worktree_path: mainWorktreePath,
+    is_linked_worktree: isLinked,
+  };
 }
 
 function detectGitStatus(cwd: string, runner: CommandRunner): 'clean' | 'dirty' | 'unavailable' {

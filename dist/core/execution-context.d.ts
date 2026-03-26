@@ -8,6 +8,16 @@ export interface ExecutionEnvSignal {
     value: string;
     redacted: boolean;
 }
+export interface GitWorktreeInfo {
+    /** Absolute path to the .git directory (or gitdir file for linked worktrees). */
+    git_dir: string;
+    /** Absolute path to the current worktree root. */
+    worktree_path: string;
+    /** Absolute path to the main worktree root (same as worktree_path for non-linked worktrees). */
+    main_worktree_path: string;
+    /** True if this is a linked worktree (not the main one). */
+    is_linked_worktree: boolean;
+}
 export interface ExecutionContextSnapshot {
     platform: NodeJS.Platform;
     shell: string;
@@ -16,6 +26,8 @@ export interface ExecutionContextSnapshot {
     branch?: string;
     git_status: 'clean' | 'dirty' | 'unavailable';
     has_remote: boolean;
+    /** Git worktree details — undefined when not in a git repo. */
+    git_worktree?: GitWorktreeInfo;
     toolchains: ExecutionToolVersion[];
     env_signals: ExecutionEnvSignal[];
 }

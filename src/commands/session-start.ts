@@ -1,9 +1,10 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
-import { buildOperationalIdentity, saveCurrentSession } from '../core/identity.js';
+import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
 import { buildContext } from '../core/context.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
@@ -40,6 +41,17 @@ export interface SessionStartOptions {
   cwd?: string;
 }
 
+export interface SharedCheckoutWarning {
+  worktree_path: string;
+  other_sessions: Array<{
+    session_id: string;
+    agent: string;
+    user?: string;
+    branch?: string;
+    pid?: number;
+  }>;
+}
+
 export interface SessionStartResult extends SessionSnapshot {
   context_target?: string;
   agent_git_hygiene?: {
@@ -47,6 +59,7 @@ export interface SessionStartResult extends SessionSnapshot {
     tracked_paths: string[];
   };
   inventory_advisory?: string[];
+  shared_checkout_warning?: SharedCheckoutWarning;
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -127,6 +140,14 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   const dir = sessionsDir(options.cwd);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   saveVersionedJsonFile('session_snapshot', sessionSnapshotPath(snapshot.session_id, options.cwd), SessionSnapshotSchema.parse(snapshot));
+  // Resolve git branch and worktree for session tracking
+  let currentBranch: string | undefined;
+  let currentWorktreePath: string | undefined;
+  try {
+    currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', cwd: options.cwd ?? process.cwd() }).trim();
+    currentWorktreePath = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: options.cwd ?? process.cwd() }).trim();
+  } catch { /* non-fatal — not a git repo */ }
+
   saveCurrentSession({
     schema_version: 2,
     session_id: snapshot.session_id,
@@ -135,6 +156,12 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     agent: actor.agent,
     agent_id: actor.agent_id,
     host_id: actor.host_id,
+    user: process.env.USER || process.env.USERNAME || os.userInfo().username || undefined,
+    pid: process.pid,
+    model: model ?? undefined,
+    branch: currentBranch,
+    worktree_path: currentWorktreePath,
+    isolation_mode: 'shared-checkout',
   }, options.cwd);
 
   // Write session_start runtime note
@@ -172,6 +199,34 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     if (lines.length > 0) inventoryAdvisory = lines;
   } catch { /* non-fatal — inventory scan failure should not block session start */ }
 
+  // Shared checkout detection: warn if other active sessions share the same worktree
+  let sharedCheckoutWarning: SharedCheckoutWarning | undefined;
+  if (currentWorktreePath) {
+    try {
+      const allSessions = loadAllSessions(options.cwd);
+      const ttlMs = 4 * 60 * 60 * 1000; // 4h
+      const now = Date.now();
+      const otherSessions = allSessions.filter(s =>
+        s.session_id !== snapshot.session_id
+        && s.worktree_path === currentWorktreePath
+        && (now - Date.parse(s.last_seen_at)) <= ttlMs
+        && (!s.pid || isPidAlive(s.pid))
+      );
+      if (otherSessions.length > 0) {
+        sharedCheckoutWarning = {
+          worktree_path: currentWorktreePath,
+          other_sessions: otherSessions.map(s => ({
+            session_id: s.session_id,
+            agent: s.agent,
+            user: s.user,
+            branch: s.branch,
+            pid: s.pid,
+          })),
+        };
+      }
+    } catch { /* non-fatal */ }
+  }
+
   return {
     ...snapshot,
     ...(agentGitHygiene.isGitRepo && (agentGitHygiene.missingGitignorePaths.length > 0 || agentGitHygiene.trackedPaths.length > 0)
@@ -183,7 +238,17 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
         }
       : {}),
     ...(inventoryAdvisory ? { inventory_advisory: inventoryAdvisory } : {}),
+    ...(sharedCheckoutWarning ? { shared_checkout_warning: sharedCheckoutWarning } : {}),
   };
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadSessionSnapshot(sessionId: string, cwd?: string): SessionSnapshot | undefined {
