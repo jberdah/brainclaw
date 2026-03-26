@@ -139,10 +139,12 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const memoryVersion = getVisibleMemoryVersion({ cwd: contextCwd, hostId: options.host, allHosts: options.allHosts });
   const target = normalizeContextTarget(options.target, requestedCwd, contextCwd);
   const project = options.project?.trim() || inferProjectFromTarget(target, config);
-  const agent = options.agent?.trim() || config.current_agent?.trim();
-  const currentAgentIdentity = agent
-    ? (options.agent?.trim() ? findAgentIdentityByName(agent, contextCwd) : resolveCurrentAgentIdentity(contextCwd))
-    : undefined;
+  // Agent resolution: explicit param > resolveCurrentAgentIdentity (env + detection).
+  // config.current_agent is NOT used — it's a singleton global that cross-contaminates in multi-agent.
+  const currentAgentIdentity = options.agent?.trim()
+    ? findAgentIdentityByName(options.agent.trim(), contextCwd)
+    : resolveCurrentAgentIdentity(contextCwd);
+  const agent = options.agent?.trim() || currentAgentIdentity?.agent_name;
   const profileMaxItems: Record<string, number> = { compact: 6, copilot: 5, quick: 3 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;

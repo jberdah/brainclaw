@@ -231,17 +231,11 @@ export function resolveCurrentAgentIdentity(cwd, preferredDirName) {
             // Non-fatal: registration may fail if store is read-only
         }
     }
-    // Config fallback (last resort — may not reflect the actual calling agent)
-    const config = loadConfig(cwd, preferredDirName);
-    if (config.current_agent_id) {
-        const byId = findAgentIdentityById(config.current_agent_id, cwd, preferredDirName);
-        if (byId) {
-            return byId;
-        }
-    }
-    if (config.current_agent) {
-        return findAgentIdentityByName(config.current_agent, cwd, preferredDirName);
-    }
+    // config.current_agent is NOT used for identity resolution — it's a singleton global
+    // that gets overwritten by whichever agent last ran register-agent --set-current.
+    // In multi-agent setups this always resolves to the wrong agent.
+    // The field remains in config for display (status, doctor) and for resolveExistingCurrentAgent
+    // which is used during setup/init only.
     return undefined;
 }
 export function resolveRegisteredAgentIdentity(options = {}) {
@@ -348,17 +342,20 @@ export function resolveCurrentModel(cwd) {
 /**
  * Returns the name of the current agent, with priority:
  *  1. $BRAINCLAW_AGENT_NAME env var  (AI agent self-declaration)
- *  2. $BRAINCLAW_AGENT      env var  (legacy alias)
- *  3. config.current_agent           (project owner / human default)
+ *  2. $BRAINCLAW_AGENT      env var  (legacy alias / relay model)
+ *  3. detectAiAgent()                (auto-detection from process env vars)
  *  4. OS user                        (last-resort fallback)
+ *
+ * Note: config.current_agent is intentionally NOT used here — it's a singleton
+ * global that causes cross-agent confusion in multi-agent setups.
  */
 export function resolveCurrentAgentName(cwd) {
     const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
     if (fromEnv)
         return fromEnv;
-    const fromConfig = loadConfig(cwd).current_agent?.trim();
-    if (fromConfig)
-        return fromConfig;
+    const detected = detectAiAgent();
+    if (detected)
+        return detected.name;
     return process.env.USER ?? process.env.USERNAME ?? 'unknown';
 }
 export function requireOperationalAgentIdentity(agentName, cwd, preferredDirName) {

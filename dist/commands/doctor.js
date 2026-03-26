@@ -232,48 +232,29 @@ export function runDoctor(options = {}) {
     }
     try {
         const registeredAgents = listAgentIdentities(options.cwd);
-        if (config.current_agent || config.current_agent_id) {
-            const currentAgent = resolveCurrentAgentIdentity(options.cwd);
-            if (!currentAgent) {
-                checks.push({
-                    name: 'agent_identity',
-                    status: 'warn',
-                    message: `Current agent is configured (${config.current_agent ?? 'unknown'} / ${config.current_agent_id ?? 'unknown'}) but no matching registry entry was found.`,
-                });
-                if (!options.json) {
-                    console.warn(`⚠ Current agent is configured (${config.current_agent ?? 'unknown'} / ${config.current_agent_id ?? 'unknown'}) but no matching registry entry was found.`);
-                }
-                hasIssues = true;
-            }
-            else if ((config.current_agent && config.current_agent !== currentAgent.agent_name)
-                || (config.current_agent_id && config.current_agent_id !== currentAgent.agent_id)) {
-                checks.push({
-                    name: 'agent_identity',
-                    status: 'warn',
-                    message: `Current agent config does not match registry entry (${currentAgent.agent_name} / ${currentAgent.agent_id}).`,
-                });
-                if (!options.json) {
-                    console.warn(`⚠ Current agent config does not match registry entry (${currentAgent.agent_name} / ${currentAgent.agent_id}).`);
-                }
-                hasIssues = true;
-            }
-            else {
-                checks.push({
-                    name: 'agent_identity',
-                    status: 'ok',
-                    message: `current_agent=${currentAgent.agent_name}, agent_id=${currentAgent.agent_id}, registered_agents=${registeredAgents.length}`,
-                });
-                if (!options.json) {
-                    console.log(`✔ current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
-                }
+        // Agent identity check: verify the detected agent is registered (env vars + detectAiAgent).
+        // config.current_agent is NOT checked — it's a legacy singleton, not an identity source.
+        const detectedAgent = resolveCurrentAgentIdentity(options.cwd);
+        if (detectedAgent) {
+            checks.push({
+                name: 'agent_identity',
+                status: 'ok',
+                message: `detected_agent=${detectedAgent.agent_name}, agent_id=${detectedAgent.agent_id}, registered_agents=${registeredAgents.length}`,
+            });
+            if (!options.json) {
+                console.log(`✔ detected agent: ${detectedAgent.agent_name} (${detectedAgent.agent_id})`);
             }
         }
         else {
             checks.push({
                 name: 'agent_identity',
-                status: 'ok',
-                message: `No current agent configured (${registeredAgents.length} registered agent(s))`,
+                status: 'warn',
+                message: `No agent detected from environment (${registeredAgents.length} registered agent(s)). Set BRAINCLAW_AGENT or run from an agent terminal.`,
             });
+            if (!options.json) {
+                console.warn(`⚠ No agent detected from environment (${registeredAgents.length} registered). Set BRAINCLAW_AGENT or run from an agent terminal.`);
+            }
+            hasIssues = true;
         }
     }
     catch (e) {
