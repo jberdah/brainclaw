@@ -11,6 +11,11 @@ import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
+export const REFLECTION_QUESTIONS = [
+    'What was the biggest time waste in this session, and how could it have been avoided?',
+    'What should have been done differently (design, process, or approach)?',
+    'What should brainclaw itself improve based on this session?',
+];
 export function runSessionEnd(options = {}) {
     try {
         const result = endSession(options);
@@ -42,6 +47,13 @@ export function runSessionEnd(options = {}) {
         }
         if (result.context_diff) {
             console.log(`  ${result.context_diff}`);
+        }
+        if (result.reflection_prompt) {
+            console.log('\n📝 Session reflection:');
+            for (let i = 0; i < result.reflection_prompt.questions.length; i++) {
+                console.log(`  ${i + 1}. ${result.reflection_prompt.questions[i]}`);
+            }
+            console.log(`\n  → Answer with: brainclaw note "your reflection" --tag reflection --tag session:${result.session_id}`);
         }
     }
     catch (e) {
@@ -182,6 +194,12 @@ export function endSession(options = {}) {
         summary: summaryText,
         open_work_warning: openWorkWarning,
     };
+    if (options.reflect) {
+        result.reflection_prompt = {
+            questions: [...REFLECTION_QUESTIONS],
+            instruction: `Please reflect on this session and answer each question. Write your answers using bclaw_write_note with tags ["reflection", "session:${sessionId}"]. One note per question, or a single combined note.`,
+        };
+    }
     return result;
 }
 //# sourceMappingURL=session-end.js.map

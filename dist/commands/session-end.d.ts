@@ -6,9 +6,12 @@ export interface SessionEndOptions {
     autoReflect?: boolean;
     autoRelease?: boolean;
     reflectHandoff?: boolean;
+    /** Include structured reflection questions in the result for the agent to answer. */
+    reflect?: boolean;
     json?: boolean;
     cwd?: string;
 }
+export declare const REFLECTION_QUESTIONS: readonly ["What was the biggest time waste in this session, and how could it have been avoided?", "What should have been done differently (design, process, or approach)?", "What should brainclaw itself improve based on this session?"];
 export interface SessionEndResult {
     session_id: string;
     agent: string;
@@ -17,6 +20,11 @@ export interface SessionEndResult {
     context_diff?: string;
     summary: string;
     open_work_warning?: OpenWorkWarning;
+    /** When reflect=true, these questions should be answered by the agent via bclaw_write_note with tag [reflection]. */
+    reflection_prompt?: {
+        questions: string[];
+        instruction: string;
+    };
 }
 export interface OpenWorkWarning {
     active_claims: {

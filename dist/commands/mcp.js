@@ -458,6 +458,7 @@ const MCP_WRITE_TOOLS = [
                 agentId: { type: 'string', description: 'Registered agent id.' },
                 summary: { type: 'string', description: 'Session summary text.' },
                 autoReflect: { type: 'boolean', description: 'Auto-reflect session notes as candidates.' },
+                reflect: { type: 'boolean', description: 'Include structured reflection questions. Answer via bclaw_write_note with tag [reflection].' },
             },
         },
     },
@@ -2426,21 +2427,30 @@ export async function executeMcpToolCall(payload) {
                 agentId: resolved.identity?.agent_id,
                 summary: args.summary,
                 autoReflect: args.autoReflect,
+                reflect: args.reflect,
                 cwd,
             });
             const preSessionEndItems = getTriggeredItems('trigger:pre-session-end', cwd);
             const preSessionEndText = renderTriggeredItems(preSessionEndItems);
-            const sessionEndMsg = preSessionEndText
-                ? `✔ Session ended\n${preSessionEndText}`
-                : '✔ Session ended';
+            const parts = ['✔ Session ended'];
+            if (preSessionEndText)
+                parts.push(preSessionEndText);
+            if (result.reflection_prompt) {
+                parts.push('\n📝 Session reflection — please answer these questions:');
+                for (let i = 0; i < result.reflection_prompt.questions.length; i++) {
+                    parts.push(`  ${i + 1}. ${result.reflection_prompt.questions[i]}`);
+                }
+                parts.push(`\n${result.reflection_prompt.instruction}`);
+            }
             return {
                 response: toolResponse({
-                    content: [{ type: 'text', text: sessionEndMsg }],
+                    content: [{ type: 'text', text: parts.join('\n') }],
                     session_id: result.session_id,
                     notes_in_session: result.notes_in_session,
                     candidates_created: result.candidates_created,
                     context_diff: result.context_diff,
                     triggered_items: preSessionEndItems,
+                    ...(result.reflection_prompt ? { reflection_prompt: result.reflection_prompt } : {}),
                 }),
                 nextConnectionSessionId: undefined,
             };

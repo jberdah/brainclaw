@@ -936,9 +936,10 @@ program
     .option('--auto-reflect', 'Auto-reflect session notes as pending candidates')
     .option('--auto-release', 'Auto-release any active claims at session end')
     .option('--reflect-handoff', 'Generate a handoff candidate from git commits since session start')
+    .option('--reflect', 'Include structured reflection questions for the agent to answer')
     .option('--json', 'Output as JSON')
     .action((options) => {
-    runSessionEnd({ ...options, autoReflect: options.autoReflect, autoRelease: options.autoRelease, reflectHandoff: options.reflectHandoff });
+    runSessionEnd({ ...options, autoReflect: options.autoReflect, autoRelease: options.autoRelease, reflectHandoff: options.reflectHandoff, reflect: options.reflect });
 });
 // --- whoami ---
 program
