@@ -22,7 +22,7 @@ import { detectContradictions } from '../core/contradictions.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
-import { assessBrainclawVersion } from '../core/brainclaw-version.js';
+import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
@@ -477,6 +477,39 @@ export function runDoctor(options: DoctorOptions = {}): void {
     if (!options.json) {
       console.log(`✔ ${brainclawVersion.message}`);
     }
+  }
+
+  // Check for concurrent brainclaw installations in PATH
+  try {
+    const installations = detectConcurrentInstallations();
+    const uniqueVersions = new Set(installations.map(i => i.version));
+    if (installations.length > 1 && uniqueVersions.size > 1) {
+      const details = installations.map(i => `${i.path} (${i.version}${i.isCurrent ? ', active' : ''})`).join(', ');
+      checks.push({
+        name: 'brainclaw_path_conflicts',
+        status: 'warn',
+        message: `Multiple brainclaw versions in PATH: ${details}. The first in PATH will be used by CLI; MCP uses absolute path.`,
+        details: { installations },
+      });
+      if (!options.json) {
+        console.warn(`⚠ Multiple brainclaw versions in PATH:`);
+        for (const inst of installations) {
+          console.warn(`  ${inst.isCurrent ? '→' : ' '} ${inst.path} (${inst.version})`);
+        }
+      }
+      hasIssues = true;
+    } else {
+      checks.push({
+        name: 'brainclaw_path_conflicts',
+        status: 'ok',
+        message: installations.length > 0
+          ? `Single brainclaw in PATH: ${installations[0]!.path} (${installations[0]!.version})`
+          : 'No brainclaw found in PATH (using direct invocation)',
+      });
+    }
+  } catch {
+    // Non-fatal — PATH scan failure should not block doctor
+    checks.push({ name: 'brainclaw_path_conflicts', status: 'ok', message: 'PATH scan skipped' });
   }
 
   // Check project.md consistency

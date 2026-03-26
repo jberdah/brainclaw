@@ -60,6 +60,17 @@ interface NpmDistTagLookupOptions {
     cacheTtlMs?: number;
 }
 type NpmDistTagLookup = (packageName: string, options: NpmDistTagLookupOptions) => NpmDistTagLookupResult;
+export interface BrainclawInstallation {
+    path: string;
+    version: string;
+    isCurrent: boolean;
+}
+/**
+ * Scan PATH for all brainclaw installations and their versions.
+ * Detects when multiple versions are installed (e.g. global + user-local)
+ * which causes confusion about which version is actually running.
+ */
+export declare function detectConcurrentInstallations(): BrainclawInstallation[];
 /**
  * Read the brainclaw version from disk (package.json), bypassing the in-memory cache.
  * Used by the MCP server to detect when a new version has been installed while the

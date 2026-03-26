@@ -15,6 +15,52 @@ const DEFAULT_NPM_UPDATE_SOURCE = {
     package_name: DEFAULT_NPM_UPDATE_PACKAGE,
     dist_tag: DEFAULT_NPM_UPDATE_DIST_TAG,
 };
+/**
+ * Scan PATH for all brainclaw installations and their versions.
+ * Detects when multiple versions are installed (e.g. global + user-local)
+ * which causes confusion about which version is actually running.
+ */
+export function detectConcurrentInstallations() {
+    const currentVersion = getInstalledBrainclawVersion();
+    const installations = [];
+    const seen = new Set();
+    // On Windows, `where` returns all matches. On Unix, `which -a` does.
+    const isWindows = os.platform() === 'win32';
+    const result = isWindows
+        ? spawnSync('where', ['brainclaw'], { encoding: 'utf-8', timeout: 5000 })
+        : spawnSync('which', ['-a', 'brainclaw'], { encoding: 'utf-8', timeout: 5000 });
+    if (result.status !== 0)
+        return [];
+    const paths = result.stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    for (const binPath of paths) {
+        // Normalize to avoid duplicates from symlinks
+        let realPath;
+        try {
+            realPath = isWindows ? binPath : fs.realpathSync(binPath);
+        }
+        catch {
+            realPath = binPath;
+        }
+        if (seen.has(realPath))
+            continue;
+        seen.add(realPath);
+        // Get version by running the binary
+        let version = 'unknown';
+        try {
+            const vResult = spawnSync(binPath, ['--version'], { encoding: 'utf-8', timeout: 5000 });
+            if (vResult.status === 0) {
+                version = vResult.stdout.trim().split(/\r?\n/)[0]?.trim() ?? 'unknown';
+            }
+        }
+        catch { /* ignore */ }
+        installations.push({
+            path: binPath,
+            version,
+            isCurrent: version === currentVersion,
+        });
+    }
+    return installations;
+}
 let cachedCliVersion;
 let cachedPackageJsonPath;
 /**
