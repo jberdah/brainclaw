@@ -2,9 +2,9 @@
   "version": 1,
   "channel": "local-pack",
   "package_name": "brainclaw",
-  "latest_installable_version": "0.34.1",
-  "published_at": "2026-03-26T16:43:50.447Z",
-  "artifact_path": "./brainclaw-0.34.1.tgz",
-  "install_command": "npm install -g \"./.releases/brainclaw-0.34.1.tgz\"",
-  "release_notes": "feat: auto-handoff from git diff at session end"
+  "latest_installable_version": "0.34.2",
+  "published_at": "2026-03-26T17:02:50.911Z",
+  "artifact_path": "./brainclaw-0.34.2.tgz",
+  "install_command": "npm install -g \"./.releases/brainclaw-0.34.2.tgz\"",
+  "release_notes": "fix: pagination on all MCP list tools — prevents giant responses wasting agent tokens"
 }
