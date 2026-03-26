@@ -5,6 +5,8 @@ export interface SessionStartOptions {
     context?: string;
     model?: string;
     json?: boolean;
+    /** Output full project context (like `brainclaw context`) after starting the session. */
+    includeContext?: boolean;
     cwd?: string;
 }
 export interface SharedCheckoutWarning {

@@ -580,6 +580,30 @@ function containsCommandHook(entries: unknown[], command: string): boolean {
   );
 }
 
+/**
+ * Replace a legacy command hook with a new one, or add the new one if neither exists.
+ * This enables clean upgrades: old hooks are swapped out, new hooks are added if fresh.
+ */
+function replaceOrAddCommandHook(entries: unknown[], newCommand: string, legacyCommand: string): void {
+  if (containsCommandHook(entries, newCommand)) return;
+
+  // Find and replace legacy command
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (isJsonObject(entry) && Array.isArray(entry.hooks)) {
+      for (const h of entry.hooks as unknown[]) {
+        if (isJsonObject(h) && h.command === legacyCommand) {
+          h.command = newCommand;
+          return;
+        }
+      }
+    }
+  }
+
+  // Neither new nor legacy found — add fresh
+  entries.push(buildCommandHookEntry(newCommand));
+}
+
 export function ensureProjectDevDependency(cwd: string): AutoConfigWriteResult | undefined {
   const filePath = path.join(cwd, 'package.json');
   if (!fs.existsSync(filePath)) return undefined;
@@ -716,21 +740,21 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   }
   permissions.allow = allow;
 
-  // Merge hooks — UserPromptSubmit injects full context on first prompt, diff on subsequent
+  // Merge hooks — UserPromptSubmit opens a session on first prompt, diff on subsequent
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-  const contextCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
-  const stopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
+  const sessionCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw session-start --include-context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
+  const stopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release 2>/dev/null';
+
+  // Legacy commands to replace on upgrade
+  const legacyContextCommand = 'f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; npx brainclaw context 2>/dev/null; else npx brainclaw context-diff 2>/dev/null; fi';
+  const legacyStopCommand = 'rm -f .claude/.bclaw-session; npx brainclaw session-end --auto-release --dry-run 2>/dev/null';
 
   const userPromptHooks = Array.isArray(hooks.UserPromptSubmit) ? [...hooks.UserPromptSubmit as unknown[]] : [];
-  if (!containsCommandHook(userPromptHooks, contextCommand)) {
-    userPromptHooks.push(buildCommandHookEntry(contextCommand));
-  }
+  replaceOrAddCommandHook(userPromptHooks, sessionCommand, legacyContextCommand);
   hooks.UserPromptSubmit = userPromptHooks;
 
   const stopHooks = Array.isArray(hooks.Stop) ? [...hooks.Stop as unknown[]] : [];
-  if (!containsCommandHook(stopHooks, stopCommand)) {
-    stopHooks.push(buildCommandHookEntry(stopCommand));
-  }
+  replaceOrAddCommandHook(stopHooks, stopCommand, legacyStopCommand);
   hooks.Stop = stopHooks;
 
   // PostToolUse — check for unseen events after any brainclaw MCP tool call

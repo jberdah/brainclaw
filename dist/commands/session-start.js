@@ -6,7 +6,8 @@ import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
-import { buildContext } from '../core/context.js';
+import { buildContext, renderContextPromptTemplate } from '../core/context.js';
+import { writeContextMarker } from '../core/freshness.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
@@ -31,6 +32,31 @@ function createHash(data) {
 export function runSessionStart(options = {}) {
     try {
         const snapshot = startSession(options);
+        // --include-context: output full project context (replaces separate `brainclaw context` call)
+        if (options.includeContext) {
+            try {
+                const cwd = options.cwd ?? process.cwd();
+                const contextResult = buildContext({
+                    target: options.context,
+                    agent: snapshot.agent,
+                    cwd,
+                });
+                console.log(renderContextPromptTemplate(contextResult, false));
+                writeContextMarker({
+                    read_at: nowISO(),
+                    memory_version: contextResult.memory_version,
+                    host_id: contextResult.current_host,
+                    target: options.context,
+                    project: contextResult.project,
+                    all_hosts: false,
+                }, cwd);
+            }
+            catch (ctxErr) {
+                // Context build failure should not block session start output
+                console.error(`⚠ Context build failed: ${ctxErr instanceof Error ? ctxErr.message : String(ctxErr)}`);
+            }
+            return;
+        }
         if (options.json) {
             console.log(JSON.stringify(snapshot, null, 2));
             return;

@@ -921,6 +921,7 @@ program
     .option('--agent <agent>', 'Agent name (defaults to current configured agent)')
     .option('--context <path>', 'Context target path for initial hash capture')
     .option('--model <id>', 'Model identifier (e.g. claude-sonnet-4-6)')
+    .option('--include-context', 'Output full project context after starting session (replaces separate context call)')
     .option('--json', 'Output as JSON')
     .action((options) => {
     runSessionStart(options);
