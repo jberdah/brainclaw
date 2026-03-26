@@ -116,20 +116,20 @@ describe('detectAiAgent', () => {
     assert.equal(result.name, 'cline');
   });
 
-  it('detects Codex via CODEX_AGENT env var', () => {
-    const env: NodeJS.ProcessEnv = { CODEX_AGENT: '1' };
+  it('detects Codex via CODEX_THREAD_ID env var', () => {
+    const env: NodeJS.ProcessEnv = { CODEX_THREAD_ID: '019d2938-ba18-7112-a77c-cf15e784c748' };
     const result = detectAiAgent(env, '/home/user');
     assert.ok(result);
     assert.equal(result.name, 'codex');
-    assert.equal(result.detection_source, 'CODEX_AGENT env var');
+    assert.equal(result.detection_source, 'CODEX_THREAD_ID env var');
   });
 
-  it('detects Codex via CODEX_SESSION_ID env var', () => {
-    const env: NodeJS.ProcessEnv = { CODEX_SESSION_ID: 'sess_abc' };
+  it('detects Codex via CODEX_CI env var', () => {
+    const env: NodeJS.ProcessEnv = { CODEX_CI: '1' };
     const result = detectAiAgent(env, '/home/user');
     assert.ok(result);
     assert.equal(result.name, 'codex');
-    assert.equal(result.detection_source, 'CODEX_SESSION_ID env var');
+    assert.equal(result.detection_source, 'CODEX_CI env var');
   });
 
   it('does not detect Codex from ~/.codex directory alone (false positive prevention)', () => {

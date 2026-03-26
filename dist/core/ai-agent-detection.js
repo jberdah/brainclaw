@@ -86,15 +86,20 @@ export function detectAiAgent(env = process.env, homeDir = os.homedir()) {
             detection_source: env.GITHUB_COPILOT_PRODUCT ? 'GITHUB_COPILOT_PRODUCT env var' : 'GITHUB_COPILOT_TOKEN env var',
         };
     }
-    // OpenAI Codex CLI — require active env var, not just ~/.codex directory.
-    // The directory persists after install and would cause false positives for
-    // every non-detected agent on a machine where Codex was ever installed.
-    if (env.CODEX_AGENT || env.CODEX_SESSION_ID || env.CODEX_HOME) {
+    // OpenAI Codex CLI — detect via active runtime env vars, not ~/.codex directory
+    // (the directory persists after install and causes permanent false positives).
+    // Real Codex env vars observed: CODEX_THREAD_ID, CODEX_CI, CODEX_INTERNAL_ORIGINATOR_OVERRIDE.
+    if (env.CODEX_THREAD_ID || env.CODEX_CI || env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE || env.CODEX_AGENT || env.CODEX_SESSION_ID) {
+        const source = env.CODEX_THREAD_ID ? 'CODEX_THREAD_ID env var'
+            : env.CODEX_CI ? 'CODEX_CI env var'
+                : env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ? 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE env var'
+                    : env.CODEX_AGENT ? 'CODEX_AGENT env var'
+                        : 'CODEX_SESSION_ID env var';
         return {
             name: 'codex',
             kind: 'agent',
             trust_level: 'trusted',
-            detection_source: env.CODEX_AGENT ? 'CODEX_AGENT env var' : env.CODEX_SESSION_ID ? 'CODEX_SESSION_ID env var' : 'CODEX_HOME env var',
+            detection_source: source,
         };
     }
     // OpenCode
