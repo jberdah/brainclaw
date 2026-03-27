@@ -11,6 +11,7 @@ import { nowISO } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
+import { extractFilesFromDiff } from '../commands/handoff.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -189,10 +190,24 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
       const diffStat = execSync(`git diff --stat ${ref}..HEAD`, { encoding: 'utf-8', cwd }).trim();
 
       if (commits) {
-        const releasedScopes = listClaims(options.cwd)
-          .filter((c) => c.status === 'released' && c.agent === registered.agent_name)
-          .map((c) => c.scope)
-          .join(', ');
+        const releasedClaims = listClaims(options.cwd)
+          .filter((c) => c.status === 'released' && c.agent === registered.agent_name);
+        const releasedScopes = releasedClaims.map((c) => c.scope).join(', ');
+
+        // Extract files touched from the full diff for the contract
+        let filesTouched: string[] = [];
+        try {
+          const fullDiff = execSync(`git diff ${ref}..HEAD`, { encoding: 'utf-8', cwd, maxBuffer: 10 * 1024 * 1024 }).trim();
+          filesTouched = extractFilesFromDiff(fullDiff);
+        } catch { /* fall back to empty */ }
+
+        // Extract linked plan IDs from released claims
+        const linkedPlans = [...new Set(releasedClaims.map((c) => c.plan_id).filter(Boolean) as string[])];
+
+        // Build contract metadata for the handoff text
+        const contractLines: string[] = [];
+        if (filesTouched.length > 0) contractLines.push(`Files touched: ${filesTouched.join(', ')}`);
+        if (linkedPlans.length > 0) contractLines.push(`Linked plans: ${linkedPlans.join(', ')}`);
 
         const handoffText = [
           `Session ${sessionId} — auto-generated handoff`,
@@ -200,6 +215,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
           `Commits:\n${commits}`,
           diffStat ? `\nChanged files:\n${diffStat}` : '',
           releasedScopes ? `\nReleased claims: ${releasedScopes}` : '',
+          contractLines.length > 0 ? `\nContract:\n${contractLines.join('\n')}` : '',
           summaryText !== `Session ended — ${sessionNotes.length} runtime note(s) created` ? `\nSummary: ${summaryText}` : '',
         ].filter(Boolean).join('\n');
 
