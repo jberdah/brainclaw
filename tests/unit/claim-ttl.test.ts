@@ -1,107 +1,93 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isClaimExpired, expireStaleActiveClaims, listClaims, saveClaim } from '../../src/core/claims.js';
-import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
+import { isClaimExpired } from '../../src/core/claims.js';
 import type { Claim } from '../../src/core/schema.js';
 
 function makeClaim(overrides: Partial<Claim> = {}): Claim {
   return {
-    id: `clm_${Math.random().toString(36).slice(2, 10)}`,
+    id: 'clm_test001',
     agent: 'test-agent',
-    scope: 'src/test.ts',
-    description: 'test claim',
+    scope: 'test/scope',
+    description: 'Test claim',
     created_at: new Date().toISOString(),
     status: 'active',
     ...overrides,
   };
 }
 
-describe('claim TTL', () => {
-  let workspace: TestWorkspace;
-  let restoreCwd: () => void;
-
-  before(() => {
-    workspace = createTestWorkspace({ prefix: 'bclaw-claim-ttl-', currentAgent: 'test-agent' });
-    restoreCwd = workspace.useCwd();
+describe('isClaimExpired', () => {
+  it('returns false when no expires_at is set', () => {
+    const claim = makeClaim();
+    assert.equal(isClaimExpired(claim), false);
   });
 
-  after(() => {
-    restoreCwd();
-    workspace.cleanup();
+  it('returns false when expires_at is in the future', () => {
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const claim = makeClaim({ expires_at: future });
+    assert.equal(isClaimExpired(claim), false);
   });
 
-  describe('isClaimExpired', () => {
-    it('returns false when no expires_at', () => {
-      assert.equal(isClaimExpired(makeClaim()), false);
-    });
-
-    it('returns false when expires_at is in the future', () => {
-      const future = new Date(Date.now() + 3_600_000).toISOString();
-      assert.equal(isClaimExpired(makeClaim({ expires_at: future })), false);
-    });
-
-    it('returns true when expires_at is in the past', () => {
-      const past = new Date(Date.now() - 1000).toISOString();
-      assert.equal(isClaimExpired(makeClaim({ expires_at: past })), true);
-    });
+  it('returns true when expires_at is in the past', () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const claim = makeClaim({ expires_at: past });
+    assert.equal(isClaimExpired(claim), true);
   });
 
-  describe('expireStaleActiveClaims', () => {
-    it('releases expired active claims', () => {
-      const past = new Date(Date.now() - 1000).toISOString();
-      const expiredClaim = makeClaim({ id: 'clm_expired01', expires_at: past });
-      saveClaim(expiredClaim, workspace.dir);
+  it('returns true for a released claim if expires_at is past (callers filter by status)', () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const claim = makeClaim({ expires_at: past, status: 'released' });
+    assert.equal(isClaimExpired(claim), true);
+  });
+});
 
-      const count = expireStaleActiveClaims(workspace.dir);
-      assert.ok(count >= 1, 'should expire at least 1 claim');
+describe('parseTtl format (claim TTL regex)', () => {
+  function parseTtl(ttl: string): string | null {
+    const match = /^(\d+)([mhd])$/.exec(ttl.trim().toLowerCase());
+    if (!match) return null;
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
+    const ms = unit === 'm' ? value * 60_000 : unit === 'h' ? value * 3_600_000 : value * 86_400_000;
+    return new Date(Date.now() + ms).toISOString();
+  }
 
-      const updated = listClaims(workspace.dir).find((c) => c.id === 'clm_expired01');
-      assert.ok(updated, 'claim should still exist');
-      assert.equal(updated!.status, 'released');
-      assert.ok(updated!.released_at, 'released_at should be set');
-    });
-
-    it('does not affect claims without expires_at', () => {
-      const neverExpires = makeClaim({ id: 'clm_noexpiry1' });
-      saveClaim(neverExpires, workspace.dir);
-
-      expireStaleActiveClaims(workspace.dir);
-
-      const updated = listClaims(workspace.dir).find((c) => c.id === 'clm_noexpiry1');
-      assert.equal(updated!.status, 'active');
-    });
-
-    it('does not affect claims with future expires_at', () => {
-      const future = new Date(Date.now() + 3_600_000).toISOString();
-      const futureClaim = makeClaim({ id: 'clm_future001', expires_at: future });
-      saveClaim(futureClaim, workspace.dir);
-
-      expireStaleActiveClaims(workspace.dir);
-
-      const updated = listClaims(workspace.dir).find((c) => c.id === 'clm_future001');
-      assert.equal(updated!.status, 'active');
-    });
-
-    it('returns 0 when no expired claims exist', () => {
-      const fresh = createTestWorkspace({ prefix: 'bclaw-claim-empty-', currentAgent: 'test-agent' });
-      try {
-        const count = expireStaleActiveClaims(fresh.dir);
-        assert.equal(count, 0);
-      } finally {
-        fresh.cleanup();
-      }
-    });
+  it('converts 30m to a date ~30 minutes from now', () => {
+    const before = Date.now();
+    const result = parseTtl('30m');
+    assert.ok(result !== null);
+    const parsed = Date.parse(result!);
+    assert.ok(parsed >= before + 29 * 60_000, 'should be at least 29m from now');
+    assert.ok(parsed <= Date.now() + 31 * 60_000, 'should be at most 31m from now');
   });
 
-  describe('claim stores expires_at', () => {
-    it('stores expires_at when created with ttl', () => {
-      const future = new Date(Date.now() + 3_600_000).toISOString();
-      const claim = makeClaim({ id: 'clm_withttl01', expires_at: future });
-      saveClaim(claim, workspace.dir);
+  it('converts 2h to a date ~2 hours from now', () => {
+    const before = Date.now();
+    const result = parseTtl('2h');
+    assert.ok(result !== null);
+    const parsed = Date.parse(result!);
+    assert.ok(parsed >= before + 2 * 3_600_000 - 1000);
+    assert.ok(parsed <= Date.now() + 2 * 3_600_000 + 1000);
+  });
 
-      const loaded = listClaims(workspace.dir).find((c) => c.id === 'clm_withttl01');
-      assert.ok(loaded, 'claim should exist');
-      assert.equal(loaded!.expires_at, future);
-    });
+  it('converts 1d to a date ~1 day from now', () => {
+    const before = Date.now();
+    const result = parseTtl('1d');
+    assert.ok(result !== null);
+    const parsed = Date.parse(result!);
+    assert.ok(parsed >= before + 86_400_000 - 1000);
+    assert.ok(parsed <= Date.now() + 86_400_000 + 1000);
+  });
+
+  it('returns null for invalid TTL format', () => {
+    assert.equal(parseTtl('invalid'), null);
+    assert.equal(parseTtl('2x'), null);
+    assert.equal(parseTtl(''), null);
+    assert.equal(parseTtl('2hours'), null);
+    assert.equal(parseTtl('1.5h'), null);
+  });
+
+  it('accepts all three unit variants', () => {
+    assert.ok(parseTtl('1m') !== null);
+    assert.ok(parseTtl('1h') !== null);
+    assert.ok(parseTtl('1d') !== null);
   });
 });

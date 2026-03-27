@@ -2835,6 +2835,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           worktreeWarn = `\n⚠ Worktree creation failed: ${wtErr instanceof Error ? wtErr.message : String(wtErr)}`;
         }
       }
+      const claimTtl = args.ttl as string | undefined;
+      const claimExpiresAt = claimTtl ? parseTtl(claimTtl) : undefined;
       saveClaim({
         id: claimId,
         agent: identity.agent,
@@ -2850,6 +2852,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         plan_id: args.planId as string | undefined,
         model: currentModel,
         worktree_path: worktreePath,
+        expires_at: claimExpiresAt,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
       const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
@@ -2858,7 +2861,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         ? '\n⚠ No plan item linked to this claim. Run bclaw_create_plan first and pass planId to track this work formally.'
         : '';
       const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
-      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${noPlanWarn}${worktreeWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({

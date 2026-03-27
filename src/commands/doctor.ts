@@ -12,7 +12,7 @@ import { findInstructionConflicts, loadInstructions } from '../core/instructions
 import { memoryExists, memoryPath, readFileSync } from '../core/io.js';
 import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
-import { listClaims } from '../core/claims.js';
+import { listClaims, isClaimExpired } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
@@ -848,6 +848,29 @@ export function runDoctor(options: DoctorOptions = {}): void {
     }
   } else {
     checks.push({ name: 'claim_plan_link', status: 'ok', message: 'No active claims to check' });
+  }
+
+  // Expired-but-still-active claims (TTL passed but prune not run)
+  const expiredActive = activeClaims.filter((c) => isClaimExpired(c));
+  if (expiredActive.length > 0) {
+    hasIssues = true;
+    const ids = expiredActive.map((c) => c.id).join(', ');
+    checks.push({
+      name: 'claim_ttl_expired',
+      status: 'warn',
+      message: `${expiredActive.length} active claim(s) past their TTL: ${ids}. Run 'brainclaw prune' to release them automatically.`,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${expiredActive.length} active claim(s) have expired (TTL passed — run 'brainclaw prune')`);
+      for (const c of expiredActive) {
+        console.warn(`  - [${c.id}] ${c.scope}: expires_at ${c.expires_at}`);
+      }
+    }
+  } else if (activeClaims.some((c) => c.expires_at)) {
+    checks.push({ name: 'claim_ttl_expired', status: 'ok', message: 'All TTL-bounded claims are within their expiry window' });
+    if (!options.json) console.log('✔ Claim TTLs: all within bounds');
+  } else {
+    checks.push({ name: 'claim_ttl_expired', status: 'ok', message: 'No TTL-bounded claims' });
   }
 
   // --- Runtime notes checks ---
