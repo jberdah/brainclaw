@@ -15,6 +15,7 @@ import { loadState, mutateState, persistState, saveState } from '../core/state.j
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
+import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
@@ -527,6 +528,8 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
         planId: { type: 'string', description: 'Optional linked plan item ID.' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
+        createWorktree: { type: 'boolean', description: 'If true, create a git linked worktree for this claim (requires a branch name via worktreeBranch).' },
+        worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
       },
       required: ['scope', 'description'],
     },
@@ -2818,6 +2821,22 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         sessionId: connectionSessionId,
       });
       const claimId = generateClaimId();
+      let worktreePath: string | undefined;
+      let worktreeWarn = '';
+      if (args.createWorktree) {
+        const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+        const worktreeBranch = (args.worktreeBranch as string | undefined)?.trim() || `feat/${branchSlug}`;
+        try {
+          worktreePath = coreCreateWorktree(claimCwd, worktreeBranch, {
+            sessionId: identity.session_id,
+            agent: identity.agent,
+          });
+        } catch (wtErr) {
+          worktreeWarn = `\n⚠ Worktree creation failed: ${wtErr instanceof Error ? wtErr.message : String(wtErr)}`;
+        }
+      }
+      const claimTtl = args.ttl as string | undefined;
+      const claimExpiresAt = claimTtl ? parseTtl(claimTtl) : undefined;
       saveClaim({
         id: claimId,
         agent: identity.agent,
@@ -2832,6 +2851,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         status: 'active',
         plan_id: args.planId as string | undefined,
         model: currentModel,
+        worktree_path: worktreePath,
+        expires_at: claimExpiresAt,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
       const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
@@ -2839,13 +2860,16 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const noPlanWarn = !(args.planId as string | undefined)
         ? '\n⚠ No plan item linked to this claim. Run bclaw_create_plan first and pass planId to track this work formally.'
         : '';
-      const claimText = `✔ Claimed scope [${claimId}]${noPlanWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
+      const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({
           content: [{ type: 'text', text: claimText }],
           claim_id: claimId,
           session_id: identity.session_id,
+          worktree_path: worktreePath,
           triggered_items: postClaimItems,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,

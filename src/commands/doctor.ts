@@ -12,7 +12,7 @@ import { findInstructionConflicts, loadInstructions } from '../core/instructions
 import { memoryExists, memoryPath, readFileSync } from '../core/io.js';
 import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
-import { listClaims } from '../core/claims.js';
+import { listClaims, isClaimExpired } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
@@ -24,6 +24,7 @@ import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
+import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
@@ -849,6 +850,29 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'claim_plan_link', status: 'ok', message: 'No active claims to check' });
   }
 
+  // Expired-but-still-active claims (TTL passed but prune not run)
+  const expiredActive = activeClaims.filter((c) => isClaimExpired(c));
+  if (expiredActive.length > 0) {
+    hasIssues = true;
+    const ids = expiredActive.map((c) => c.id).join(', ');
+    checks.push({
+      name: 'claim_ttl_expired',
+      status: 'warn',
+      message: `${expiredActive.length} active claim(s) past their TTL: ${ids}. Run 'brainclaw prune' to release them automatically.`,
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${expiredActive.length} active claim(s) have expired (TTL passed — run 'brainclaw prune')`);
+      for (const c of expiredActive) {
+        console.warn(`  - [${c.id}] ${c.scope}: expires_at ${c.expires_at}`);
+      }
+    }
+  } else if (activeClaims.some((c) => c.expires_at)) {
+    checks.push({ name: 'claim_ttl_expired', status: 'ok', message: 'All TTL-bounded claims are within their expiry window' });
+    if (!options.json) console.log('✔ Claim TTLs: all within bounds');
+  } else {
+    checks.push({ name: 'claim_ttl_expired', status: 'ok', message: 'No TTL-bounded claims' });
+  }
+
   // --- Runtime notes checks ---
   const notes = listRuntimeNotes(undefined, options.cwd);
   const localTraps = listOperationalTraps({}, options.cwd);
@@ -1332,6 +1356,53 @@ export function runDoctor(options: DoctorOptions = {}): void {
       }
     } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
+
+  // Worktree stale-session and shared-checkout checks
+  try {
+    const activeClaims = listClaims(options.cwd);
+    const worktrees = listWorktrees(options.cwd ?? process.cwd());
+    const claimWorktrees = new Set(activeClaims.filter((c) => c.worktree_path && c.status === 'active').map((c) => c.worktree_path!));
+    const orphanWorktrees = worktrees.filter(
+      (wt) => !wt.is_main && wt.session_id && !claimWorktrees.has(wt.path),
+    );
+    if (orphanWorktrees.length > 0) {
+      hasIssues = true;
+      checks.push({
+        name: 'worktree_orphans',
+        status: 'warn',
+        message: `${orphanWorktrees.length} worktree(s) have no active claim: ${orphanWorktrees.map((w) => w.path).join(', ')}. Run 'brainclaw worktree prune' or remove them.`,
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${orphanWorktrees.length} orphan worktree(s) with no active claim`);
+        for (const wt of orphanWorktrees) {
+          console.warn(`  - ${wt.path} (branch: ${wt.branch}, session: ${wt.session_id ?? 'unknown'})`);
+        }
+      }
+    } else {
+      checks.push({ name: 'worktree_orphans', status: 'ok', message: 'No orphan worktrees detected' });
+      if (!options.json) console.log('✔ Worktrees: no orphans');
+    }
+
+    // Shared-checkout risk: multiple brainclaw sessions in the same working tree
+    const risk = detectSharedCheckoutRisk(options.cwd ?? process.cwd());
+    if (risk.has_conflict) {
+      hasIssues = true;
+      checks.push({
+        name: 'worktree_shared_checkout',
+        status: 'warn',
+        message: `Shared-checkout risk: ${risk.conflicting_paths.length} worktree(s) have multiple active sessions. Each session should use a dedicated worktree.`,
+      });
+      if (!options.json) {
+        console.warn('⚠ Shared-checkout risk detected — multiple sessions share a worktree');
+        for (const p of risk.conflicting_paths) {
+          console.warn(`  - ${p}`);
+        }
+      }
+    } else {
+      checks.push({ name: 'worktree_shared_checkout', status: 'ok', message: 'No shared-checkout conflicts' });
+      if (!options.json) console.log('✔ Worktrees: no shared-checkout conflicts');
+    }
+  } catch { /* non-fatal — git may not be available or no worktrees */ }
 
   if (options.json) {
     console.log(JSON.stringify({
