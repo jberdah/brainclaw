@@ -354,8 +354,8 @@ export function buildReputationRankingLookup(cwd) {
             return 0;
         }
         const trust = getInternalTrust(actorId, actorName);
-        const bonus = (trust / 100) * (rankingWeight * 10);
-        return Math.max(0, Math.min(1.5, Number(bonus.toFixed(2))));
+        const bonus = (trust / 100) * (rankingWeight * 20);
+        return Math.max(0, Math.min(3, Number(bonus.toFixed(2))));
     };
     return {
         enabled: snapshot.enabled,

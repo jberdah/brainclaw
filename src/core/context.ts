@@ -466,9 +466,9 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       item.reasons = uniqueReasons([...item.reasons, 'agent-layer: my assigned plan']);
     }
 
-    // Layer 2: boost items authored by me (+2)
+    // Layer 2: boost items authored by me (+0.5)
     if (item.score >= 0 && item.provenance?.actor === agentName) {
-      item.score += 2;
+      item.score += 0.5;
       item.reasons = uniqueReasons([...item.reasons, 'agent-layer: my authored item']);
     }
 
