@@ -112,7 +112,33 @@ function startMcp(cwd: string, envOverrides: Record<string, string> = {}): Child
 }
 
 function writeMcp(proc: ChildProcessWithoutNullStreams, payload: unknown): void {
-  proc.stdin.write(JSON.stringify(payload) + '\n');
+  const json = JSON.stringify(payload);
+  const byteLength = Buffer.byteLength(json, 'utf-8');
+  proc.stdin.write(`Content-Length: ${byteLength}\r\n\r\n${json}`);
+}
+
+/**
+ * Parse a Content-Length framed message from a buffer.
+ * Returns the parsed JSON and the remaining buffer, or null if incomplete.
+ */
+function parseContentLengthMessage(buffer: Buffer): { message: unknown; remaining: Buffer } | null {
+  const str = buffer.toString('utf-8');
+  const sepIndex = str.indexOf('\r\n\r\n');
+  if (sepIndex === -1) return null;
+
+  const headers = str.slice(0, sepIndex);
+  const match = headers.match(/Content-Length:\s*(\d+)/i);
+  if (!match) return null;
+
+  const contentLength = parseInt(match[1], 10);
+  const bodyStartBytes = Buffer.byteLength(str.slice(0, sepIndex + 4), 'utf-8');
+  if (buffer.length < bodyStartBytes + contentLength) return null;
+
+  const body = buffer.subarray(bodyStartBytes, bodyStartBytes + contentLength).toString('utf-8');
+  return {
+    message: JSON.parse(body),
+    remaining: buffer.subarray(bodyStartBytes + contentLength),
+  };
 }
 
 function stopMcp(proc: ChildProcessWithoutNullStreams): Promise<void> {
@@ -131,20 +157,15 @@ function stopMcp(proc: ChildProcessWithoutNullStreams): Promise<void> {
 function sendMcpRequest(proc: ChildProcessWithoutNullStreams, request: unknown): Promise<any> {
   return new Promise((resolve, reject) => {
     let stderr = '';
+    let buffer = Buffer.alloc(0);
 
     const onData = (chunk: Buffer) => {
-      const text = chunk.toString('utf-8');
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length === 0) {
-        return;
-      }
+      buffer = Buffer.concat([buffer, chunk]);
+      const parsed = parseContentLengthMessage(buffer);
+      if (!parsed) return;
 
       cleanup();
-      try {
-        resolve(JSON.parse(lines[0]));
-      } catch (error) {
-        reject(error);
-      }
+      resolve(parsed.message);
     };
 
     const onStderr = (chunk: Buffer) => {
@@ -165,7 +186,7 @@ function sendMcpRequest(proc: ChildProcessWithoutNullStreams, request: unknown):
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onStderr);
     proc.on('exit', onExit);
-    proc.stdin.write(JSON.stringify(request) + '\n');
+    writeMcp(proc, request);
   });
 }
 
@@ -179,24 +200,19 @@ function sendMcpNotification(proc: ChildProcessWithoutNullStreams, notification:
 function waitForNextMcpMessage(proc: ChildProcessWithoutNullStreams, timeoutMs: number = 5000): Promise<any> {
   return new Promise((resolve, reject) => {
     let stderr = '';
+    let buffer = Buffer.alloc(0);
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for MCP response: ${stderr}`));
     }, timeoutMs);
 
     const onData = (chunk: Buffer) => {
-      const text = chunk.toString('utf-8');
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length === 0) {
-        return;
-      }
+      buffer = Buffer.concat([buffer, chunk]);
+      const parsed = parseContentLengthMessage(buffer);
+      if (!parsed) return;
 
       cleanup();
-      try {
-        resolve(JSON.parse(lines[0]));
-      } catch (error) {
-        reject(error);
-      }
+      resolve(parsed.message);
     };
 
     const onStderr = (chunk: Buffer) => {
