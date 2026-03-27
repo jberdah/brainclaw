@@ -20,9 +20,12 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc && node dist/cli.js",
-    "build:test": "tsc -p tsconfig.test.json",
+    "clean:build": "node scripts/clean-build.mjs dist dist-test",
+    "clean:dist": "node scripts/clean-build.mjs dist",
+    "clean:dist-test": "node scripts/clean-build.mjs dist-test",
+    "build": "npm run clean:dist && tsc",
+    "dev": "npm run clean:dist && tsc && node dist/cli.js",
+    "build:test": "npm run build && npm run clean:dist-test && tsc -p tsconfig.test.json",
     "pack:check": "node scripts/check-pack.mjs",
     "test": "npm run build:test && node scripts/run-tests.mjs default",
     "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",

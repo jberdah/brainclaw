@@ -64,18 +64,21 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
-const timeoutMsByGroup = {
-  default: 60000,
-  unit: 60000,
-  smoke: 30000,
-  e2e: 120000,
-  all: 120000,
+// Per-file timeouts: some CLI-heavy unit files legitimately take >60s on Windows.
+const perFileTimeoutMs = {
+  default: 180000,
+  unit: 180000,
+  smoke: 60000,
+  e2e: 180000,
+  all: 600000,
 };
 
-const timeoutMs = timeoutMsByGroup[groupName];
+const timeoutMs = perFileTimeoutMs[groupName];
 const startedAt = Date.now();
 
-console.log(`Running ${selected.length} ${groupName} test file(s) sequentially`);
+console.log(`Running ${selected.length} ${groupName} test file(s) sequentially (${timeoutMs / 1000}s per file)`);
+
+const failures = [];
 
 for (const testFile of selected) {
   const label = relativeTestPath(testFile);
@@ -95,15 +98,26 @@ for (const testFile of selected) {
   const durationMs = Date.now() - fileStartedAt;
   if (result.error) {
     console.error(`Test runner error in ${label} after ${durationMs}ms`);
-    console.error(result.error);
-    process.exit(1);
+    console.error(result.error.code === 'ETIMEDOUT' ? `  TIMEOUT after ${timeoutMs}ms` : result.error);
+    failures.push({ label, reason: result.error.code === 'ETIMEDOUT' ? 'TIMEOUT' : 'ERROR', durationMs });
+    continue;
   }
   if (result.status !== 0) {
     console.error(`Test file failed: ${label} (${durationMs}ms)`);
-    process.exit(result.status ?? 1);
+    failures.push({ label, reason: 'FAIL', durationMs });
+    continue;
   }
 
   console.log(`<== ok ${label} (${durationMs}ms)`);
 }
 
-console.log(`\nCompleted ${selected.length} ${groupName} test file(s) in ${Date.now() - startedAt}ms`);
+const totalMs = Date.now() - startedAt;
+console.log(`\nCompleted ${selected.length} ${groupName} test file(s) in ${totalMs}ms`);
+
+if (failures.length > 0) {
+  console.log(`\n${failures.length} FAILED:`);
+  for (const f of failures) {
+    console.log(`  ✖ ${f.label} (${f.reason}, ${f.durationMs}ms)`);
+  }
+  process.exit(1);
+}
