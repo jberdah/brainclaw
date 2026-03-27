@@ -428,6 +428,8 @@ export const ClaimSchema = z.object({
   released_at: z.string().optional(),
   expires_at: z.string().optional(),
   model: z.string().optional(),
+  /** Absolute path to the git worktree associated with this claim, if one was created. */
+  worktree_path: z.string().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 
