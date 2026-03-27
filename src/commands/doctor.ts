@@ -24,6 +24,7 @@ import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
+import { listWorktrees } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
@@ -1332,6 +1333,33 @@ export function runDoctor(options: DoctorOptions = {}): void {
       }
     } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
+
+  // Worktree stale-session check
+  try {
+    const activeClaims = listClaims(options.cwd);
+    const worktrees = listWorktrees(options.cwd ?? process.cwd());
+    const claimWorktrees = new Set(activeClaims.filter((c) => c.worktree_path && c.status === 'active').map((c) => c.worktree_path!));
+    const orphanWorktrees = worktrees.filter(
+      (wt) => !wt.is_main && wt.session_id && !claimWorktrees.has(wt.path),
+    );
+    if (orphanWorktrees.length > 0) {
+      hasIssues = true;
+      checks.push({
+        name: 'worktree_orphans',
+        status: 'warn',
+        message: `${orphanWorktrees.length} worktree(s) have no active claim: ${orphanWorktrees.map((w) => w.path).join(', ')}. Run 'brainclaw worktree prune' or remove them.`,
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${orphanWorktrees.length} orphan worktree(s) with no active claim`);
+        for (const wt of orphanWorktrees) {
+          console.warn(`  - ${wt.path} (branch: ${wt.branch}, session: ${wt.session_id ?? 'unknown'})`);
+        }
+      }
+    } else {
+      checks.push({ name: 'worktree_orphans', status: 'ok', message: 'No orphan worktrees detected' });
+      if (!options.json) console.log('✔ Worktrees: no orphans');
+    }
+  } catch { /* non-fatal — git may not be available or no worktrees */ }
 
   if (options.json) {
     console.log(JSON.stringify({
