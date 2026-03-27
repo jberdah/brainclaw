@@ -7,7 +7,7 @@ import { scanText } from '../core/security.js';
 import { memoryExists } from '../core/io.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Handoff } from '../core/schema.js';
+import type { Handoff, HandoffContract } from '../core/schema.js';
 
 export interface HandoffOptions {
   from: string;
@@ -20,6 +20,11 @@ export interface HandoffOptions {
   captureDiff?: boolean;
   cwd?: string;
   store?: StoreTarget;
+  files?: string[];
+  preCondition?: string[];
+  postCondition?: string[];
+  test?: string[];
+  linkedPlan?: string[];
 }
 
 export function runHandoff(text: string, options: HandoffOptions): void {
@@ -58,6 +63,8 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     }
   }
 
+  const contract = buildContract(options, diff);
+
   const entry: Handoff = {
     id,
     short_label,
@@ -71,6 +78,7 @@ export function runHandoff(text: string, options: HandoffOptions): void {
     plan_id: options.plan,
     tags: options.tag ?? [],
     related_paths: options.path,
+    contract,
     snapshot: diff ? { diff } : undefined,
   };
 
@@ -80,4 +88,37 @@ export function runHandoff(text: string, options: HandoffOptions): void {
   console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
 }
 
+export function extractFilesFromDiff(diff: string): string[] {
+  const files = new Set<string>();
+  for (const line of diff.split('\n')) {
+    // Match "diff --git a/path b/path" or "+++ b/path" or "--- a/path"
+    const gitDiffMatch = line.match(/^diff --git a\/(.+?) b\//);
+    if (gitDiffMatch) {
+      files.add(gitDiffMatch[1]);
+      continue;
+    }
+    const plusMatch = line.match(/^\+\+\+ b\/(.+)/);
+    if (plusMatch && plusMatch[1] !== '/dev/null') {
+      files.add(plusMatch[1]);
+    }
+  }
+  return [...files].sort();
+}
 
+function buildContract(options: HandoffOptions, diff?: string): HandoffContract | undefined {
+  const hasExplicit = options.files?.length || options.preCondition?.length ||
+    options.postCondition?.length || options.test?.length || options.linkedPlan?.length;
+
+  const filesFromDiff = diff ? extractFilesFromDiff(diff) : [];
+  const allFiles = [...new Set([...(options.files ?? []), ...filesFromDiff])].sort();
+
+  if (!hasExplicit && allFiles.length === 0) return undefined;
+
+  return {
+    files_touched: allFiles.length > 0 ? allFiles : undefined,
+    pre_conditions: options.preCondition?.length ? options.preCondition : undefined,
+    post_conditions: options.postCondition?.length ? options.postCondition : undefined,
+    tests_to_verify: options.test?.length ? options.test : undefined,
+    linked_plans: options.linkedPlan?.length ? options.linkedPlan : undefined,
+  };
+}

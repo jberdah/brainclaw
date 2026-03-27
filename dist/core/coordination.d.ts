@@ -125,6 +125,13 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
+        contract?: {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        } | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;

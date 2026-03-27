@@ -194,6 +194,26 @@ export declare const TrapSchema: z.ZodObject<{
     platform_scope?: string | undefined;
 }>;
 export type Trap = z.infer<typeof TrapSchema>;
+export declare const HandoffContractSchema: z.ZodObject<{
+    files_touched: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    pre_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    post_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    tests_to_verify: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    linked_plans: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+}, "strip", z.ZodTypeAny, {
+    files_touched?: string[] | undefined;
+    pre_conditions?: string[] | undefined;
+    post_conditions?: string[] | undefined;
+    tests_to_verify?: string[] | undefined;
+    linked_plans?: string[] | undefined;
+}, {
+    files_touched?: string[] | undefined;
+    pre_conditions?: string[] | undefined;
+    post_conditions?: string[] | undefined;
+    tests_to_verify?: string[] | undefined;
+    linked_plans?: string[] | undefined;
+}>;
+export type HandoffContract = z.infer<typeof HandoffContractSchema>;
 export declare const HandoffSchema: z.ZodObject<{
     schema_version: z.ZodOptional<z.ZodNumber>;
     id: z.ZodString;
@@ -213,6 +233,25 @@ export declare const HandoffSchema: z.ZodObject<{
     plan_id: z.ZodOptional<z.ZodString>;
     tags: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], unknown>;
     related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    contract: z.ZodOptional<z.ZodObject<{
+        files_touched: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        pre_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        post_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        tests_to_verify: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        linked_plans: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    }, "strip", z.ZodTypeAny, {
+        files_touched?: string[] | undefined;
+        pre_conditions?: string[] | undefined;
+        post_conditions?: string[] | undefined;
+        tests_to_verify?: string[] | undefined;
+        linked_plans?: string[] | undefined;
+    }, {
+        files_touched?: string[] | undefined;
+        pre_conditions?: string[] | undefined;
+        post_conditions?: string[] | undefined;
+        tests_to_verify?: string[] | undefined;
+        linked_plans?: string[] | undefined;
+    }>>;
     snapshot: z.ZodOptional<z.ZodObject<{
         diff: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
@@ -239,6 +278,13 @@ export declare const HandoffSchema: z.ZodObject<{
     session_id?: string | undefined;
     related_paths?: string[] | undefined;
     plan_id?: string | undefined;
+    contract?: {
+        files_touched?: string[] | undefined;
+        pre_conditions?: string[] | undefined;
+        post_conditions?: string[] | undefined;
+        tests_to_verify?: string[] | undefined;
+        linked_plans?: string[] | undefined;
+    } | undefined;
     snapshot?: {
         diff?: string | undefined;
     } | undefined;
@@ -261,6 +307,13 @@ export declare const HandoffSchema: z.ZodObject<{
     tags?: unknown;
     related_paths?: string[] | undefined;
     plan_id?: string | undefined;
+    contract?: {
+        files_touched?: string[] | undefined;
+        pre_conditions?: string[] | undefined;
+        post_conditions?: string[] | undefined;
+        tests_to_verify?: string[] | undefined;
+        linked_plans?: string[] | undefined;
+    } | undefined;
     snapshot?: {
         diff?: string | undefined;
     } | undefined;
@@ -747,6 +800,25 @@ export declare const StateSchema: z.ZodObject<{
         plan_id: z.ZodOptional<z.ZodString>;
         tags: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], unknown>;
         related_paths: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        contract: z.ZodOptional<z.ZodObject<{
+            files_touched: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+            pre_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+            post_conditions: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+            tests_to_verify: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+            linked_plans: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        }, "strip", z.ZodTypeAny, {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        }, {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        }>>;
         snapshot: z.ZodOptional<z.ZodObject<{
             diff: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
@@ -773,6 +845,13 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
+        contract?: {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        } | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -795,6 +874,13 @@ export declare const StateSchema: z.ZodObject<{
         tags?: unknown;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
+        contract?: {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        } | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -982,6 +1068,13 @@ export declare const StateSchema: z.ZodObject<{
         session_id?: string | undefined;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
+        contract?: {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        } | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;
@@ -1096,6 +1189,13 @@ export declare const StateSchema: z.ZodObject<{
         tags?: unknown;
         related_paths?: string[] | undefined;
         plan_id?: string | undefined;
+        contract?: {
+            files_touched?: string[] | undefined;
+            pre_conditions?: string[] | undefined;
+            post_conditions?: string[] | undefined;
+            tests_to_verify?: string[] | undefined;
+            linked_plans?: string[] | undefined;
+        } | undefined;
         snapshot?: {
             diff?: string | undefined;
         } | undefined;

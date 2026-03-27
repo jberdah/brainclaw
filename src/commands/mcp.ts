@@ -704,13 +704,18 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_update_handoff',
-    description: 'Update the status or recipient of an open handoff. Requires contributor trust level or above.',
+    description: 'Update the status, recipient, or contract of an open handoff. Requires contributor trust level or above.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Handoff ID to update.' },
         status: { type: 'string', description: 'New status: open, closed.' },
         to: { type: 'string', description: 'New recipient agent name.' },
+        files_touched: { type: 'array', items: { type: 'string' }, description: 'Files touched in this handoff.' },
+        pre_conditions: { type: 'array', items: { type: 'string' }, description: 'Pre-conditions for the receiving agent.' },
+        post_conditions: { type: 'array', items: { type: 'string' }, description: 'Post-conditions the receiving agent must satisfy.' },
+        tests_to_verify: { type: 'array', items: { type: 'string' }, description: 'Tests the receiving agent should verify.' },
+        linked_plans: { type: 'array', items: { type: 'string' }, description: 'Linked plan IDs.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -1649,7 +1654,18 @@ export function handleMcpReadToolCall(
     const handoff = state.open_handoffs.find((entry) => entry.id === args.id);
     let text = `Handoff not found: ${String(args.id)}`;
     if (handoff) {
-      text = `From: ${handoff.from}\nTo: ${handoff.to}\nTask: ${handoff.text}\n\n`;
+      text = `From: ${handoff.from}\nTo: ${handoff.to}\nTask: ${handoff.text}\n`;
+      if (handoff.plan_id) text += `Plan: ${handoff.plan_id}\n`;
+      if (handoff.contract) {
+        const c = handoff.contract;
+        text += '\n--- Contract ---\n';
+        if (c.files_touched?.length) text += `Files touched:\n${c.files_touched.map(f => `  - ${f}`).join('\n')}\n`;
+        if (c.pre_conditions?.length) text += `Pre-conditions:\n${c.pre_conditions.map(p => `  - ${p}`).join('\n')}\n`;
+        if (c.post_conditions?.length) text += `Post-conditions:\n${c.post_conditions.map(p => `  - ${p}`).join('\n')}\n`;
+        if (c.tests_to_verify?.length) text += `Tests to verify:\n${c.tests_to_verify.map(t => `  - ${t}`).join('\n')}\n`;
+        if (c.linked_plans?.length) text += `Linked plans:\n${c.linked_plans.map(l => `  - ${l}`).join('\n')}\n`;
+      }
+      text += '\n';
       if (handoff.snapshot?.diff) {
         text += `--- Uncommitted Git Diff ---\n\`\`\`diff\n${handoff.snapshot.diff}\n\`\`\`\n`;
       }
@@ -1703,7 +1719,8 @@ export function handleMcpReadToolCall(
     }
     lines.push(`Open handoffs: ${board.open_handoffs.length}`);
     for (const handoff of board.open_handoffs.slice(0, 10)) {
-      lines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}`);
+      const contractHint = handoff.contract ? ' [contract]' : '';
+      lines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}${contractHint}`);
     }
     lines.push(`Resolved instructions: ${board.resolved_instructions.length}`);
     for (const instruction of board.resolved_instructions.slice(0, 10)) {
@@ -3326,6 +3343,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       if (args.status) handoff.status = args.status as 'open' | 'closed';
       if (args.to) handoff.to = String(args.to);
+      // Update contract fields
+      const contractUpdates: Record<string, string[]> = {};
+      for (const key of ['files_touched', 'pre_conditions', 'post_conditions', 'tests_to_verify', 'linked_plans'] as const) {
+        if (Array.isArray(args[key])) contractUpdates[key] = args[key] as string[];
+      }
+      if (Object.keys(contractUpdates).length > 0) {
+        handoff.contract = { ...handoff.contract, ...contractUpdates };
+      }
       saveState(state, cwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'update', item_id: handoffId, item_type: 'handoff' }, cwd);
       return {

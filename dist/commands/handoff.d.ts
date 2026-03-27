@@ -10,6 +10,12 @@ export interface HandoffOptions {
     captureDiff?: boolean;
     cwd?: string;
     store?: StoreTarget;
+    files?: string[];
+    preCondition?: string[];
+    postCondition?: string[];
+    test?: string[];
+    linkedPlan?: string[];
 }
 export declare function runHandoff(text: string, options: HandoffOptions): void;
+export declare function extractFilesFromDiff(diff: string): string[];
 //# sourceMappingURL=handoff.d.ts.map

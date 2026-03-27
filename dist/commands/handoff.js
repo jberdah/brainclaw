@@ -39,6 +39,7 @@ export function runHandoff(text, options) {
             diff = "Could not capture git diff.";
         }
     }
+    const contract = buildContract(options, diff);
     const entry = {
         id,
         short_label,
@@ -52,10 +53,42 @@ export function runHandoff(text, options) {
         plan_id: options.plan,
         tags: options.tag ?? [],
         related_paths: options.path,
+        contract,
         snapshot: diff ? { diff } : undefined,
     };
     state.open_handoffs.push(entry);
     persistState(state, cwd);
     console.log(`✔ Handoff added: [${id}] ${options.from} → ${options.to}: ${text}`);
+}
+export function extractFilesFromDiff(diff) {
+    const files = new Set();
+    for (const line of diff.split('\n')) {
+        // Match "diff --git a/path b/path" or "+++ b/path" or "--- a/path"
+        const gitDiffMatch = line.match(/^diff --git a\/(.+?) b\//);
+        if (gitDiffMatch) {
+            files.add(gitDiffMatch[1]);
+            continue;
+        }
+        const plusMatch = line.match(/^\+\+\+ b\/(.+)/);
+        if (plusMatch && plusMatch[1] !== '/dev/null') {
+            files.add(plusMatch[1]);
+        }
+    }
+    return [...files].sort();
+}
+function buildContract(options, diff) {
+    const hasExplicit = options.files?.length || options.preCondition?.length ||
+        options.postCondition?.length || options.test?.length || options.linkedPlan?.length;
+    const filesFromDiff = diff ? extractFilesFromDiff(diff) : [];
+    const allFiles = [...new Set([...(options.files ?? []), ...filesFromDiff])].sort();
+    if (!hasExplicit && allFiles.length === 0)
+        return undefined;
+    return {
+        files_touched: allFiles.length > 0 ? allFiles : undefined,
+        pre_conditions: options.preCondition?.length ? options.preCondition : undefined,
+        post_conditions: options.postCondition?.length ? options.postCondition : undefined,
+        tests_to_verify: options.test?.length ? options.test : undefined,
+        linked_plans: options.linkedPlan?.length ? options.linkedPlan : undefined,
+    };
 }
 //# sourceMappingURL=handoff.js.map

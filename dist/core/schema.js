@@ -126,6 +126,13 @@ export const TrapSchema = z.object({
     expires_at: z.string().optional(),
     platform_scope: z.string().optional(),
 });
+export const HandoffContractSchema = z.object({
+    files_touched: z.array(z.string()).optional(),
+    pre_conditions: z.array(z.string()).optional(),
+    post_conditions: z.array(z.string()).optional(),
+    tests_to_verify: z.array(z.string()).optional(),
+    linked_plans: z.array(z.string()).optional(),
+});
 export const HandoffSchema = z.object({
     schema_version: z.number().int().positive().optional(),
     id: z.string(),
@@ -145,6 +152,7 @@ export const HandoffSchema = z.object({
     plan_id: z.string().optional(),
     tags: TagsSchema,
     related_paths: z.array(z.string()).optional(),
+    contract: HandoffContractSchema.optional(),
     snapshot: z.object({
         diff: z.string().optional(),
     }).optional(),

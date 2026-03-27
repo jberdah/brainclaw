@@ -347,6 +347,11 @@ program
     .option('--plan <id>', 'Optional linked plan item ID')
     .option('--author <author>', 'Author name')
     .option('--capture-diff', 'Capture current git diff into the handoff snapshot')
+    .option('--files <files...>', 'Files touched in this handoff')
+    .option('--pre-condition <conditions...>', 'Pre-conditions for the receiving agent')
+    .option('--post-condition <conditions...>', 'Post-conditions the receiving agent must satisfy')
+    .option('--test <tests...>', 'Tests the receiving agent should verify')
+    .option('--linked-plan <plans...>', 'Linked plan IDs')
     .action((text, options) => {
     runHandoff(text, options);
 });
