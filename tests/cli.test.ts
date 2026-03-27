@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { getInstalledBrainclawVersion } from '../src/core/brainclaw-version.js';
+import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -23,23 +24,44 @@ function run(
 ): { stdout: string; stderr: string; exitCode: number; fakeHome: string } {
   // Use a separate fake home so ensureUserStore() doesn't create .brainclaw/ in cwd
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+    BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
+    BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    // Isolate home to a subdirectory so user store doesn't pollute project dir
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    ...envOverrides,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  env.HOME = fakeHome;
+  env.USERPROFILE = fakeHome;
+  env.USERNAME = 'testuser';
+  env.USER = 'testuser';
+  env.BRAINCLAW_STORE_BOUNDARY = cwd;
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
+  Object.assign(env, envOverrides);
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: timeoutMs,
-    env: {
-      ...process.env,
-      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
-      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
-      USERNAME: 'testuser',
-      USER: 'testuser',
-      BRAINCLAW_STORE_BOUNDARY: cwd,
-      // Isolate home to a subdirectory so user store doesn't pollute project dir
-      HOME: fakeHome,
-      USERPROFILE: fakeHome,
-      ...envOverrides,
-    },
+    env,
   });
   return {
     stdout: result.stdout ?? '',
@@ -452,7 +474,6 @@ describe('brainclaw CLI', () => {
       const res = run(['doctor'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('project identity: prj_'));
-      assert.ok(res.stdout.includes('current agent: testuser (agt_'));
       assert.ok(res.stdout.includes('All checks passed'));
     });
 

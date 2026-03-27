@@ -26,6 +26,7 @@ export interface RegisteredAgentIdentityOptions {
     cwd?: string;
     preferredDirName?: string;
     env?: NodeJS.ProcessEnv;
+    homeDir?: string;
     allowCurrent?: boolean;
     allowEnv?: boolean;
 }
@@ -37,7 +38,7 @@ export declare function listAgentIdentities(cwd?: string, preferredDirName?: str
 export declare function findAgentIdentityByName(agentName: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined;
 export declare function findAgentIdentityById(agentId: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined;
 export declare function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentIdentityDocument;
-export declare function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined;
+export declare function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string, homeDir?: string): AgentIdentityDocument | undefined;
 export declare function resolveRegisteredAgentIdentity(options?: RegisteredAgentIdentityOptions): AgentIdentityDocument | undefined;
 export declare function requireRegisteredAgentIdentity(options?: RegisteredAgentIdentityOptions): AgentIdentityDocument;
 export declare function resolveAgentScope(agentName?: string, cwd?: string, preferredDirName?: string): string | undefined;
@@ -51,11 +52,14 @@ export declare function resolveCurrentModel(cwd?: string): string | undefined;
 /**
  * Returns the name of the current agent, with priority:
  *  1. $BRAINCLAW_AGENT_NAME env var  (AI agent self-declaration)
- *  2. $BRAINCLAW_AGENT      env var  (legacy alias)
- *  3. config.current_agent           (project owner / human default)
+ *  2. $BRAINCLAW_AGENT      env var  (legacy alias / relay model)
+ *  3. detectAiAgent()                (auto-detection from process env vars)
  *  4. OS user                        (last-resort fallback)
+ *
+ * Note: config.current_agent is intentionally NOT used here — it's a singleton
+ * global that causes cross-agent confusion in multi-agent setups.
  */
-export declare function resolveCurrentAgentName(cwd?: string): string;
+export declare function resolveCurrentAgentName(cwd?: string, homeDir?: string): string;
 export declare function requireOperationalAgentIdentity(agentName?: string, cwd?: string, preferredDirName?: string): AgentIdentityDocument;
 export declare function resolveExistingCurrentAgent(cwd?: string): AgentIdentityDocument | undefined;
 export declare function setCurrentAgentIdentity(agent: AgentIdentityDocument, cwd?: string, preferredDirName?: string): void;

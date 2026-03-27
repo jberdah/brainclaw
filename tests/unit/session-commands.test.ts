@@ -47,8 +47,10 @@ function initGitRepo(dir: string): void {
   git(['config', 'user.name', 'Test User'], dir);
 }
 
-describe('session commands', () => {
+describe('session commands', { concurrency: false }, () => {
   let workspace: TestWorkspace;
+  let previousBrainclawAgentName: string | undefined;
+  let previousBrainclawAgent: string | undefined;
 
   beforeEach(() => {
     workspace = createTestWorkspace({
@@ -56,9 +58,17 @@ describe('session commands', () => {
       projectId: 'prj_session_test',
       currentAgent: 'copilot',
     });
+    previousBrainclawAgentName = process.env.BRAINCLAW_AGENT_NAME;
+    previousBrainclawAgent = process.env.BRAINCLAW_AGENT;
+    process.env.BRAINCLAW_AGENT_NAME = workspace.currentAgent.agent_name;
+    delete process.env.BRAINCLAW_AGENT;
   });
 
   afterEach(() => {
+    if (previousBrainclawAgentName === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
+    else process.env.BRAINCLAW_AGENT_NAME = previousBrainclawAgentName;
+    if (previousBrainclawAgent === undefined) delete process.env.BRAINCLAW_AGENT;
+    else process.env.BRAINCLAW_AGENT = previousBrainclawAgent;
     workspace.cleanup();
   });
 

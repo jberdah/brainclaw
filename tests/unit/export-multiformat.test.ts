@@ -226,6 +226,12 @@ describe('export command formats', () => {
 
   it('--detect with cursor env writes to .cursor/rules/brainclaw.md', () => {
     const saved = process.env.CURSOR_TRACE_ID;
+    const savedAgentName = process.env.BRAINCLAW_AGENT_NAME;
+    const savedAgent = process.env.BRAINCLAW_AGENT;
+    const savedAgentId = process.env.BRAINCLAW_AGENT_ID;
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT;
+    delete process.env.BRAINCLAW_AGENT_ID;
     process.env.CURSOR_TRACE_ID = 'test-trace';
     const logs: string[] = [];
     const orig = console.log;
@@ -244,11 +250,23 @@ describe('export command formats', () => {
       console.log = orig;
       if (saved === undefined) delete process.env.CURSOR_TRACE_ID;
       else process.env.CURSOR_TRACE_ID = saved;
+      if (savedAgentName === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
+      else process.env.BRAINCLAW_AGENT_NAME = savedAgentName;
+      if (savedAgent === undefined) delete process.env.BRAINCLAW_AGENT;
+      else process.env.BRAINCLAW_AGENT = savedAgent;
+      if (savedAgentId === undefined) delete process.env.BRAINCLAW_AGENT_ID;
+      else process.env.BRAINCLAW_AGENT_ID = savedAgentId;
     }
   });
 
   it('--detect with copilot env writes both instructions and the Copilot skill', () => {
     const savedToken = process.env.GITHUB_COPILOT_TOKEN;
+    const savedAgentName = process.env.BRAINCLAW_AGENT_NAME;
+    const savedAgent = process.env.BRAINCLAW_AGENT;
+    const savedAgentId = process.env.BRAINCLAW_AGENT_ID;
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT;
+    delete process.env.BRAINCLAW_AGENT_ID;
     process.env.GITHUB_COPILOT_TOKEN = 'test-token';
     try {
       runExport({ detect: true, cwd: workspace.dir });
@@ -262,6 +280,12 @@ describe('export command formats', () => {
     } finally {
       if (savedToken === undefined) delete process.env.GITHUB_COPILOT_TOKEN;
       else process.env.GITHUB_COPILOT_TOKEN = savedToken;
+      if (savedAgentName === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
+      else process.env.BRAINCLAW_AGENT_NAME = savedAgentName;
+      if (savedAgent === undefined) delete process.env.BRAINCLAW_AGENT;
+      else process.env.BRAINCLAW_AGENT = savedAgent;
+      if (savedAgentId === undefined) delete process.env.BRAINCLAW_AGENT_ID;
+      else process.env.BRAINCLAW_AGENT_ID = savedAgentId;
     }
   });
 });

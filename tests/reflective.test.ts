@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
+import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -14,18 +15,36 @@ function tmpDir(): string {
 }
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    ...envOverrides,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: {
-      ...process.env,
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
-      USERNAME: 'testuser',
-      USER: 'testuser',
-      BRAINCLAW_STORE_BOUNDARY: cwd,
-      ...envOverrides,
-    },
+    env,
   });
   return {
     stdout: result.stdout ?? '',
@@ -56,6 +75,8 @@ describe('Reflective Memory (Phase 1)', () => {
   beforeEach(() => {
     dir = tmpDir();
     run(['init', '-y'], dir);
+    run(['register-agent', 'contributor-bot', '--kind', 'agent', '--set-current'], dir);
+    run(['register-agent', 'copilot', '--kind', 'agent'], dir);
   });
 
   afterEach(() => {
@@ -80,7 +101,7 @@ describe('Reflective Memory (Phase 1)', () => {
       const candidate = JSON.parse(fs.readFileSync(path.join(inboxDir, `${cndId}.json`), 'utf-8'));
       assert.equal(candidate.status, 'pending');
       assert.equal(candidate.type, 'decision');
-      assert.equal(candidate.author, 'testuser');
+      assert.equal(candidate.author, 'contributor-bot');
       assert.match(candidate.author_id, /^agt_[a-f0-9]+$/);
       assert.match(candidate.project_id, /^prj_[a-f0-9]+$/);
       assert.equal(candidate.host_id, os.hostname().toLowerCase());
@@ -202,11 +223,13 @@ describe('Reflective Memory (Phase 1)', () => {
       const r2 = run(['reflect', 'Second item', '--type', 'trap'], dir);
       const id1 = extractId(r1.stdout);
       const id2 = extractId(r2.stdout);
+      const candidate1 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${id1}.json`), 'utf-8'));
+      const candidate2 = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${id2}.json`), 'utf-8'));
       const res = run(['review'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('2 pending'));
-      assert.ok(res.stdout.includes(`[${id1}]`));
-      assert.ok(res.stdout.includes(`[${id2}]`));
+      assert.ok(res.stdout.includes(`[${candidate1.short_label}]`));
+      assert.ok(res.stdout.includes(`[${candidate2.short_label}]`));
     });
 
     it('filters by type', () => {
@@ -357,7 +380,7 @@ describe('Reflective Memory (Phase 1)', () => {
     it('promotes decision candidate into state', () => {
       const rDec = run(['reflect', 'Use Redis for caching', '--type', 'decision', '--tag', 'cache'], dir, { BRAINCLAW_SESSION_ID: 'sess_accept_1' });
       const cndIdDec = extractId(rDec.stdout);
-      const res = run(['accept', cndIdDec], dir);
+      const res = run(['accept', cndIdDec, '--by', 'testuser'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Promoted to decision'));
       assert.ok(res.stdout.includes('accepted and archived'));
@@ -367,7 +390,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(decFiles.length, 1);
       const dec = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'decisions', decFiles[0]), 'utf-8'));
       assert.equal(dec.text, 'Use Redis for caching');
-      assert.equal(dec.author, 'testuser');
+      assert.equal(dec.author, 'contributor-bot');
       assert.match(dec.author_id, /^agt_[a-f0-9]+$/);
       assert.match(dec.project_id, /^prj_[a-f0-9]+$/);
       assert.equal(dec.host_id, os.hostname().toLowerCase());
@@ -384,7 +407,7 @@ describe('Reflective Memory (Phase 1)', () => {
 
     it('promotes constraint candidate', () => {
       const rCst = run(['reflect', 'Payments frozen', '--type', 'constraint'], dir);
-      run(['accept', extractId(rCst.stdout)], dir);
+      run(['accept', extractId(rCst.stdout), '--by', 'testuser'], dir);
       const cstFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'constraints')).filter(f => f.endsWith('.json'));
       assert.equal(cstFiles.length, 1);
       const constraint = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'constraints', cstFiles[0]), 'utf-8'));
@@ -393,7 +416,7 @@ describe('Reflective Memory (Phase 1)', () => {
 
     it('promotes trap candidate with severity', () => {
       const rTrp = run(['reflect', 'Flaky test', '--type', 'trap', '--severity', 'high'], dir);
-      run(['accept', extractId(rTrp.stdout)], dir);
+      run(['accept', extractId(rTrp.stdout), '--by', 'testuser'], dir);
       const trpFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'memory', 'traps')).filter(f => f.endsWith('.json'));
       assert.equal(trpFiles.length, 1);
       const trap = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'memory', 'traps', trpFiles[0]), 'utf-8'));
@@ -402,7 +425,7 @@ describe('Reflective Memory (Phase 1)', () => {
 
     it('promotes handoff candidate', () => {
       const rHnd = run(['reflect', 'Review PR', '--type', 'handoff', '--from', 'alice', '--to', 'bob'], dir);
-      run(['accept', extractId(rHnd.stdout)], dir);
+      run(['accept', extractId(rHnd.stdout), '--by', 'testuser'], dir);
       const hndFiles = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
       assert.equal(hndFiles.length, 1);
       const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hndFiles[0]), 'utf-8'));
@@ -413,9 +436,9 @@ describe('Reflective Memory (Phase 1)', () => {
     it('fails on already-accepted candidate', () => {
       const rAlready = run(['reflect', 'Test', '--type', 'decision'], dir);
       const cndIdAlready = extractId(rAlready.stdout);
-      run(['accept', cndIdAlready], dir);
+      run(['accept', cndIdAlready, '--by', 'testuser'], dir);
       // Candidate is now in accepted/ archive, not in inbox
-      const res = run(['accept', cndIdAlready], dir);
+      const res = run(['accept', cndIdAlready, '--by', 'testuser'], dir);
       assert.notEqual(res.exitCode, 0);
     });
   });
@@ -424,7 +447,7 @@ describe('Reflective Memory (Phase 1)', () => {
     it('rejects and archives a candidate', () => {
       const rRej = run(['reflect', 'Bad idea', '--type', 'decision'], dir);
       const cndIdRej = extractId(rRej.stdout);
-      const res = run(['reject', cndIdRej, '--reason', 'Not relevant'], dir);
+      const res = run(['reject', cndIdRej, '--by', 'testuser', '--reason', 'Not relevant'], dir);
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('rejected and archived'));
 
@@ -443,13 +466,13 @@ describe('Reflective Memory (Phase 1)', () => {
     it('supports explicit reviewer attribution on rejection', () => {
       const rRej2 = run(['reflect', 'Another bad idea', '--type', 'decision'], dir);
       const cndIdRej2 = extractId(rRej2.stdout);
-      const res = run(['reject', cndIdRej2, '--by', 'curator-bot', '--reason', 'Duplicate of accepted decision'], dir);
+      const res = run(['reject', cndIdRej2, '--by', 'testuser', '--reason', 'Duplicate of accepted decision'], dir);
       assert.equal(res.exitCode, 0);
 
       const archived = JSON.parse(fs.readFileSync(
         path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdRej2}.json`), 'utf-8'
       ));
-      assert.equal(archived.resolved_by, 'curator-bot');
+      assert.equal(archived.resolved_by, 'testuser');
       assert.equal(archived.resolution_reason, 'Duplicate of accepted decision');
     });
   });
@@ -458,7 +481,7 @@ describe('Reflective Memory (Phase 1)', () => {
     it('prunes old rejected candidates', () => {
       const rPrune = run(['reflect', 'Old item', '--type', 'decision'], dir);
       const cndIdPrune = extractId(rPrune.stdout);
-      run(['reject', cndIdPrune], dir);
+      run(['reject', cndIdPrune, '--by', 'testuser'], dir);
 
       // Manually backdate the rejected candidate
       const rejectedPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdPrune}.json`);
@@ -476,7 +499,7 @@ describe('Reflective Memory (Phase 1)', () => {
     it('supports dry-run', () => {
       const rDry = run(['reflect', 'Old item', '--type', 'decision'], dir);
       const cndIdDry = extractId(rDry.stdout);
-      run(['reject', cndIdDry], dir);
+      run(['reject', cndIdDry, '--by', 'testuser'], dir);
 
       const rejectedPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', 'rejected', `${cndIdDry}.json`);
       const candidate = JSON.parse(fs.readFileSync(rejectedPath, 'utf-8'));

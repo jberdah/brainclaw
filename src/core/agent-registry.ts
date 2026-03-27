@@ -56,6 +56,7 @@ export interface RegisteredAgentIdentityOptions {
   cwd?: string;
   preferredDirName?: string;
   env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   allowCurrent?: boolean;
   allowEnv?: boolean;
 }
@@ -252,7 +253,7 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
   return created;
 }
 
-export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string): AgentIdentityDocument | undefined {
+export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string, homeDir?: string): AgentIdentityDocument | undefined {
   // env var takes priority over config — allows AI agent to self-identify
   const envAgentId = (process.env.BRAINCLAW_AGENT_ID ?? '').trim();
   const envAgentName = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT ?? '').trim();
@@ -268,8 +269,14 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID, CODEX_THREAD_ID).
   // If detected agent is not registered, auto-register it as trusted agent.
   // This is the primary identification path for MCP servers and CLI hooks.
-  const detected = detectAiAgent();
+  const detected = detectAiAgent(process.env, homeDir);
   if (detected) {
+    // If the detected name matches an explicit env var that was already tried
+    // and not found, don't auto-register — the caller expects a "not registered" error.
+    if (detected.name === envAgentName) {
+      return undefined;
+    }
+
     const byDetected = findAgentIdentityByName(detected.name, cwd, preferredDirName);
     if (byDetected) return byDetected;
 
@@ -383,7 +390,7 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
   }
 
   const current = options.allowCurrent !== false
-    ? resolveCurrentAgentIdentity(cwd, preferredDirName)
+    ? resolveCurrentAgentIdentity(cwd, preferredDirName, options.homeDir)
     : undefined;
   if (current) {
     return current;
@@ -440,10 +447,10 @@ export function resolveCurrentModel(cwd?: string): string | undefined {
  * Note: config.current_agent is intentionally NOT used here — it's a singleton
  * global that causes cross-agent confusion in multi-agent setups.
  */
-export function resolveCurrentAgentName(cwd?: string): string {
+export function resolveCurrentAgentName(cwd?: string, homeDir?: string): string {
   const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
   if (fromEnv) return fromEnv;
-  const detected = detectAiAgent();
+  const detected = detectAiAgent(process.env, homeDir);
   if (detected) return detected.name;
   return process.env.USER ?? process.env.USERNAME ?? 'unknown';
 }

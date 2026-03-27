@@ -5,6 +5,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import YAML from 'yaml';
+import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -19,17 +21,35 @@ function tmpDir(): string {
 }
 
 function run(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 15000,
-    env: {
-      ...process.env,
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
-      USERNAME: 'testuser',
-      USER: 'testuser',
-      BRAINCLAW_STORE_BOUNDARY: cwd,
-    },
+    env,
   });
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitCode: result.status ?? 1 };
 }
@@ -46,6 +66,7 @@ describe('diff command', () => {
   beforeEach(() => {
     dir = tmpDir();
     run(['init', '-y'], dir);
+    run(['register-agent', 'contributor-bot', '--kind', 'agent', '--set-current'], dir);
   });
 
   afterEach(() => {
@@ -160,7 +181,7 @@ describe('diff command', () => {
 
   it('diff shows accepted candidates since timestamp', () => {
     const rDiff = run(['reflect', 'Good trap to accept', '--type', 'trap'], dir);
-    run(['accept', extractId(rDiff.stdout)], dir);
+    run(['accept', extractId(rDiff.stdout), '--by', 'testuser'], dir);
 
     const res = run(['diff', '--since', '2020-01-01T00:00:00Z', '--json'], dir);
     assert.equal(res.exitCode, 0);

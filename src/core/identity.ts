@@ -122,9 +122,11 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
 
     for (const file of files) {
       try {
-        const session = CurrentSessionStateSchema.parse(
-          loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
-        );
+        const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+        const session = {
+          ...CurrentSessionStateSchema.parse(migration.document),
+          schema_version: migration.metadata.currentVersion,
+        };
         // Strict match: agent name must match, user must match (when both are known)
         if (session.agent !== currentAgent) continue;
         const userMatch = !session.user || !currentUser || session.user === currentUser;
@@ -142,9 +144,11 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   const legacyPath = path.join(memoryDir(cwd), LEGACY_SESSION_FILE);
   if (fs.existsSync(legacyPath)) {
     try {
-      return CurrentSessionStateSchema.parse(
-        loadVersionedJsonFile<CurrentSessionState>('current_session', legacyPath).document
-      );
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', legacyPath);
+      return {
+        ...CurrentSessionStateSchema.parse(migration.document),
+        schema_version: migration.metadata.currentVersion,
+      };
     } catch {
       return undefined;
     }
@@ -160,9 +164,11 @@ export function loadSessionById(sessionId: string, cwd?: string): CurrentSession
   const filepath = sessionFilePath(sessionId, cwd);
   if (!fs.existsSync(filepath)) return undefined;
   try {
-    return CurrentSessionStateSchema.parse(
-      loadVersionedJsonFile<CurrentSessionState>('current_session', filepath).document
-    );
+    const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
+    return {
+      ...CurrentSessionStateSchema.parse(migration.document),
+      schema_version: migration.metadata.currentVersion,
+    };
   } catch {
     return undefined;
   }
@@ -179,9 +185,11 @@ export function loadAllSessions(cwd?: string): CurrentSessionState[] {
   const sessions: CurrentSessionState[] = [];
   for (const file of files) {
     try {
-      sessions.push(CurrentSessionStateSchema.parse(
-        loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
-      ));
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+      sessions.push({
+        ...CurrentSessionStateSchema.parse(migration.document),
+        schema_version: migration.metadata.currentVersion,
+      });
     } catch {
       // skip invalid
     }
@@ -239,9 +247,11 @@ export function gcStaleSessions(cwd?: string, ttlOverride?: string): number {
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
   for (const file of files) {
     try {
-      const session = CurrentSessionStateSchema.parse(
-        loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file)).document
-      );
+      const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
+      const session = {
+        ...CurrentSessionStateSchema.parse(migration.document),
+        schema_version: migration.metadata.currentVersion,
+      };
       if (now - Date.parse(session.last_seen_at) > ttlMs) {
         fs.unlinkSync(path.join(dir, file));
         removed++;

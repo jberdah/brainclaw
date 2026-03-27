@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import YAML from 'yaml';
 import { SCHEMA_VERSION } from '../src/commands/mcp.js';
+import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -16,22 +17,40 @@ function tmpDir(): string {
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+    BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
+    BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    ...envOverrides,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  if (envOverrides.CODEX_HOME) {
+    env.CODEX_HOME = envOverrides.CODEX_HOME;
+  }
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
-    env: {
-      ...process.env,
-      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
-      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
-      USERNAME: 'testuser',
-      USER: 'testuser',
-      BRAINCLAW_STORE_BOUNDARY: cwd,
-      HOME: fakeHome,
-      USERPROFILE: fakeHome,
-      ...envOverrides,
-    },
+    env,
   });
   return {
     stdout: result.stdout ?? '',
@@ -59,21 +78,36 @@ function enableReputation(dir: string): void {
 
 function startMcp(cwd: string, envOverrides: Record<string, string> = {}): ChildProcessWithoutNullStreams {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+    BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
+    BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    ...envOverrides,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
   return spawn(NODE, [CLI_PATH, 'mcp'], {
     cwd,
     stdio: 'pipe',
-    env: {
-      ...process.env,
-      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
-      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
-      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
-      USERNAME: 'testuser',
-      USER: 'testuser',
-      BRAINCLAW_STORE_BOUNDARY: cwd,
-      HOME: fakeHome,
-      USERPROFILE: fakeHome,
-      ...envOverrides,
-    },
+    env,
   });
 }
 
@@ -578,7 +612,7 @@ describe('MCP server', () => {
       release_notes: 'Local release ready for upgrade.',
     }, null, 2), 'utf-8');
 
-    const codexHome = path.join(dir, '.codex-home');
+    const codexHome = path.join(dir, '.codex');
     fs.mkdirSync(path.join(codexHome, 'skills', '.system', 'openai-docs'), { recursive: true });
     fs.writeFileSync(
       path.join(codexHome, 'skills', '.system', 'openai-docs', 'SKILL.md'),
@@ -591,7 +625,7 @@ describe('MCP server', () => {
       'utf-8',
     );
 
-    const proc = startMcp(dir, { CODEX_HOME: codexHome });
+    const proc = startMcp(dir);
     try {
       await initializeMcp(proc);
       const response = await sendMcpRequest(proc, {
@@ -611,9 +645,8 @@ describe('MCP server', () => {
       assert.equal(response.result.structuredContent.installable_update.status, 'update_available');
       assert.equal(response.result.structuredContent.installable_update.latest_installable_version, '99.0.0');
       assert.ok(Array.isArray(response.result.structuredContent.execution_context.toolchains));
-      assert.equal(response.result.structuredContent.agent_tooling.skills[0].name, 'openai-docs');
-      assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].name, 'atlassian');
-      assert.equal(response.result.structuredContent.agent_tooling.mcp_servers[0].availability, 'remote');
+      assert.ok(response.result.structuredContent.agent_tooling.skills.some((skill: { name?: string }) => skill.name === 'openai-docs'));
+      assert.ok(response.result.structuredContent.agent_tooling.mcp_servers.some((server: { name?: string; availability?: string }) => server.name === 'atlassian' && server.availability === 'remote'));
     } finally {
       await stopMcp(proc);
     }
@@ -814,7 +847,7 @@ describe('MCP server', () => {
       assert.equal(first.result.skip_reason, undefined);
       assert.equal(second.result.auto_reflect_attempted, false);
 
-      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', '.current-session'), 'utf-8'));
+      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'sessions', `${first.result.session_id}.json`), 'utf-8'));
       assert.equal(currentSession.session_id, first.result.session_id);
 
       const inboxFile = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${first.result.candidate_id}.json`);
@@ -877,7 +910,7 @@ describe('MCP server', () => {
       const note = JSON.parse(fs.readFileSync(path.join(runtimeDir, runtimeFiles[0]!), 'utf-8'));
       assert.equal(note.text, 'Follow-up note');
 
-      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', '.current-session'), 'utf-8'));
+      const currentSession = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'sessions', `${response.result.session_id}.json`), 'utf-8'));
       assert.equal(currentSession.session_id, response.result.session_id);
     } finally {
       await stopMcp(proc);

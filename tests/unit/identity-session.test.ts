@@ -47,7 +47,7 @@ describe('core/identity implicit sessions', () => {
       config.implicit_session_ttl = '1m';
     });
 
-    const filepath = path.join(workspace.dir, '.brainclaw', '.current-session');
+    const filepath = path.join(workspace.dir, '.brainclaw', 'sessions', `${first.session_id}.json`);
     const raw = loadCurrentSession(workspace.dir);
     assert.ok(raw);
     fs.writeFileSync(filepath, JSON.stringify({

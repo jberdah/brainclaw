@@ -79,8 +79,8 @@ describe('core/migration', () => {
   it('migrates legacy current sessions and persists schema_version on save', () => {
     workspace = createTestWorkspace({ prefix: 'bclaw-migration-session-' });
 
-    const sessionPath = path.join(workspace.dir, '.brainclaw', '.current-session');
-    fs.writeFileSync(sessionPath, JSON.stringify({
+    const legacySessionPath = path.join(workspace.dir, '.brainclaw', '.current-session');
+    fs.writeFileSync(legacySessionPath, JSON.stringify({
       session_id: 'sess_legacy',
       started_at: '2026-03-15T09:00:00.000Z',
       last_seen_at: '2026-03-15T09:10:00.000Z',
@@ -94,7 +94,8 @@ describe('core/migration', () => {
     assert.equal(loaded?.session_id, 'sess_legacy');
 
     saveCurrentSession(loaded!, workspace.dir);
-    const persisted = JSON.parse(fs.readFileSync(sessionPath, 'utf-8')) as { schema_version?: number };
+    const persistedPath = path.join(workspace.dir, '.brainclaw', 'sessions', `${loaded!.session_id}.json`);
+    const persisted = JSON.parse(fs.readFileSync(persistedPath, 'utf-8')) as { schema_version?: number };
     assert.equal(persisted.schema_version, 2);
   });
 

@@ -82,7 +82,11 @@ export function loadCurrentSession(cwd) {
         const now = Date.now();
         for (const file of files) {
             try {
-                const session = CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', path.join(dir, file)).document);
+                const migration = loadVersionedJsonFile('current_session', path.join(dir, file));
+                const session = {
+                    ...CurrentSessionStateSchema.parse(migration.document),
+                    schema_version: migration.metadata.currentVersion,
+                };
                 // Strict match: agent name must match, user must match (when both are known)
                 if (session.agent !== currentAgent)
                     continue;
@@ -101,7 +105,11 @@ export function loadCurrentSession(cwd) {
     const legacyPath = path.join(memoryDir(cwd), LEGACY_SESSION_FILE);
     if (fs.existsSync(legacyPath)) {
         try {
-            return CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', legacyPath).document);
+            const migration = loadVersionedJsonFile('current_session', legacyPath);
+            return {
+                ...CurrentSessionStateSchema.parse(migration.document),
+                schema_version: migration.metadata.currentVersion,
+            };
         }
         catch {
             return undefined;
@@ -117,7 +125,11 @@ export function loadSessionById(sessionId, cwd) {
     if (!fs.existsSync(filepath))
         return undefined;
     try {
-        return CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', filepath).document);
+        const migration = loadVersionedJsonFile('current_session', filepath);
+        return {
+            ...CurrentSessionStateSchema.parse(migration.document),
+            schema_version: migration.metadata.currentVersion,
+        };
     }
     catch {
         return undefined;
@@ -134,7 +146,11 @@ export function loadAllSessions(cwd) {
     const sessions = [];
     for (const file of files) {
         try {
-            sessions.push(CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', path.join(dir, file)).document));
+            const migration = loadVersionedJsonFile('current_session', path.join(dir, file));
+            sessions.push({
+                ...CurrentSessionStateSchema.parse(migration.document),
+                schema_version: migration.metadata.currentVersion,
+            });
         }
         catch {
             // skip invalid
@@ -196,7 +212,11 @@ export function gcStaleSessions(cwd, ttlOverride) {
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
     for (const file of files) {
         try {
-            const session = CurrentSessionStateSchema.parse(loadVersionedJsonFile('current_session', path.join(dir, file)).document);
+            const migration = loadVersionedJsonFile('current_session', path.join(dir, file));
+            const session = {
+                ...CurrentSessionStateSchema.parse(migration.document),
+                schema_version: migration.metadata.currentVersion,
+            };
             if (now - Date.parse(session.last_seen_at) > ttlMs) {
                 fs.unlinkSync(path.join(dir, file));
                 removed++;

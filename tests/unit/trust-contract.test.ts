@@ -74,6 +74,9 @@ describe('trust contract', () => {
     setAgentTrustLevel(workspace.currentAgent.agent_name, 'curator', workspace.dir);
     const claude = workspace.registerAgent('claude');
     setCurrentAgentIdentity(claude, workspace.dir);
+    process.env.BRAINCLAW_AGENT_NAME = claude.agent_name;
+    process.env.BRAINCLAW_AGENT = claude.agent_name;
+    process.env.BRAINCLAW_AGENT_ID = claude.agent_id;
 
     const result = captureCommand(() => {
       runSetTrust(workspace.currentAgent.agent_name, { level: 'trusted' });

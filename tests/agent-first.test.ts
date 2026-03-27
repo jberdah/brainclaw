@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
+import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -14,11 +15,41 @@ function tmpDir(): string {
 }
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    USERNAME: 'testuser',
+    USER: 'testuser',
+    BRAINCLAW_STORE_BOUNDARY: cwd,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    ...envOverrides,
+  };
+  for (const key of AGENT_ENV_KEYS) {
+    delete env[key];
+  }
+  const configPath = path.join(cwd, '.brainclaw', 'config.yaml');
+  if (fs.existsSync(configPath)) {
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as { current_agent?: string; current_agent_id?: string };
+    if (config.current_agent) {
+      env.BRAINCLAW_AGENT_NAME = config.current_agent;
+      env.BRAINCLAW_AGENT = config.current_agent;
+    }
+    if (config.current_agent_id) {
+      env.BRAINCLAW_AGENT_ID = config.current_agent_id;
+    }
+  }
+  env.USERNAME = 'testuser';
+  env.USER = 'testuser';
+  env.BRAINCLAW_STORE_BOUNDARY = cwd;
+  env.HOME = fakeHome;
+  env.USERPROFILE = fakeHome;
+  Object.assign(env, envOverrides);
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 20000,
-    env: { ...process.env, USERNAME: 'testuser', USER: 'testuser', BRAINCLAW_STORE_BOUNDARY: cwd, ...envOverrides },
+    env,
   });
 
   return {
