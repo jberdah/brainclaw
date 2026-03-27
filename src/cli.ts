@@ -198,10 +198,12 @@ program
   .description('Upgrade project memory structure and refresh managed workspace agent files without losing data')
   .option('--json', 'Output as JSON')
   .option('--dry-run', 'Show what would be done without making changes')
+  .option('--self-update', 'Check for a newer brainclaw package version and install it before upgrading memory')
   .action((options) => {
     runUpgrade({
       json: options.json,
       dryRun: options.dryRun,
+      selfUpdate: options.selfUpdate,
     });
   });
 
