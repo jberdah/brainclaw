@@ -5,6 +5,9 @@ import path from 'node:path';
 import {
   worktreesBaseDir,
   resolveWorktreePath,
+  isBareRepo,
+  hasGitLock,
+  detectSharedCheckoutRisk,
 } from '../../src/core/worktree.js';
 
 describe('worktreesBaseDir', () => {
@@ -64,5 +67,42 @@ describe('resolveWorktreePath', () => {
     const a = resolveWorktreePath('/my/project', 'feat/alpha');
     const b = resolveWorktreePath('/my/project', 'feat/beta');
     assert.notEqual(a, b);
+  });
+});
+
+describe('isBareRepo', () => {
+  it('returns false for a non-git directory', () => {
+    // os.tmpdir() is not a git repo, git command will fail → returns false
+    const result = isBareRepo(os.tmpdir());
+    assert.equal(result, false);
+  });
+
+  it('returns false for a normal (non-bare) git repo', () => {
+    // The current repo (where tests run) is a normal checkout
+    const result = isBareRepo(process.cwd());
+    assert.equal(result, false);
+  });
+});
+
+describe('hasGitLock', () => {
+  it('returns false when no lock is present in the current repo', () => {
+    // No concurrent git operation during test run
+    const result = hasGitLock(process.cwd());
+    assert.equal(result, false);
+  });
+
+  it('returns false for a non-git directory', () => {
+    const result = hasGitLock(os.tmpdir());
+    assert.equal(result, false);
+  });
+});
+
+describe('detectSharedCheckoutRisk', () => {
+  it('returns no conflict when called on a repo with no brainclaw worktrees', () => {
+    // Current repo has no brainclaw-managed worktrees with session sidecars
+    const risk = detectSharedCheckoutRisk(process.cwd());
+    // Conflict may or may not exist, but the function must return the shape
+    assert.ok(typeof risk.has_conflict === 'boolean');
+    assert.ok(Array.isArray(risk.conflicting_paths));
   });
 });

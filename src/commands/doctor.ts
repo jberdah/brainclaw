@@ -24,7 +24,7 @@ import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/brainclaw-version.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
-import { listWorktrees } from '../core/worktree.js';
+import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
@@ -1334,7 +1334,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
     } catch { /* non-fatal */ }
   } catch { /* non-fatal */ }
 
-  // Worktree stale-session check
+  // Worktree stale-session and shared-checkout checks
   try {
     const activeClaims = listClaims(options.cwd);
     const worktrees = listWorktrees(options.cwd ?? process.cwd());
@@ -1358,6 +1358,26 @@ export function runDoctor(options: DoctorOptions = {}): void {
     } else {
       checks.push({ name: 'worktree_orphans', status: 'ok', message: 'No orphan worktrees detected' });
       if (!options.json) console.log('✔ Worktrees: no orphans');
+    }
+
+    // Shared-checkout risk: multiple brainclaw sessions in the same working tree
+    const risk = detectSharedCheckoutRisk(options.cwd ?? process.cwd());
+    if (risk.has_conflict) {
+      hasIssues = true;
+      checks.push({
+        name: 'worktree_shared_checkout',
+        status: 'warn',
+        message: `Shared-checkout risk: ${risk.conflicting_paths.length} worktree(s) have multiple active sessions. Each session should use a dedicated worktree.`,
+      });
+      if (!options.json) {
+        console.warn('⚠ Shared-checkout risk detected — multiple sessions share a worktree');
+        for (const p of risk.conflicting_paths) {
+          console.warn(`  - ${p}`);
+        }
+      }
+    } else {
+      checks.push({ name: 'worktree_shared_checkout', status: 'ok', message: 'No shared-checkout conflicts' });
+      if (!options.json) console.log('✔ Worktrees: no shared-checkout conflicts');
     }
   } catch { /* non-fatal — git may not be available or no worktrees */ }
 

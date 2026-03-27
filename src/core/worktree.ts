@@ -4,6 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+/** Normalizes a path for use in git CLI arguments (forward slashes on Windows). */
+function gitPath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 export interface WorktreeInfo {
   /** Absolute path to the worktree root. */
   path: string;
@@ -17,6 +22,8 @@ export interface WorktreeInfo {
   session_id?: string;
   /** Brainclaw agent name associated with this worktree, if any. */
   agent?: string;
+  /** OS user who created this worktree (from sidecar). */
+  user?: string;
 }
 
 /**
@@ -50,6 +57,62 @@ function runGit(args: string[], cwd: string): { ok: boolean; stdout: string; std
 }
 
 /**
+ * Returns true if the given path is a bare git repository.
+ * Bare repos have no working tree, so worktree add is not applicable.
+ */
+export function isBareRepo(cwd: string): boolean {
+  const result = runGit(['rev-parse', '--is-bare-repository'], cwd);
+  return result.ok && result.stdout.trim() === 'true';
+}
+
+/**
+ * Returns true if git has an index lock in this worktree
+ * (another git process is active — worktree operations would fail).
+ */
+export function hasGitLock(cwd: string): boolean {
+  const gitDir = runGit(['rev-parse', '--git-dir'], cwd);
+  if (!gitDir.ok) return false;
+  const lockPath = path.join(gitDir.stdout.trim(), 'index.lock');
+  return fs.existsSync(lockPath);
+}
+
+export interface SharedCheckoutRisk {
+  /** True if multiple brainclaw-session sidecars are found in the same worktree directory. */
+  has_conflict: boolean;
+  /** Paths that share the same worktree root but belong to different sessions. */
+  conflicting_paths: string[];
+}
+
+/**
+ * Detects whether multiple distinct brainclaw sessions are using the same
+ * physical worktree directory (shared-checkout risk).
+ *
+ * Only worktrees with a `.brainclaw-worktree.json` sidecar are examined,
+ * since those are the ones brainclaw actively manages.
+ */
+export function detectSharedCheckoutRisk(mainWorktreePath: string): SharedCheckoutRisk {
+  const worktrees = listWorktrees(mainWorktreePath);
+  const sessionsByPath = new Map<string, string[]>();
+
+  for (const wt of worktrees) {
+    if (!wt.session_id) continue;
+    const existing = sessionsByPath.get(wt.path) ?? [];
+    existing.push(wt.session_id);
+    sessionsByPath.set(wt.path, existing);
+  }
+
+  const conflicting: string[] = [];
+  for (const [wtPath, sessions] of sessionsByPath) {
+    if (sessions.length > 1) conflicting.push(wtPath);
+  }
+
+  return {
+    has_conflict: conflicting.length > 0,
+    conflicting_paths: conflicting,
+  };
+}
+
+/**
  * Creates a git linked worktree at the computed placement path.
  *
  * - If `branchName` does not exist locally, creates it from HEAD.
@@ -62,6 +125,18 @@ export function createWorktree(
   branchName: string,
   options: { sessionId?: string; agent?: string } = {},
 ): string {
+  // Guard: bare repos have no working tree
+  if (isBareRepo(mainWorktreePath)) {
+    throw new Error('Cannot create a brainclaw worktree in a bare git repository.');
+  }
+
+  // Guard: active git operation lock
+  if (hasGitLock(mainWorktreePath)) {
+    throw new Error(
+      'Git index.lock detected — another git operation is in progress. Wait for it to complete before creating a worktree.',
+    );
+  }
+
   const targetPath = resolveWorktreePath(mainWorktreePath, branchName);
 
   if (fs.existsSync(targetPath)) {
@@ -77,9 +152,11 @@ export function createWorktree(
   const branchCheck = runGit(['rev-parse', '--verify', branchName], mainWorktreePath);
   const branchExists = branchCheck.ok;
 
+  // Use forward-slash paths for git on Windows
+  const gitTargetPath = gitPath(targetPath);
   const worktreeArgs = branchExists
-    ? ['worktree', 'add', targetPath, branchName]
-    : ['worktree', 'add', '-b', branchName, targetPath];
+    ? ['worktree', 'add', gitTargetPath, branchName]
+    : ['worktree', 'add', '-b', branchName, gitTargetPath];
 
   const result = runGit(worktreeArgs, mainWorktreePath);
   if (!result.ok) {
@@ -87,18 +164,17 @@ export function createWorktree(
   }
 
   // Write brainclaw metadata sidecar inside the worktree
-  if (options.sessionId || options.agent) {
-    const meta = {
-      session_id: options.sessionId,
-      agent: options.agent,
-      created_at: new Date().toISOString(),
-      main_worktree_path: mainWorktreePath,
-    };
-    fs.writeFileSync(
-      path.join(targetPath, '.brainclaw-worktree.json'),
-      JSON.stringify(meta, null, 2),
-    );
-  }
+  const meta = {
+    session_id: options.sessionId,
+    agent: options.agent,
+    user: process.env.USER || process.env.USERNAME || undefined,
+    created_at: new Date().toISOString(),
+    main_worktree_path: mainWorktreePath,
+  };
+  fs.writeFileSync(
+    path.join(targetPath, '.brainclaw-worktree.json'),
+    JSON.stringify(meta, null, 2),
+  );
 
   return targetPath;
 }
@@ -112,14 +188,16 @@ export function listWorktrees(mainWorktreePath: string): WorktreeInfo[] {
   if (!result.ok) return [];
 
   const infos: WorktreeInfo[] = [];
-  let current: Partial<WorktreeInfo> & { raw_branch?: string } = {};
+  let current: Partial<WorktreeInfo> & { raw_branch?: string; is_first?: boolean } = {};
+  let isFirst = true;
 
   for (const line of result.stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current.path) {
         infos.push(finaliseWorktree(current));
       }
-      current = { path: line.slice('worktree '.length).trim() };
+      current = { path: line.slice('worktree '.length).trim(), is_first: isFirst };
+      isFirst = false;
     } else if (line.startsWith('HEAD ')) {
       current.commit = line.slice('HEAD '.length).trim();
     } else if (line.startsWith('branch ')) {
@@ -140,13 +218,13 @@ export function listWorktrees(mainWorktreePath: string): WorktreeInfo[] {
 }
 
 function finaliseWorktree(
-  raw: Partial<WorktreeInfo> & { raw_branch?: string },
+  raw: Partial<WorktreeInfo> & { raw_branch?: string; is_first?: boolean },
 ): WorktreeInfo {
   const wt: WorktreeInfo = {
     path: raw.path ?? '',
     branch: raw.branch ?? '(detached)',
     commit: raw.commit ?? '',
-    is_main: false,
+    is_main: raw.is_first === true,
   };
 
   // Try to read brainclaw sidecar
@@ -156,6 +234,7 @@ function finaliseWorktree(
       const meta = JSON.parse(fs.readFileSync(sidecarPath, 'utf-8'));
       wt.session_id = meta.session_id;
       wt.agent = meta.agent;
+      wt.user = meta.user;
       wt.is_main = false;
     } catch {
       // ignore parse errors
