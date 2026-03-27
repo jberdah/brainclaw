@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectTarget, writeCrossProjectNote } from '../core/cross-project.js';
@@ -1323,6 +1322,109 @@ export class McpServerConnection {
   }
 }
 
+/**
+ * Send an MCP message with Content-Length framing (LSP-style).
+ * Format: `Content-Length: <N>\r\n\r\n<JSON>`
+ */
+function sendContentLengthFramed(message: Record<string, unknown>): void {
+  const json = JSON.stringify(message);
+  const byteLength = Buffer.byteLength(json, 'utf-8');
+  process.stdout.write(`Content-Length: ${byteLength}\r\n\r\n${json}`);
+}
+
+/**
+ * Bi-modal stdin parser that accepts both Content-Length framed messages
+ * (MCP/LSP standard) and legacy newline-delimited JSON.
+ *
+ * Detection: if the first non-empty data starts with "Content-Length:",
+ * we use Content-Length mode for the rest of the connection.
+ * Otherwise, we fall back to newline-delimited mode.
+ */
+export class StdioTransport {
+  private buffer = Buffer.alloc(0);
+  private mode: 'detecting' | 'content-length' | 'newline' = 'detecting';
+  private onMessage: (line: string) => void;
+  private onClose: () => void;
+
+  constructor(onMessage: (line: string) => void, onClose: () => void) {
+    this.onMessage = onMessage;
+    this.onClose = onClose;
+  }
+
+  start(): void {
+    process.stdin.on('data', (chunk: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      this.drain();
+    });
+    process.stdin.on('end', () => this.onClose());
+    process.stdin.on('close', () => this.onClose());
+  }
+
+  private drain(): void {
+    if (this.mode === 'detecting') {
+      // Skip leading whitespace/newlines to detect mode
+      const str = this.buffer.toString('utf-8');
+      const trimmed = str.trimStart();
+      if (trimmed.length === 0) return; // need more data
+      this.mode = trimmed.startsWith('Content-Length:') ? 'content-length' : 'newline';
+    }
+
+    if (this.mode === 'content-length') {
+      this.drainContentLength();
+    } else {
+      this.drainNewline();
+    }
+  }
+
+  private drainContentLength(): void {
+    while (this.buffer.length > 0) {
+      const str = this.buffer.toString('utf-8');
+      // Find the header/body separator: \r\n\r\n
+      const separatorIndex = str.indexOf('\r\n\r\n');
+      if (separatorIndex === -1) return; // need more data for headers
+
+      // Parse Content-Length from headers
+      const headers = str.slice(0, separatorIndex);
+      const match = headers.match(/Content-Length:\s*(\d+)/i);
+      if (!match) {
+        // Malformed header — skip to after separator and try again
+        this.buffer = Buffer.from(str.slice(separatorIndex + 4), 'utf-8');
+        continue;
+      }
+
+      const contentLength = parseInt(match[1], 10);
+      const bodyStart = separatorIndex + 4; // after \r\n\r\n
+      const bodyStartBytes = Buffer.byteLength(str.slice(0, bodyStart), 'utf-8');
+
+      // Check if we have enough bytes for the body
+      if (this.buffer.length < bodyStartBytes + contentLength) return; // need more data
+
+      const bodyBuffer = this.buffer.subarray(bodyStartBytes, bodyStartBytes + contentLength);
+      const body = bodyBuffer.toString('utf-8');
+      this.buffer = this.buffer.subarray(bodyStartBytes + contentLength);
+
+      if (body.trim()) {
+        this.onMessage(body);
+      }
+    }
+  }
+
+  private drainNewline(): void {
+    while (true) {
+      const str = this.buffer.toString('utf-8');
+      const newlineIndex = str.indexOf('\n');
+      if (newlineIndex === -1) return;
+
+      const line = str.slice(0, newlineIndex).replace(/\r$/, '');
+      this.buffer = Buffer.from(str.slice(newlineIndex + 1), 'utf-8');
+
+      if (line.trim()) {
+        this.onMessage(line);
+      }
+    }
+  }
+}
+
 export function runMcp(): void {
   const cwd = resolveEffectiveCwd();
 
@@ -1331,26 +1433,16 @@ export function runMcp(): void {
     process.exit(1);
   }
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false,
-  });
-
   const connection = new McpServerConnection({
     cwd,
-    send: (message) => {
-      process.stdout.write(JSON.stringify(message) + '\n');
-    },
+    send: sendContentLengthFramed,
   });
 
-  rl.on('line', (line) => {
-    connection.handleLine(line);
-  });
-
-  rl.on('close', () => {
-    connection.close();
-  });
+  const transport = new StdioTransport(
+    (line) => connection.handleLine(line),
+    () => connection.close(),
+  );
+  transport.start();
 }
 
 function createWorkerToolExecutor(): McpToolExecutor {

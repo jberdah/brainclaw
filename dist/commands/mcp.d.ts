@@ -676,6 +676,25 @@ export declare class McpServerConnection {
     private sendResult;
     private sendError;
 }
+/**
+ * Bi-modal stdin parser that accepts both Content-Length framed messages
+ * (MCP/LSP standard) and legacy newline-delimited JSON.
+ *
+ * Detection: if the first non-empty data starts with "Content-Length:",
+ * we use Content-Length mode for the rest of the connection.
+ * Otherwise, we fall back to newline-delimited mode.
+ */
+export declare class StdioTransport {
+    private buffer;
+    private mode;
+    private onMessage;
+    private onClose;
+    constructor(onMessage: (line: string) => void, onClose: () => void);
+    start(): void;
+    private drain;
+    private drainContentLength;
+    private drainNewline;
+}
 export declare function runMcp(): void;
 export declare function normaliseFormat(value: unknown): ContextFormat;
 export declare function renderContextForMcp(result: ReturnType<typeof buildContext>, format: ContextFormat, options: {
