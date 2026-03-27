@@ -9,5 +9,6 @@ interface PersistStateOptions {
     commitMessage?: string;
 }
 export declare function persistState(state: State, cwd?: string, options?: PersistStateOptions): void;
+export declare function mutateState<T>(mutateFn: (state: State) => T, cwd?: string, options?: PersistStateOptions): T;
 export {};
 //# sourceMappingURL=state.d.ts.map

@@ -2,7 +2,7 @@ import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
 import { loadClaim, listClaims, releaseClaim } from '../core/claims.js';
 import { rebuildProjectMd } from '../core/markdown.js';
-import { loadState, saveState } from '../core/state.js';
+import { loadState, mutateState } from '../core/state.js';
 export function runReleaseClaim(id, options = {}) {
     if (!memoryExists(options.cwd)) {
         console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
@@ -13,10 +13,12 @@ export function runReleaseClaim(id, options = {}) {
         mutate({ cwd: options.cwd }, () => {
             const existing = loadClaim(id, options.cwd);
             claim = releaseClaim(id, options.cwd);
-            let state = loadState(options.cwd);
             if (existing.plan_id) {
-                const plan = state.plan_items.find((item) => item.id === existing.plan_id);
-                if (plan) {
+                const updated = mutateState((state) => {
+                    const plan = state.plan_items.find((item) => item.id === existing.plan_id);
+                    if (!plan) {
+                        return false;
+                    }
                     const otherActiveClaims = listClaims(options.cwd).filter((item) => item.status === 'active' && item.plan_id === existing.plan_id);
                     if (options.planStatus) {
                         plan.status = options.planStatus;
@@ -28,10 +30,13 @@ export function runReleaseClaim(id, options = {}) {
                         plan.assignee = undefined;
                     }
                     plan.updated_at = new Date().toISOString();
-                    saveState(state, options.cwd);
+                    return true;
+                }, options.cwd, { writeProjectMarkdown: false });
+                if (updated) {
+                    const state = loadState(options.cwd);
+                    rebuildProjectMd(state, options.cwd);
                 }
             }
-            rebuildProjectMd(state, options.cwd);
         });
         console.log(`✔ Claim [${id}] released (was: ${claim.agent} → ${claim.scope})`);
     }

@@ -12,7 +12,7 @@ import { buildExecutionContext, renderExecutionContextSummary } from '../core/ex
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { loadState, mutateState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
@@ -2913,27 +2913,28 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         }
         estimatedEffort = n;
       }
-      const state = loadState(cwd);
-      const { id, short_label } = generateIdWithLabel('plan_items');
-      const timestamp = nowISO();
-      const planType = args.type as PlanType | undefined;
-      const entry: PlanItem = {
-        id,
-        short_label,
-        text: planText,
-        type: planType,
-        created_at: timestamp,
-        updated_at: timestamp,
-        author: resolved.identity!.agent_name,
-        status: 'todo',
-        priority: (args.priority as Priority) ?? 'medium',
-        assignee: args.assignee as string | undefined,
-        tags: (args.tags as string[]) ?? [],
-        depends_on: [],
-        estimated_effort: estimatedEffort,
-      };
-      state.plan_items.push(entry);
-      persistState(state, cwd);
+      const id = mutateState((state) => {
+        const { id, short_label } = generateIdWithLabel('plan_items');
+        const timestamp = nowISO();
+        const planType = args.type as PlanType | undefined;
+        const entry: PlanItem = {
+          id,
+          short_label,
+          text: planText,
+          type: planType,
+          created_at: timestamp,
+          updated_at: timestamp,
+          author: resolved.identity!.agent_name,
+          status: 'todo',
+          priority: (args.priority as Priority) ?? 'medium',
+          assignee: args.assignee as string | undefined,
+          tags: (args.tags as string[]) ?? [],
+          depends_on: [],
+          estimated_effort: estimatedEffort,
+        };
+        state.plan_items.push(entry);
+        return id;
+      }, cwd);
       appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: id, item_type: 'plan' }, cwd);
       return {
         response: toolResponse({
@@ -2952,28 +2953,32 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!planId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      const state = loadState(cwd);
-      const plan = state.plan_items.find((item) => item.id === planId || item.short_label === planId);
-      if (!plan) {
+      const updateResult = mutateState((state) => {
+        const plan = state.plan_items.find((item) => item.id === planId || item.short_label === planId);
+        if (!plan) {
+          return undefined;
+        }
+        const timestamp = nowISO();
+        if (args.status) {
+          plan.status = args.status as PlanStatus;
+          if (args.status === 'in_progress' && !plan.started_at) plan.started_at = timestamp;
+          if (args.status === 'done' && !plan.completed_at) plan.completed_at = timestamp;
+        }
+        if (args.assignee !== undefined) plan.assignee = args.assignee as string;
+        if (args.priority) plan.priority = args.priority as Priority;
+        if (args.actualEffort) plan.actual_effort = args.actualEffort as string;
+        plan.updated_at = timestamp;
+        return { id: plan.id, text: plan.text, status: plan.status };
+      }, cwd);
+      if (!updateResult) {
         return { response: createToolErrorResponse('not_found', `Plan item '${planId}' not found`) };
       }
-      const timestamp = nowISO();
-      if (args.status) {
-        plan.status = args.status as PlanStatus;
-        if (args.status === 'in_progress' && !plan.started_at) plan.started_at = timestamp;
-        if (args.status === 'done' && !plan.completed_at) plan.completed_at = timestamp;
-      }
-      if (args.assignee !== undefined) plan.assignee = args.assignee as string;
-      if (args.priority) plan.priority = args.priority as Priority;
-      if (args.actualEffort) plan.actual_effort = args.actualEffort as string;
-      plan.updated_at = timestamp;
-      persistState(state, cwd);
-      appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: plan.id, item_type: 'plan' }, cwd);
+      appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: updateResult.id, item_type: 'plan' }, cwd);
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Plan item updated: [${plan.id}] ${plan.text}` }],
-          plan_id: plan.id,
-          status: plan.status,
+          content: [{ type: 'text', text: `✔ Plan item updated: [${updateResult.id}] ${updateResult.text}` }],
+          plan_id: updateResult.id,
+          status: updateResult.status,
         }),
       };
     }
@@ -2987,28 +2992,33 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const stepText = String(args.text ?? '').trim();
       if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
-      const state = loadState(cwd);
-      const plan = state.plan_items.find((p) => p.id === stepPlanId || p.short_label === stepPlanId);
-      if (!plan) return { response: createToolErrorResponse('not_found', `Plan '${stepPlanId}' not found`) };
-      const step: PlanStep = {
-        id: generateId('plan_steps'),
-        text: stepText,
-        status: 'todo',
-        assignee: args.assignee as string | undefined,
-        created_at: nowISO(),
-        updated_at: nowISO(),
-      };
-      plan.steps = [...(plan.steps ?? []), step];
-      plan.updated_at = nowISO();
-      persistState(state, cwd);
-      const total = plan.steps.length;
-      const done = plan.steps.filter((s) => s.status === 'done').length;
+      const addStepResult = mutateState((state) => {
+        const plan = state.plan_items.find((p) => p.id === stepPlanId || p.short_label === stepPlanId);
+        if (!plan) return undefined;
+        const step: PlanStep = {
+          id: generateId('plan_steps'),
+          text: stepText,
+          status: 'todo',
+          assignee: args.assignee as string | undefined,
+          created_at: nowISO(),
+          updated_at: nowISO(),
+        };
+        plan.steps = [...(plan.steps ?? []), step];
+        plan.updated_at = nowISO();
+        return {
+          stepId: step.id,
+          planId: plan.id,
+          done: plan.steps.filter((s) => s.status === 'done').length,
+          total: plan.steps.length,
+        };
+      }, cwd);
+      if (!addStepResult) return { response: createToolErrorResponse('not_found', `Plan '${stepPlanId}' not found`) };
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Step added: [${step.id}] ${stepText} (${done}/${total} done)` }],
-          step_id: step.id,
-          plan_id: plan.id,
-          progress: { done, total },
+          content: [{ type: 'text', text: `✔ Step added: [${addStepResult.stepId}] ${stepText} (${addStepResult.done}/${addStepResult.total} done)` }],
+          step_id: addStepResult.stepId,
+          plan_id: addStepResult.planId,
+          progress: { done: addStepResult.done, total: addStepResult.total },
         }),
       };
     }
@@ -3022,24 +3032,32 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const csStepId = String(args.stepId ?? '').trim();
       if (!csPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!csStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-      const state = loadState(cwd);
-      const plan = state.plan_items.find((p) => p.id === csPlanId || p.short_label === csPlanId);
-      if (!plan) return { response: createToolErrorResponse('not_found', `Plan '${csPlanId}' not found`) };
-      const step = (plan.steps ?? []).find((s) => s.id === csStepId);
-      if (!step) return { response: createToolErrorResponse('not_found', `Step '${csStepId}' not found in plan '${csPlanId}'`) };
-      step.status = 'done';
-      step.updated_at = nowISO();
-      plan.updated_at = nowISO();
-      persistState(state, cwd);
-      const total = plan.steps!.length;
-      const done = plan.steps!.filter((s) => s.status === 'done').length;
+      const completeResult = mutateState((state) => {
+        const plan = state.plan_items.find((p) => p.id === csPlanId || p.short_label === csPlanId);
+        if (!plan) return { kind: 'plan_missing' } as const;
+        const step = (plan.steps ?? []).find((s) => s.id === csStepId);
+        if (!step) return { kind: 'step_missing' } as const;
+        step.status = 'done';
+        step.updated_at = nowISO();
+        plan.updated_at = nowISO();
+        return {
+          kind: 'ok',
+          stepId: step.id,
+          stepText: step.text,
+          planId: plan.id,
+          done: plan.steps!.filter((s) => s.status === 'done').length,
+          total: plan.steps!.length,
+        } as const;
+      }, cwd);
+      if (completeResult.kind === 'plan_missing') return { response: createToolErrorResponse('not_found', `Plan '${csPlanId}' not found`) };
+      if (completeResult.kind === 'step_missing') return { response: createToolErrorResponse('not_found', `Step '${csStepId}' not found in plan '${csPlanId}'`) };
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Step completed: [${step.id}] ${step.text} (${done}/${total} done)` }],
-          step_id: step.id,
-          plan_id: plan.id,
-          progress: { done, total },
-          all_done: done === total,
+          content: [{ type: 'text', text: `✔ Step completed: [${completeResult.stepId}] ${completeResult.stepText} (${completeResult.done}/${completeResult.total} done)` }],
+          step_id: completeResult.stepId,
+          plan_id: completeResult.planId,
+          progress: { done: completeResult.done, total: completeResult.total },
+          all_done: completeResult.done === completeResult.total,
         }),
       };
     }

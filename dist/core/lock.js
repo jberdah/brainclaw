@@ -37,8 +37,12 @@ function tryCreateLock(lockPath) {
         return true;
     }
     catch (err) {
-        if (err instanceof Error && 'code' in err && err.code === 'EEXIST')
-            return false;
+        if (err instanceof Error && 'code' in err) {
+            const code = err.code;
+            if (code === 'EEXIST' || code === 'EPERM' || code === 'EACCES') {
+                return false;
+            }
+        }
         throw err;
     }
 }

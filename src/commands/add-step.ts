@@ -1,4 +1,4 @@
-import { loadState, persistState } from '../core/state.js';
+import { mutateState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateId, nowISO } from '../core/ids.js';
 import { validateCliInput } from '../core/input-validation.js';
@@ -16,29 +16,38 @@ export function runAddStep(planId: string, text: string, options: AddStepOptions
 
   validateCliInput(text);
 
-  const state = loadState();
-  const plan = state.plan_items.find((p) => p.id === planId || p.short_label === planId);
-  if (!plan) {
-    console.error(`Error: Plan '${planId}' not found.`);
+  try {
+    const result = mutateState((state) => {
+      const plan = state.plan_items.find((p) => p.id === planId || p.short_label === planId);
+      if (!plan) {
+        throw new Error(`Plan '${planId}' not found.`);
+      }
+
+      const step: PlanStep = {
+        id: generateId('plan_steps'),
+        text,
+        status: 'todo',
+        assignee: options.assignee,
+        created_at: nowISO(),
+        updated_at: nowISO(),
+      };
+
+      plan.steps = [...(plan.steps ?? []), step];
+      plan.updated_at = nowISO();
+
+      return {
+        stepId: step.id,
+        planId: plan.id,
+        total: plan.steps.length,
+        done: plan.steps.filter((s) => s.status === 'done').length,
+      };
+    });
+
+    console.log(`✔ Step added: [${result.stepId}] ${text}`);
+    console.log(`  Plan [${result.planId}] progress: ${result.done}/${result.total} steps done`);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${msg}`);
     process.exit(1);
   }
-
-  const step: PlanStep = {
-    id: generateId('plan_steps'),
-    text,
-    status: 'todo',
-    assignee: options.assignee,
-    created_at: nowISO(),
-    updated_at: nowISO(),
-  };
-
-  plan.steps = [...(plan.steps ?? []), step];
-  plan.updated_at = nowISO();
-
-  persistState(state);
-
-  const total = plan.steps.length;
-  const done = plan.steps.filter((s) => s.status === 'done').length;
-  console.log(`✔ Step added: [${step.id}] ${text}`);
-  console.log(`  Plan [${plan.id}] progress: ${done}/${total} steps done`);
 }

@@ -73,6 +73,19 @@ function syncDirectory(dirPath, items, documentType) {
 export function saveState(state, cwd) {
     persistState(state, cwd, { writeProjectMarkdown: false });
 }
+function persistStateUnlocked(state, cwd, options = {}) {
+    writeStateDirectories(state, cwd);
+    if (options.writeProjectMarkdown ?? true) {
+        rebuildProjectMd(state, cwd);
+    }
+    appendEvent({
+        action: options.eventAction ?? 'update',
+        item_type: 'state',
+        agent: 'system',
+        summary: options.eventSummary,
+    }, cwd);
+    commitMemoryChange(options.commitMessage ?? 'state update', cwd);
+}
 function writeStateDirectories(state, cwd) {
     ensureMemoryDir(cwd);
     const effectiveCwd = cwd ?? process.cwd();
@@ -85,17 +98,16 @@ function writeStateDirectories(state, cwd) {
 export function persistState(state, cwd, options = {}) {
     const effectiveCwd = cwd ?? process.cwd();
     mutate({ cwd: effectiveCwd }, () => {
-        writeStateDirectories(state, effectiveCwd);
-        if (options.writeProjectMarkdown ?? true) {
-            rebuildProjectMd(state, effectiveCwd);
-        }
-        appendEvent({
-            action: options.eventAction ?? 'update',
-            item_type: 'state',
-            agent: 'system',
-            summary: options.eventSummary,
-        }, effectiveCwd);
-        commitMemoryChange(options.commitMessage ?? 'state update', effectiveCwd);
+        persistStateUnlocked(state, effectiveCwd, options);
+    });
+}
+export function mutateState(mutateFn, cwd, options = {}) {
+    const effectiveCwd = cwd ?? process.cwd();
+    return mutate({ cwd: effectiveCwd }, () => {
+        const state = loadState(effectiveCwd);
+        const result = mutateFn(state);
+        persistStateUnlocked(state, effectiveCwd, options);
+        return result;
     });
 }
 //# sourceMappingURL=state.js.map

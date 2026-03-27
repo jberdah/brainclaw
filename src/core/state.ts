@@ -97,6 +97,20 @@ interface PersistStateOptions {
   commitMessage?: string;
 }
 
+function persistStateUnlocked(state: State, cwd: string, options: PersistStateOptions = {}): void {
+  writeStateDirectories(state, cwd);
+  if (options.writeProjectMarkdown ?? true) {
+    rebuildProjectMd(state, cwd);
+  }
+  appendEvent({
+    action: options.eventAction ?? 'update',
+    item_type: 'state',
+    agent: 'system',
+    summary: options.eventSummary,
+  }, cwd);
+  commitMemoryChange(options.commitMessage ?? 'state update', cwd);
+}
+
 function writeStateDirectories(state: State, cwd?: string): void {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
@@ -111,16 +125,20 @@ function writeStateDirectories(state: State, cwd?: string): void {
 export function persistState(state: State, cwd?: string, options: PersistStateOptions = {}): void {
   const effectiveCwd = cwd ?? process.cwd();
   mutate({ cwd: effectiveCwd }, () => {
-    writeStateDirectories(state, effectiveCwd);
-    if (options.writeProjectMarkdown ?? true) {
-      rebuildProjectMd(state, effectiveCwd);
-    }
-    appendEvent({
-      action: options.eventAction ?? 'update',
-      item_type: 'state',
-      agent: 'system',
-      summary: options.eventSummary,
-    }, effectiveCwd);
-    commitMemoryChange(options.commitMessage ?? 'state update', effectiveCwd);
+    persistStateUnlocked(state, effectiveCwd, options);
+  });
+}
+
+export function mutateState<T>(
+  mutateFn: (state: State) => T,
+  cwd?: string,
+  options: PersistStateOptions = {},
+): T {
+  const effectiveCwd = cwd ?? process.cwd();
+  return mutate({ cwd: effectiveCwd }, () => {
+    const state = loadState(effectiveCwd);
+    const result = mutateFn(state);
+    persistStateUnlocked(state, effectiveCwd, options);
+    return result;
   });
 }

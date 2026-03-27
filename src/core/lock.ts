@@ -44,7 +44,12 @@ function tryCreateLock(lockPath: string): boolean {
     fs.writeFileSync(lockPath, JSON.stringify(data), { encoding: 'utf-8', flag: 'wx' });
     return true;
   } catch (err: unknown) {
-    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    if (err instanceof Error && 'code' in err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST' || code === 'EPERM' || code === 'EACCES') {
+        return false;
+      }
+    }
     throw err;
   }
 }
