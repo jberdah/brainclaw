@@ -901,6 +901,22 @@ export const BrainclawUpdateSourceSchema = z.discriminatedUnion('type', [
 ]);
 export type BrainclawUpdateSource = z.infer<typeof BrainclawUpdateSourceSchema>;
 
+export const AgentReleaseNotesSchema = z.object({
+  /** One-line summary an agent can surface directly to the operator. */
+  summary: z.string().min(1),
+  /** Concrete impact on agent workflows: new MCP tools, changed behaviour, removed commands. */
+  agent_relevance: z.string().optional(),
+  /** How risky is upgrading without reading the changelog first. */
+  breaking_risk: z.enum(['none', 'low', 'medium', 'high']).default('none'),
+  /** Audience tags ('all', 'multi-agent', 'large-teams'). Absent means 'all'. */
+  recommended_for: z.array(z.string()).optional(),
+  /** Short bullet points the agent can list (max ~5). */
+  highlights: z.array(z.string()).optional(),
+  /** What the agent should tell the operator, e.g. "Safe to auto-install" or "Needs review before upgrading". */
+  action_recommendation: z.string().optional(),
+});
+export type AgentReleaseNotes = z.infer<typeof AgentReleaseNotesSchema>;
+
 export const BrainclawLocalReleaseManifestSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
@@ -911,6 +927,7 @@ export const BrainclawLocalReleaseManifestSchema = z.object({
   artifact_path: z.string().optional(),
   install_command: z.string().optional(),
   release_notes: z.string().optional(),
+  agent_release_notes: AgentReleaseNotesSchema.optional(),
 });
 export type BrainclawLocalReleaseManifest = z.infer<typeof BrainclawLocalReleaseManifestSchema>;
 

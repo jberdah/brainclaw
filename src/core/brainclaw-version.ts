@@ -4,7 +4,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  AgentReleaseNotesSchema,
   BrainclawLocalReleaseManifestSchema,
+  type AgentReleaseNotes,
   type BrainclawUpdateSource,
   type BrainclawUpdateSourceNpm,
   type Config,
@@ -45,6 +47,7 @@ export interface BrainclawInstallableUpdateCheck {
   artifact_path: string | null;
   install_command: string | null;
   release_notes: string | null;
+  agent_release_notes?: AgentReleaseNotes | null;
   status: InstallableUpdateStatus;
   message: string;
   checked_at?: string | null;
@@ -59,10 +62,12 @@ export interface BrainclawLocalReleasePublication {
   artifact_path: string;
   install_command: string;
   release_notes: string | null;
+  agent_release_notes: AgentReleaseNotes | null;
 }
 
 export interface PublishLocalBrainclawReleaseOptions {
   releaseNotes?: string;
+  agentReleaseNotes?: AgentReleaseNotes;
   manifestPath?: string;
   outputDir?: string;
 }
@@ -313,7 +318,22 @@ export function renderBrainclawInstallableUpdateNotice(
   if (updateCheck.install_command) {
     lines.push(`Install: ${updateCheck.install_command}`);
   }
-  if (updateCheck.release_notes) {
+  const arn = updateCheck.agent_release_notes;
+  if (arn) {
+    lines.push(`Summary: ${arn.summary}`);
+    if (arn.breaking_risk && arn.breaking_risk !== 'none') {
+      lines.push(`Breaking risk: ${arn.breaking_risk}`);
+    }
+    if (arn.highlights && arn.highlights.length > 0) {
+      lines.push('Highlights:');
+      for (const h of arn.highlights) {
+        lines.push(`  • ${h}`);
+      }
+    }
+    if (arn.action_recommendation) {
+      lines.push(`Action: ${arn.action_recommendation}`);
+    }
+  } else if (updateCheck.release_notes) {
     lines.push(`Why update: ${updateCheck.release_notes}`);
   }
   return lines.join('\n');
@@ -357,6 +377,9 @@ export function publishLocalBrainclawRelease(
   const projectManifestPath = toPortablePath(path.relative(cwd, manifestPath));
   const installCommand = `npm install -g "${projectArtifactPath}"`;
   const releaseNotes = options.releaseNotes?.trim() || null;
+  const agentReleaseNotes = options.agentReleaseNotes
+    ? AgentReleaseNotesSchema.parse(options.agentReleaseNotes)
+    : null;
 
   const manifest = BrainclawLocalReleaseManifestSchema.parse({
     version: 1,
@@ -367,6 +390,7 @@ export function publishLocalBrainclawRelease(
     artifact_path: manifestArtifactPath,
     install_command: installCommand,
     release_notes: releaseNotes ?? undefined,
+    agent_release_notes: agentReleaseNotes ?? undefined,
   });
 
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
@@ -378,6 +402,7 @@ export function publishLocalBrainclawRelease(
     artifact_path: projectArtifactPath,
     install_command: installCommand,
     release_notes: releaseNotes,
+    agent_release_notes: agentReleaseNotes,
   };
 }
 
@@ -563,6 +588,7 @@ function checkLocalPackInstallableUpdate(
     const installCommand = manifest.install_command?.trim()
       || (artifactPath ? `npm install -g "${artifactPath}"` : config?.brainclaw_upgrade_command?.trim() || null);
     const releaseNotes = manifest.release_notes?.trim() || config?.brainclaw_upgrade_message?.trim() || null;
+    const agentReleaseNotes = manifest.agent_release_notes ?? null;
     const installedVersion = getInstalledBrainclawVersion();
 
     if (compareVersions(installedVersion, latestVersion) < 0) {
@@ -574,6 +600,7 @@ function checkLocalPackInstallableUpdate(
         artifact_path: artifactPath,
         install_command: installCommand,
         release_notes: releaseNotes,
+        agent_release_notes: agentReleaseNotes,
         status: 'update_available',
         message: `A newer installable brainclaw build is available: ${latestVersion} (installed ${installedVersion}).`,
         default_source: false,
@@ -588,6 +615,7 @@ function checkLocalPackInstallableUpdate(
       artifact_path: artifactPath,
       install_command: installCommand,
       release_notes: releaseNotes,
+      agent_release_notes: agentReleaseNotes,
       status: 'up_to_date',
       message: `Installed brainclaw ${installedVersion} is up to date for the configured local-pack channel.`,
       default_source: false,
