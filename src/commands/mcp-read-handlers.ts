@@ -1,0 +1,1022 @@
+/**
+ * MCP read-only tool handlers.
+ *
+ * Extracted from mcp.ts to reduce file size. These handlers do not mutate
+ * state — they build context, list items, search, and inspect.
+ *
+ * @module
+ */
+import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
+import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
+import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
+import { buildCoordinationSnapshot } from '../core/coordination.js';
+import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
+import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
+import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
+import { loadConfig } from '../core/config.js';
+import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
+import { loadState } from '../core/state.js';
+import { memoryExists } from '../core/io.js';
+import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
+import { listClaims } from '../core/claims.js';
+import {
+  listAgentIdentities,
+  resolveAgentScope,
+  resolveCurrentAgentIdentity,
+  resolveCurrentAgentName,
+} from '../core/agent-registry.js';
+import { readAuditLog, type AuditAction } from '../core/audit.js';
+import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
+import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
+import { search } from '../core/search.js';
+import { buildEstimationReport } from './estimation-report.js';
+import { runDoctor } from './doctor.js';
+import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
+import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
+import { listAvailableProjects, switchProject } from './switch.js';
+import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
+import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
+import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
+import type { BootstrapInterviewAnswer } from '../core/schema.js';
+import {
+  type McpToolResponse,
+  type McpReadToolContext,
+  SCHEMA_VERSION,
+  createToolErrorResponse,
+  normaliseFormat,
+  renderContextForMcp,
+} from './mcp.js';
+
+function normalizeBootstrapInterviewAnswersArg(value: unknown): BootstrapInterviewAnswer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => BootstrapInterviewAnswerSchema.parse(entry));
+}
+
+function normalizeBootstrapInterviewAudienceArg(value: unknown): 'cli' | 'ide_chat' | 'any' {
+  if (value === 'cli' || value === 'ide_chat' || value === 'any') {
+    return value;
+  }
+  return 'any';
+}
+
+function getReviewAssignee(tags: string[]): string | undefined {
+  for (const tag of tags) {
+    if (tag.startsWith('assignee:')) {
+      return tag.slice('assignee:'.length).trim() || undefined;
+    }
+  }
+  return undefined;
+}
+
+export function handleMcpReadToolCall(
+  name: string,
+  args: Record<string, unknown> = {},
+  context: McpReadToolContext = {},
+): McpToolResponse {
+  let cwd = context.cwd ?? resolveEffectiveCwd();
+
+  // If a project param is provided, resolve it to an actual cwd override
+  const projectArg = args.project as string | undefined;
+  if (projectArg) {
+    const resolvedProject = resolveProjectRef(projectArg, cwd);
+    if (resolvedProject) {
+      cwd = resolvedProject;
+    }
+  }
+
+  if (name === 'bclaw_get_context') {
+    const result = buildContext({
+      target: args.path as string | undefined,
+      project: projectArg,
+      agent: args.agent as string | undefined,
+      host: args.host as string | undefined,
+      allHosts: args.allHosts as boolean | undefined,
+      profile: args.profile as 'dev' | 'openclaw' | 'ops' | 'research' | undefined,
+      includePending: args.includePending as boolean | undefined,
+      maxItems: args.maxItems as number | undefined,
+      maxChars: args.maxChars as number | undefined,
+      digest: args.digest as boolean | undefined,
+      sinceSession: args.since_session as string | undefined,
+      bootstrap: args.bootstrap as boolean | undefined,
+      refreshBootstrap: args.refreshBootstrap as boolean | undefined,
+      cwd,
+    });
+
+    // Load available capabilities and tools from dedicated registries
+    const capabilities = listCapabilities(cwd);
+    const tools = listRegistryTools(cwd);
+
+    const format = normaliseFormat(args.format);
+    const content = renderContextForMcp(result, format, {
+      explain: args.explain as boolean | undefined,
+      compactTemplate: args.compactTemplate as boolean | undefined,
+    });
+
+    // Add metadata discovery section to content
+    let enrichedContent = content;
+    if (capabilities.length > 0 || tools.length > 0) {
+      const suggestions: string[] = [];
+      if (capabilities.length > 0) {
+        suggestions.push(`\n## Available Capabilities (${capabilities.length})`);
+        capabilities.slice(0, 5).forEach((cap) => {
+          suggestions.push(`- [${cap.id}] ${cap.name} (${cap.category})`);
+        });
+        if (capabilities.length > 5) {
+          suggestions.push(`- ... and ${capabilities.length - 5} more`);
+        }
+      }
+      if (tools.length > 0) {
+        suggestions.push(`\n## Available Tools (${tools.length})`);
+        tools.slice(0, 5).forEach((tool) => {
+          suggestions.push(`- [${tool.id}] ${tool.name} (${tool.type})`);
+        });
+        if (tools.length > 5) {
+          suggestions.push(`- ... and ${tools.length - 5} more`);
+        }
+      }
+      suggestions.push('\n💡 Tip: Use bclaw_get_capabilities, bclaw_list_tools, or bclaw_search_tools for detailed discovery');
+      enrichedContent = content + suggestions.join('\n');
+    }
+
+    // Check for unseen events from other agents
+    const agentName = (args.agent as string) ?? resolveCurrentAgentName(cwd);
+    const unseenEvents = readUnseenEvents(agentName, cwd);
+    const notifications = buildNotificationSummary(unseenEvents);
+
+    return {
+      content: [{ type: 'text', text: enrichedContent || 'No relevant memory found.' }],
+      structuredContent: {
+        ...result,
+        available_capabilities: capabilities.map((cap) => ({
+          id: cap.id,
+          name: cap.name,
+          category: cap.category,
+        })),
+        available_tools: tools.map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+          type: tool.type,
+        })),
+        ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEvents.length } : {}),
+      },
+    };
+  }
+
+  if (name === 'bclaw_bootstrap') {
+    const interviewAnswers = normalizeBootstrapInterviewAnswersArg(args.interviewAnswers);
+    if (args.apply && args.uninstall) {
+      throw new Error('bclaw_bootstrap does not allow apply and uninstall at the same time.');
+    }
+    if (args.uninstall) {
+      const result = uninstallBootstrapImport(cwd);
+      const text = !result.receipt
+        ? 'No bootstrap import receipt found.'
+        : `Bootstrap uninstall completed: ${result.deactivatedCount} instruction(s) deactivated, ${result.deletedCount} artifact(s) deleted, ${result.skippedCount} artifact(s) skipped.`;
+      return {
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          receipt: result.receipt,
+          deactivated_count: result.deactivatedCount,
+          deleted_count: result.deletedCount,
+          skipped_count: result.skippedCount,
+        },
+      };
+    }
+    if (args.apply) {
+      const applied = applyBootstrapImport({
+        target: args.target as string | undefined,
+        refresh: args.refresh as boolean | undefined,
+        interviewAnswers,
+        cwd,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: `Bootstrap import applied: ${applied.createdCount} item(s) created, ${applied.skippedCount} suggestion(s) skipped.`,
+        }],
+        structuredContent: {
+          created_count: applied.createdCount,
+          skipped_count: applied.skippedCount,
+          receipt: applied.receipt,
+          import_plan: applied.proposal,
+        },
+      };
+    }
+    const result = runBootstrapProfile({
+      target: args.target as string | undefined,
+      refresh: args.refresh as boolean | undefined,
+      interviewAnswers,
+      cwd,
+    });
+    const audience = normalizeBootstrapInterviewAudienceArg(args.audience);
+    const text = args.interview
+      ? renderBootstrapInterview(result, audience)
+      : renderBootstrapSummary(result);
+
+    // Extract top-level suggested questions for conversational bootstrap (step 11)
+    const suggestedQuestions = result.importPlan.interview?.questions?.map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      rationale: q.rationale,
+      priority: q.priority,
+    })) ?? [];
+
+    // Separate auto-imports (high confidence) from proposals (need discussion)
+    const autoImports = result.importPlan.suggestions.filter((s) => s.confidence === 'high');
+    const proposals = result.importPlan.suggestions.filter((s) => s.confidence !== 'high');
+
+    return {
+      content: [{ type: 'text', text }],
+        structuredContent: {
+          summary: result.profile.summary,
+          target: result.profile.target,
+          repo_fingerprint: result.profile.repo_fingerprint,
+          sources_scanned: result.profile.sources_scanned,
+          workspace_kind: result.profile.workspace_kind,
+        onboarding_mode: result.profile.onboarding_mode,
+        confidence: result.profile.confidence,
+        native_instruction_files: result.profile.native_instruction_files,
+        gaps: result.profile.gaps,
+        seed_count: result.profile.seed_count,
+        seeds: result.seeds,
+        import_plan: result.importPlan,
+        auto_imports: autoImports,
+        proposals,
+        suggested_questions: suggestedQuestions,
+        last_application: result.lastApplication,
+        reused_profile: result.reusedProfile,
+      },
+    };
+  }
+
+  if (name === 'bclaw_get_execution_context') {
+    const executionContext = buildExecutionContext({ cwd });
+    const config = loadConfig(cwd);
+    const installableUpdate = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+    const installableUpdateNotice = renderBrainclawInstallableUpdateNotice(installableUpdate);
+    const agentTooling = args.includeAgentTooling ? buildAgentToolingContext({ cwd }) : undefined;
+    const text = [
+      renderExecutionContextSummary(executionContext, true),
+      ...(installableUpdateNotice ? ['', installableUpdateNotice] : []),
+      ...(agentTooling ? ['', renderAgentToolingSummary(agentTooling)] : []),
+    ].join('\n');
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: {
+        execution_context: executionContext,
+        installable_update: {
+          ...installableUpdate,
+          ...(installableUpdate.agent_release_notes
+            ? { agent_release_notes: installableUpdate.agent_release_notes }
+            : {}),
+        },
+        ...(agentTooling ? { agent_tooling: agentTooling } : {}),
+      },
+    };
+  }
+
+  if (name === 'bclaw_release_notes') {
+    const config = loadConfig(cwd);
+    const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+    const arn = updateCheck.agent_release_notes;
+    const lines: string[] = [];
+    if (arn) {
+      lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+      lines.push(`Summary: ${arn.summary}`);
+      if (arn.agent_relevance) lines.push(`Agent relevance: ${arn.agent_relevance}`);
+      lines.push(`Breaking risk: ${arn.breaking_risk ?? 'none'}`);
+      if (arn.recommended_for && arn.recommended_for.length > 0) {
+        lines.push(`Recommended for: ${arn.recommended_for.join(', ')}`);
+      }
+      if (arn.highlights && arn.highlights.length > 0) {
+        lines.push('Highlights:');
+        for (const h of arn.highlights) lines.push(`  • ${h}`);
+      }
+      if (arn.action_recommendation) lines.push(`Action: ${arn.action_recommendation}`);
+    } else if (updateCheck.release_notes) {
+      lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+      lines.push(updateCheck.release_notes);
+    } else {
+      lines.push('No agent release notes available for the configured update source.');
+      if (updateCheck.status === 'not_configured') {
+        lines.push('Configure brainclaw_update_source in your project config to enable update checks.');
+      }
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: {
+        status: updateCheck.status,
+        latest_installable_version: updateCheck.latest_installable_version,
+        agent_release_notes: arn ?? null,
+        release_notes: updateCheck.release_notes ?? null,
+      },
+    };
+  }
+
+  if (name === 'bclaw_read_handoff') {
+    const state = loadState(cwd);
+    const handoff = state.open_handoffs.find((entry) => entry.id === args.id);
+    let text = `Handoff not found: ${String(args.id)}`;
+    if (handoff) {
+      text = `From: ${handoff.from}\nTo: ${handoff.to}\nTask: ${handoff.text}\n`;
+      if (handoff.plan_id) text += `Plan: ${handoff.plan_id}\n`;
+      if (handoff.contract) {
+        const c = handoff.contract;
+        text += '\n--- Contract ---\n';
+        if (c.files_touched?.length) text += `Files touched:\n${c.files_touched.map(f => `  - ${f}`).join('\n')}\n`;
+        if (c.pre_conditions?.length) text += `Pre-conditions:\n${c.pre_conditions.map(p => `  - ${p}`).join('\n')}\n`;
+        if (c.post_conditions?.length) text += `Post-conditions:\n${c.post_conditions.map(p => `  - ${p}`).join('\n')}\n`;
+        if (c.tests_to_verify?.length) text += `Tests to verify:\n${c.tests_to_verify.map(t => `  - ${t}`).join('\n')}\n`;
+        if (c.linked_plans?.length) text += `Linked plans:\n${c.linked_plans.map(l => `  - ${l}`).join('\n')}\n`;
+      }
+      text += '\n';
+      if (handoff.snapshot?.diff) {
+        text += `--- Uncommitted Git Diff ---\n\`\`\`diff\n${handoff.snapshot.diff}\n\`\`\`\n`;
+      }
+    }
+    return { content: [{ type: 'text', text }] };
+  }
+
+  if (name === 'bclaw_get_agent_board') {
+    const board = buildCoordinationSnapshot({
+      agent: args.agent as string | undefined,
+      project: args.project as string | undefined,
+      target: args.path as string | undefined,
+      host: args.host as string | undefined,
+      allHosts: args.allHosts as boolean | undefined,
+      includeReputation: args.includeReputation as boolean | undefined,
+      includeSessionMeta: args.includeSessionMeta as boolean | undefined,
+      autoAcknowledge: true,
+      cwd,
+    });
+    const lines: string[] = [];
+    lines.push(`Agent board${board.agent ? ` for ${board.agent}` : ''}${board.project ? ` (${board.project})` : ''}`);
+    lines.push('');
+    if (board.project_id) lines.push(`Project ID: ${board.project_id}`);
+    if (board.agent && board.agent_id) lines.push(`Agent ID: ${board.agent_id}`);
+    lines.push(`Current host: ${board.current_host}`);
+    if (board.all_hosts) lines.push('Host filter: all-hosts');
+    else if (board.host_filter) lines.push(`Host filter: ${board.host_filter}`);
+    if (args.includeReputation && board.reputation_summary) {
+      lines.push(`Reputation: tracked=${board.reputation_summary.tracked_agents}, avg_trust=${board.reputation_summary.avg_internal_trust}`);
+      if (board.agent_reputation) {
+        lines.push(`Agent trust: ${board.agent_reputation.internal_trust} (cq=${board.agent_reputation.contribution_quality}, rv=${board.agent_reputation.review_reliability}, ct=${board.agent_reputation.continuity_hygiene})`);
+      }
+    }
+    lines.push(`Active plans: ${board.active_plans.length}`);
+    for (const plan of board.active_plans.slice(0, 10)) {
+      const claims = plan.claims.length ? ` claims=${plan.claims.map((claim) => claim.agent).join(',')}` : '';
+      lines.push(`- [${plan.id}] ${plan.text} (${plan.status}, ${plan.priority})${claims}`);
+    }
+    lines.push(`Active claims: ${board.active_claims.length}`);
+    for (const claim of board.active_claims.slice(0, 10)) {
+      const identity = claim.agent_id ? ` [${claim.agent_id}]` : '';
+      const session = claim.session_id ? ` session=${claim.session_id}` : '';
+      lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}`);
+    }
+    const sessionMetaHint = board.session_meta_hidden > 0 ? ` (+${board.session_meta_hidden} session lifecycle notes hidden — pass includeSessionMeta to show)` : '';
+    lines.push(`Runtime notes: ${board.runtime_notes.length}${sessionMetaHint}`);
+    for (const note of board.runtime_notes.slice(-10)) {
+      const scope = note.visibility === 'shared' ? 'shared' : `${note.visibility}:${note.host_id ?? 'unknown-host'}`;
+      const identity = note.agent_id ? ` [${note.agent_id}]` : '';
+      lines.push(`- [${note.id}] ${note.agent}${identity}: ${note.text}${note.plan_id ? ` (plan ${note.plan_id})` : ''} [${scope}]`);
+    }
+    lines.push(`Open handoffs: ${board.open_handoffs.length}`);
+    for (const handoff of board.open_handoffs.slice(0, 10)) {
+      const contractHint = handoff.contract ? ' [contract]' : '';
+      lines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}${contractHint}`);
+    }
+    lines.push(`Resolved instructions: ${board.resolved_instructions.length}`);
+    for (const instruction of board.resolved_instructions.slice(0, 10)) {
+      lines.push(`- [${instruction.id}] <${instruction.layer}${instruction.scope ? `:${instruction.scope}` : ''}> ${instruction.text}`);
+    }
+    if (board.other_agents && board.other_agents.length > 0) {
+      lines.push(`Other agents: ${board.other_agents.length}`);
+      for (const other of board.other_agents) {
+        lines.push(`- ${other.name}: ${other.claim_count} claim(s) on ${other.scopes.join(', ')}`);
+      }
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { ...board },
+    };
+  }
+
+  if (name === 'bclaw_search') {
+    const query = String(args.query ?? '');
+    if (!query) {
+      throw new Error('Missing required argument: query');
+    }
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = typeof args.limit === 'number' ? args.limit : 10;
+    const allResults = search({
+      query,
+      section: (args.section ?? args.type) as string | undefined,
+      since: args.since as string | undefined,
+      maxResults: offset + limit,
+      cwd,
+    });
+    const total = allResults.length;
+    const page = allResults.slice(offset, offset + limit);
+    const lines = page.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
+    return {
+      content: [{ type: 'text', text: page.length > 0 ? lines.join('\n') : 'No results found.' }],
+      structuredContent: { total, offset, limit, results: page },
+    };
+  }
+
+  if (name === 'bclaw_estimation_report') {
+    const report = buildEstimationReport({ agent: args.agent as string | undefined, cwd });
+    const lines: string[] = [`Estimation Report — ${report.summary.total} completed plan(s)`];
+    if (report.summary.calibration_hint) {
+      lines.push(`Calibration: ${report.summary.calibration_hint}`);
+      lines.push(`Median ratio: ${report.summary.median_ratio}x · Mean: ${report.summary.mean_ratio}x`);
+    }
+    for (const e of report.entries) {
+      const est = e.estimated_minutes !== undefined ? `est:${e.estimated_minutes}min` : 'no estimate';
+      const act = e.elapsed_minutes !== undefined ? `actual:${e.elapsed_minutes}min` : 'no actual';
+      const ratio = e.ratio !== undefined ? ` ratio:${e.ratio}x` : '';
+      lines.push(`[${e.id.slice(0, 8)}] ${e.text.slice(0, 60)} — ${est} · ${act}${ratio}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  if (name === 'bclaw_list_plans') {
+    let plans = loadState(cwd).plan_items;
+
+    // Direct lookup by ID
+    if (args.id) {
+      const plan = plans.find((p) => p.id === String(args.id) || p.short_label === String(args.id));
+      if (!plan) {
+        return { content: [{ type: 'text', text: `Plan '${args.id}' not found.` }], structuredContent: { total: 0, plans: [] } };
+      }
+      return {
+        content: [{ type: 'text', text: `[${plan.id}] ${plan.text} (${plan.status}, ${plan.priority})` }],
+        structuredContent: { total: 1, plans: [plan] },
+      };
+    }
+
+    // Filters
+    if (!args.all) {
+      plans = plans.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped');
+    }
+    if (args.status) {
+      plans = plans.filter((plan) => plan.status === args.status);
+    }
+    if (args.type) {
+      plans = plans.filter((plan) => plan.type === args.type);
+    }
+    if (args.assignee) {
+      const assignee = String(args.assignee).toLowerCase();
+      plans = plans.filter((plan) => plan.assignee?.toLowerCase() === assignee);
+    }
+    if (args.project) {
+      const project = String(args.project).toLowerCase();
+      plans = plans.filter((plan) => plan.project?.toLowerCase() === project);
+    }
+
+    const totalFiltered = plans.length;
+
+    // Pagination
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const paginated = plans.slice(offset, offset + limit);
+
+    const lines = paginated.length === 0
+      ? ['No plan items found.']
+      : [
+          `${totalFiltered} plan(s)${totalFiltered > paginated.length ? ` (showing ${offset + 1}-${offset + paginated.length})` : ''}:`,
+          ...paginated.map((plan) => {
+            const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
+            if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
+            if (plan.project) meta.push(`project ${plan.project}`);
+            if (plan.depends_on.length > 0) meta.push(`depends_on ${plan.depends_on.join(',')}`);
+            const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
+            return `[${plan.id}] ${plan.text} (${meta.join(' · ')})${tags}`;
+          }),
+        ];
+
+    // Compact mode: strip heavy fields
+    const outputPlans = args.compact
+      ? paginated.map(({ id, short_label, text, status, priority, tags, assignee, type }) => ({
+          id, short_label, text, status, priority, tags, assignee, type,
+        }))
+      : paginated;
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: totalFiltered, offset, limit, plans: outputPlans },
+    };
+  }
+
+  if (name === 'bclaw_list_claims') {
+    let claims = listClaims(cwd);
+    if (!args.all) {
+      claims = claims.filter((claim) => claim.status === 'active');
+    }
+    if (args.project) {
+      claims = claims.filter((claim) => claim.project === args.project);
+    }
+    if (args.plan) {
+      claims = claims.filter((claim) => claim.plan_id === args.plan);
+    }
+    if (args.agent) {
+      claims = claims.filter((claim) => claim.agent === args.agent);
+    }
+
+    const total = claims.length;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const page = claims.slice(offset, offset + limit);
+    const label = args.all ? 'claim(s)' : 'active claim(s)';
+
+    const lines = page.length === 0
+      ? ['No active claims.']
+      : [
+          `${total} ${label}${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((claim) => {
+            const status = claim.status !== 'active' ? ` (${claim.status})` : '';
+            const extras: string[] = [];
+            if (claim.session_id) extras.push(`session ${claim.session_id.slice(-8)}`);
+            if (claim.plan_id) extras.push(`plan ${claim.plan_id}`);
+            if (claim.project) extras.push(`project ${claim.project}`);
+            const suffix = extras.length ? ` [${extras.join(', ')}]` : '';
+            return `[${claim.id}] ${claim.agent} -> ${claim.scope}: ${claim.description}${suffix}${status}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, claims: page },
+    };
+  }
+
+  if (name === 'bclaw_list_agents') {
+    const agents = listAgentIdentities(cwd);
+    const current = resolveCurrentAgentIdentity(cwd);
+    const reputation = args.includeReputation ? buildReputationSnapshot(cwd) : undefined;
+    const reputationById = new Map((reputation?.agents ?? []).map((agent) => [agent.agent_id ?? agent.key, toPublicReputationSummary(agent)]));
+    const structuredAgents = args.includeReputation
+      ? agents.map((agent) => ({
+          ...agent,
+          reputation: reputationById.get(agent.agent_id),
+        }))
+      : agents;
+
+    const lines = structuredAgents.length === 0
+      ? ['No registered agents.']
+      : [
+          `${structuredAgents.length} registered agent(s):`,
+          ...structuredAgents.map((agent) => {
+            const reputation = (agent as {
+              reputation?: {
+                internal_trust: number;
+                contribution_quality: number;
+                review_reliability: number;
+                continuity_hygiene: number;
+              };
+            }).reputation;
+            const currentLabel = current?.agent_id === agent.agent_id ? ' [current]' : '';
+            const capabilitiesLabel = agent.capabilities.length > 0 ? ` caps=${agent.capabilities.join(',')}` : '';
+            const fingerprintLabel = agent.identity_key ? ` fp=${agent.identity_key.fingerprint.slice(0, 12)}` : '';
+            const reputationLabel = reputation
+              ? ` trust=${reputation.internal_trust} cq=${reputation.contribution_quality} rv=${reputation.review_reliability} ct=${reputation.continuity_hygiene}`
+              : '';
+            return `- ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}${reputationLabel}${capabilitiesLabel}${fingerprintLabel}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: {
+        current_agent_id: current?.agent_id,
+        current_agent: current?.agent_name,
+        agents: structuredAgents,
+      },
+    };
+  }
+
+  if (name === 'bclaw_list_instructions') {
+    const config = loadConfig(cwd);
+    const project = args.project as string | undefined;
+    const inferredProject = project ?? inferProjectFromTarget(args.path as string | undefined, config);
+    const resolvedAgent = args.resolved ? resolveAgentScope(args.agent as string | undefined) : args.agent as string | undefined;
+    const source = args.resolved
+      ? resolveInstructions(loadInstructions(cwd), { project: inferredProject, agent: resolvedAgent })
+      : loadInstructions(cwd);
+
+    let entries = source;
+    if (args.active) {
+      entries = entries.filter((entry) => entry.active);
+    }
+    if (args.layer) {
+      entries = entries.filter((entry) => entry.layer === args.layer);
+    }
+    if (inferredProject) {
+      entries = entries.filter((entry) => entry.layer !== 'project' || entry.scope === inferredProject);
+    }
+    if (args.agent) {
+      entries = entries.filter((entry) => entry.layer !== 'agent' || entry.scope === args.agent);
+    }
+
+    const total = entries.length;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const page = entries.slice(offset, offset + limit);
+
+    const lines = page.length === 0
+      ? ['No instructions found.']
+      : [
+          `${total} instruction(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((entry) => {
+            const scope = entry.scope ? `:${entry.scope}` : '';
+            const flags: string[] = [entry.layer];
+            if (!entry.active) flags.push('inactive');
+            if (entry.supersedes) flags.push(`supersedes ${entry.supersedes}`);
+            const tags = entry.tags.length ? ` [${entry.tags.join(', ')}]` : '';
+            return `[${entry.id}] <${entry.layer}${scope}> ${entry.text} (${flags.join(' · ')})${tags}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, instructions: page },
+    };
+  }
+
+  if (name === 'bclaw_list_candidates') {
+    const status = String(args.status ?? 'pending').toLowerCase();
+    let candidates = status === 'accepted'
+      ? listArchivedCandidates('accepted', cwd)
+      : status === 'rejected'
+        ? listArchivedCandidates('rejected', cwd)
+        : status === 'all'
+          ? [
+              ...listCandidates('pending', cwd),
+              ...listArchivedCandidates('accepted', cwd),
+              ...listArchivedCandidates('rejected', cwd),
+            ]
+          : listCandidates('pending', cwd);
+
+    if (args.type) {
+      candidates = candidates.filter((candidate) => candidate.type === args.type);
+    }
+    if (args.assignee) {
+      const assignee = String(args.assignee).toLowerCase();
+      candidates = candidates.filter((candidate) => getReviewAssignee(candidate.tags)?.toLowerCase() === assignee);
+    }
+
+    const total = candidates.length;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const page = candidates.slice(offset, offset + limit);
+    const isCompact = args.compact === true;
+
+    const lines = page.length === 0
+      ? ['No candidates found.']
+      : [
+          `${total} candidate(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((candidate) => {
+            if (isCompact) {
+              return `[${candidate.id}] ${candidate.type}/${candidate.status}: ${candidate.text.slice(0, 120)}${candidate.text.length > 120 ? '…' : ''}`;
+            }
+            const assignee = getReviewAssignee(candidate.tags);
+            const tags = candidate.tags.length ? ` [${candidate.tags.join(', ')}]` : '';
+            const assigneeLabel = assignee ? ` assignee=${assignee}` : '';
+            return `[${candidate.id}] ${candidate.type}/${candidate.status}${assigneeLabel}: ${candidate.text}${tags}`;
+          }),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, candidates: page },
+    };
+  }
+
+  if (name === 'bclaw_get_capabilities') {
+    const allCapabilities = listCapabilities(cwd);
+
+    const filtered = allCapabilities.filter((cap) => {
+      const categoryFilter = args.category as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      if (categoryFilter && cap.category !== categoryFilter) return false;
+      if (tagsFilter && tagsFilter.length > 0) {
+        if (!tagsFilter.every((tag) => cap.tags.includes(tag))) return false;
+      }
+      return true;
+    });
+
+    const lines: string[] = [`Capabilities (${filtered.length}):`];
+    filtered.forEach((cap) => {
+      lines.push(`\n[${cap.id}] ${cap.name}`);
+      lines.push(`    Category: ${cap.category}`);
+      lines.push(`    Author: ${cap.author}`);
+      if (cap.tags.length > 0) {
+        lines.push(`    Tags: ${cap.tags.join(', ')}`);
+      }
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No capabilities found.' }],
+      structuredContent: { total: filtered.length, capabilities: filtered },
+    };
+  }
+
+  if (name === 'bclaw_list_tools') {
+    const allTools = listRegistryTools(cwd);
+
+    const filtered = allTools.filter((tool) => {
+      const typeFilter = args.type as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      if (typeFilter && tool.type !== typeFilter) return false;
+      if (tagsFilter && tagsFilter.length > 0) {
+        if (!tagsFilter.every((tag) => tool.tags.includes(tag))) return false;
+      }
+      return true;
+    });
+
+    const lines: string[] = [`Tools (${filtered.length}):`];
+    filtered.forEach((tool) => {
+      lines.push(`\n[${tool.id}] ${tool.name}`);
+      lines.push(`    Type: ${tool.type}`);
+      lines.push(`    Author: ${tool.author}`);
+      if (tool.tags.length > 0) {
+        lines.push(`    Tags: ${tool.tags.join(', ')}`);
+      }
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
+      structuredContent: { total: filtered.length, tools: filtered },
+    };
+  }
+
+  if (name === 'bclaw_search_tools') {
+    const query = String(args.query ?? '');
+    if (!query) {
+      throw new Error('Missing required argument: query');
+    }
+
+    const allTools = listRegistryTools(cwd);
+    const queryLower = query.toLowerCase();
+
+    const filtered = allTools.filter((tool) => {
+      const typeFilter = args.type as string | undefined;
+      const tagsFilter = args.tags as string[] | undefined;
+
+      if (typeFilter && tool.type !== typeFilter) return false;
+      if (tagsFilter && tagsFilter.length > 0) {
+        if (!tagsFilter.every((tag) => tool.tags.includes(tag))) return false;
+      }
+
+      return (
+        tool.name.toLowerCase().includes(queryLower) ||
+        tool.description.toLowerCase().includes(queryLower) ||
+        tool.tags.some((tag) => tag.toLowerCase().includes(queryLower))
+      );
+    });
+
+    const lines: string[] = [`Search results for '${query}' (${filtered.length} tool(s)):`];
+    filtered.forEach((tool) => {
+      lines.push(`\n[${tool.id}] ${tool.name}`);
+      lines.push(`    Type: ${tool.type}`);
+    });
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') || 'No tools found.' }],
+      structuredContent: { query, total: filtered.length, tools: filtered },
+    };
+  }
+
+  if (name === 'bclaw_get_discovery') {
+    const refresh = args.refresh !== false; // default: true
+    const noSave = args.noSave as boolean | undefined;
+
+    let profile;
+    if (!refresh) {
+      profile = loadDiscoveryProfile(cwd);
+    }
+    if (!profile) {
+      profile = buildProjectDiscovery({ cwd });
+      if (!noSave) {
+        saveDiscoveryProfile(profile, cwd);
+      }
+    }
+
+    return {
+      content: [{ type: 'text', text: renderDiscoverySummary(profile) }],
+      structuredContent: { ...profile, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_conflict_check') {
+    const agentNameArg = args.agent as string | undefined;
+    const agentIdArg = args.agentId as string | undefined;
+    const currentAgentName = agentNameArg ?? resolveCurrentAgentName(cwd);
+    const allClaimsForCheck = listClaims(cwd).filter((c) => c.status === 'active');
+    const myClaimsForCheck = allClaimsForCheck.filter((c) =>
+      agentIdArg ? c.agent_id === agentIdArg : c.agent === currentAgentName
+    );
+    const otherClaimsForCheck = allClaimsForCheck.filter((c) =>
+      agentIdArg ? c.agent_id !== agentIdArg : c.agent !== currentAgentName
+    );
+
+    const conflicts: Array<{ my_claim: string; my_scope: string; other_claim: string; other_agent: string; other_scope: string; reason: string }> = [];
+    for (const mine of myClaimsForCheck) {
+      const myScopes = mine.scope.replace(/\\/g, '/').split(/\s+/);
+      for (const other of otherClaimsForCheck) {
+        const otherScopes = other.scope.replace(/\\/g, '/').split(/\s+/);
+        for (const ms of myScopes) {
+          for (const os of otherScopes) {
+            if (ms === os || ms.startsWith(os + '/') || os.startsWith(ms + '/')) {
+              conflicts.push({
+                my_claim: mine.id, my_scope: mine.scope,
+                other_claim: other.id, other_agent: other.agent, other_scope: other.scope,
+                reason: ms === os ? `exact: ${ms}` : `overlap: ${ms} ↔ ${os}`,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const text = conflicts.length === 0
+      ? `No claim conflicts for ${currentAgentName}.`
+      : `${conflicts.length} conflict(s) found:\n${conflicts.map((c) => `  ${c.my_scope} ↔ ${c.other_agent}:${c.other_scope} (${c.reason})`).join('\n')}`;
+
+    return {
+      content: [{ type: 'text', text }],
+      structuredContent: { agent: currentAgentName, conflicts, total: conflicts.length, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_switch') {
+    if (args.list === true) {
+      try {
+        const result = listAvailableProjects(cwd);
+        const lines = result.projects.map(p => {
+          const marker = p.active ? '→' : ' ';
+          const label = p.name ? `${p.name} (${p.relative_path})` : p.relative_path;
+          return `${marker} ${label}`;
+        });
+        return {
+          content: [{ type: 'text', text: lines.length > 0 ? `Projects in workspace:\n${lines.join('\n')}` : 'No projects found.' }],
+          structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+        };
+      } catch (err) {
+        return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    if (args.clear === true) {
+      try {
+        const session = loadCurrentSession(cwd);
+        if (session?.active_project) {
+          const { active_project: _removed, ...rest } = session;
+          saveCurrentSession(rest, cwd);
+        }
+        return {
+          content: [{ type: 'text', text: '✔ Active project cleared. Commands will use workspace root.' }],
+          structuredContent: { cleared: true, schema_version: SCHEMA_VERSION },
+        };
+      } catch (err) {
+        return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const projectRef = args.project as string | undefined;
+    if (!projectRef) {
+      return createToolErrorResponse('validation_error', 'Missing required argument: project (or use list=true / clear=true)');
+    }
+
+    try {
+      const result = switchProject(projectRef, { cwd, sessionOnly: true });
+      const text = `✔ Switched to ${result.name ? `"${result.name}"` : result.path} (${result.scope}-scoped)`;
+      return {
+        content: [{ type: 'text', text }],
+        structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+      };
+    } catch (err) {
+      return createToolErrorResponse('switch_error', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  if (name === 'bclaw_who') {
+    // loadAllSessions and gcStaleSessions imported at top of file
+    const doGc = args.gc === true;
+    const showAll = args.all === true;
+
+    if (doGc) {
+      const removed = gcStaleSessions(cwd);
+      return {
+        content: [{ type: 'text', text: `✔ Removed ${removed} stale session(s).` }],
+        structuredContent: { gc: true, removed, schema_version: SCHEMA_VERSION },
+      };
+    }
+
+    const allSessions = loadAllSessions(cwd);
+    const ttlMs = 4 * 60 * 60 * 1000;
+    const now = Date.now();
+    const sessions = showAll
+      ? allSessions
+      : allSessions.filter((s) => (now - Date.parse(s.last_seen_at)) <= ttlMs);
+
+    const activeClaims = listClaims(cwd).filter((c) => c.status === 'active');
+    const output = sessions.map((s) => ({
+      session_id: s.session_id,
+      user: s.user ?? 'unknown',
+      agent: s.agent,
+      agent_id: s.agent_id,
+      project: s.active_project?.name ?? s.active_project?.path ?? null,
+      claims: activeClaims.filter((c) => c.agent_id === s.agent_id).length,
+      last_seen_at: s.last_seen_at,
+      stale: (now - Date.parse(s.last_seen_at)) > ttlMs,
+    }));
+
+    const lines = sessions.length === 0
+      ? 'No active sessions.'
+      : output.map((s) => `${s.user} | ${s.agent} | ${s.project ?? '(root)'} | ${s.claims} claims | ${s.stale ? 'stale' : 'active'}`).join('\n');
+
+    return {
+      content: [{ type: 'text', text: lines }],
+      structuredContent: { sessions: output, total: output.length, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_doctor') {
+    // Capture doctor JSON output by redirecting console.log
+    const captured: string[] = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    console.log = (...a: unknown[]) => captured.push(a.join(' '));
+    console.warn = (...a: unknown[]) => captured.push(a.join(' '));
+    console.error = (...a: unknown[]) => captured.push(a.join(' '));
+    try {
+      runDoctor({ json: true, cwd, migrationCheck: args.migrationCheck as boolean | undefined });
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+    }
+    const jsonStr = captured.join('\n');
+    let structured: Record<string, unknown> = {};
+    try { structured = JSON.parse(jsonStr) as Record<string, unknown>; } catch { /* non-JSON fallback */ }
+    const ok = structured.ok as boolean | undefined;
+    const checks = (structured.checks as Array<{ name: string; status: string; message: string }>) ?? [];
+    const errors = checks.filter(c => c.status === 'error');
+    const warns = checks.filter(c => c.status === 'warn');
+    const summary = ok
+      ? `✔ All ${checks.length} checks passed.`
+      : `${errors.length} error(s), ${warns.length} warning(s) out of ${checks.length} checks.`;
+    return {
+      content: [{ type: 'text', text: summary }],
+      structuredContent: { ...structured, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_history') {
+    const id = String(args.id ?? '').trim();
+    if (!id) throw new Error('Missing required argument: id');
+    const entries = readAuditLog({ itemId: id }, cwd);
+    const lines = [`History for ${id} — ${entries.length} event(s):`];
+    for (const e of entries) {
+      const reason = e.reason ? ` | ${e.reason}` : '';
+      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${reason}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { id, total: entries.length, entries, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_audit') {
+    const limit = (args.limit as number | undefined) ?? 20;
+    const entries = readAuditLog({
+      since: args.since as string | undefined,
+      actor: args.actor as string | undefined,
+      action: args.action as AuditAction | undefined,
+    }, cwd);
+    const sliced = entries.slice(-limit);
+    const lines = [`Audit log — showing ${sliced.length} of ${entries.length} entries:`];
+    for (const e of sliced) {
+      const itemInfo = e.item_id ? ` → ${e.item_id}` : '';
+      const typeInfo = e.item_type ? ` (${e.item_type})` : '';
+      const reason = e.reason ? ` | ${e.reason}` : '';
+      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${itemInfo}${typeInfo}${reason}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total: entries.length, returned: sliced.length, entries: sliced, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  throw new Error(`Unknown read tool: ${name}`);
+}
