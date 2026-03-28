@@ -65,6 +65,7 @@ import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
 import type { BootstrapInterviewAnswer, CandidateType, Constraint, Decision, MemoryVisibility, PlanItem, PlanStep, PlanStatus, PlanType, Priority, Trap } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { createDecision, createConstraint, createTrap } from '../core/operations/memory-write.js';
+import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -3248,56 +3249,27 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!['constraint', 'decision', 'trap'].includes(itemType)) {
         return { response: createToolErrorResponse('validation_error', `Invalid type: ${itemType}`) };
       }
-
-      // Walk store chain to find the item
-      const chain = resolveStoreChain(cwd);
-      let foundStore: (typeof chain)[number] | undefined;
-
-      for (const store of chain) {
-        const state = loadState(store.cwd);
-        const found =
-          (itemType === 'constraint' && state.active_constraints.some((c) => c.id === itemId || c.short_label === itemId)) ||
-          (itemType === 'decision' && state.recent_decisions.some((d) => d.id === itemId || d.short_label === itemId)) ||
-          (itemType === 'trap' && state.known_traps.some((t) => t.id === itemId || t.short_label === itemId));
-        if (found) {
-          foundStore = store;
-          break;
+      try {
+        const result = deleteMemoryItem(itemId, itemType as MemoryItemType, cwd);
+        appendAuditEntry(
+          { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'delete', item_id: itemId, item_type: itemType as CandidateType },
+          cwd,
+        );
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Deleted [${itemId}] (${itemType})` }],
+            deleted_id: result.deletedId,
+            item_type: result.itemType,
+            store_level: result.storeRole,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
         }
+        return { response: createToolErrorResponse('operation_error', msg) };
       }
-
-      if (!foundStore) {
-        return { response: createToolErrorResponse('not_found', `${itemType} with id '${itemId}' not found in any store`) };
-      }
-
-      // Delete from the found store
-      const state = loadState(foundStore.cwd);
-      const beforeCount =
-        itemType === 'constraint' ? state.active_constraints.length :
-        itemType === 'decision' ? state.recent_decisions.length :
-        state.known_traps.length;
-
-      if (itemType === 'constraint') {
-        state.active_constraints = state.active_constraints.filter((c) => c.id !== itemId && c.short_label !== itemId);
-      } else if (itemType === 'decision') {
-        state.recent_decisions = state.recent_decisions.filter((d) => d.id !== itemId && d.short_label !== itemId);
-      } else if (itemType === 'trap') {
-        state.known_traps = state.known_traps.filter((t) => t.id !== itemId && t.short_label !== itemId);
-      }
-
-      persistState(state, foundStore.cwd);
-      appendAuditEntry(
-        { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'delete', item_id: itemId, item_type: itemType as CandidateType },
-        foundStore.cwd,
-      );
-
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Deleted [${itemId}] (${itemType})` }],
-          deleted_id: itemId,
-          item_type: itemType,
-          store_level: foundStore.role,
-        }),
-      };
     }
 
     if (name === 'bclaw_update_memory') {
@@ -3329,93 +3301,35 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (newStatus && !['active', 'resolved', 'expired'].includes(newStatus)) {
         return { response: createToolErrorResponse('validation_error', `Invalid trap status: ${newStatus}`) };
       }
-
-      // Walk store chain to find the item
-      const chain = resolveStoreChain(cwd);
-      let sourceStore: (typeof chain)[number] | undefined;
-      let item: Constraint | Decision | Trap | undefined;
-
-      for (const store of chain) {
-        const state = loadState(store.cwd);
-        if (itemType === 'constraint') {
-          item = state.active_constraints.find((c) => c.id === itemId || c.short_label === itemId);
-        } else if (itemType === 'decision') {
-          item = state.recent_decisions.find((d) => d.id === itemId || d.short_label === itemId);
-        } else if (itemType === 'trap') {
-          item = state.known_traps.find((t) => t.id === itemId || t.short_label === itemId);
+      try {
+        const result = updateMemoryItem({
+          id: itemId,
+          type: itemType as MemoryItemType,
+          text: newText,
+          tags: newTags,
+          status: newStatus,
+          moveToStore: moveToStore as StoreTarget | undefined,
+        }, cwd);
+        appendAuditEntry(
+          { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: itemId, item_type: itemType as CandidateType },
+          cwd,
+        );
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Updated [${itemId}] (${itemType})` }],
+            updated_id: result.updatedId,
+            item_type: result.itemType,
+            previous_store: result.previousStore,
+            new_store: result.newStore,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
         }
-        if (item) {
-          sourceStore = store;
-          break;
-        }
+        return { response: createToolErrorResponse('operation_error', msg) };
       }
-
-      if (!sourceStore || !item) {
-        return { response: createToolErrorResponse('not_found', `${itemType} with id '${itemId}' not found in any store`) };
-      }
-
-      const previousStore = sourceStore.role;
-
-      // Update text and tags
-      if (newText) item.text = newText;
-      if (newTags) item.tags = newTags;
-      if (newStatus && itemType === 'trap') (item as Trap).status = newStatus as Trap['status'];
-
-      // Handle moveToStore
-      if (moveToStore) {
-        const targetCwd = resolveTargetStore(cwd, moveToStore as StoreTarget);
-
-        // Delete from source store
-        const sourceState = loadState(sourceStore.cwd);
-        if (itemType === 'constraint') {
-          sourceState.active_constraints = sourceState.active_constraints.filter((c) => c.id !== itemId);
-        } else if (itemType === 'decision') {
-          sourceState.recent_decisions = sourceState.recent_decisions.filter((d) => d.id !== itemId);
-        } else if (itemType === 'trap') {
-          sourceState.known_traps = sourceState.known_traps.filter((t) => t.id !== itemId);
-        }
-        persistState(sourceState, sourceStore.cwd);
-
-        // Add to target store
-        const targetState = loadState(targetCwd);
-        if (itemType === 'constraint') {
-          targetState.active_constraints.push(item as Constraint);
-        } else if (itemType === 'decision') {
-          targetState.recent_decisions.push(item as Decision);
-        } else if (itemType === 'trap') {
-          targetState.known_traps.push(item as Trap);
-        }
-        persistState(targetState, targetCwd);
-      } else {
-        // Just update in place
-        const state = loadState(sourceStore.cwd);
-        if (itemType === 'constraint') {
-          const idx = state.active_constraints.findIndex((c) => c.id === itemId);
-          if (idx >= 0) state.active_constraints[idx] = item as Constraint;
-        } else if (itemType === 'decision') {
-          const idx = state.recent_decisions.findIndex((d) => d.id === itemId);
-          if (idx >= 0) state.recent_decisions[idx] = item as Decision;
-        } else if (itemType === 'trap') {
-          const idx = state.known_traps.findIndex((t) => t.id === itemId);
-          if (idx >= 0) state.known_traps[idx] = item as Trap;
-        }
-        persistState(state, sourceStore.cwd);
-      }
-
-      appendAuditEntry(
-        { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: itemId, item_type: itemType as CandidateType },
-        sourceStore.cwd,
-      );
-
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Updated [${itemId}] (${itemType})` }],
-          updated_id: itemId,
-          item_type: itemType,
-          previous_store: previousStore,
-          new_store: moveToStore,
-        }),
-      };
     }
 
     if (name === 'bclaw_add_capability') {
