@@ -19,6 +19,7 @@ import {
   describeAutoConfigWrite,
   ensureGitignoreEntries,
   collectWorkspaceGitignoreEntries,
+  BRAINCLAW_EXCLUSIVE_DIRECTORIES,
 } from '../core/agent-files.js';
 import { MEMORY_DIR, memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
 import { loadConfig, saveConfig, defaultConfig } from '../core/config.js';
@@ -320,7 +321,7 @@ export async function initReposAndConfigureAgents(
       }
     }
     if (gitignoreEntries.size > 0) {
-      ensureGitignoreEntries(repo.path, [...gitignoreEntries]);
+      ensureGitignoreEntries(repo.path, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
       console.log(`  ✔ Updated .gitignore with generated agent files (${[...gitignoreEntries].join(', ')})`);
     }
   }

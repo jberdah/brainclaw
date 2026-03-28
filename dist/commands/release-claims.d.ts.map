@@ -1,1 +1,0 @@
-{"version":3,"file":"release-claims.d.ts","sourceRoot":"","sources":["../../src/commands/release-claims.ts"],"names":[],"mappings":"AAOA,MAAM,WAAW,oBAAoB;IACnC,WAAW,CAAC,EAAE,OAAO,CAAC;IACtB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,GAAG,CAAC,EAAE,MAAM,CAAC;CACd;AAcD,wBAAgB,gBAAgB,CAAC,OAAO,GAAE,oBAAyB,GAAG,IAAI,CA6DzE"}

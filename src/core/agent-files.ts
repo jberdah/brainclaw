@@ -354,9 +354,22 @@ const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 
+/**
+ * Directories exclusively managed by brainclaw — safe to gitignore as a whole.
+ * Individual files in these directories don't need separate gitignore entries.
+ */
+export const BRAINCLAW_EXCLUSIVE_DIRECTORIES = [
+  '.roo/',
+  '.continue/',
+  '.codeium/windsurf/',
+  '.gemini/antigravity/',
+  '.github/skills/brainclaw-context/',
+] as const;
+
 export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   CLINE_MCP_RELATIVE_PATH,
   CURSOR_MDC_RELATIVE_PATH,
+  CURSOR_MCP_RELATIVE_PATH,
   COPILOT_SKILL_RELATIVE_PATH,
   CLAUDE_CODE_MCP_RELATIVE_PATH,
   CLAUDE_CODE_COMMAND_RELATIVE_PATH,
@@ -365,6 +378,8 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   ROO_MCP_RELATIVE_PATH,
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
+  WINDSURF_MCP_RELATIVE_PATH,
+  ANTIGRAVITY_MCP_RELATIVE_PATH,
 ] as const;
 
 export interface AgentGitHygieneAudit {

@@ -1,1 +1,0 @@
-{"version":3,"file":"push.d.ts","sourceRoot":"","sources":["../../src/commands/push.ts"],"names":[],"mappings":"AAGA,MAAM,WAAW,WAAW;IAC1B,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,IAAI,CAAC,EAAE,OAAO,CAAC;CAChB;AAED,wBAAgB,OAAO,CAAC,OAAO,GAAE,WAAgB,GAAG,IAAI,CAwBvD"}

@@ -16,6 +16,7 @@ import {
   writeExportCompanionFiles,
   collectExportGitignoreEntries,
   ensureGitignoreEntries,
+  BRAINCLAW_EXCLUSIVE_DIRECTORIES,
   type ExportFormat,
 } from '../core/agent-files.js';
 import { logger } from '../core/logger.js';
@@ -72,9 +73,7 @@ export function runExport(options: ExportOptions): void {
     const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs, {
       includeTarget: !options.shared,
     });
-    if (gitignoreEntries.length > 0) {
-      ensureGitignoreEntries(cwd, gitignoreEntries);
-    }
+    ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
     declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
     if (options.shared) {
@@ -105,9 +104,7 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const result = writeExportFile(content, target.relativePath, cwd);
   const autoConfigs = writeExportCompanionFiles(target.format, cwd);
   const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
-  if (gitignoreEntries.length > 0) {
-    ensureGitignoreEntries(cwd, gitignoreEntries);
-  }
+  ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
   declareAgentIntegrationFromTarget(cwd, target.agentName, detected ? 'detected' : 'manual');
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
@@ -154,7 +151,7 @@ function runExportAll(cwd: string, options: ExportOptions): void {
 
   // Consolidate gitignore entries
   if (allGitignoreEntries.length > 0) {
-    ensureGitignoreEntries(cwd, [...new Set(allGitignoreEntries)]);
+    ensureGitignoreEntries(cwd, [...new Set([...allGitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES])]);
     console.log('✔ Updated .gitignore');
   }
 

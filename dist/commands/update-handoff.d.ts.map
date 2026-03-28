@@ -1,1 +1,0 @@
-{"version":3,"file":"update-handoff.d.ts","sourceRoot":"","sources":["../../src/commands/update-handoff.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,mBAAmB,CAAC;AAEvD,MAAM,WAAW,oBAAoB;IACnC,MAAM,CAAC,EAAE,aAAa,CAAC;IACvB,EAAE,CAAC,EAAE,MAAM,CAAC;CACb;AAED,wBAAgB,gBAAgB,CAAC,EAAE,EAAE,MAAM,EAAE,OAAO,GAAE,oBAAyB,GAAG,IAAI,CAmBrF"}

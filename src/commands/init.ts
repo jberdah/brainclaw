@@ -12,7 +12,7 @@ import { scanProject, upsertProject } from '../core/global-registry.js';
 import { analyzeRepository, scanWorkspaceBoundaries } from '../core/repo-analysis.js';
 import { renderBootstrapSummary, runBootstrapProfile } from '../core/bootstrap.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
-import { describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
+import { BRAINCLAW_EXCLUSIVE_DIRECTORIES, describeAutoConfigWrite, ensureAgentFiles, ensureGitignoreEntries, writeDetectedAgentAutoConfig } from '../core/agent-files.js';
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
 import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
@@ -204,7 +204,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       .map((item) => item.relativePath)
       .filter((item): item is string => item !== undefined)
       .filter((item) => !item.startsWith('.codeium/'));
-    ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md', ...generatedWorkspacePaths]);
+    ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md', ...generatedWorkspacePaths, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
   }
 
   console.log(`✔ Initialized project memory in ${storageDir}/`);
