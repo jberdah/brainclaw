@@ -190,6 +190,14 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_release_notes',
+    description: 'Return the agent-first release notes for the latest installable Brainclaw version from the configured update source. Returns structured highlights, breaking risk, and action recommendation when available.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'bclaw_read_handoff',
     description: 'Read an open handoff ticket with its captured git diff and state snapshot.',
     inputSchema: {
@@ -1738,8 +1746,51 @@ export function handleMcpReadToolCall(
       content: [{ type: 'text', text }],
       structuredContent: {
         execution_context: executionContext,
-        installable_update: installableUpdate,
+        installable_update: {
+          ...installableUpdate,
+          ...(installableUpdate.agent_release_notes
+            ? { agent_release_notes: installableUpdate.agent_release_notes }
+            : {}),
+        },
         ...(agentTooling ? { agent_tooling: agentTooling } : {}),
+      },
+    };
+  }
+
+  if (name === 'bclaw_release_notes') {
+    const config = loadConfig(cwd);
+    const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+    const arn = updateCheck.agent_release_notes;
+    const lines: string[] = [];
+    if (arn) {
+      lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+      lines.push(`Summary: ${arn.summary}`);
+      if (arn.agent_relevance) lines.push(`Agent relevance: ${arn.agent_relevance}`);
+      lines.push(`Breaking risk: ${arn.breaking_risk ?? 'none'}`);
+      if (arn.recommended_for && arn.recommended_for.length > 0) {
+        lines.push(`Recommended for: ${arn.recommended_for.join(', ')}`);
+      }
+      if (arn.highlights && arn.highlights.length > 0) {
+        lines.push('Highlights:');
+        for (const h of arn.highlights) lines.push(`  • ${h}`);
+      }
+      if (arn.action_recommendation) lines.push(`Action: ${arn.action_recommendation}`);
+    } else if (updateCheck.release_notes) {
+      lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+      lines.push(updateCheck.release_notes);
+    } else {
+      lines.push('No agent release notes available for the configured update source.');
+      if (updateCheck.status === 'not_configured') {
+        lines.push('Configure brainclaw_update_source in your project config to enable update checks.');
+      }
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: {
+        status: updateCheck.status,
+        latest_installable_version: updateCheck.latest_installable_version,
+        agent_release_notes: arn ?? null,
+        release_notes: updateCheck.release_notes ?? null,
       },
     };
   }
@@ -2927,9 +2978,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
 
       const postSessionStartItems = getTriggeredItems('trigger:post-session-start', cwd);
       const postSessionStartText = renderTriggeredItems(postSessionStartItems);
-      const sessionStartMsg = postSessionStartText
-        ? `✔ Session started\n${postSessionStartText}`
-        : '✔ Session started';
+      const sessionUpdateConfig = loadConfig(cwd);
+      const sessionUpdateCheck = checkBrainclawInstallableUpdate(sessionUpdateConfig, cwd, { useDefaultNpmSource: true });
+      const sessionUpdateNotice = renderBrainclawInstallableUpdateNotice(sessionUpdateCheck);
+      const sessionStartMsgParts = ['✔ Session started'];
+      if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
+      if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);
+      const sessionStartMsg = sessionStartMsgParts.join('\n');
 
       const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: sessionStartMsg }];
       const structured: Record<string, unknown> = {

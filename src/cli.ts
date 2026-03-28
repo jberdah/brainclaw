@@ -514,7 +514,8 @@ program
   .description('Show the installed brainclaw version and the project version policy')
   .option('--check', 'Check the configured installable update source')
   .option('--publish-local', 'Create/update the local installable .releases channel via npm pack')
-  .option('--release-notes <text>', 'Attach release notes to the generated local-pack manifest')
+  .option('--release-notes <text>', 'Attach plain-text release notes to the generated local-pack manifest')
+  .option('--agent-release-notes <json>', 'Attach structured agent-first release notes (JSON) to the generated local-pack manifest')
   .option('--json', 'Output as JSON')
   .action((options) => {
     runVersion(options);

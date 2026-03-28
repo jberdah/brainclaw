@@ -8,12 +8,15 @@ import {
   DEFAULT_LOCAL_RELEASE_MANIFEST_PATH,
   publishLocalBrainclawRelease,
 } from '../core/brainclaw-version.js';
+import { AgentReleaseNotesSchema, type AgentReleaseNotes } from '../core/schema.js';
 
 export interface VersionOptions {
   check?: boolean;
   json?: boolean;
   publishLocal?: boolean;
   releaseNotes?: string;
+  /** Structured agent-first release notes (JSON string or parsed object). */
+  agentReleaseNotes?: string | AgentReleaseNotes;
   cwd?: string;
 }
 
@@ -29,9 +32,24 @@ export function runVersion(options: VersionOptions = {}): void {
       process.exit(1);
     }
 
+    let parsedAgentNotes: AgentReleaseNotes | undefined;
+    if (options.agentReleaseNotes) {
+      try {
+        const raw = typeof options.agentReleaseNotes === 'string'
+          ? JSON.parse(options.agentReleaseNotes) as unknown
+          : options.agentReleaseNotes;
+        parsedAgentNotes = AgentReleaseNotesSchema.parse(raw);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`Error: --agent-release-notes is not valid JSON or does not match the expected schema: ${message}`);
+        process.exit(1);
+      }
+    }
+
     try {
       publishedLocalRelease = publishLocalBrainclawRelease(cwd, {
         releaseNotes: options.releaseNotes,
+        agentReleaseNotes: parsedAgentNotes,
       });
       config.brainclaw_update_source = {
         type: 'local-pack',
