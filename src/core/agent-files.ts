@@ -44,8 +44,12 @@ function getBrainclawMcpCommand(): { command: string; args: string[] } {
  * Build a complete MCP server entry with relay model env injection.
  * Merges with the existing entry to preserve manual edits (e.g. custom command
  * path, additional env vars, extra args). Only sets defaults for missing fields.
+ *
+ * When `workspacePath` is provided, injects BRAINCLAW_CWD into the env so
+ * the MCP server resolves the correct workspace root regardless of the IDE's
+ * process.cwd() at launch time.
  */
-function brainclawMcpEntry(agentName: string, existing?: unknown): Record<string, unknown> {
+function brainclawMcpEntry(agentName: string, existing?: unknown, workspacePath?: string): Record<string, unknown> {
   const defaults = getBrainclawMcpCommand();
   const ex = isJsonObject(existing) ? existing : {};
   const exEnv = isJsonObject(ex.env) ? ex.env : {};
@@ -59,6 +63,7 @@ function brainclawMcpEntry(agentName: string, existing?: unknown): Record<string
     env: {
       ...exEnv,
       BRAINCLAW_AGENT: agentName,
+      ...(workspacePath ? { BRAINCLAW_CWD: workspacePath } : {}),
     },
   };
 }
@@ -511,7 +516,7 @@ export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...brainclawMcpEntry('cline', mcpServers.brainclaw),
+    ...brainclawMcpEntry('cline', mcpServers.brainclaw, cwd),
     disabled: false,
     autoApprove: ALL_BCLAW_TOOLS,
   };
@@ -723,7 +728,7 @@ export function ensureClaudeCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, '.mcp.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('claude-code', mcpServers.brainclaw);
+  mcpServers.brainclaw = brainclawMcpEntry('claude-code', mcpServers.brainclaw, cwd);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -903,7 +908,7 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
-    ...brainclawMcpEntry('roo', mcpServers.brainclaw),
+    ...brainclawMcpEntry('roo', mcpServers.brainclaw, cwd),
     alwaysAllow: ALL_BCLAW_TOOLS,
   };
 
@@ -935,6 +940,7 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     '',
     '[mcp_servers.brainclaw.env]',
     'BRAINCLAW_AGENT = "codex"',
+    '# BRAINCLAW_CWD is set per-workspace via brainclaw init; override here if needed',
   ].join('\n');
 
   let existing = '';
@@ -974,9 +980,9 @@ export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
   );
   if (existingIdx >= 0) {
     // Update existing entry, preserving manual edits
-    mcpServers[existingIdx] = { name: 'brainclaw', ...brainclawMcpEntry('continue', mcpServers[existingIdx]) };
+    mcpServers[existingIdx] = { name: 'brainclaw', ...brainclawMcpEntry('continue', mcpServers[existingIdx], cwd) };
   } else {
-    mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue') });
+    mcpServers.push({ name: 'brainclaw', ...brainclawMcpEntry('continue', undefined, cwd) });
   }
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1032,7 +1038,7 @@ export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   mcp.brainclaw = {
     type: 'local',
     command: [mcpCmd.command, ...mcpCmd.args],
-    env: { BRAINCLAW_AGENT: 'opencode' },
+    env: { BRAINCLAW_AGENT: 'opencode', BRAINCLAW_CWD: cwd },
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {

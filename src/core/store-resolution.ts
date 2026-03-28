@@ -144,10 +144,11 @@ export interface ResolveEffectiveCwdOptions {
  *
  * Priority:
  * 1. explicitCwd (--cwd flag)
- * 2. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
- * 3. Session-scoped active project (from .current-session)
- * 4. Global active-project.json in workspace root
- * 5. process.cwd()
+ * 2. BRAINCLAW_CWD env var → absolute workspace path injected by MCP configs
+ * 3. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
+ * 4. Session-scoped active project (from .current-session)
+ * 5. Global active-project.json in workspace root
+ * 6. process.cwd()
  */
 export function resolveEffectiveCwd(
   options: ResolveEffectiveCwdOptions = {},
@@ -157,7 +158,14 @@ export function resolveEffectiveCwd(
     return path.resolve(options.explicitCwd);
   }
 
-  // 2. BRAINCLAW_PROJECT env var
+  // 2. BRAINCLAW_CWD env var — set by MCP configs to bind to the workspace
+  //    regardless of the IDE's process.cwd() at launch time
+  const envCwd = process.env.BRAINCLAW_CWD?.trim();
+  if (envCwd && fs.existsSync(path.join(path.resolve(envCwd), MEMORY_DIR, 'config.yaml'))) {
+    return path.resolve(envCwd);
+  }
+
+  // 3. BRAINCLAW_PROJECT env var
   const envProject = process.env.BRAINCLAW_PROJECT;
   if (envProject) {
     const resolved = resolveProjectRef(envProject, process.cwd(), options.storeChainOptions);
