@@ -1,12 +1,11 @@
-import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
-import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists } from '../core/io.js';
+import { requireInitialized } from '../core/guards.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Constraint, ConstraintCategory } from '../core/schema.js';
+import { createConstraint } from '../core/operations/memory-write.js';
+import type { ConstraintCategory } from '../core/schema.js';
 
 export interface ConstraintOptions {
   tag?: string[];
@@ -20,10 +19,7 @@ export interface ConstraintOptions {
 export function runConstraint(text: string, options: ConstraintOptions = {}): void {
   const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
 
-  if (!memoryExists(cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
+  requireInitialized(cwd);
 
   validateCliInput(text, options.tag);
 
@@ -37,25 +33,13 @@ export function runConstraint(text: string, options: ConstraintOptions = {}): vo
     }
   }
 
-  const state = loadState(cwd);
-  const { id, short_label } = generateIdWithLabel('active_constraints');
-
-  const entry: Constraint = {
-    id,
-    short_label,
+  const result = createConstraint({
     text,
-    created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(cwd),
-    status: 'active',
     category: options.category,
-    tags: options.tag ?? [],
-    related_paths: options.path,
-  };
+    tags: options.tag,
+    relatedPaths: options.path,
+  }, cwd);
 
-  state.active_constraints.push(entry);
-  persistState(state, cwd);
-
-  console.log(`✔ Constraint added: [${id}] ${text}`);
+  console.log(`✔ Constraint added: [${result.id}] ${text}`);
 }
-
-

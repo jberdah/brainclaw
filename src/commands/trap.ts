@@ -1,14 +1,12 @@
-import { loadState, persistState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { loadConfig } from '../core/config.js';
-import { nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists } from '../core/io.js';
-import { generateTrapIdWithLabel, saveOperationalTrap } from '../core/traps.js';
+import { requireInitialized } from '../core/guards.js';
 import { validateCliInput, validateCliTtl } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import type { Trap, Severity, MemoryVisibility, TrapStatus } from '../core/schema.js';
+import { createTrap } from '../core/operations/memory-write.js';
+import type { Severity, MemoryVisibility, TrapStatus } from '../core/schema.js';
 
 export interface TrapOptions {
   status?: TrapStatus;
@@ -27,10 +25,7 @@ export interface TrapOptions {
 export function runTrap(text: string, options: TrapOptions = {}): void {
   const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
 
-  if (!memoryExists(cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
+  requireInitialized(cwd);
 
   validateCliInput(text, options.tag);
   if (options.ttl) {
@@ -47,39 +42,26 @@ export function runTrap(text: string, options: TrapOptions = {}): void {
     }
   }
 
-  const state = loadState(cwd);
-  const { id, short_label } = generateTrapIdWithLabel();
   const visibility = options.visibility ?? 'shared';
   const hostId = visibility === 'shared' ? undefined : resolveCurrentHostId(options.host);
 
-  const entry: Trap = {
-    id,
-    short_label,
+  const result = createTrap({
     text,
-    created_at: nowISO(),
     author: options.author ?? resolveCurrentAgentName(cwd),
-    status: options.status ?? 'active',
-    severity: options.severity ?? 'medium',
-    tags: options.tag ?? [],
-    related_paths: options.path,
-    plan_id: options.plan,
+    status: options.status,
+    severity: options.severity,
+    tags: options.tag,
+    relatedPaths: options.path,
+    planId: options.plan,
     visibility,
-    host_id: hostId,
-    expires_at: options.ttl ? parseTtl(options.ttl) : undefined,
-  };
+    hostId,
+    expiresAt: options.ttl ? parseTtl(options.ttl) : undefined,
+  }, cwd);
 
-  if (visibility === 'shared') {
-    state.known_traps.push(entry);
-    persistState(state, cwd);
-  } else {
-    saveOperationalTrap(entry, cwd);
-  }
-
-  const scopeInfo = visibility === 'shared' ? 'shared' : `${visibility}:${hostId}`;
+  const scopeInfo = result.visibility === 'shared' ? 'shared' : `${result.visibility}:${result.hostId}`;
   const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
-  console.log(`✔ Trap added: [${id}] (${scopeInfo}) ${text}${storeLabel}`);
+  console.log(`✔ Trap added: [${result.id}] (${scopeInfo}) ${text}${storeLabel}`);
 }
-
 
 
 /** Parse a TTL string like "30m", "2h", "7d" and return an ISO expiry timestamp. */

@@ -1,21 +1,17 @@
-import { mutateState } from '../core/state.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
-import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { scanText } from '../core/security.js';
-import { memoryExists } from '../core/io.js';
+import { requireInitialized } from '../core/guards.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { runListPlans } from './list-plans.js';
 import { resolveTargetStore } from '../core/store-resolution.js';
+import { createPlan } from '../core/operations/plan.js';
 // Known plan subcommands that should not be accepted as plan text
 const PLAN_SUBCOMMAND_ALIASES = new Set(['list', 'ls']);
 const PLAN_SUBCOMMAND_ERRORS = new Set(['update']);
 export function runPlan(text, options = {}) {
     const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
-    if (!memoryExists(cwd)) {
-        console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-        process.exit(1);
-    }
+    requireInitialized(cwd);
     const normalized = text.trim().toLowerCase();
     if (PLAN_SUBCOMMAND_ALIASES.has(normalized)) {
         runListPlans({});
@@ -46,30 +42,19 @@ export function runPlan(text, options = {}) {
         }
         estimatedEffort = n;
     }
-    const id = mutateState((state) => {
-        const { id, short_label } = generateIdWithLabel('plan_items');
-        const timestamp = nowISO();
-        const entry = {
-            id,
-            short_label,
-            text,
-            type: options.type,
-            created_at: timestamp,
-            updated_at: timestamp,
-            author: options.author ?? resolveCurrentAgentName(cwd),
-            status: 'todo',
-            priority: options.priority ?? 'medium',
-            assignee: options.assignee,
-            project: options.project,
-            tags: options.tag ?? [],
-            related_paths: options.path,
-            depends_on: options.dependsOn ?? [],
-            estimated_effort: estimatedEffort,
-        };
-        state.plan_items.push(entry);
-        return id;
+    const result = createPlan({
+        text,
+        author: options.author ?? resolveCurrentAgentName(cwd),
+        type: options.type,
+        priority: options.priority,
+        assignee: options.assignee,
+        project: options.project,
+        tags: options.tag,
+        relatedPaths: options.path,
+        dependsOn: options.dependsOn,
+        estimatedEffort,
     }, cwd);
     const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';
-    console.log(`✔ Plan item added: [${id}] ${text}${storeLabel}`);
+    console.log(`✔ Plan item added: [${result.id}] ${text}${storeLabel}`);
 }
 //# sourceMappingURL=plan.js.map

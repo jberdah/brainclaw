@@ -11,7 +11,7 @@ import { buildExecutionContext, renderExecutionContextSummary } from '../core/ex
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
-import { loadState, mutateState, persistState, saveState } from '../core/state.js';
+import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
@@ -24,7 +24,7 @@ import { endSession } from './session-end.js';
 import { switchProject, listAvailableProjects } from './switch.js';
 import { agentCanWriteDirect, AgentIdentityResolutionError, AgentTrustError, listAgentIdentities, requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveAgentScope, resolveCurrentAgentIdentity, resolveCurrentAgentName, resolveCurrentModel, } from '../core/agent-registry.js';
 import { appendAuditEntry, readAuditLog } from '../core/audit.js';
-import { nowISO, generateIdWithLabel, generateId } from '../core/ids.js';
+import { nowISO, generateId } from '../core/ids.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
 import { search } from '../core/search.js';
@@ -41,6 +41,7 @@ import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPrevie
 import { ensureUserStore } from '../core/setup-state.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
+import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 export const SCHEMA_VERSION = '0.6.0';
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
@@ -2813,35 +2814,27 @@ export async function executeMcpToolCall(payload) {
                 }
                 estimatedEffort = n;
             }
-            const id = mutateState((state) => {
-                const { id, short_label } = generateIdWithLabel('plan_items');
-                const timestamp = nowISO();
-                const planType = args.type;
-                const entry = {
-                    id,
-                    short_label,
+            try {
+                const result = createPlan({
                     text: planText,
-                    type: planType,
-                    created_at: timestamp,
-                    updated_at: timestamp,
                     author: resolved.identity.agent_name,
-                    status: 'todo',
+                    type: args.type,
                     priority: args.priority ?? 'medium',
                     assignee: args.assignee,
                     tags: args.tags ?? [],
-                    depends_on: [],
-                    estimated_effort: estimatedEffort,
+                    estimatedEffort,
+                }, cwd);
+                appendAuditEntry({ actor: resolved.identity.agent_name, actor_id: resolved.identity.agent_id, action: 'create', item_id: result.id, item_type: 'plan' }, cwd);
+                return {
+                    response: toolResponse({
+                        content: [{ type: 'text', text: `✔ Plan item added: [${result.id}] ${planText}` }],
+                        plan_id: result.id,
+                    }),
                 };
-                state.plan_items.push(entry);
-                return id;
-            }, cwd);
-            appendAuditEntry({ actor: resolved.identity.agent_name, actor_id: resolved.identity.agent_id, action: 'create', item_id: id, item_type: 'plan' }, cwd);
-            return {
-                response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Plan item added: [${id}] ${planText}` }],
-                    plan_id: id,
-                }),
-            };
+            }
+            catch (err) {
+                return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+            }
         }
         if (name === 'bclaw_update_plan') {
             const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
@@ -2852,39 +2845,30 @@ export async function executeMcpToolCall(payload) {
             if (!planId) {
                 return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
             }
-            const updateResult = mutateState((state) => {
-                const plan = state.plan_items.find((item) => item.id === planId || item.short_label === planId);
-                if (!plan) {
-                    return undefined;
-                }
-                const timestamp = nowISO();
-                if (args.status) {
-                    plan.status = args.status;
-                    if (args.status === 'in_progress' && !plan.started_at)
-                        plan.started_at = timestamp;
-                    if (args.status === 'done' && !plan.completed_at)
-                        plan.completed_at = timestamp;
-                }
-                if (args.assignee !== undefined)
-                    plan.assignee = args.assignee;
-                if (args.priority)
-                    plan.priority = args.priority;
-                if (args.actualEffort)
-                    plan.actual_effort = args.actualEffort;
-                plan.updated_at = timestamp;
-                return { id: plan.id, text: plan.text, status: plan.status };
-            }, cwd);
-            if (!updateResult) {
-                return { response: createToolErrorResponse('not_found', `Plan item '${planId}' not found`) };
+            try {
+                const result = updatePlanOp({
+                    id: planId,
+                    status: args.status,
+                    assignee: args.assignee,
+                    priority: args.priority,
+                    actualEffort: args.actualEffort,
+                }, cwd);
+                appendAuditEntry({ actor: resolved.identity.agent_name, actor_id: resolved.identity.agent_id, action: 'update', item_id: result.id, item_type: 'plan' }, cwd);
+                return {
+                    response: toolResponse({
+                        content: [{ type: 'text', text: `✔ Plan item updated: [${result.id}] ${result.text}` }],
+                        plan_id: result.id,
+                        status: result.status,
+                    }),
+                };
             }
-            appendAuditEntry({ actor: resolved.identity.agent_name, actor_id: resolved.identity.agent_id, action: 'update', item_id: updateResult.id, item_type: 'plan' }, cwd);
-            return {
-                response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Plan item updated: [${updateResult.id}] ${updateResult.text}` }],
-                    plan_id: updateResult.id,
-                    status: updateResult.status,
-                }),
-            };
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('not found')) {
+                    return { response: createToolErrorResponse('not_found', msg) };
+                }
+                return { response: createToolErrorResponse('operation_error', msg) };
+            }
         }
         if (name === 'bclaw_add_step') {
             const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
@@ -2897,37 +2881,24 @@ export async function executeMcpToolCall(payload) {
                 return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
             if (!stepText)
                 return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
-            const addStepResult = mutateState((state) => {
-                const plan = state.plan_items.find((p) => p.id === stepPlanId || p.short_label === stepPlanId);
-                if (!plan)
-                    return undefined;
-                const step = {
-                    id: generateId('plan_steps'),
-                    text: stepText,
-                    status: 'todo',
-                    assignee: args.assignee,
-                    created_at: nowISO(),
-                    updated_at: nowISO(),
-                };
-                plan.steps = [...(plan.steps ?? []), step];
-                plan.updated_at = nowISO();
+            try {
+                const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: args.assignee }, cwd);
                 return {
-                    stepId: step.id,
-                    planId: plan.id,
-                    done: plan.steps.filter((s) => s.status === 'done').length,
-                    total: plan.steps.length,
+                    response: toolResponse({
+                        content: [{ type: 'text', text: `✔ Step added: [${result.stepId}] ${stepText} (${result.doneSteps}/${result.totalSteps} done)` }],
+                        step_id: result.stepId,
+                        plan_id: result.planId,
+                        progress: { done: result.doneSteps, total: result.totalSteps },
+                    }),
                 };
-            }, cwd);
-            if (!addStepResult)
-                return { response: createToolErrorResponse('not_found', `Plan '${stepPlanId}' not found`) };
-            return {
-                response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Step added: [${addStepResult.stepId}] ${stepText} (${addStepResult.done}/${addStepResult.total} done)` }],
-                    step_id: addStepResult.stepId,
-                    plan_id: addStepResult.planId,
-                    progress: { done: addStepResult.done, total: addStepResult.total },
-                }),
-            };
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('not found')) {
+                    return { response: createToolErrorResponse('not_found', msg) };
+                }
+                return { response: createToolErrorResponse('operation_error', msg) };
+            }
         }
         if (name === 'bclaw_complete_step') {
             const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
@@ -2940,38 +2911,25 @@ export async function executeMcpToolCall(payload) {
                 return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
             if (!csStepId)
                 return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-            const completeResult = mutateState((state) => {
-                const plan = state.plan_items.find((p) => p.id === csPlanId || p.short_label === csPlanId);
-                if (!plan)
-                    return { kind: 'plan_missing' };
-                const step = (plan.steps ?? []).find((s) => s.id === csStepId);
-                if (!step)
-                    return { kind: 'step_missing' };
-                step.status = 'done';
-                step.updated_at = nowISO();
-                plan.updated_at = nowISO();
+            try {
+                const result = completeStepOp({ planId: csPlanId, stepId: csStepId }, cwd);
                 return {
-                    kind: 'ok',
-                    stepId: step.id,
-                    stepText: step.text,
-                    planId: plan.id,
-                    done: plan.steps.filter((s) => s.status === 'done').length,
-                    total: plan.steps.length,
+                    response: toolResponse({
+                        content: [{ type: 'text', text: `✔ Step completed: [${result.stepId}] (${result.doneSteps}/${result.totalSteps} done)` }],
+                        step_id: result.stepId,
+                        plan_id: result.planId,
+                        progress: { done: result.doneSteps, total: result.totalSteps },
+                        all_done: result.doneSteps === result.totalSteps,
+                    }),
                 };
-            }, cwd);
-            if (completeResult.kind === 'plan_missing')
-                return { response: createToolErrorResponse('not_found', `Plan '${csPlanId}' not found`) };
-            if (completeResult.kind === 'step_missing')
-                return { response: createToolErrorResponse('not_found', `Step '${csStepId}' not found in plan '${csPlanId}'`) };
-            return {
-                response: toolResponse({
-                    content: [{ type: 'text', text: `✔ Step completed: [${completeResult.stepId}] ${completeResult.stepText} (${completeResult.done}/${completeResult.total} done)` }],
-                    step_id: completeResult.stepId,
-                    plan_id: completeResult.planId,
-                    progress: { done: completeResult.done, total: completeResult.total },
-                    all_done: completeResult.done === completeResult.total,
-                }),
-            };
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('not found')) {
+                    return { response: createToolErrorResponse('not_found', msg) };
+                }
+                return { response: createToolErrorResponse('operation_error', msg) };
+            }
         }
         if (name === 'bclaw_delete_memory') {
             const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd);
