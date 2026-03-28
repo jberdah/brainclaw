@@ -56,6 +56,7 @@ import { runCheckConstraints } from './commands/check-constraints.js';
 import { runRegisterAgent } from './commands/register-agent.js';
 import { runEnableAgent } from './commands/enable-agent.js';
 import { runVersion } from './commands/version.js';
+import { runReleaseNotes } from './commands/release-notes.js';
 import { runDiff } from './commands/changes.js';
 import { runPrune } from './commands/prune.js';
 import { runMcp } from './commands/mcp.js';
@@ -516,9 +517,21 @@ program
   .option('--publish-local', 'Create/update the local installable .releases channel via npm pack')
   .option('--release-notes <text>', 'Attach plain-text release notes to the generated local-pack manifest')
   .option('--agent-release-notes <json>', 'Attach structured agent-first release notes (JSON) to the generated local-pack manifest')
+  .option('--auto-release-notes', 'Auto-generate agent-first release notes from git log (use with --publish-local)')
   .option('--json', 'Output as JSON')
   .action((options) => {
     runVersion(options);
+  });
+
+// --- release-notes ---
+program
+  .command('release-notes')
+  .description('Show or generate agent-first release notes')
+  .option('--generate', 'Generate release notes from git log instead of showing configured ones')
+  .option('--since <ref>', 'Git ref to generate from (default: last version tag)')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runReleaseNotes(options);
   });
 
 // --- uninstall ---

@@ -353,6 +353,7 @@ const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
+const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
 
 /**
  * Directories exclusively managed by brainclaw — safe to gitignore as a whole.
@@ -1096,6 +1097,31 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   };
 }
 
+export function ensureOpenClawMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) {
+    return undefined;
+  }
+
+  const filePath = path.join(homeDir, '.openclaw', 'mcp.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = brainclawMcpEntry('openclaw', mcpServers.brainclaw);
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'OpenClaw MCP config',
+    created,
+    updated,
+    filePath,
+    relativePath: OPENCLAW_MCP_RELATIVE_PATH,
+  };
+}
+
 export function writeDetectedAgentAutoConfig(
   agentName: string,
   cwd: string,
@@ -1146,6 +1172,10 @@ export function writeDetectedAgentAutoConfig(
       return [ensureOpenCodeMcpConfig(cwd)];
     case 'antigravity': {
       const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
+      return result ? [result] : [];
+    }
+    case 'openclaw': {
+      const result = ensureOpenClawMcpConfig(resolveHomeDir(env));
       return result ? [result] : [];
     }
     default:

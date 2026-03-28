@@ -73,6 +73,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   ],
   'openclaw': [
     { kind: 'skill', location: 'machine', path: '.openclaw/workspace/skills/brainclaw/SKILL.md' },
+    { kind: 'mcp',   location: 'machine', path: '.openclaw/mcp.json' },
   ],
   'nanoclaw': [
     { kind: 'skill', location: 'workspace', path: 'skills/nanoclaw/SKILL.md' },

@@ -2093,8 +2093,12 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       });
       const preSessionEndItems = getTriggeredItems('trigger:pre-session-end', cwd);
       const preSessionEndText = renderTriggeredItems(preSessionEndItems);
+      const endUpdateConfig = loadConfig(cwd);
+      const endUpdateCheck = checkBrainclawInstallableUpdate(endUpdateConfig, cwd, { useDefaultNpmSource: true });
+      const endUpdateNotice = renderBrainclawInstallableUpdateNotice(endUpdateCheck);
 
       const parts: string[] = ['✔ Session ended'];
+      if (endUpdateNotice) parts.push(endUpdateNotice);
       if (preSessionEndText) parts.push(preSessionEndText);
       if (result.reflection_prompt) {
         parts.push('\n📝 Session reflection — please answer these questions:');

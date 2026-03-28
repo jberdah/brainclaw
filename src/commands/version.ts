@@ -9,6 +9,7 @@ import {
   publishLocalBrainclawRelease,
 } from '../core/brainclaw-version.js';
 import { AgentReleaseNotesSchema, type AgentReleaseNotes } from '../core/schema.js';
+import { generateAgentReleaseNotes } from './release-notes.js';
 
 export interface VersionOptions {
   check?: boolean;
@@ -17,6 +18,8 @@ export interface VersionOptions {
   releaseNotes?: string;
   /** Structured agent-first release notes (JSON string or parsed object). */
   agentReleaseNotes?: string | AgentReleaseNotes;
+  /** Auto-generate agent release notes from git log. */
+  autoReleaseNotes?: boolean;
   cwd?: string;
 }
 
@@ -33,6 +36,9 @@ export function runVersion(options: VersionOptions = {}): void {
     }
 
     let parsedAgentNotes: AgentReleaseNotes | undefined;
+    if (options.autoReleaseNotes && !options.agentReleaseNotes) {
+      parsedAgentNotes = generateAgentReleaseNotes(cwd);
+    }
     if (options.agentReleaseNotes) {
       try {
         const raw = typeof options.agentReleaseNotes === 'string'
