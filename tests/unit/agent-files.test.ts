@@ -474,6 +474,55 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
+  it('injects BRAINCLAW_CWD in workspace-level MCP configs', () => {
+    const dir = tmpDir();
+    try {
+      ensureClaudeCodeMcpConfig(dir);
+      const filePath = path.join(dir, '.mcp.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcpServers?: Record<string, { env?: Record<string, string> }>;
+      };
+      const env = content.mcpServers?.brainclaw?.env;
+      assert.ok(env, 'brainclaw MCP entry should have env');
+      assert.equal(env.BRAINCLAW_CWD, dir, 'BRAINCLAW_CWD should point to workspace root');
+      assert.equal(env.BRAINCLAW_AGENT, 'claude-code', 'BRAINCLAW_AGENT should be set');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('injects BRAINCLAW_CWD in Cline MCP config', () => {
+    const dir = tmpDir();
+    try {
+      ensureClineMcpConfig(dir);
+      const filePath = path.join(dir, '.vscode', 'cline_mcp_settings.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcpServers?: Record<string, { env?: Record<string, string> }>;
+      };
+      const env = content.mcpServers?.brainclaw?.env;
+      assert.ok(env, 'brainclaw MCP entry should have env');
+      assert.equal(env.BRAINCLAW_CWD, dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('injects BRAINCLAW_CWD in OpenCode MCP config', () => {
+    const dir = tmpDir();
+    try {
+      ensureOpenCodeMcpConfig(dir);
+      const filePath = path.join(dir, 'opencode.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcp?: Record<string, { env?: Record<string, string> }>;
+      };
+      const env = content.mcp?.brainclaw?.env;
+      assert.ok(env, 'brainclaw MCP entry should have env');
+      assert.equal(env.BRAINCLAW_CWD, dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('creates Claude Code slash command with workflow content', () => {
     const dir = tmpDir();
     try {

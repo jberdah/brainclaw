@@ -321,6 +321,85 @@ describe('core/store-resolution', () => {
       }
     });
 
+    it('uses BRAINCLAW_CWD env var when set and valid (MCP workspace binding)', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig(defaultConfig('workspace'), workspace);
+
+        // Simulate an IDE launching brainclaw MCP from a wrong cwd (e.g. home dir)
+        // but with BRAINCLAW_CWD set to the real workspace
+        const originalEnv = process.env.BRAINCLAW_CWD;
+        process.env.BRAINCLAW_CWD = workspace;
+        try {
+          const resolved = resolveEffectiveCwd();
+          assert.equal(resolved, path.resolve(workspace));
+        } finally {
+          if (originalEnv === undefined) {
+            delete process.env.BRAINCLAW_CWD;
+          } else {
+            process.env.BRAINCLAW_CWD = originalEnv;
+          }
+        }
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
+    it('ignores BRAINCLAW_CWD when path has no brainclaw store', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      const bogus = tmpDir('bclaw-bogus-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig(defaultConfig('workspace'), workspace);
+
+        // BRAINCLAW_CWD points to a directory without .brainclaw/
+        const originalEnv = process.env.BRAINCLAW_CWD;
+        process.env.BRAINCLAW_CWD = bogus;
+        try {
+          // Should fall through to process.cwd(), not use bogus path
+          const resolved = resolveEffectiveCwd();
+          assert.notEqual(resolved, bogus);
+        } finally {
+          if (originalEnv === undefined) {
+            delete process.env.BRAINCLAW_CWD;
+          } else {
+            process.env.BRAINCLAW_CWD = originalEnv;
+          }
+        }
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+        fs.rmSync(bogus, { recursive: true, force: true });
+      }
+    });
+
+    it('explicitCwd takes priority over BRAINCLAW_CWD', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      const explicit = tmpDir('bclaw-explicit-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig(defaultConfig('workspace'), workspace);
+        makeStore(explicit, 'repo');
+        saveConfig(defaultConfig('explicit'), explicit);
+
+        const originalEnv = process.env.BRAINCLAW_CWD;
+        process.env.BRAINCLAW_CWD = workspace;
+        try {
+          const resolved = resolveEffectiveCwd({ explicitCwd: explicit });
+          assert.equal(resolved, path.resolve(explicit));
+        } finally {
+          if (originalEnv === undefined) {
+            delete process.env.BRAINCLAW_CWD;
+          } else {
+            process.env.BRAINCLAW_CWD = originalEnv;
+          }
+        }
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+        fs.rmSync(explicit, { recursive: true, force: true });
+      }
+    });
+
     it('returns active project path when set and valid', () => {
       const workspace = tmpDir('bclaw-effective-');
       try {
