@@ -842,13 +842,13 @@ function requireObjectParams(params: unknown, id: JsonRpcId): Record<string, unk
 
 function resolveRequestedProtocolVersion(params: Record<string, unknown>, id: JsonRpcId): McpProtocolVersion {
   const requested = params.protocolVersion;
+  if (typeof requested !== 'string' || !requested.trim()) {
+    throw new McpProtocolError(-32602, 'Invalid params', id);
+  }
   if (!isSupportedProtocolVersion(requested)) {
-    throw new McpProtocolError(
-      -32602,
-      'Unsupported protocol version',
-      id,
-      { supportedVersions: MCP_PROTOCOL_VERSIONS },
-    );
+    // MCP version negotiation is server-driven: when the client proposes an
+    // unsupported version, the server responds with one it does support.
+    return MCP_PROTOCOL_VERSIONS[0]!;
   }
   return requested;
 }
