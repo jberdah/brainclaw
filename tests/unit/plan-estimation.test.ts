@@ -59,6 +59,11 @@ describe('PlanItemSchema estimated_effort coercion', () => {
     const p = PlanItemSchema.parse({ ...base });
     assert.equal(p.estimated_effort, undefined);
   });
+
+  it('accepts critical priority for MCP and CLI parity', () => {
+    const p = PlanItemSchema.parse({ ...base, priority: 'critical' });
+    assert.equal(p.priority, 'critical');
+  });
 });
 
 // --- renderRatioBar ---

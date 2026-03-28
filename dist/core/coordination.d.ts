@@ -47,7 +47,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         author: string;
         tags: string[];
         updated_at: string;
-        priority: "low" | "medium" | "high";
+        priority: "low" | "medium" | "high" | "critical";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
         project?: string | undefined;

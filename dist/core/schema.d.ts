@@ -10,7 +10,7 @@ export declare const SeveritySchema: z.ZodEnum<["low", "medium", "high"]>;
 export type Severity = z.infer<typeof SeveritySchema>;
 export declare const TrapStatusSchema: z.ZodEnum<["active", "resolved", "expired"]>;
 export type TrapStatus = z.infer<typeof TrapStatusSchema>;
-export declare const PrioritySchema: z.ZodEnum<["low", "medium", "high"]>;
+export declare const PrioritySchema: z.ZodEnum<["low", "medium", "high", "critical"]>;
 export type Priority = z.infer<typeof PrioritySchema>;
 export declare const MemoryVisibilitySchema: z.ZodEnum<["shared", "machine", "private"]>;
 export type MemoryVisibility = z.infer<typeof MemoryVisibilitySchema>;
@@ -359,7 +359,7 @@ export declare const PlanItemSchema: z.ZodObject<{
     author: z.ZodString;
     model: z.ZodOptional<z.ZodString>;
     status: z.ZodEnum<["todo", "in_progress", "blocked", "done", "dropped"]>;
-    priority: z.ZodEnum<["low", "medium", "high"]>;
+    priority: z.ZodEnum<["low", "medium", "high", "critical"]>;
     assignee: z.ZodOptional<z.ZodString>;
     project: z.ZodOptional<z.ZodString>;
     tags: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], unknown>;
@@ -399,7 +399,7 @@ export declare const PlanItemSchema: z.ZodObject<{
     author: string;
     tags: string[];
     updated_at: string;
-    priority: "low" | "medium" | "high";
+    priority: "low" | "medium" | "high" | "critical";
     depends_on: string[];
     type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
     project?: string | undefined;
@@ -427,7 +427,7 @@ export declare const PlanItemSchema: z.ZodObject<{
     created_at: string;
     author: string;
     updated_at: string;
-    priority: "low" | "medium" | "high";
+    priority: "low" | "medium" | "high" | "critical";
     type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
     project?: string | undefined;
     schema_version?: number | undefined;
@@ -896,7 +896,7 @@ export declare const StateSchema: z.ZodObject<{
         author: z.ZodString;
         model: z.ZodOptional<z.ZodString>;
         status: z.ZodEnum<["todo", "in_progress", "blocked", "done", "dropped"]>;
-        priority: z.ZodEnum<["low", "medium", "high"]>;
+        priority: z.ZodEnum<["low", "medium", "high", "critical"]>;
         assignee: z.ZodOptional<z.ZodString>;
         project: z.ZodOptional<z.ZodString>;
         tags: z.ZodEffects<z.ZodArray<z.ZodString, "many">, string[], unknown>;
@@ -936,7 +936,7 @@ export declare const StateSchema: z.ZodObject<{
         author: string;
         tags: string[];
         updated_at: string;
-        priority: "low" | "medium" | "high";
+        priority: "low" | "medium" | "high" | "critical";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
         project?: string | undefined;
@@ -964,7 +964,7 @@ export declare const StateSchema: z.ZodObject<{
         created_at: string;
         author: string;
         updated_at: string;
-        priority: "low" | "medium" | "high";
+        priority: "low" | "medium" | "high" | "critical";
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
         project?: string | undefined;
         schema_version?: number | undefined;
@@ -1087,7 +1087,7 @@ export declare const StateSchema: z.ZodObject<{
         author: string;
         tags: string[];
         updated_at: string;
-        priority: "low" | "medium" | "high";
+        priority: "low" | "medium" | "high" | "critical";
         depends_on: string[];
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
         project?: string | undefined;
@@ -1208,7 +1208,7 @@ export declare const StateSchema: z.ZodObject<{
         created_at: string;
         author: string;
         updated_at: string;
-        priority: "low" | "medium" | "high";
+        priority: "low" | "medium" | "high" | "critical";
         type?: "feat" | "fix" | "chore" | "spike" | "doc" | undefined;
         project?: string | undefined;
         schema_version?: number | undefined;

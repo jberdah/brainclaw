@@ -435,6 +435,69 @@ describe('MCP server', () => {
     }
   });
 
+  it('persists critical-priority plans so they remain listable and step-editable', async () => {
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+
+      const created = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'create-critical-plan',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_create_plan',
+          arguments: {
+            text: 'Critical MCP plan persistence regression',
+            type: 'fix',
+            priority: 'critical',
+            estimate: 15,
+          },
+        },
+      });
+
+      assert.equal(created.result.isError, false);
+      const planId = created.result.plan_id;
+      assert.ok(typeof planId === 'string' && planId.startsWith('pln_'));
+
+      const listed = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'list-critical-plan',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_list_plans',
+          arguments: {
+            id: planId,
+            all: true,
+          },
+        },
+      });
+
+      assert.equal(listed.result.isError, false);
+      assert.equal(listed.result.structuredContent.total, 1);
+      assert.equal(listed.result.structuredContent.plans[0].id, planId);
+      assert.equal(listed.result.structuredContent.plans[0].priority, 'critical');
+
+      const addedStep = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'add-step-critical-plan',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_add_step',
+          arguments: {
+            planId,
+            text: 'Verify step persistence after critical priority create',
+          },
+        },
+      });
+
+      assert.equal(addedStep.result.isError, false);
+      assert.equal(addedStep.result.plan_id, planId);
+      assert.equal(addedStep.result.progress.total, 1);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('returns structured context with format and budget controls', async () => {
     run(['decision', 'OAuth migration now goes through auth-gateway', '--tag', 'auth'], dir);
     run(['runtime-note', 'Auth runtime context', '--tag', 'auth'], dir, { BRAINCLAW_SESSION_ID: 'sess_mcp_ctx' });

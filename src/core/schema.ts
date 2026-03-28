@@ -51,7 +51,7 @@ export type Severity = z.infer<typeof SeveritySchema>;
 export const TrapStatusSchema = z.enum(['active', 'resolved', 'expired']);
 export type TrapStatus = z.infer<typeof TrapStatusSchema>;
 
-export const PrioritySchema = z.enum(['low', 'medium', 'high']);
+export const PrioritySchema = z.enum(['low', 'medium', 'high', 'critical']);
 export type Priority = z.infer<typeof PrioritySchema>;
 
 export const MemoryVisibilitySchema = z.enum(['shared', 'machine', 'private']);
