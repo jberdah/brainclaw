@@ -105,7 +105,7 @@ describe('commands/mcp protocol core', () => {
     assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32600);
   });
 
-  it('supports both protocol versions and rejects unsupported ones', () => {
+  it('supports both protocol versions and negotiates down unknown protocol versions', () => {
     const sent: Array<Record<string, unknown>> = [];
     const connection = new McpServerConnection({
       cwd: process.cwd(),
@@ -123,23 +123,48 @@ describe('commands/mcp protocol core', () => {
     }));
     assert.equal((sent[0]?.result as { protocolVersion: string }).protocolVersion, '2024-11-05');
 
-    const unsupportedSent: Array<Record<string, unknown>> = [];
-    const unsupported = new McpServerConnection({
+    const negotiatedSent: Array<Record<string, unknown>> = [];
+    const negotiated = new McpServerConnection({
       cwd: process.cwd(),
-      send: (message) => unsupportedSent.push(message),
+      send: (message) => negotiatedSent.push(message),
       executeTool: async () => ({
         response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
       }),
     });
-    unsupported.handleLine(JSON.stringify({
+    negotiated.handleLine(JSON.stringify({
       jsonrpc: '2.0',
       id: 11,
       method: 'initialize',
       params: { protocolVersion: '2099-01-01' },
     }));
-    const error = unsupportedSent[0]?.error as { code: number; data: { supportedVersions: string[] } };
-    assert.equal(error.code, -32602);
-    assert.deepEqual(error.data.supportedVersions, ['2025-11-25', '2024-11-05']);
+    assert.equal((negotiatedSent[0]?.result as { protocolVersion: string }).protocolVersion, '2025-11-25');
+  });
+
+  it('rejects initialize requests with missing or non-string protocol versions', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const connection = new McpServerConnection({
+      cwd: process.cwd(),
+      send: (message) => sent.push(message),
+      executeTool: async () => ({
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
+      }),
+    });
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 12,
+      method: 'initialize',
+      params: {},
+    }));
+    assert.equal((sent[0]?.error as { code: number }).code, -32602);
+
+    connection.handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 13,
+      method: 'initialize',
+      params: { protocolVersion: 42 },
+    }));
+    assert.equal((sent[1]?.error as { code: number }).code, -32602);
   });
 
   it('returns protocol errors for unknown methods and invalid params', () => {

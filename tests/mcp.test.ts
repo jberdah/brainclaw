@@ -392,6 +392,27 @@ describe('MCP server', () => {
     }
   });
 
+  it('negotiates down to the latest supported protocol version for newer clients', async () => {
+    const proc = startMcp(dir);
+    try {
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'init-future',
+        method: 'initialize',
+        params: { protocolVersion: '2099-01-01' },
+      });
+
+      assert.equal(response.result.protocolVersion, '2025-11-25');
+
+      await sendMcpNotification(proc, { jsonrpc: '2.0', method: 'notifications/initialized' });
+
+      const tools = await sendMcpRequest(proc, { jsonrpc: '2.0', id: 'list-after-future-init', method: 'tools/list' });
+      assert.ok(Array.isArray(tools.result.tools));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('returns MCP tool errors instead of protocol errors for invalid tool calls', async () => {
     const proc = startMcp(dir);
     try {
