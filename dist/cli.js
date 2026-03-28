@@ -82,6 +82,7 @@ import { cleanOrphanFiles, memoryDir } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
+import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune } from './commands/worktree.js';
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
@@ -187,10 +188,12 @@ program
     .description('Upgrade project memory structure and refresh managed workspace agent files without losing data')
     .option('--json', 'Output as JSON')
     .option('--dry-run', 'Show what would be done without making changes')
+    .option('--self-update', 'Check for a newer brainclaw package version and install it before upgrading memory')
     .action((options) => {
     runUpgrade({
         json: options.json,
         dryRun: options.dryRun,
+        selfUpdate: options.selfUpdate,
     });
 });
 // --- machine-profile ---
@@ -488,7 +491,8 @@ program
     .description('Show the installed brainclaw version and the project version policy')
     .option('--check', 'Check the configured installable update source')
     .option('--publish-local', 'Create/update the local installable .releases channel via npm pack')
-    .option('--release-notes <text>', 'Attach release notes to the generated local-pack manifest')
+    .option('--release-notes <text>', 'Attach plain-text release notes to the generated local-pack manifest')
+    .option('--agent-release-notes <json>', 'Attach structured agent-first release notes (JSON) to the generated local-pack manifest')
     .option('--json', 'Output as JSON')
     .action((options) => {
     runVersion(options);
@@ -1186,6 +1190,40 @@ program
     const globalOpts = program.opts();
     const { runWho } = await import('./commands/who.js');
     runWho({ json: options.json, all: options.all, gc: options.gc, cwd: globalOpts.cwd });
+});
+const worktreeCmd = program
+    .command('worktree')
+    .description('Manage git worktrees for parallel agent isolation');
+worktreeCmd
+    .command('create <branch>')
+    .description('Create a linked git worktree for a given branch')
+    .option('--session-id <id>', 'Associate this worktree with a brainclaw session')
+    .option('--agent <name>', 'Associate this worktree with an agent name')
+    .action((branch, options) => {
+    const globalOpts = program.opts();
+    runWorktreeCreate({ branch, sessionId: options.sessionId, agent: options.agent, cwd: globalOpts.cwd });
+});
+worktreeCmd
+    .command('list')
+    .description('List all git worktrees for this project')
+    .action(() => {
+    const globalOpts = program.opts();
+    runWorktreeList({ cwd: globalOpts.cwd });
+});
+worktreeCmd
+    .command('remove <path>')
+    .description('Remove a linked git worktree')
+    .option('--force', 'Force removal even with uncommitted changes')
+    .action((worktreePath, options) => {
+    const globalOpts = program.opts();
+    runWorktreeRemove({ path: worktreePath, force: options.force, cwd: globalOpts.cwd });
+});
+worktreeCmd
+    .command('prune')
+    .description('Prune stale worktree administrative files')
+    .action(() => {
+    const globalOpts = program.opts();
+    runWorktreePrune({ cwd: globalOpts.cwd });
 });
 program.parseAsync(process.argv).catch((err) => {
     console.error(err);

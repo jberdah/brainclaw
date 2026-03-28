@@ -1,10 +1,12 @@
 import { memoryExists } from '../core/io.js';
-import { listClaims } from '../core/claims.js';
+import { listClaims, expireStaleActiveClaims, isClaimExpired } from '../core/claims.js';
 export function runListClaims(options = {}) {
     if (!memoryExists(options.cwd)) {
         console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
         process.exit(1);
     }
+    // Auto-expire claims whose TTL has passed before listing
+    expireStaleActiveClaims(options.cwd);
     let claims = listClaims(options.cwd);
     if (!options.all) {
         claims = claims.filter(c => c.status === 'active');
@@ -30,6 +32,7 @@ export function runListClaims(options = {}) {
     console.log(`${claims.length} ${label}:`);
     console.log('');
     for (const c of claims) {
+        const expired = isClaimExpired(c) ? ' [EXPIRED]' : '';
         const status = c.status !== 'active' ? ` (${c.status})` : '';
         const extras = [];
         if (c.session_id)
@@ -38,8 +41,10 @@ export function runListClaims(options = {}) {
             extras.push(`plan ${c.plan_id}`);
         if (c.project)
             extras.push(`project ${c.project}`);
+        if (c.expires_at && !isClaimExpired(c))
+            extras.push(`expires ${c.expires_at.slice(0, 16).replace('T', ' ')}`);
         const suffix = extras.length ? ` [${extras.join(', ')}]` : '';
-        console.log(`  [${c.id}] ${c.agent} → ${c.scope}: ${c.description}${suffix}${status}`);
+        console.log(`  [${c.id}] ${c.agent} → ${c.scope}: ${c.description}${suffix}${status}${expired}`);
     }
 }
 //# sourceMappingURL=list-claims.js.map

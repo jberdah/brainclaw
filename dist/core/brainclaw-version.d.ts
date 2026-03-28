@@ -1,4 +1,4 @@
-import { type BrainclawUpdateSource, type Config } from './schema.js';
+import { type AgentReleaseNotes, type BrainclawUpdateSource, type Config } from './schema.js';
 type VersionStatus = 'ok' | 'update_available' | 'upgrade_required' | 'invalid_config';
 type InstallableUpdateStatus = 'not_configured' | 'unsupported_source' | 'check_failed' | 'up_to_date' | 'update_available' | 'invalid_config';
 export declare const DEFAULT_LOCAL_RELEASES_DIR = ".releases";
@@ -24,6 +24,7 @@ export interface BrainclawInstallableUpdateCheck {
     artifact_path: string | null;
     install_command: string | null;
     release_notes: string | null;
+    agent_release_notes?: AgentReleaseNotes | null;
     status: InstallableUpdateStatus;
     message: string;
     checked_at?: string | null;
@@ -37,9 +38,11 @@ export interface BrainclawLocalReleasePublication {
     artifact_path: string;
     install_command: string;
     release_notes: string | null;
+    agent_release_notes: AgentReleaseNotes | null;
 }
 export interface PublishLocalBrainclawReleaseOptions {
     releaseNotes?: string;
+    agentReleaseNotes?: AgentReleaseNotes;
     manifestPath?: string;
     outputDir?: string;
 }

@@ -38,6 +38,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
             plan_id?: string | undefined;
             agent_id?: string | undefined;
             released_at?: string | undefined;
+            worktree_path?: string | undefined;
         }[];
         status: "todo" | "in_progress" | "blocked" | "done" | "dropped";
         id: string;
@@ -86,6 +87,7 @@ export declare function buildCoordinationSnapshot(options?: CoordinationOptions)
         plan_id?: string | undefined;
         agent_id?: string | undefined;
         released_at?: string | undefined;
+        worktree_path?: string | undefined;
     }[];
     runtime_notes: {
         id: string;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { loadConfig, saveConfig } from '../core/config.js';
 import { memoryExists } from '../core/io.js';
 import { assessBrainclawVersion, checkBrainclawInstallableUpdate, DEFAULT_LOCAL_RELEASE_MANIFEST_PATH, publishLocalBrainclawRelease, } from '../core/brainclaw-version.js';
+import { AgentReleaseNotesSchema } from '../core/schema.js';
 export function runVersion(options = {}) {
     const cwd = options.cwd ?? process.cwd();
     const initialized = memoryExists(cwd);
@@ -13,9 +14,24 @@ export function runVersion(options = {}) {
             console.error('Error: local release publishing requires an initialized Brainclaw project.');
             process.exit(1);
         }
+        let parsedAgentNotes;
+        if (options.agentReleaseNotes) {
+            try {
+                const raw = typeof options.agentReleaseNotes === 'string'
+                    ? JSON.parse(options.agentReleaseNotes)
+                    : options.agentReleaseNotes;
+                parsedAgentNotes = AgentReleaseNotesSchema.parse(raw);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                console.error(`Error: --agent-release-notes is not valid JSON or does not match the expected schema: ${message}`);
+                process.exit(1);
+            }
+        }
         try {
             publishedLocalRelease = publishLocalBrainclawRelease(cwd, {
                 releaseNotes: options.releaseNotes,
+                agentReleaseNotes: parsedAgentNotes,
             });
             config.brainclaw_update_source = {
                 type: 'local-pack',

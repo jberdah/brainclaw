@@ -1344,6 +1344,14 @@ function sendContentLengthFramed(message: Record<string, unknown>): void {
 }
 
 /**
+ * Send an MCP message as bare newline-delimited JSON.
+ * Used when the client sends bare JSON (e.g. Claude Code).
+ */
+function sendNewlineDelimited(message: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(message) + '\n');
+}
+
+/**
  * Bi-modal stdin parser that accepts both Content-Length framed messages
  * (MCP/LSP standard) and legacy newline-delimited JSON.
  *
@@ -1353,8 +1361,9 @@ function sendContentLengthFramed(message: Record<string, unknown>): void {
  */
 export class StdioTransport {
   private buffer = Buffer.alloc(0);
-  private mode: 'detecting' | 'content-length' | 'newline' = 'detecting';
-  private onMessage: (line: string) => void;
+  /** Detected framing mode — exposed so the server can match output format. */
+  detectedMode: 'detecting' | 'content-length' | 'newline' = 'detecting';
+  onMessage: (line: string) => void;
   private onClose: () => void;
 
   constructor(onMessage: (line: string) => void, onClose: () => void) {
@@ -1372,15 +1381,15 @@ export class StdioTransport {
   }
 
   private drain(): void {
-    if (this.mode === 'detecting') {
+    if (this.detectedMode === 'detecting') {
       // Skip leading whitespace/newlines to detect mode
       const str = this.buffer.toString('utf-8');
       const trimmed = str.trimStart();
       if (trimmed.length === 0) return; // need more data
-      this.mode = trimmed.startsWith('Content-Length:') ? 'content-length' : 'newline';
+      this.detectedMode = trimmed.startsWith('Content-Length:') ? 'content-length' : 'newline';
     }
 
-    if (this.mode === 'content-length') {
+    if (this.detectedMode === 'content-length') {
       this.drainContentLength();
     } else {
       this.drainNewline();
@@ -1444,15 +1453,26 @@ export function runMcp(): void {
     process.exit(1);
   }
 
-  const connection = new McpServerConnection({
-    cwd,
-    send: sendContentLengthFramed,
-  });
-
   const transport = new StdioTransport(
-    (line) => connection.handleLine(line),
+    () => {}, // placeholder, replaced below
     () => connection.close(),
   );
+
+  /** Adaptive send: match the framing format the client uses. */
+  const adaptiveSend = (message: Record<string, unknown>): void => {
+    if (transport.detectedMode === 'content-length') {
+      sendContentLengthFramed(message);
+    } else {
+      sendNewlineDelimited(message);
+    }
+  };
+
+  const connection = new McpServerConnection({
+    cwd,
+    send: adaptiveSend,
+  });
+
+  transport.onMessage = (line: string) => connection.handleLine(line);
   transport.start();
 }
 

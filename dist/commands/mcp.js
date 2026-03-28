@@ -15,6 +15,7 @@ import { loadState, mutateState, persistState, saveState } from '../core/state.j
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, listArchivedCandidates, listCandidates, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
+import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
@@ -97,6 +98,14 @@ export const MCP_READ_TOOLS = [
             properties: {
                 includeAgentTooling: { type: 'boolean', description: 'Include AGENTS.md, skills, and local MCP inventory.' },
             },
+        },
+    },
+    {
+        name: 'bclaw_release_notes',
+        description: 'Return the agent-first release notes for the latest installable Brainclaw version from the configured update source. Returns structured highlights, breaking risk, and action recommendation when available.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
         },
     },
     {
@@ -437,6 +446,8 @@ const MCP_WRITE_TOOLS = [
                 agentId: { type: 'string', description: 'Registered agent id.' },
                 planId: { type: 'string', description: 'Optional linked plan item ID.' },
                 store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
+                createWorktree: { type: 'boolean', description: 'If true, create a git linked worktree for this claim (requires a branch name via worktreeBranch).' },
+                worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
             },
             required: ['scope', 'description'],
         },
@@ -1144,6 +1155,13 @@ function sendContentLengthFramed(message) {
     process.stdout.write(`Content-Length: ${byteLength}\r\n\r\n${json}`);
 }
 /**
+ * Send an MCP message as bare newline-delimited JSON.
+ * Used when the client sends bare JSON (e.g. Claude Code).
+ */
+function sendNewlineDelimited(message) {
+    process.stdout.write(JSON.stringify(message) + '\n');
+}
+/**
  * Bi-modal stdin parser that accepts both Content-Length framed messages
  * (MCP/LSP standard) and legacy newline-delimited JSON.
  *
@@ -1153,7 +1171,8 @@ function sendContentLengthFramed(message) {
  */
 export class StdioTransport {
     buffer = Buffer.alloc(0);
-    mode = 'detecting';
+    /** Detected framing mode — exposed so the server can match output format. */
+    detectedMode = 'detecting';
     onMessage;
     onClose;
     constructor(onMessage, onClose) {
@@ -1169,15 +1188,15 @@ export class StdioTransport {
         process.stdin.on('close', () => this.onClose());
     }
     drain() {
-        if (this.mode === 'detecting') {
+        if (this.detectedMode === 'detecting') {
             // Skip leading whitespace/newlines to detect mode
             const str = this.buffer.toString('utf-8');
             const trimmed = str.trimStart();
             if (trimmed.length === 0)
                 return; // need more data
-            this.mode = trimmed.startsWith('Content-Length:') ? 'content-length' : 'newline';
+            this.detectedMode = trimmed.startsWith('Content-Length:') ? 'content-length' : 'newline';
         }
-        if (this.mode === 'content-length') {
+        if (this.detectedMode === 'content-length') {
             this.drainContentLength();
         }
         else {
@@ -1233,11 +1252,22 @@ export function runMcp() {
         console.error('Project memory not initialized. Run `brainclaw init` first.');
         process.exit(1);
     }
+    const transport = new StdioTransport(() => { }, // placeholder, replaced below
+    () => connection.close());
+    /** Adaptive send: match the framing format the client uses. */
+    const adaptiveSend = (message) => {
+        if (transport.detectedMode === 'content-length') {
+            sendContentLengthFramed(message);
+        }
+        else {
+            sendNewlineDelimited(message);
+        }
+    };
     const connection = new McpServerConnection({
         cwd,
-        send: sendContentLengthFramed,
+        send: adaptiveSend,
     });
-    const transport = new StdioTransport((line) => connection.handleLine(line), () => connection.close());
+    transport.onMessage = (line) => connection.handleLine(line);
     transport.start();
 }
 function createWorkerToolExecutor() {
@@ -1499,8 +1529,55 @@ export function handleMcpReadToolCall(name, args = {}, context = {}) {
             content: [{ type: 'text', text }],
             structuredContent: {
                 execution_context: executionContext,
-                installable_update: installableUpdate,
+                installable_update: {
+                    ...installableUpdate,
+                    ...(installableUpdate.agent_release_notes
+                        ? { agent_release_notes: installableUpdate.agent_release_notes }
+                        : {}),
+                },
                 ...(agentTooling ? { agent_tooling: agentTooling } : {}),
+            },
+        };
+    }
+    if (name === 'bclaw_release_notes') {
+        const config = loadConfig(cwd);
+        const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+        const arn = updateCheck.agent_release_notes;
+        const lines = [];
+        if (arn) {
+            lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+            lines.push(`Summary: ${arn.summary}`);
+            if (arn.agent_relevance)
+                lines.push(`Agent relevance: ${arn.agent_relevance}`);
+            lines.push(`Breaking risk: ${arn.breaking_risk ?? 'none'}`);
+            if (arn.recommended_for && arn.recommended_for.length > 0) {
+                lines.push(`Recommended for: ${arn.recommended_for.join(', ')}`);
+            }
+            if (arn.highlights && arn.highlights.length > 0) {
+                lines.push('Highlights:');
+                for (const h of arn.highlights)
+                    lines.push(`  • ${h}`);
+            }
+            if (arn.action_recommendation)
+                lines.push(`Action: ${arn.action_recommendation}`);
+        }
+        else if (updateCheck.release_notes) {
+            lines.push(`Version: ${updateCheck.latest_installable_version ?? 'unknown'}`);
+            lines.push(updateCheck.release_notes);
+        }
+        else {
+            lines.push('No agent release notes available for the configured update source.');
+            if (updateCheck.status === 'not_configured') {
+                lines.push('Configure brainclaw_update_source in your project config to enable update checks.');
+            }
+        }
+        return {
+            content: [{ type: 'text', text: lines.join('\n') }],
+            structuredContent: {
+                status: updateCheck.status,
+                latest_installable_version: updateCheck.latest_installable_version,
+                agent_release_notes: arn ?? null,
+                release_notes: updateCheck.release_notes ?? null,
             },
         };
     }
@@ -2507,6 +2584,23 @@ export async function executeMcpToolCall(payload) {
                 sessionId: connectionSessionId,
             });
             const claimId = generateClaimId();
+            let worktreePath;
+            let worktreeWarn = '';
+            if (args.createWorktree) {
+                const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+                const worktreeBranch = args.worktreeBranch?.trim() || `feat/${branchSlug}`;
+                try {
+                    worktreePath = coreCreateWorktree(claimCwd, worktreeBranch, {
+                        sessionId: identity.session_id,
+                        agent: identity.agent,
+                    });
+                }
+                catch (wtErr) {
+                    worktreeWarn = `\n⚠ Worktree creation failed: ${wtErr instanceof Error ? wtErr.message : String(wtErr)}`;
+                }
+            }
+            const claimTtl = args.ttl;
+            const claimExpiresAt = claimTtl ? parseTtl(claimTtl) : undefined;
             saveClaim({
                 id: claimId,
                 agent: identity.agent,
@@ -2521,6 +2615,8 @@ export async function executeMcpToolCall(payload) {
                 status: 'active',
                 plan_id: args.planId,
                 model: currentModel,
+                worktree_path: worktreePath,
+                expires_at: claimExpiresAt,
             }, claimCwd);
             appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
             const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
@@ -2528,12 +2624,15 @@ export async function executeMcpToolCall(payload) {
             const noPlanWarn = !args.planId
                 ? '\n⚠ No plan item linked to this claim. Run bclaw_create_plan first and pass planId to track this work formally.'
                 : '';
-            const claimText = `✔ Claimed scope [${claimId}]${noPlanWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+            const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
+            const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
+            const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
             return {
                 response: toolResponse({
                     content: [{ type: 'text', text: claimText }],
                     claim_id: claimId,
                     session_id: identity.session_id,
+                    worktree_path: worktreePath,
                     triggered_items: postClaimItems,
                 }),
                 nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
@@ -2591,9 +2690,15 @@ export async function executeMcpToolCall(payload) {
             });
             const postSessionStartItems = getTriggeredItems('trigger:post-session-start', cwd);
             const postSessionStartText = renderTriggeredItems(postSessionStartItems);
-            const sessionStartMsg = postSessionStartText
-                ? `✔ Session started\n${postSessionStartText}`
-                : '✔ Session started';
+            const sessionUpdateConfig = loadConfig(cwd);
+            const sessionUpdateCheck = checkBrainclawInstallableUpdate(sessionUpdateConfig, cwd, { useDefaultNpmSource: true });
+            const sessionUpdateNotice = renderBrainclawInstallableUpdateNotice(sessionUpdateCheck);
+            const sessionStartMsgParts = ['✔ Session started'];
+            if (sessionUpdateNotice)
+                sessionStartMsgParts.push(sessionUpdateNotice);
+            if (postSessionStartText)
+                sessionStartMsgParts.push(postSessionStartText);
+            const sessionStartMsg = sessionStartMsgParts.join('\n');
             const contentParts = [{ type: 'text', text: sessionStartMsg }];
             const structured = {
                 session_id: result.session_id,

@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { ensureMemoryDir, memoryDir, memoryExists } from '../core/io.js';
 import { loadState, persistState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
 import { BRAINCLAW_SECTION_END, BRAINCLAW_SECTION_START, buildBrainclawSection, buildClaudeCodeCommandText, ensureClaudeCodeCommand, hasBrainclawSection, } from '../core/agent-files.js';
 import { loadConfig } from '../core/config.js';
+import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
 /**
@@ -38,6 +40,51 @@ export function runUpgrade(options = {}) {
     if (!memoryExists(cwd)) {
         console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
         process.exit(1);
+    }
+    // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
+    if (options.selfUpdate) {
+        const config = loadConfig(cwd);
+        const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
+        if (updateCheck.status === 'update_available' && updateCheck.install_command) {
+            const installedVersion = getInstalledBrainclawVersion();
+            if (!options.json) {
+                console.log(`📦 New version available: ${updateCheck.latest_installable_version} (current: ${installedVersion})`);
+                console.log(`   Running: ${updateCheck.install_command}`);
+            }
+            if (!options.dryRun) {
+                const parts = updateCheck.install_command.split(' ');
+                const result = spawnSync(parts[0], parts.slice(1), { stdio: 'inherit', encoding: 'utf-8' });
+                if (result.status !== 0) {
+                    console.error('Error: install command failed. Check output above.');
+                    if (!options.json) {
+                        console.error(`  Re-run manually: ${updateCheck.install_command}`);
+                    }
+                    process.exit(1);
+                }
+                if (!options.json) {
+                    console.log(`✔ Brainclaw updated to ${updateCheck.latest_installable_version}`);
+                    console.log('  MCP servers using this installation will need a restart.');
+                    console.log('  In Claude Code: use /restart or restart the MCP session.');
+                }
+            }
+            else {
+                if (!options.json) {
+                    console.log(`  (dry run — would run: ${updateCheck.install_command})`);
+                }
+            }
+        }
+        else if (updateCheck.status === 'up_to_date') {
+            if (!options.json) {
+                console.log(`✔ Brainclaw is already up to date (${getInstalledBrainclawVersion()})`);
+            }
+        }
+        else {
+            if (!options.json) {
+                console.log(`ℹ No installable update found (${updateCheck.status})`);
+            }
+        }
+        if (!options.json)
+            console.log('');
     }
     const base = memoryDir(cwd);
     const actions = [];

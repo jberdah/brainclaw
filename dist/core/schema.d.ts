@@ -1564,6 +1564,8 @@ export declare const ClaimSchema: z.ZodObject<{
     released_at: z.ZodOptional<z.ZodString>;
     expires_at: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
+    /** Absolute path to the git worktree associated with this claim, if one was created. */
+    worktree_path: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     status: "active" | "released" | "stale";
     id: string;
@@ -1582,6 +1584,7 @@ export declare const ClaimSchema: z.ZodObject<{
     plan_id?: string | undefined;
     agent_id?: string | undefined;
     released_at?: string | undefined;
+    worktree_path?: string | undefined;
 }, {
     status: "active" | "released" | "stale";
     id: string;
@@ -1600,6 +1603,7 @@ export declare const ClaimSchema: z.ZodObject<{
     plan_id?: string | undefined;
     agent_id?: string | undefined;
     released_at?: string | undefined;
+    worktree_path?: string | undefined;
 }>;
 export type Claim = z.infer<typeof ClaimSchema>;
 export declare const RuntimeNoteSchema: z.ZodObject<{
@@ -2028,13 +2032,13 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     user?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
+    worktree_path?: string | undefined;
     pid?: number | undefined;
     active_project?: {
         path: string;
         switched_at: string;
         name?: string | undefined;
     } | undefined;
-    worktree_path?: string | undefined;
     branch?: string | undefined;
     isolation_mode?: "shared-checkout" | "dedicated-worktree" | undefined;
 }, {
@@ -2047,13 +2051,13 @@ export declare const CurrentSessionStateSchema: z.ZodObject<{
     user?: string | undefined;
     schema_version?: number | undefined;
     model?: string | undefined;
+    worktree_path?: string | undefined;
     pid?: number | undefined;
     active_project?: {
         path: string;
         switched_at: string;
         name?: string | undefined;
     } | undefined;
-    worktree_path?: string | undefined;
     branch?: string | undefined;
     isolation_mode?: "shared-checkout" | "dedicated-worktree" | undefined;
 }>;
@@ -2922,6 +2926,35 @@ export declare const BrainclawUpdateSourceSchema: z.ZodDiscriminatedUnion<"type"
     dist_tag?: string | undefined;
 }>]>;
 export type BrainclawUpdateSource = z.infer<typeof BrainclawUpdateSourceSchema>;
+export declare const AgentReleaseNotesSchema: z.ZodObject<{
+    /** One-line summary an agent can surface directly to the operator. */
+    summary: z.ZodString;
+    /** Concrete impact on agent workflows: new MCP tools, changed behaviour, removed commands. */
+    agent_relevance: z.ZodOptional<z.ZodString>;
+    /** How risky is upgrading without reading the changelog first. */
+    breaking_risk: z.ZodDefault<z.ZodEnum<["none", "low", "medium", "high"]>>;
+    /** Audience tags ('all', 'multi-agent', 'large-teams'). Absent means 'all'. */
+    recommended_for: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    /** Short bullet points the agent can list (max ~5). */
+    highlights: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    /** What the agent should tell the operator, e.g. "Safe to auto-install" or "Needs review before upgrading". */
+    action_recommendation: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    summary: string;
+    breaking_risk: "low" | "medium" | "high" | "none";
+    agent_relevance?: string | undefined;
+    recommended_for?: string[] | undefined;
+    highlights?: string[] | undefined;
+    action_recommendation?: string | undefined;
+}, {
+    summary: string;
+    agent_relevance?: string | undefined;
+    breaking_risk?: "low" | "medium" | "high" | "none" | undefined;
+    recommended_for?: string[] | undefined;
+    highlights?: string[] | undefined;
+    action_recommendation?: string | undefined;
+}>;
+export type AgentReleaseNotes = z.infer<typeof AgentReleaseNotesSchema>;
 export declare const BrainclawLocalReleaseManifestSchema: z.ZodObject<{
     schema_version: z.ZodOptional<z.ZodNumber>;
     version: z.ZodLiteral<1>;
@@ -2932,6 +2965,34 @@ export declare const BrainclawLocalReleaseManifestSchema: z.ZodObject<{
     artifact_path: z.ZodOptional<z.ZodString>;
     install_command: z.ZodOptional<z.ZodString>;
     release_notes: z.ZodOptional<z.ZodString>;
+    agent_release_notes: z.ZodOptional<z.ZodObject<{
+        /** One-line summary an agent can surface directly to the operator. */
+        summary: z.ZodString;
+        /** Concrete impact on agent workflows: new MCP tools, changed behaviour, removed commands. */
+        agent_relevance: z.ZodOptional<z.ZodString>;
+        /** How risky is upgrading without reading the changelog first. */
+        breaking_risk: z.ZodDefault<z.ZodEnum<["none", "low", "medium", "high"]>>;
+        /** Audience tags ('all', 'multi-agent', 'large-teams'). Absent means 'all'. */
+        recommended_for: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        /** Short bullet points the agent can list (max ~5). */
+        highlights: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        /** What the agent should tell the operator, e.g. "Safe to auto-install" or "Needs review before upgrading". */
+        action_recommendation: z.ZodOptional<z.ZodString>;
+    }, "strip", z.ZodTypeAny, {
+        summary: string;
+        breaking_risk: "low" | "medium" | "high" | "none";
+        agent_relevance?: string | undefined;
+        recommended_for?: string[] | undefined;
+        highlights?: string[] | undefined;
+        action_recommendation?: string | undefined;
+    }, {
+        summary: string;
+        agent_relevance?: string | undefined;
+        breaking_risk?: "low" | "medium" | "high" | "none" | undefined;
+        recommended_for?: string[] | undefined;
+        highlights?: string[] | undefined;
+        action_recommendation?: string | undefined;
+    }>>;
 }, "strip", z.ZodTypeAny, {
     version: 1;
     package_name: string;
@@ -2942,6 +3003,14 @@ export declare const BrainclawLocalReleaseManifestSchema: z.ZodObject<{
     artifact_path?: string | undefined;
     install_command?: string | undefined;
     release_notes?: string | undefined;
+    agent_release_notes?: {
+        summary: string;
+        breaking_risk: "low" | "medium" | "high" | "none";
+        agent_relevance?: string | undefined;
+        recommended_for?: string[] | undefined;
+        highlights?: string[] | undefined;
+        action_recommendation?: string | undefined;
+    } | undefined;
 }, {
     version: 1;
     latest_installable_version: string;
@@ -2952,6 +3021,14 @@ export declare const BrainclawLocalReleaseManifestSchema: z.ZodObject<{
     artifact_path?: string | undefined;
     install_command?: string | undefined;
     release_notes?: string | undefined;
+    agent_release_notes?: {
+        summary: string;
+        agent_relevance?: string | undefined;
+        breaking_risk?: "low" | "medium" | "high" | "none" | undefined;
+        recommended_for?: string[] | undefined;
+        highlights?: string[] | undefined;
+        action_recommendation?: string | undefined;
+    } | undefined;
 }>;
 export type BrainclawLocalReleaseManifest = z.infer<typeof BrainclawLocalReleaseManifestSchema>;
 export declare const ConfigSchema: z.ZodObject<{

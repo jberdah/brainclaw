@@ -190,6 +190,13 @@ export declare const MCP_READ_TOOLS: readonly [{
         };
     };
 }, {
+    readonly name: "bclaw_release_notes";
+    readonly description: "Return the agent-first release notes for the latest installable Brainclaw version from the configured update source. Returns structured highlights, breaking risk, and action recommendation when available.";
+    readonly inputSchema: {
+        readonly type: "object";
+        readonly properties: {};
+    };
+}, {
     readonly name: "bclaw_read_handoff";
     readonly description: "Read an open handoff ticket with its captured git diff and state snapshot.";
     readonly inputSchema: {
@@ -686,8 +693,9 @@ export declare class McpServerConnection {
  */
 export declare class StdioTransport {
     private buffer;
-    private mode;
-    private onMessage;
+    /** Detected framing mode — exposed so the server can match output format. */
+    detectedMode: 'detecting' | 'content-length' | 'newline';
+    onMessage: (line: string) => void;
     private onClose;
     constructor(onMessage: (line: string) => void, onClose: () => void);
     start(): void;
