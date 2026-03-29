@@ -31,7 +31,7 @@ export interface ContextOptions {
   host?: string;
   allHosts?: boolean;
   includePending?: boolean;
-  profile?: 'dev' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick';
+  profile?: 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick';
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
@@ -133,7 +133,6 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   // Resolve parent stores for multi-store merge (walk-up from cwd)
   const storeChain = resolveStoreChain(contextCwd);
 
-  const profile = options.profile ?? config.profile ?? 'dev';
   const projectMode = config.project_mode ?? 'auto';
   const projectStrategy = config.projects?.strategy ?? 'manual';
   const currentHost = resolveCurrentHostId();
@@ -146,7 +145,9 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     ? findAgentIdentityByName(options.agent.trim(), contextCwd)
     : resolveCurrentAgentIdentity(contextCwd);
   const agent = options.agent?.trim() || currentAgentIdentity?.agent_name;
-  const profileMaxItems: Record<string, number> = { compact: 6, copilot: 5, quick: 3 };
+  // Profile resolution: explicit param > agent default > config default > 'dev'
+  const profile = options.profile ?? currentAgentIdentity?.context_profile ?? config.profile ?? 'dev';
+  const profileMaxItems: Record<string, number> = { dense: 20, compact: 6, copilot: 5, quick: 3 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
   // Instructions will be resolved after parent-store merge below (line ~460)
@@ -1396,6 +1397,13 @@ function computeRelevance(item: ContextItem, terms: string[], profile: string, t
   if (item.section === 'runtime') {
     score += 1;
     reasons.push('runtime execution signal');
+  }
+  if (profile === 'dense') {
+    // Dense profile: boost all actionable sections equally for maximum coverage
+    if (item.section === 'decision' || item.section === 'trap' || item.section === 'candidate' || item.section === 'runtime') {
+      score += 2;
+      reasons.push('profile boost: dense');
+    }
   }
   if (profile === 'dev' && (item.section === 'decision' || item.section === 'trap')) {
     score += 2;

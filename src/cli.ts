@@ -720,6 +720,7 @@ program
   .command('enable-agent <name>')
   .description('Activate a supported coding agent on an already initialized project')
   .option('--kind <kind>', 'Identity kind: agent, human, unknown', 'agent')
+  .option('--context-profile <profile>', 'Default context profile: dev, dense, compact, copilot, quick, openclaw, ops, research')
   .option('--capability <value>', 'Declare a capability on the agent profile (repeatable)', collect, [])
   .option('--replace-capabilities', 'Replace existing capabilities instead of merging')
   .option('--generate-fingerprint', 'Generate or rotate a local public identity fingerprint for this agent')

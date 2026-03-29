@@ -130,7 +130,7 @@ export const MCP_READ_TOOLS = [
         agent: { type: 'string', description: 'Optional agent name for agent-layer instruction resolution.' },
         host: { type: 'string', description: 'Optional host identifier used to include machine-local runtime context.' },
         allHosts: { type: 'boolean', description: 'Include machine-local runtime context from all hosts.' },
-        profile: { type: 'string', description: 'Optional profile override: dev, openclaw, ops, research.' },
+        profile: { type: 'string', description: 'Optional profile override: dev (default), dense (all sections, max items), compact (plans+constraints), copilot (constraints+traps), quick (minimal), openclaw, ops, research.' },
         includePending: { type: 'boolean', description: 'Include pending candidates in the context.' },
         maxItems: { type: 'number', description: 'Maximum number of ranked items to return.' },
         maxChars: { type: 'number', description: 'Approximate character budget applied after ranking.' },
@@ -550,7 +550,7 @@ const MCP_WRITE_TOOLS = [
         context: { type: 'string', description: 'Context target path.' },
         includeContext: { type: 'boolean', description: 'Include project memory context in the response (equivalent to bclaw_get_context).' },
         includeBoard: { type: 'boolean', description: 'Include agent board (plans, claims, handoffs) in the response (equivalent to bclaw_get_agent_board).' },
-        contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev, openclaw, ops, research.' },
+        contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev (default), dense, compact, copilot, quick, openclaw, ops, research. If unset, uses the agent default profile.' },
         contextFormat: { type: 'string', description: 'Context format when includeContext is true: markdown, json, or template.' },
       },
     },
@@ -2037,7 +2037,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const ctxResult = buildContext({
           target: args.context as string | undefined,
           agent: resolved.identity?.agent_name,
-          profile: args.contextProfile as 'dev' | 'openclaw' | 'ops' | 'research' | undefined,
+          profile: args.contextProfile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | undefined,
           cwd,
         });
         const format = normaliseFormat(args.contextFormat);

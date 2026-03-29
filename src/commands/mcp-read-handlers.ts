@@ -93,7 +93,7 @@ export function handleMcpReadToolCall(
       agent: args.agent as string | undefined,
       host: args.host as string | undefined,
       allHosts: args.allHosts as boolean | undefined,
-      profile: args.profile as 'dev' | 'openclaw' | 'ops' | 'research' | undefined,
+      profile: args.profile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | undefined,
       includePending: args.includePending as boolean | undefined,
       maxItems: args.maxItems as number | undefined,
       maxChars: args.maxChars as number | undefined,

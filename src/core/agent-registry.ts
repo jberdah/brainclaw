@@ -42,6 +42,7 @@ export interface RegisterAgentIdentityInput {
   agentName: string;
   kind?: AgentKind;
   trustLevel?: AgentTrustLevel;
+  contextProfile?: string;
   capabilities?: string[];
   replaceCapabilities?: boolean;
   generateFingerprint?: boolean;
@@ -227,6 +228,9 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     } else if (normalizedCapabilities.length > 0) {
       updated = { ...updated, capabilities: mergeCapabilities(existing.capabilities ?? [], normalizedCapabilities) };
     }
+    if (input.contextProfile && existing.context_profile !== input.contextProfile) {
+      updated = { ...updated, context_profile: input.contextProfile as AgentIdentityDocument['context_profile'] };
+    }
     if (input.generateFingerprint) {
       updated = withIdentityKey(updated, input.env, true);
     }
@@ -245,6 +249,7 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     kind: input.kind ?? 'unknown',
     trust_level: input.trustLevel ?? 'contributor',
     capabilities: normalizedCapabilities,
+    ...(input.contextProfile ? { context_profile: input.contextProfile as AgentIdentityDocument['context_profile'] } : {}),
   };
   if (input.generateFingerprint) {
     created = withIdentityKey(created, input.env, true);

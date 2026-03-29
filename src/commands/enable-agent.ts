@@ -9,6 +9,7 @@ import { writeDetectedAgentHooks } from './hooks.js';
 
 export interface EnableAgentOptions {
   kind?: AgentKind;
+  contextProfile?: string;
   capability?: string[];
   replaceCapabilities?: boolean;
   generateFingerprint?: boolean;
@@ -32,6 +33,7 @@ export function runEnableAgent(agentName: string, options: EnableAgentOptions = 
   const agent = registerAgentIdentity({
     agentName,
     kind: options.kind ?? 'agent',
+    contextProfile: options.contextProfile,
     capabilities: options.capability,
     replaceCapabilities: options.replaceCapabilities,
     generateFingerprint: options.generateFingerprint,

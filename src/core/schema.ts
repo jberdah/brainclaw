@@ -579,6 +579,7 @@ export const AgentIdentityDocumentSchema = z.object({
   capabilities: z.array(z.string()).default([]),
   identity_key: AgentIdentityKeySchema.optional(),
   model: z.string().optional(),
+  context_profile: z.enum(['dev', 'dense', 'compact', 'copilot', 'quick', 'openclaw', 'ops', 'research']).optional(),
 });
 export type AgentIdentityDocument = z.infer<typeof AgentIdentityDocumentSchema>;
 
