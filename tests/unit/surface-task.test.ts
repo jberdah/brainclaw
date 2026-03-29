@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLI_PATH = path.resolve(__dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 
 function tmpDir(): string {
