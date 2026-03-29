@@ -26,6 +26,7 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       BRAINCLAW_STORE_BOUNDARY: cwd,
+      BRAINCLAW_AGENT: 'test-agent',
       HOME: fakeHome,
       USERPROFILE: fakeHome,
       USERNAME: 'testuser',
