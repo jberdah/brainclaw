@@ -16,6 +16,8 @@ import { extractFilesFromDiff } from '../commands/handoff.js';
 export interface SessionEndOptions {
   session?: string;
   summary?: string;
+  /** Free-text narrative of what happened in the session and why, beyond auto-generated commits. */
+  narrative?: string;
   agent?: string;
   agentId?: string;
   autoReflect?: boolean;
@@ -211,6 +213,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
 
         const handoffText = [
           `Session ${sessionId} — auto-generated handoff`,
+          options.narrative ? `\nNarrative: ${options.narrative}` : '',
           '',
           `Commits:\n${commits}`,
           diffStat ? `\nChanged files:\n${diffStat}` : '',

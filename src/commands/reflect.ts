@@ -294,28 +294,28 @@ function promoteCandidateToState(candidate: Candidate, cwd?: string): string {
   switch (candidate.type) {
     case 'constraint': {
       const { id: cId, short_label } = generateIdWithLabel('active_constraints', cwd);
-      const entry: Constraint = { id: cId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags };
+      const entry: Constraint = { id: cId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', tags: candidate.tags, plan_id: candidate.plan_id };
       state.active_constraints.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'decision': {
       const { id: dId, short_label } = generateIdWithLabel('recent_decisions', cwd);
-      const entry: Decision = { id: dId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, related_paths: candidate.related_paths, tags: candidate.tags };
+      const entry: Decision = { id: dId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, related_paths: candidate.related_paths, plan_id: candidate.plan_id, tags: candidate.tags };
       state.recent_decisions.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'trap': {
       const { id: tId, short_label } = generateTrapIdWithLabel(cwd);
-      const entry: Trap = { id: tId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', severity: candidate.severity ?? 'medium', tags: candidate.tags, visibility: 'shared' };
+      const entry: Trap = { id: tId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, status: 'active', severity: candidate.severity ?? 'medium', tags: candidate.tags, plan_id: candidate.plan_id, visibility: 'shared' };
       state.known_traps.push(entry);
       promotedItemId = entry.id;
       break;
     }
     case 'handoff': {
       const { id: hId, short_label } = generateIdWithLabel('open_handoffs', cwd);
-      const entry: Handoff = { id: hId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, from: candidate.from ?? '', to: candidate.to ?? '', status: 'open', tags: candidate.tags, related_paths: candidate.related_paths };
+      const entry: Handoff = { id: hId, short_label, text: candidate.text, created_at: candidate.created_at, author: candidate.author, author_id: candidate.author_id, project_id: candidate.project_id, host_id: candidate.host_id, session_id: candidate.session_id, from: candidate.from ?? '', to: candidate.to ?? '', status: 'open', tags: candidate.tags, plan_id: candidate.plan_id, narrative: candidate.narrative, related_paths: candidate.related_paths };
       state.open_handoffs.push(entry);
       promotedItemId = entry.id;
       break;

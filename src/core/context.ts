@@ -50,6 +50,7 @@ export interface ContextItem {
   reasons: string[];
   related_paths?: string[];
   extra?: string;
+  plan_id?: string;
   from_project?: string;
   provenance?: {
     actor?: string;
@@ -193,6 +194,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       score: 0,
       reasons: [],
       extra: c.status,
+      plan_id: c.plan_id,
       provenance: {
         actor: c.author,
         actor_id: c.author_id,
@@ -213,6 +215,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       score: 0,
       reasons: [],
       extra: d.related_paths?.join(', '),
+      plan_id: d.plan_id,
       provenance: {
         actor: d.author,
         actor_id: d.author_id,
@@ -233,6 +236,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       score: 0,
       reasons: [],
       extra: `${t.severity}, visibility:${t.visibility ?? 'shared'}`,
+      plan_id: t.plan_id,
       provenance: {
         actor: t.author,
         actor_id: t.author_id,
@@ -836,8 +840,9 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   for (const item of result.selected) {
     const tags = item.tags.length ? ` [${item.tags.join(', ')}]` : '';
     const extra = item.extra ? ` (${item.extra})` : '';
+    const planRef = item.plan_id ? ` [plan: ${item.plan_id}]` : '';
     const why = explain && item.reasons.length ? ` {why: ${item.reasons.join(', ')}}` : '';
-    lines.push(`- [${item.id}] <${item.section}> ${item.text}${extra}${tags}${why}`);
+    lines.push(`- [${item.id}] <${item.section}> ${item.text}${extra}${planRef}${tags}${why}`);
   }
 
   if (result.derived_signals && result.derived_signals.length > 0) {
@@ -1071,13 +1076,15 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       if (compact) {
         const tags = item.tags.length ? ` tg=[${item.tags.join(',')}]` : '';
         const extra = item.extra ? ` ex="${item.extra}"` : '';
+        const planRef = item.plan_id ? ` pl=${item.plan_id}` : '';
         const why = item.reasons.length ? ` why=[${item.reasons.join('|')}]` : '';
-        lines.push(`  - id=${item.id} tp=${item.section}${tags}${extra}${why} tx="${item.text}"`);
+        lines.push(`  - id=${item.id} tp=${item.section}${tags}${extra}${planRef}${why} tx="${item.text}"`);
       } else {
         const tags = item.tags.length ? ` tags=[${item.tags.join(',')}]` : '';
         const extra = item.extra ? ` extra="${item.extra}"` : '';
+        const planRef = item.plan_id ? ` plan=${item.plan_id}` : '';
         const why = item.reasons.length ? ` why=[${item.reasons.join(', ')}]` : '';
-        lines.push(`  - id=${item.id} type=${item.section}${tags}${extra}${why} text="${item.text}"`);
+        lines.push(`  - id=${item.id} type=${item.section}${tags}${extra}${planRef}${why} text="${item.text}"`);
       }
     }
   }

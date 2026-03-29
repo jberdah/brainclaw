@@ -322,6 +322,7 @@ export function handleMcpReadToolCall(
     if (handoff) {
       text = `From: ${handoff.from}\nTo: ${handoff.to}\nTask: ${handoff.text}\n`;
       if (handoff.plan_id) text += `Plan: ${handoff.plan_id}\n`;
+      if (handoff.narrative) text += `\n--- Narrative ---\n${handoff.narrative}\n`;
       if (handoff.contract) {
         const c = handoff.contract;
         text += '\n--- Contract ---\n';

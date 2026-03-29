@@ -83,6 +83,7 @@ export const ConstraintSchema = z.object({
   scope: MemoryScopeSchema.optional(),
   tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
+  plan_id: z.string().optional(),
   expires_at: z.string().optional(),
 });
 export type Constraint = z.infer<typeof ConstraintSchema>;
@@ -157,6 +158,7 @@ export const HandoffSchema = z.object({
   status: HandoffStatusSchema,
   project: z.string().optional(),
   plan_id: z.string().optional(),
+  narrative: z.string().optional(),
   tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   contract: HandoffContractSchema.optional(),
@@ -366,6 +368,7 @@ export const CandidateSchema = z.object({
   usage_events: z.array(CandidateUseSchema).default([]),
   last_used_at: z.string().optional(),
   plan_id: z.string().optional(),
+  narrative: z.string().optional(),
   contradictions_detected: z.array(CandidateContradictionSchema).optional(),
   contradiction_summary: z.string().optional(),
   promotion_blocked_reason: z.string().optional(),

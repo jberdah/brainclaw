@@ -565,6 +565,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         summary: { type: 'string', description: 'Session summary text.' },
+        narrative: { type: 'string', description: 'Free-text narrative of what happened in the session and why. Goes beyond the auto-generated commit list: "Tried X, failed because Y, pivoted to Z. Watch out for A."' },
         autoReflect: { type: 'boolean', description: 'Auto-reflect session notes as candidates.' },
         reflect: { type: 'boolean', description: 'Include structured reflection questions. Answer via bclaw_write_note with tag [reflection].' },
       },
@@ -711,6 +712,7 @@ const MCP_WRITE_TOOLS = [
         post_conditions: { type: 'array', items: { type: 'string' }, description: 'Post-conditions the receiving agent must satisfy.' },
         tests_to_verify: { type: 'array', items: { type: 'string' }, description: 'Tests the receiving agent should verify.' },
         linked_plans: { type: 'array', items: { type: 'string' }, description: 'Linked plan IDs.' },
+        narrative: { type: 'string', description: 'Free-text narrative of what happened and why, beyond the auto-generated commit list.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -2087,6 +2089,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agent: resolved.identity?.agent_name,
         agentId: resolved.identity?.agent_id,
         summary: args.summary as string | undefined,
+        narrative: args.narrative as string | undefined,
         autoReflect: args.autoReflect as boolean | undefined,
         reflect: args.reflect as boolean | undefined,
         cwd,
@@ -2433,6 +2436,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       if (args.status) handoff.status = args.status as 'open' | 'closed';
       if (args.to) handoff.to = String(args.to);
+      if (args.narrative) handoff.narrative = String(args.narrative);
       // Update contract fields
       const contractUpdates: Record<string, string[]> = {};
       for (const key of ['files_touched', 'pre_conditions', 'post_conditions', 'tests_to_verify', 'linked_plans'] as const) {

@@ -70,6 +70,7 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
           session_id: candidate.session_id,
           status: 'active',
           tags: candidate.tags,
+          plan_id: candidate.plan_id,
         };
         state.active_constraints.push(entry);
         promotedItemId = entryId;
@@ -133,6 +134,8 @@ export function acceptCandidate(id: string, by?: string, cwd?: string, byId?: st
           session_id: candidate.session_id,
           status: 'open',
           tags: candidate.tags,
+          plan_id: candidate.plan_id,
+          narrative: candidate.narrative,
         };
         state.open_handoffs.push(entry);
         promotedItemId = entryId;
