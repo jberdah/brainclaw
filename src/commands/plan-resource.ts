@@ -6,6 +6,7 @@ import { runDeletePlan } from './delete-plan.js';
 interface PlanResourceOptions extends PlanOptions, UpdatePlanOptions {
   json?: boolean;
   all?: boolean;
+  recursive?: boolean;
 }
 
 export function runPlanResource(subcommand: string, args: string[], options: PlanResourceOptions = {}): void {
@@ -29,6 +30,7 @@ export function runPlanResource(subcommand: string, args: string[], options: Pla
       assignee: options.assignee,
       project: options.project,
       all: options.all,
+      recursive: options.recursive,
     });
     return;
   }

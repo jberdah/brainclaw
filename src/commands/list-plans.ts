@@ -57,13 +57,23 @@ export function scanDescendantPlans(cwd: string, options: ListPlansOptions): Des
   const resolvedCwd = path.resolve(cwd ?? process.cwd());
   const descendants = scanNestedBrainclawProjects(resolvedCwd);
   const groups: DescendantPlanGroup[] = [];
+  // In recursive mode, --project filters by descendant project name/path, not plan.project field
+  const projectFilter = options.project?.toLowerCase();
+  const filterOpts = { ...options, project: undefined };
   for (const project of descendants) {
+    const relativePath = path.relative(resolvedCwd, project.path);
+    const projectName = project.project_name?.toLowerCase();
+    const relLower = relativePath.toLowerCase();
+    const baseLower = path.basename(project.path).toLowerCase();
+    if (projectFilter && projectName !== projectFilter && relLower !== projectFilter && baseLower !== projectFilter) {
+      continue;
+    }
     try {
-      const plans = filterPlans(loadState(project.path).plan_items, options);
+      const plans = filterPlans(loadState(project.path).plan_items, filterOpts);
       if (plans.length > 0) {
         groups.push({
           path: project.path,
-          relative_path: path.relative(resolvedCwd, project.path),
+          relative_path: relativePath,
           project_name: project.project_name,
           plans,
         });

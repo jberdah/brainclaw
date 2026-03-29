@@ -399,6 +399,7 @@ program
   .option('--estimate <minutes>', 'Estimated effort in minutes (positive integer, e.g. --estimate 30)')
   .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
   .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
+  .option('--recursive', 'Include plans from descendant brainclaw projects (for list)')
   .action((subcommand, args, options) => {
     runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort });
   });
