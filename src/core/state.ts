@@ -111,15 +111,39 @@ function persistStateUnlocked(state: State, cwd: string, options: PersistStateOp
   commitMemoryChange(options.commitMessage ?? 'state update', cwd);
 }
 
+function cleanupLegacyDir(entityName: string, currentIds: Set<string>, cwd: string): void {
+  const writeDir = resolveEntityDir(entityName, cwd, 'write');
+  const readDir = resolveEntityDir(entityName, cwd, 'read');
+  // If read resolves to a different (legacy) directory, clean orphans there too
+  if (readDir !== writeDir && fs.existsSync(readDir)) {
+    const files = fs.readdirSync(readDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      const id = file.replace('.json', '');
+      if (!currentIds.has(id)) {
+        fs.unlinkSync(path.join(readDir, file));
+      }
+    }
+  }
+}
+
 function writeStateDirectories(state: State, cwd?: string): void {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
 
-  syncDirectory(resolveEntityDir('constraints', effectiveCwd, 'write'), state.active_constraints, 'constraint');
-  syncDirectory(resolveEntityDir('decisions', effectiveCwd, 'write'), state.recent_decisions, 'decision');
-  syncDirectory(resolveEntityDir('traps', effectiveCwd, 'write'), state.known_traps, 'trap');
-  syncDirectory(resolveEntityDir('handoffs', effectiveCwd, 'write'), state.open_handoffs, 'handoff');
-  syncDirectory(resolveEntityDir('plans', effectiveCwd, 'write'), state.plan_items, 'plan');
+  const entities: Array<{ name: string; items: { id: string }[]; docType: VersionedDocumentType }> = [
+    { name: 'constraints', items: state.active_constraints, docType: 'constraint' },
+    { name: 'decisions', items: state.recent_decisions, docType: 'decision' },
+    { name: 'traps', items: state.known_traps, docType: 'trap' },
+    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff' },
+    { name: 'plans', items: state.plan_items, docType: 'plan' },
+  ];
+
+  for (const { name, items, docType } of entities) {
+    const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
+    syncDirectory(writeDir, items, docType);
+    const currentIds = new Set(items.map(item => item.id));
+    cleanupLegacyDir(name, currentIds, effectiveCwd);
+  }
 }
 
 export function persistState(state: State, cwd?: string, options: PersistStateOptions = {}): void {
