@@ -2,33 +2,126 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Resolve the brainclaw command for MCP configs.
- * Prefers the absolute path to the installed binary to avoid PATH resolution issues
- * in non-login shells (VS Code Server, MCP subprocesses).
- * Falls back to 'npx brainclaw' if the binary can't be resolved.
+ * Returns `{ command: "<node>", args: ["<cli.js>", "mcp"] }` so the config
+ * works in non-login shells (VS Code Server, MCP subprocesses) on all OSes.
+ *
+ * Strategy:
+ * 1. Find the brainclaw bin via which/where
+ * 2. Trace from the bin/shim to the actual cli.js entry point
+ * 3. Pair it with the absolute node path
+ * Falls back to 'npx brainclaw mcp' if resolution fails.
  */
 function resolveBrainclawMcpCommand(): { command: string; args: string[] } {
-  // 1. Try to resolve via which/where (finds the actual binary in PATH)
+  const nodeBin = process.execPath;
+
+  // 1. Try to resolve the cli.js from the installed brainclaw binary
+  const cliJs = resolveBrainclawCliJs();
+  if (cliJs) {
+    return { command: nodeBin, args: [cliJs, 'mcp'] };
+  }
+
+  // 2. Fallback: npx (relies on PATH, may resolve wrong version)
+  return { command: 'npx', args: ['brainclaw', 'mcp'] };
+}
+
+/**
+ * Trace from the brainclaw bin/shim to the actual dist/cli.js file.
+ * Works on Windows (.cmd shim), macOS/Linux (symlink to bin stub).
+ */
+function resolveBrainclawCliJs(): string | undefined {
+  // Strategy A: find via which/where and trace to cli.js
   const whichCmd = os.platform() === 'win32' ? 'where' : 'which';
   try {
     const result = spawnSync(whichCmd, ['brainclaw'], { encoding: 'utf-8', timeout: 3000 });
     if (result.status === 0) {
       const resolved = result.stdout.trim().split(/\r?\n/)[0]?.trim();
-      if (resolved && fs.existsSync(resolved)) {
-        // On Windows, `where` returns the .cmd shim — use it directly
-        // On Unix, follow symlinks to get the real path
-        const absolutePath = os.platform() === 'win32' ? resolved : fs.realpathSync(resolved);
-        return { command: absolutePath, args: ['mcp'] };
+      if (resolved) {
+        const cliJs = traceToCliJs(resolved);
+        if (cliJs) return cliJs;
       }
     }
   } catch {
-    // Non-fatal — fall through to npx
+    // Non-fatal — try next strategy
   }
 
-  // 2. Fallback: npx (relies on PATH, may resolve wrong version)
-  return { command: 'npx', args: ['brainclaw', 'mcp'] };
+  // Strategy B: resolve from this file's own package (we ARE brainclaw)
+  try {
+    const ownCliJs = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli.js');
+    if (fs.existsSync(ownCliJs)) return ownCliJs;
+  } catch {
+    // Non-fatal
+  }
+
+  return undefined;
+}
+
+/**
+ * Given a bin path (shim or symlink), trace to the dist/cli.js entry point.
+ *
+ * Windows: .cmd shim contains a line like `"%_prog%" "%dp0%\node_modules\brainclaw\dist\cli.js" %*`
+ * Unix: bin is a symlink → resolve to real path → go up to package root → dist/cli.js
+ */
+function traceToCliJs(binPath: string): string | undefined {
+  const isWindows = os.platform() === 'win32';
+
+  if (isWindows) {
+    // Read the .cmd shim and extract the cli.js path
+    const cmdPath = binPath.endsWith('.cmd') ? binPath : `${binPath}.cmd`;
+    try {
+      const content = fs.readFileSync(cmdPath, 'utf-8');
+      // Match patterns like: "%dp0%\node_modules\brainclaw\dist\cli.js"
+      const match = content.match(/%dp0%\\([^\s"]+cli\.js)/);
+      if (match) {
+        const shimDir = path.dirname(cmdPath);
+        const cliJs = path.resolve(shimDir, match[1]!);
+        if (fs.existsSync(cliJs)) return cliJs;
+      }
+    } catch {
+      // Fall through
+    }
+  } else {
+    // Unix: follow symlink chain to the real bin, then find cli.js
+    try {
+      const realBin = fs.realpathSync(binPath);
+      // Typical layout: .../node_modules/.bin/brainclaw → ../brainclaw/dist/cli.js
+      // Or: .../node_modules/brainclaw/dist/cli.js (direct)
+      if (realBin.endsWith('cli.js') && fs.existsSync(realBin)) return realBin;
+
+      // The bin stub typically lives at node_modules/brainclaw/dist/cli.js
+      // or node_modules/.bin/brainclaw → ../brainclaw/dist/cli.js
+      const packageRoot = findPackageRoot(realBin);
+      if (packageRoot) {
+        const cliJs = path.join(packageRoot, 'dist', 'cli.js');
+        if (fs.existsSync(cliJs)) return cliJs;
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  return undefined;
+}
+
+/** Walk up from a file to find the nearest directory containing package.json with name "brainclaw". */
+function findPackageRoot(from: string): string | undefined {
+  let dir = path.dirname(from);
+  for (let i = 0; i < 10; i++) {
+    const pkgPath = path.join(dir, 'package.json');
+    try {
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { name?: string };
+        if (pkg.name === 'brainclaw') return dir;
+      }
+    } catch { /* continue */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
 }
 
 /** Cached MCP command — resolved once per process. */
