@@ -413,6 +413,7 @@ program
   .option('--assignee <assignee>', 'Filter by assignee')
   .option('--project <project>', 'Filter by project namespace')
   .option('--all', 'Include done and dropped plan items')
+  .option('--recursive', 'Include plans from descendant brainclaw projects')
   .action((options) => {
     runListPlans(options);
   });

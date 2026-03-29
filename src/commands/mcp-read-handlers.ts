@@ -10,6 +10,7 @@ import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
+import { scanDescendantPlans } from './list-plans.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -37,7 +38,7 @@ import { listAvailableProjects, switchProject } from './switch.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
-import type { BootstrapInterviewAnswer } from '../core/schema.js';
+import type { BootstrapInterviewAnswer, PlanStatus, PlanType } from '../core/schema.js';
 import {
   type McpToolResponse,
   type McpReadToolContext,
@@ -483,24 +484,66 @@ export function handleMcpReadToolCall(
 
     const totalFiltered = plans.length;
 
-    // Pagination
+    // Descendant discovery
+    const descendantGroups = args.recursive
+      ? scanDescendantPlans(cwd, {
+          all: args.all as boolean | undefined,
+          status: args.status as PlanStatus | undefined,
+          type: args.type as PlanType | undefined,
+          assignee: args.assignee as string | undefined,
+          project: args.project as string | undefined,
+        })
+      : [];
+    const totalDescendantPlans = descendantGroups.reduce((sum, g) => sum + g.plans.length, 0);
+
+    // Pagination (local plans only)
     const offset = Math.max(0, Number(args.offset) || 0);
     const limit = Math.max(1, Number(args.limit) || 20);
     const paginated = plans.slice(offset, offset + limit);
 
-    const lines = paginated.length === 0
-      ? ['No plan items found.']
-      : [
-          `${totalFiltered} plan(s)${totalFiltered > paginated.length ? ` (showing ${offset + 1}-${offset + paginated.length})` : ''}:`,
-          ...paginated.map((plan) => {
-            const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
-            if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
-            if (plan.project) meta.push(`project ${plan.project}`);
-            if (plan.depends_on.length > 0) meta.push(`depends_on ${plan.depends_on.join(',')}`);
-            const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
-            return `[${plan.id}] ${plan.text} (${meta.join(' · ')})${tags}`;
-          }),
-        ];
+    const lines: string[] = [];
+    if (args.recursive) {
+      lines.push(`── local (${totalFiltered} plans) ──`);
+    }
+    if (paginated.length === 0 && !args.recursive) {
+      lines.push('No plan items found.');
+      // Signal descendant plans when 0 local results
+      if (!args.recursive) {
+        const signalGroups = scanDescendantPlans(cwd, {
+          all: args.all as boolean | undefined,
+          status: args.status as PlanStatus | undefined,
+        });
+        const signalTotal = signalGroups.reduce((sum, g) => sum + g.plans.length, 0);
+        if (signalTotal > 0) {
+          lines.push(`ℹ ${signalTotal} plan(s) found in ${signalGroups.length} descendant project(s) (use recursive: true to see all)`);
+        }
+      }
+    } else if (paginated.length > 0) {
+      if (!args.recursive) {
+        lines.push(`${totalFiltered} plan(s)${totalFiltered > paginated.length ? ` (showing ${offset + 1}-${offset + paginated.length})` : ''}:`);
+      }
+      for (const plan of paginated) {
+        const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
+        if (plan.assignee) meta.push(`assignee ${plan.assignee}`);
+        if (plan.project) meta.push(`project ${plan.project}`);
+        if (plan.depends_on.length > 0) meta.push(`depends_on ${plan.depends_on.join(',')}`);
+        const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
+        lines.push(`[${plan.id}] ${plan.text} (${meta.join(' · ')})${tags}`);
+      }
+    } else {
+      lines.push('  (none)');
+    }
+
+    // Append descendant groups
+    for (const group of descendantGroups) {
+      const label = group.project_name ?? group.relative_path;
+      lines.push(`\n── ${label} (${group.plans.length} plans) ──`);
+      for (const plan of group.plans) {
+        const meta: string[] = [plan.type ?? 'feat', plan.status, plan.priority];
+        const tags = plan.tags.length ? ` [${plan.tags.join(', ')}]` : '';
+        lines.push(`[${plan.id}] ${plan.text} (${meta.join(' · ')})${tags}`);
+      }
+    }
 
     // Compact mode: strip heavy fields
     const outputPlans = args.compact
@@ -511,7 +554,13 @@ export function handleMcpReadToolCall(
 
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { total: totalFiltered, offset, limit, plans: outputPlans },
+      structuredContent: {
+        total: totalFiltered,
+        offset,
+        limit,
+        plans: outputPlans,
+        ...(descendantGroups.length > 0 ? { descendants: descendantGroups, total_with_descendants: totalFiltered + totalDescendantPlans } : {}),
+      },
     };
   }
 

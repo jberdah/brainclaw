@@ -249,6 +249,7 @@ export const MCP_READ_TOOLS = [
         id: { type: 'string', description: 'Get a single plan by ID (exact match).' },
         limit: { type: 'number', description: 'Maximum number of plans to return (default: 20).' },
         offset: { type: 'number', description: 'Number of plans to skip (for pagination).' },
+        recursive: { type: 'boolean', description: 'Include plans from descendant brainclaw projects. Shows aggregated view with provenance.' },
         compact: { type: 'boolean', description: 'Return only key fields (id, short_label, text, status, priority) to reduce output size.' },
       },
     },
@@ -478,6 +479,7 @@ const MCP_WRITE_TOOLS = [
         planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
         scope: { type: 'string', description: 'Memory scope: project (default), machine, or user. Machine-scoped items apply to all projects on this machine.' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace, user. Use "user" to write to ~/.brainclaw/ (visible across all projects).' },
+        targetProject: { type: 'string', description: 'Cross-project report: create this candidate in a linked project (name or path). The candidate appears in the target project pending inbox with source attribution.' },
       },
       required: ['text', 'type'],
     },
@@ -1779,12 +1781,50 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agentId: resolvedIdentity.agent_id,
         sessionId: connectionSessionId,
       });
-      const candId = generateCandidateIdWithLabel(cwd);
       const type = String(args.type ?? 'decision') as CandidateType;
-      const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const candidatePlanId = args.planId as string | undefined;
       const candidateScope = args.scope as string | undefined;
       const targetStore = args.store as string | undefined;
+
+      // Cross-project report: save candidate in a linked project
+      const targetProjectArg = args.targetProject as string | undefined;
+      if (targetProjectArg) {
+        const targetLink = resolveCrossProjectTarget(targetProjectArg, cwd);
+        if (!targetLink) {
+          return { response: createToolErrorResponse('not_found', `Cross-project target not found: ${targetProjectArg}. Declare it in cross_project_links config.`) };
+        }
+        const targetCwd = targetLink.absolutePath;
+        const candId = generateCandidateIdWithLabel(targetCwd);
+        const sourceConfig = loadConfig(cwd);
+        const candidate: any = {
+          id: candId.id, short_label: candId.short_label, type, text: candidateText,
+          created_at: nowISO(),
+          author: identity.agent, author_id: identity.agent_id,
+          project_id: identity.project_id, host_id: identity.host_id, session_id: identity.session_id,
+          source: `cross-project:${sourceConfig.project_name ?? 'unknown'}`,
+          tags: [...candidateTags, 'cross-project-report'],
+          status: 'pending' as const,
+          severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
+          plan_id: candidatePlanId, scope: candidateScope,
+          model: currentModel,
+          star_count: 0, starred_by: [], usage_count: 0, usage_events: [],
+        };
+        saveCandidate(candidate, targetCwd);
+        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Cross-project report [${candId.short_label}] sent to ${targetLink.projectName} (pending review in target project)` }],
+            candidate_id: candId.id,
+            target_project: targetLink.projectName,
+            target_path: targetLink.absolutePath,
+            write_through: false,
+          }),
+          nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
+        };
+      }
+
+      const candId = generateCandidateIdWithLabel(cwd);
+      const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
       const effectiveCwd = targetStore ? resolveTargetStore(cwd, targetStore as StoreTarget) : cwd;
       const candidate: any = {
         id: candId.id,

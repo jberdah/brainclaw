@@ -578,22 +578,32 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     if (!link.available) continue;
     try {
       const linkedState = loadCrossProjectState(link.absolutePath);
+      for (const p of linkedState.plan_items.filter((plan) => plan.status !== 'done' && plan.status !== 'dropped')) {
+        crossProjectItems.push({
+          id: p.id, section: 'cross_project', text: `[plan] ${p.text}`,
+          tags: p.tags, score: 0, reasons: [], from_project: link.projectName,
+          extra: `${p.status}, ${p.priority}`,
+        });
+      }
       for (const d of linkedState.recent_decisions) {
         crossProjectItems.push({
           id: d.id, section: 'cross_project', text: d.text,
           tags: d.tags, score: 0, reasons: [], from_project: link.projectName,
+          plan_id: d.plan_id,
         });
       }
       for (const c of linkedState.active_constraints) {
         crossProjectItems.push({
           id: c.id, section: 'cross_project', text: c.text,
           tags: c.tags, score: 0, reasons: [], from_project: link.projectName,
+          plan_id: c.plan_id,
         });
       }
       for (const t of linkedState.known_traps.filter((trap) => isTrapActive(trap))) {
         crossProjectItems.push({
           id: t.id, section: 'cross_project', text: t.text,
           tags: t.tags, score: 0, reasons: [], from_project: link.projectName,
+          plan_id: t.plan_id,
         });
       }
     } catch { /* skip unavailable linked project */ }
