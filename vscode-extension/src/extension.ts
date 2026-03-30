@@ -299,6 +299,10 @@ class BrainclawBoardProvider implements vscode.WebviewViewProvider {
     if (!cwd) return;
 
     const bclaw = resolveBrainclawCmd(cwd);
+    if (!bclaw) {
+      this._view!.webview.html = getNotInstalledHtml();
+      return;
+    }
 
     // Initial board load
     cp.exec(`${bclaw} agent-board --json`, { cwd }, (err, stdout) => {
@@ -334,20 +338,41 @@ class BrainclawBoardProvider implements vscode.WebviewViewProvider {
   }
 }
 
-function resolveBrainclawCmd(cwd: string): string {
-  // Prefer local install, fall back to global
+function resolveBrainclawCmd(cwd: string): string | undefined {
+  // Prefer local install, fall back to global, return undefined if not found
   const local = path.join(cwd, 'node_modules', '.bin', 'brainclaw');
   try {
     cp.execSync(`"${local}" --version`, { stdio: 'ignore' });
     return `"${local}"`;
-  } catch {
+  } catch { /* local not available */ }
+
+  try {
+    cp.execSync('brainclaw --version', { stdio: 'ignore' });
     return 'brainclaw';
-  }
+  } catch { /* global not available */ }
+
+  vscode.window.showWarningMessage(
+    'brainclaw is not installed. Install it with: npm install -g brainclaw',
+    'Install instructions'
+  ).then(choice => {
+    if (choice) {
+      vscode.env.openExternal(vscode.Uri.parse('https://www.npmjs.com/package/brainclaw'));
+    }
+  });
+  return undefined;
 }
 
 function getLoadingHtml(): string {
   return `<!DOCTYPE html><html><body style="padding:12px;font-family:sans-serif;color:var(--vscode-foreground)">
     <p>Loading brainclaw board…</p></body></html>`;
+}
+
+function getNotInstalledHtml(): string {
+  return `<!DOCTYPE html><html><body style="padding:12px;font-family:sans-serif;color:var(--vscode-foreground)">
+    <p><strong>brainclaw not found</strong></p>
+    <p>Install brainclaw to use this panel:</p>
+    <code style="display:block;padding:8px;background:var(--vscode-textBlockQuote-background);border-radius:4px">npm install -g brainclaw</code>
+    <p style="margin-top:12px;opacity:.7">Then reload this window.</p></body></html>`;
 }
 
 function getBoardHtml(board: Record<string, unknown>): string {
