@@ -177,7 +177,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     note_type: 'session_end',
   }, options.cwd);
 
-  appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session' }, options.cwd);
+  appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session', session_id: sessionId, host_id: actor.host_id }, options.cwd);
   clearCurrentSession(options.cwd, sessionId);
 
   // Reflect-handoff: generate a handoff candidate from git commits since session start

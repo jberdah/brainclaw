@@ -1,4 +1,5 @@
 import { readAuditLog } from '../core/audit.js';
+import { buildGovernanceReport, renderGovernanceMarkdown } from '../core/governance.js';
 import { memoryExists } from '../core/io.js';
 import type { AuditAction } from '../core/audit.js';
 
@@ -8,12 +9,19 @@ export interface AuditCommandOptions {
   action?: string;
   json?: boolean;
   limit?: number;
+  governance?: boolean;
+  scope?: string;
 }
 
 export function runAuditCommand(options: AuditCommandOptions = {}): void {
   if (!memoryExists()) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  if (options.governance) {
+    runGovernanceReport(options);
+    return;
   }
 
   const entries = readAuditLog({
@@ -40,7 +48,23 @@ export function runAuditCommand(options: AuditCommandOptions = {}): void {
     const parts = [entry.timestamp, `[${entry.actor}]`, entry.action];
     if (entry.item_id) parts.push(`→ ${entry.item_id}`);
     if (entry.item_type) parts.push(`(${entry.item_type})`);
+    if (entry.scope) parts.push(`scope:${entry.scope}`);
     if (entry.reason) parts.push(`| ${entry.reason}`);
     console.log(parts.join(' '));
   }
+}
+
+function runGovernanceReport(options: AuditCommandOptions): void {
+  const report = buildGovernanceReport({
+    scope: options.scope,
+    agent: options.actor,
+    since: options.since,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+
+  console.log(renderGovernanceMarkdown(report));
 }

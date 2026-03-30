@@ -53,6 +53,7 @@ import { runEnv } from './commands/env.js';
 import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js';
 import { runInstallHooks } from './commands/install-hooks.js';
 import { runCheckConstraints } from './commands/check-constraints.js';
+import { runCheckPolicy } from './commands/check-policy.js';
 import { runRegisterAgent } from './commands/register-agent.js';
 import { runEnableAgent } from './commands/enable-agent.js';
 import { runVersion } from './commands/version.js';
@@ -952,6 +953,25 @@ program
     runCheckConstraints({ staged: options.staged, files: options.files, json: options.json });
   });
 
+// --- check-policy ---
+program
+  .command('check-policy')
+  .description('Pre-execution policy check: verify claims, constraints, traps and instructions for a scope')
+  .requiredOption('--scope <path>', 'File or directory scope to check')
+  .option('--agent <name>', 'Agent name to check claims for')
+  .option('--agent-id <id>', 'Agent id to check claims for')
+  .option('--action <action>', 'Intended action: edit, create, delete')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runCheckPolicy({
+      scope: options.scope,
+      agent: options.agent,
+      agentId: options.agentId,
+      action: options.action,
+      json: options.json,
+    });
+  });
+
 // --- install-hooks ---
 program
   .command('install-hooks')
@@ -1175,14 +1195,16 @@ program
 // --- audit ---
 program
   .command('audit')
-  .description('View the append-only audit log of all memory mutations')
+  .description('View the append-only audit log, or generate a governance posture report with --governance')
   .option('--since <date>', 'Show entries since this ISO date')
   .option('--actor <agent>', 'Filter by actor name or agent ID')
   .option('--action <action>', 'Filter by action type (create, accept, reject, etc.)')
   .option('--limit <n>', 'Show last N entries', parseInt)
   .option('--json', 'Output as JSON')
+  .option('--governance', 'Generate a governance posture report (aggregated view of claims, constraints, traps, instructions)')
+  .option('--scope <path>', 'Filter governance report by scope (used with --governance)')
   .action((options) => {
-    runAuditCommand({ since: options.since, actor: options.actor, action: options.action, limit: options.limit, json: options.json });
+    runAuditCommand({ since: options.since, actor: options.actor, action: options.action, limit: options.limit, json: options.json, governance: options.governance, scope: options.scope });
   });
 
 // --- history ---

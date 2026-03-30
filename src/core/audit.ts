@@ -21,6 +21,8 @@ const AUDIT_TO_EVENT_ACTION: Partial<Record<AuditAction, EventAction>> = {
   session_start: 'session_start',
   session_end: 'session_end',
   rollback: 'rollback',
+  promote_direct: 'create',
+  trust_change: 'update',
 };
 
 export type AuditAction =
@@ -47,6 +49,12 @@ export interface AuditEntry {
   before?: unknown;
   after?: unknown;
   reason?: string;
+  /** Scope for claim/release_claim actions (file path or directory). */
+  scope?: string;
+  /** Session ID active when this entry was created. */
+  session_id?: string;
+  /** Host ID where this entry was created. */
+  host_id?: string;
 }
 
 function auditLogPath(cwd?: string): string {
@@ -66,6 +74,9 @@ export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAct
         after: entry.after,
         actor_id: entry.actor_id,
         reason: entry.reason,
+        scope: entry.scope,
+        session_id: entry.session_id,
+        host_id: entry.host_id,
       };
       const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
       fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');

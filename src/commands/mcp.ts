@@ -11,6 +11,7 @@ import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
+import { checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { acceptCandidate } from './accept.js';
@@ -369,7 +370,7 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_audit',
-    description: 'View the append-only audit log of all memory mutations.',
+    description: 'View the audit log or generate a governance posture report. Use governance=true for an aggregated view of claims, constraints, traps, instructions and recommendations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -377,6 +378,8 @@ export const MCP_READ_TOOLS = [
         actor: { type: 'string', description: 'Filter by actor name or agent ID.' },
         action: { type: 'string', description: 'Filter by action type (create, accept, reject, etc.).' },
         limit: { type: 'number', description: 'Show last N entries (default 20).' },
+        governance: { type: 'boolean', description: 'Generate a governance posture report instead of chronological log.' },
+        scope: { type: 'string', description: 'Filter governance report by scope (used with governance=true).' },
       },
     },
   },
@@ -411,6 +414,20 @@ export const MCP_READ_TOOLS = [
         all: { type: 'boolean', description: 'Include stale sessions (default: false).' },
         gc: { type: 'boolean', description: 'Remove stale sessions and return count.' },
       },
+    },
+  },
+  {
+    name: 'bclaw_check_policy',
+    description: 'Pre-execution policy check. Verifies claims, constraints, traps and governance instructions for a given scope. Returns blocks (hard stops) and warnings (context to consider). Call before editing to ensure compliance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: 'File or directory scope to check (e.g. "src/core/foo.ts" or "src/commands").' },
+        agent: { type: 'string', description: 'Agent name to check claims for.' },
+        agentId: { type: 'string', description: 'Agent id to check claims for.' },
+        action: { type: 'string', description: 'Intended action: edit, create, delete (informational, does not change check logic in v1).' },
+      },
+      required: ['scope'],
     },
   },
 ] as const;
@@ -1985,7 +2002,25 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         worktree_path: worktreePath,
         expires_at: claimExpiresAt,
       }, claimCwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim' }, claimCwd);
+      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: claimScope, session_id: identity.session_id, host_id: identity.host_id }, claimCwd);
+
+      // Post-claim policy check: surface constraints/traps as warnings
+      const policyResult = checkPolicy({
+        scope: claimScope,
+        agent: resolvedIdentity.agent_name,
+        agentId: resolvedIdentity.agent_id,
+        cwd: claimCwd,
+      });
+      let policyWarn = '';
+      const policyWarnings = policyResult.warnings.filter(w => w.kind !== 'no_claim');
+      if (policyWarnings.length > 0) {
+        policyWarn = '\n\nPolicy warnings for this scope:';
+        for (const w of policyWarnings) {
+          const idLabel = w.id ? ` (${w.id})` : '';
+          policyWarn += `\n  ⚠ [${w.kind}]${idLabel} ${w.message}`;
+        }
+      }
+
       const postClaimItems = getTriggeredItems('trigger:post-claim', claimCwd);
       const postClaimText = renderTriggeredItems(postClaimItems);
       const noPlanWarn = !(args.planId as string | undefined)
@@ -1993,7 +2028,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         : '';
       const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
       const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
-      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({
@@ -2019,7 +2054,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
       saveClaim({ ...claimObj, status: 'released' as const, released_at: nowISO() }, cwd);
-      appendAuditEntry({ actor: claimObj.agent, action: 'release_claim', item_id: claimId, item_type: 'claim' }, cwd);
+      appendAuditEntry({ actor: claimObj.agent, actor_id: claimObj.agent_id, action: 'release_claim', item_id: claimId, item_type: 'claim', scope: claimObj.scope, session_id: claimObj.session_id, host_id: claimObj.host_id }, cwd);
       const releasePlanStatus = args.planStatus as string | undefined;
       let releasePlanUpdated = false;
       if (releasePlanStatus && claimObj.plan_id) {

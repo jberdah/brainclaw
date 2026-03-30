@@ -27,6 +27,8 @@ import {
   resolveCurrentAgentName,
 } from '../core/agent-registry.js';
 import { readAuditLog, type AuditAction } from '../core/audit.js';
+import { checkPolicy } from '../core/policy.js';
+import { buildGovernanceReport, renderGovernanceMarkdown } from '../core/governance.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
 import { search } from '../core/search.js';
@@ -1000,6 +1002,66 @@ export function handleMcpReadToolCall(
     };
   }
 
+  if (name === 'bclaw_check_policy') {
+    const scope = String(args.scope ?? '').trim();
+    if (!scope) {
+      return { content: [{ type: 'text', text: 'Error: missing required argument: scope' }] };
+    }
+    const result = checkPolicy({
+      scope,
+      agent: (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd),
+      agentId: args.agentId as string | undefined,
+      action: args.action as string | undefined,
+      cwd,
+    });
+
+    const parts: string[] = [];
+    const status = result.allowed ? '✔ ALLOWED' : '✘ BLOCKED';
+    parts.push(`Policy check for "${scope}": ${status}`);
+
+    if (result.blocks.length > 0) {
+      parts.push('');
+      parts.push('Blocks:');
+      for (const b of result.blocks) {
+        parts.push(`  ✘ [${b.kind}] ${b.message}`);
+      }
+    }
+    if (result.warnings.length > 0) {
+      parts.push('');
+      parts.push('Warnings:');
+      for (const w of result.warnings) {
+        const idLabel = w.id ? ` (${w.id})` : '';
+        parts.push(`  ⚠ [${w.kind}]${idLabel} ${w.message}`);
+      }
+    }
+    if (result.governance_context.active_instructions.length > 0) {
+      parts.push('');
+      parts.push(`Governance: ${result.governance_context.active_instructions.length} active instruction(s)`);
+      for (const ins of result.governance_context.active_instructions) {
+        const layerLabel = ins.layer === 'global' ? '[global]' : `[${ins.layer}:${ins.scope ?? '*'}]`;
+        parts.push(`  ${layerLabel} ${ins.text.slice(0, 150)}${ins.text.length > 150 ? '…' : ''}`);
+      }
+    }
+
+    return {
+      content: [{ type: 'text', text: parts.join('\n') }],
+      structuredContent: {
+        allowed: result.allowed,
+        blocks: result.blocks,
+        warnings: result.warnings,
+        governance_context: {
+          active_instructions_count: result.governance_context.active_instructions.length,
+          matching_constraints_count: result.governance_context.matching_constraints.length,
+          matching_traps_count: result.governance_context.matching_traps.length,
+          active_claims_on_scope: result.governance_context.active_claims_on_scope.map(c => ({
+            id: c.id, agent: c.agent, scope: c.scope, description: c.description,
+          })),
+        },
+        schema_version: SCHEMA_VERSION,
+      },
+    };
+  }
+
   if (name === 'bclaw_doctor') {
     // Capture doctor JSON output by redirecting console.log
     const captured: string[] = [];
@@ -1048,6 +1110,22 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_audit') {
+    // Governance mode
+    if (args.governance === true) {
+      const report = buildGovernanceReport({
+        scope: args.scope as string | undefined,
+        agent: args.actor as string | undefined,
+        since: args.since as string | undefined,
+        cwd,
+      });
+      const markdown = renderGovernanceMarkdown(report);
+      return {
+        content: [{ type: 'text', text: markdown }],
+        structuredContent: { ...report, schema_version: SCHEMA_VERSION },
+      };
+    }
+
+    // Chronological mode (default)
     const limit = (args.limit as number | undefined) ?? 20;
     const entries = readAuditLog({
       since: args.since as string | undefined,
@@ -1059,8 +1137,9 @@ export function handleMcpReadToolCall(
     for (const e of sliced) {
       const itemInfo = e.item_id ? ` → ${e.item_id}` : '';
       const typeInfo = e.item_type ? ` (${e.item_type})` : '';
+      const scopeInfo = e.scope ? ` scope:${e.scope}` : '';
       const reason = e.reason ? ` | ${e.reason}` : '';
-      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${itemInfo}${typeInfo}${reason}`);
+      lines.push(`  ${e.timestamp} [${e.actor}] ${e.action}${itemInfo}${typeInfo}${scopeInfo}${reason}`);
     }
     return {
       content: [{ type: 'text', text: lines.join('\n') }],

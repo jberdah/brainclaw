@@ -208,7 +208,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     note_type: 'session_start',
   }, options.cwd);
 
-  appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session' }, options.cwd);
+  appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session', session_id: snapshot.session_id, host_id: actor.host_id }, options.cwd);
   const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
 
   // Inventory reconciliation — detect new/disappeared agents on this machine
