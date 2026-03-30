@@ -1,3 +1,4 @@
+import * as childProcess from 'node:child_process';
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { buildReputationSummary } from '../core/reputation.js';
@@ -1403,6 +1404,29 @@ export function runDoctor(options: DoctorOptions = {}): void {
       if (!options.json) console.log('✔ Worktrees: no shared-checkout conflicts');
     }
   } catch { /* non-fatal — git may not be available or no worktrees */ }
+
+  // --- Documentation drift check ---
+  try {
+    const { execSync } = childProcess;
+    const effectiveCwd = options.cwd ?? process.cwd();
+    const srcCommitDate = execSync('git log -1 --format=%aI -- src/commands src/core', { encoding: 'utf-8', cwd: effectiveCwd }).trim();
+    const docsCommitDate = execSync('git log -1 --format=%aI -- docs/', { encoding: 'utf-8', cwd: effectiveCwd }).trim();
+
+    if (srcCommitDate && docsCommitDate && srcCommitDate > docsCommitDate) {
+      checks.push({ name: 'doc_drift', status: 'warn', message: `Documentation may be outdated: src/ last changed ${srcCommitDate.slice(0, 10)}, docs/ last changed ${docsCommitDate.slice(0, 10)}` });
+      if (!options.json) {
+        console.warn(`⚠ Documentation drift: src/ updated ${srcCommitDate.slice(0, 10)} but docs/ last updated ${docsCommitDate.slice(0, 10)}`);
+      }
+    } else if (srcCommitDate && !docsCommitDate) {
+      checks.push({ name: 'doc_drift', status: 'warn', message: 'No docs/ directory found in git history' });
+      if (!options.json) {
+        console.warn('⚠ No docs/ directory found in git history');
+      }
+    } else {
+      checks.push({ name: 'doc_drift', status: 'ok', message: 'Documentation is up to date with source' });
+      if (!options.json) console.log('✔ Documentation is up to date with source');
+    }
+  } catch { /* non-fatal — git may not be available */ }
 
   if (options.json) {
     console.log(JSON.stringify({
