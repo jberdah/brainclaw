@@ -130,8 +130,10 @@ export function buildGovernanceReport(options: GovernanceReportOptions = {}): Go
     );
   }
 
-  // --- Traps ---
-  const openTraps = state.known_traps.filter(t => t.status === 'active');
+  // --- Traps (shared visibility only — machine/private traps are environment-specific) ---
+  const openTraps = state.known_traps.filter(t =>
+    t.status === 'active' && (t.visibility === 'shared' || !t.visibility)
+  );
   const trapsBySeverity: Record<string, number> = {};
   for (const t of openTraps) {
     trapsBySeverity[t.severity] = (trapsBySeverity[t.severity] ?? 0) + 1;
