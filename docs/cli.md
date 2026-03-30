@@ -802,6 +802,19 @@ brainclaw plan create "Refactor payments module" --project payments --estimate 9
 
 Legacy compatibility: `brainclaw plan "Coordinate auth rollout"`
 
+### `brainclaw plan show <id>`
+
+Display details of a specific plan item.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw plan show pln_abc123
+brainclaw plan show pln_abc123 --json
+```
+
 ### `brainclaw add-step <planId> <text>`
 
 Add a step to an existing plan.
@@ -1229,6 +1242,32 @@ brainclaw check-constraints --staged
 brainclaw check-constraints --files src/payments/index.ts --json
 ```
 
+### `brainclaw check-policy`
+
+Pre-execution policy check. Verifies claims, constraints, traps, and governance instructions for a given scope. Returns blocks (hard stops) and warnings (context to consider).
+
+| Option | Description |
+|---|---|
+| `--scope <path>` | **(required)** File or directory scope to check |
+| `--agent <name>` | Agent name to check claims for |
+| `--agent-id <id>` | Agent ID to check claims for |
+| `--action <type>` | Intended action: edit, create, delete (informational) |
+| `--json` | Output as JSON |
+
+**Checks performed (deterministic, no AI):**
+- **Claim check** — Does the agent have an active claim on the scope? (BLOCK if not)
+- **Claim conflict** — Is the scope claimed by another agent? (BLOCK)
+- **Constraint check** — Do active constraints with matching `related_paths` apply? (WARN)
+- **Trap check** — Are there active traps with matching `related_paths`? (WARN)
+- **Governance context** — Active global/project instructions are displayed for reference.
+
+```bash
+brainclaw check-policy --scope src/core/auth.ts --agent claude-code
+brainclaw check-policy --scope src/commands --json
+```
+
+Exit code: 0 if allowed, 1 if blocked. Also available as MCP tool `bclaw_check_policy`.
+
 ---
 
 ## Sync and Distribution
@@ -1344,7 +1383,7 @@ brainclaw rollback --audit-id aud_042 --json
 
 ### `brainclaw audit`
 
-Show the audit log of memory changes.
+Show the audit log of memory changes, or generate a governance posture report.
 
 | Option | Description |
 |---|---|
@@ -1352,11 +1391,25 @@ Show the audit log of memory changes.
 | `--actor <name>` | Filter by actor |
 | `--action <type>` | Filter by action type |
 | `--limit <n>` | Maximum number of entries |
+| `--governance` | Generate an aggregated governance posture report instead of chronological log |
+| `--scope <path>` | Filter governance report by scope (used with `--governance`) |
 | `--json` | Output as JSON |
+
+**Chronological mode (default):** Shows individual audit entries with timestamp, actor, action, and scope.
+
+**Governance mode (`--governance`):** Produces an aggregated posture report:
+- Active global instructions ("constitution vivante")
+- Constraints by category ("red lines")
+- Claims by agent, expired claims needing release
+- Open traps by severity
+- Mutations without claim (last 24h)
+- Actionable recommendations
 
 ```bash
 brainclaw audit --since 2026-03-01 --actor copilot
 brainclaw audit --action accept --limit 20 --json
+brainclaw audit --governance
+brainclaw audit --governance --json
 ```
 
 ### `brainclaw history <id>`
@@ -1398,6 +1451,16 @@ brainclaw mcp
 | `bclaw_list_agents` | List registered agents, optionally with bounded reputation summaries |
 | `bclaw_list_instructions` | List raw or resolved shared instructions |
 | `bclaw_list_candidates` | List pending or archived review candidates |
+| `bclaw_check_policy` | Pre-execution policy check: verify claims, constraints, traps for a scope |
+| `bclaw_audit` | View audit log or generate governance posture report (`governance: true`) |
+| `bclaw_history` | Full mutation history of a memory item |
+| `bclaw_doctor` | Health checks (JSON output) |
+| `bclaw_get_discovery` | Scan workspace for MCP configs, skills, hooks, agent integrations |
+| `bclaw_conflict_check` | Check for overlapping claims between agents |
+| `bclaw_who` | List active agent sessions on this workspace |
+| `bclaw_get_capabilities` | List registered project capabilities |
+| `bclaw_list_tools` | List registered project tools |
+| `bclaw_search_tools` | Search tools by name or description |
 
 **Write tools** (contributor trust or above):
 
@@ -1407,7 +1470,7 @@ brainclaw mcp
 | `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
 | `bclaw_accept` | Accept a pending candidate into canonical memory |
 | `bclaw_reject` | Reject a pending candidate |
-| `bclaw_claim` | Claim a work scope (advisory lock) |
+| `bclaw_claim` | Claim a work scope (advisory lock, auto-runs policy warnings) |
 | `bclaw_release_claim` | Release a claim, optionally updating the linked plan status |
 | `bclaw_session_start` | Start an agent session and register identity |
 | `bclaw_session_end` | End session, optionally auto-reflect notes as candidates |
@@ -1415,6 +1478,13 @@ brainclaw mcp
 | `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
 | `bclaw_add_step` | Add a sub-step to a plan item |
 | `bclaw_complete_step` | Mark a plan sub-step as done |
+| `bclaw_switch` | Change the active project for subsequent tool calls |
+| `bclaw_setup` | Agent-driven onboarding wizard |
+| `bclaw_delete_memory` | Delete a memory item by ID |
+| `bclaw_update_memory` | Update a memory item's text or metadata |
+| `bclaw_update_handoff` | Update a handoff status or add narrative |
+| `bclaw_add_capability` | Register a project capability |
+| `bclaw_add_tool` | Register a project tool |
 
 ---
 
@@ -1441,5 +1511,102 @@ brainclaw version --publish-local --release-notes "Add estimation-report command
 
 - if `brainclaw_update_source` is configured, use it
 - otherwise, fall back to the public npm channel `brainclaw@latest`
+
+### `brainclaw release-notes`
+
+Generate agent-first release notes from git history.
+
+| Option | Description |
+|---|---|
+| `--from <ref>` | Base git ref (default: latest tag) |
+| `--json` | Output as JSON |
+
+---
+
+## Additional Operational Commands
+
+### `brainclaw uninstall`
+
+Remove brainclaw from a project and/or machine. Cleans up generated agent files, hooks, and MCP configurations.
+
+| Option | Description |
+|---|---|
+| `--global` | Also uninstall the global npm package |
+| `--keep-memory` | Remove agent files but preserve `.brainclaw/` memory |
+| `--json` | Output as JSON |
+
+### `brainclaw discover`
+
+Scan the workspace for MCP configs, instruction files, skills, hooks, and agent integrations. Produces a structured discovery profile saved to `.brainclaw/discovery/`.
+
+| Option | Description |
+|---|---|
+| `--refresh` | Force a fresh scan even if a cached profile exists |
+| `--no-save` | Do not persist the discovery profile |
+| `--json` | Output as JSON |
+
+### `brainclaw migrate`
+
+Migrate memory items between stores (e.g. promote machine-scoped items to user store).
+
+| Option | Description |
+|---|---|
+| `--dry-run` | Show what would be migrated without making changes |
+| `--json` | Output as JSON |
+
+### `brainclaw memory-log`
+
+Show recent memory change history from the internal git repo.
+
+| Option | Description |
+|---|---|
+| `--limit <n>` | Number of entries to show |
+| `--json` | Output as JSON |
+
+### `brainclaw memory-rollback <ref>`
+
+Rollback entire memory to a previous git snapshot. Use `memory-log` to find valid refs.
+
+### `brainclaw agent-inventory`
+
+Detect all installed AI coding agents and their capabilities on this machine.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+### `brainclaw projects`
+
+List all brainclaw-initialized projects on this machine from the global registry.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+### `brainclaw check-events`
+
+Show unseen events from the event bus (`events.jsonl`) for the current agent.
+
+| Option | Description |
+|---|---|
+| `--agent <name>` | Agent to check events for |
+| `--json` | Output as JSON |
+
+### `brainclaw who`
+
+List active agent sessions on this workspace. Shows agent, user, project, claims count, and last activity.
+
+| Option | Description |
+|---|---|
+| `--all` | Include stale sessions |
+| `--gc` | Remove stale sessions |
+
+### `brainclaw usage`
+
+Show brainclaw context volume stats — tokens injected per agent and per MCP tool call.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
 
 This keeps end-user installs aware of published npm releases without requiring a local tarball channel. To keep beta testers on a different channel, set `brainclaw_update_source` to `type: npm` with a different `dist_tag`, such as `prelaunch`.

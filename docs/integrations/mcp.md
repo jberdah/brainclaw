@@ -26,20 +26,22 @@ The default dynamic workflow is:
 2. `bclaw_get_execution_context` early in the session when the agent needs local tooling signals or package update visibility
 3. `bclaw_get_context` when the target path or task changes
 4. `bclaw_list_plans` and `bclaw_list_claims` to inspect active work
-5. `bclaw_claim` before editing
-6. `bclaw_write_note` for runtime observations
-7. `bclaw_session_end` to close cleanly and hand work off
+5. `bclaw_claim` before editing (auto-runs policy checks and surfaces warnings)
+6. `bclaw_check_policy` for explicit pre-execution governance checks on a scope
+7. `bclaw_write_note` for runtime observations
+8. `bclaw_session_end` to close cleanly and hand work off
 
 This keeps session continuity inside Brainclaw instead of pushing the agent back to manual CLI usage.
 
 ## Available Tools
+
+**Read tools** (any trust level):
 
 | Tool | Purpose |
 |---|---|
 | `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
 | `bclaw_bootstrap` | Derive brownfield bootstrap signals, return adaptive interview prompts, accept structured interview answers, and preview/apply a selective import proposal |
 | `bclaw_get_execution_context` | Inspect local execution context, installable update status, and agent tooling |
-| `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
 | `bclaw_read_handoff` | Read active handoffs |
 | `bclaw_get_agent_board` | Coordination snapshot |
 | `bclaw_list_plans` | Structured plan listing with filters, pagination (`limit`/`offset`), `compact` mode, and `id` lookup |
@@ -48,6 +50,41 @@ This keeps session continuity inside Brainclaw instead of pushing the agent back
 | `bclaw_list_instructions` | Raw or resolved instruction listing |
 | `bclaw_list_candidates` | Pending or archived review queue listing |
 | `bclaw_search` | Full-text search across memory |
+| `bclaw_check_policy` | Pre-execution policy check: verify claims, constraints, traps for a scope |
+| `bclaw_audit` | Audit log or governance posture report (`governance: true`) |
+| `bclaw_history` | Full mutation history of a memory item |
+| `bclaw_doctor` | Health checks (JSON output) |
+| `bclaw_get_discovery` | Scan workspace for MCP configs, skills, hooks, integrations |
+| `bclaw_conflict_check` | Check for overlapping claims between agents |
+| `bclaw_who` | List active agent sessions on this workspace |
+| `bclaw_estimation_report` | Estimation accuracy report for completed plans |
+| `bclaw_get_capabilities` | List registered project capabilities |
+| `bclaw_list_tools` | List registered project tools |
+| `bclaw_search_tools` | Search tools by name or description |
+
+**Write tools** (contributor trust or above):
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
+| `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
+| `bclaw_accept` | Accept a pending candidate into canonical memory |
+| `bclaw_reject` | Reject a pending candidate |
+| `bclaw_claim` | Claim a work scope (advisory lock, auto-surfaces policy warnings) |
+| `bclaw_release_claim` | Release a claim, optionally updating the linked plan status |
+| `bclaw_session_start` | Start an agent session and register identity |
+| `bclaw_session_end` | End session, optionally auto-reflect notes as candidates |
+| `bclaw_create_plan` | Create a new plan item |
+| `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
+| `bclaw_add_step` | Add a sub-step to a plan item |
+| `bclaw_complete_step` | Mark a plan sub-step as done |
+| `bclaw_switch` | Change the active project for subsequent tool calls |
+| `bclaw_setup` | Agent-driven onboarding wizard |
+| `bclaw_delete_memory` | Delete a memory item by ID |
+| `bclaw_update_memory` | Update a memory item's text or metadata |
+| `bclaw_update_handoff` | Update a handoff status or add narrative |
+| `bclaw_add_capability` | Register a project capability |
+| `bclaw_add_tool` | Register a project tool |
 
 ## When To Use MCP Versus Other Surfaces
 

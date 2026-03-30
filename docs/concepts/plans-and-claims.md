@@ -122,14 +122,39 @@ Without claims, multiple agents can easily touch the same area at once and gener
 Claims are not necessarily hard file locks.
 They are a shared coordination signal.
 
+## Policy checks
+
+Before editing a scope, agents can verify governance compliance using `check-policy`:
+
+```bash
+brainclaw check-policy --scope src/core/auth.ts --agent claude-code
+```
+
+Or via MCP:
+
+```
+bclaw_check_policy(scope: "src/core/auth.ts", agent: "claude-code")
+```
+
+The check is fully **deterministic** (no AI involved) and verifies:
+
+- **Claim active** — Does the agent have a claim on this scope? (BLOCK if not)
+- **Claim conflict** — Is another agent claiming this scope? (BLOCK)
+- **Constraints** — Do any active constraints with matching `related_paths` apply? (WARN)
+- **Traps** — Are there known pitfalls for this scope? (WARN)
+- **Governance context** — Active global instructions are surfaced for reference.
+
+Policy warnings are also **automatically included** in the `bclaw_claim` response — agents get constraint and trap alerts at claim time without an extra call.
+
 ## Recommended workflow
 
 1. create a plan item
-2. claim the target scope
-3. work on the implementation
-4. update the plan status
-5. release the claim when done or blocked
-6. create a handoff if another actor should continue
+2. claim the target scope (policy warnings are surfaced automatically)
+3. create a feature branch (`git checkout -b feat/<name>`)
+4. work on the implementation
+5. update the plan status
+6. release the claim when done or blocked
+7. create a handoff if another actor should continue
 
 ## Session hygiene
 

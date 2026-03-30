@@ -4,7 +4,34 @@ This document tracks all breaking and notable changes to the brainclaw MCP serve
 
 ---
 
-## 0.6.0 (current)
+## 0.7.0 (current)
+
+**Added**
+- `bclaw_check_policy` — pre-execution governance check for a scope
+  - Input: `scope` (required), `agent`, `agentId`, `action`
+  - Returns `allowed` boolean, `blocks[]` (hard stops), `warnings[]` (context)
+  - Checks: claim active, claim conflict, constraint matching, trap matching
+  - Returns `governance_context` with active instructions count, matching items
+- `bclaw_audit` now supports `governance: true` parameter
+  - Returns aggregated posture report instead of chronological log
+  - Includes: constitution (global instructions), red lines (constraints by category), claims by agent, open traps by severity, mutations without claim, recommendations
+  - Supports `scope` filter for governance mode
+- `bclaw_claim` response now includes automatic policy warnings
+  - Constraints and traps matching the claimed scope are surfaced as warnings
+  - No extra call needed — governance context is provided at claim time
+- Enriched `AuditEntry` fields: `scope`, `session_id`, `host_id`
+  - Claim/release entries include the scope being claimed
+  - Session start/end entries include session and host IDs
+  - `promote_direct` and `trust_change` actions now propagated to events.jsonl
+
+**Changed**
+- MCP schema version bumped to 0.7.0
+- Governance report filters machine/private traps — only shared-visibility traps affect project posture
+- Audit chronological mode now shows `scope` field for claim actions
+
+---
+
+## 0.6.0
 
 **Added**
 - `bclaw_get_capabilities` — list all registered project capabilities with optional filtering by category
