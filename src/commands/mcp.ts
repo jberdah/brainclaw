@@ -840,9 +840,9 @@ function resolveRequestedProtocolVersion(params: Record<string, unknown>, id: Js
     throw new McpProtocolError(-32602, 'Invalid params', id);
   }
   if (!isSupportedProtocolVersion(requested)) {
-    // MCP version negotiation is server-driven: when the client proposes an
-    // unsupported version, the server responds with one it does support.
-    return MCP_PROTOCOL_VERSIONS[0]!;
+    // MCP version negotiation: when the client proposes an unsupported version,
+    // respond with the oldest supported version to maximize compatibility.
+    return MCP_PROTOCOL_VERSIONS[MCP_PROTOCOL_VERSIONS.length - 1]!;
   }
   return requested;
 }
