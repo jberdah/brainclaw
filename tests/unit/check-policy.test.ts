@@ -253,6 +253,37 @@ describe('checkPolicy', () => {
     assert.equal(noClaimWarns.length, 1);
   });
 
+  it('allows when claim uses space-separated multi-path scope', () => {
+    saveClaim({
+      id: generateClaimId(),
+      agent: 'test-agent',
+      scope: 'src/views/FeaturesPage.astro src/components/FeatureCard.astro src/pages/features.astro',
+      description: 'Working on features page',
+      created_at: nowISO(),
+      status: 'active',
+    }, workspace.dir);
+
+    // Check individual file from the multi-path scope
+    const result = checkPolicy({
+      scope: 'src/views/FeaturesPage.astro',
+      agent: 'test-agent',
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.allowed, true);
+    assert.equal(result.blocks.length, 0);
+
+    // Check another file from the same claim
+    const result2 = checkPolicy({
+      scope: 'src/components/FeatureCard.astro',
+      agent: 'test-agent',
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result2.allowed, true);
+    assert.equal(result2.blocks.length, 0);
+  });
+
   it('normalises Windows backslashes in scope matching', () => {
     saveClaim({
       id: generateClaimId(),

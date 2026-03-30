@@ -82,10 +82,13 @@ function scopeOverlaps(targetScope: string, relatedPath: string): boolean {
 
 /**
  * Check if a claim's scope overlaps with the target scope.
- * Claims use free-form scope strings (file paths, directory paths, or descriptive scopes).
+ * Claims use free-form scope strings — may be a single path, a directory,
+ * or multiple space-separated paths (e.g. "src/views/A.astro src/components/B.astro").
  */
 function claimScopeOverlaps(targetScope: string, claimScope: string): boolean {
-  return scopeOverlaps(targetScope, claimScope);
+  // Split space-separated scopes and check each segment
+  const segments = claimScope.split(/\s+/).filter(Boolean);
+  return segments.some(segment => scopeOverlaps(targetScope, segment));
 }
 
 // ---------------------------------------------------------------------------

@@ -93,31 +93,17 @@ else
   BCLAW_CMD="npx --no brainclaw"
 fi
 
-# Check 1: sensitive content in .brainclaw/
-RESULT=$($BCLAW_CMD doctor --json 2>/dev/null) || {
-  echo "brainclaw hook: could not run doctor check, skipping."
-  exit 0
-}
-
-echo "$RESULT" | node -e "
-const chunks = [];
-process.stdin.on('data', d => chunks.push(d));
-process.stdin.on('end', () => {
-  try {
-    const data = JSON.parse(chunks.join(''));
-    const issues = (data.checks || []).filter(c =>
-      (c.name === 'state_security' || c.name === 'candidate_security') &&
-      c.status !== 'ok'
-    );
-    if (issues.length > 0) {
-      process.stderr.write('\\nbrainclaw: sensitive content in .brainclaw/ — commit blocked.\\n');
-      issues.forEach(c => process.stderr.write('  ⚠  ' + c.message + '\\n'));
-      process.stderr.write('  Fix: review with \`brainclaw doctor\`\\n\\n');
-      process.exit(1);
-    }
-  } catch (_) { /* skip parse errors */ }
-});
-" || exit 1
+# Check 1: reject staged .brainclaw/ files (should never be committed)
+STAGED_BRAINCLAW=$(git diff --cached --name-only -- .brainclaw/ 2>/dev/null || true)
+if [ -n "$STAGED_BRAINCLAW" ]; then
+  echo ""
+  echo "brainclaw: .brainclaw/ files are staged for commit — blocked."
+  echo "  These files are local memory and should be in .gitignore:"
+  echo "$STAGED_BRAINCLAW" | while read -r f; do echo "    $f"; done
+  echo "  Fix: git reset HEAD .brainclaw/ && echo '.brainclaw/' >> .gitignore"
+  echo ""
+  exit 1
+fi
 
 # Check 2: active constraint violations on staged files
 $BCLAW_CMD check-constraints --staged 2>&1 || exit 1
