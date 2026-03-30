@@ -530,7 +530,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_claim',
-    description: 'Claim a work scope (advisory lock). Requires contributor trust level or above.',
+    description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim (opt out with createWorktree: false). Requires contributor trust level or above.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -540,7 +540,7 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
         planId: { type: 'string', description: 'Optional linked plan item ID.' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
-        createWorktree: { type: 'boolean', description: 'If true, create a git linked worktree for this claim (requires a branch name via worktreeBranch).' },
+        createWorktree: { type: 'boolean', description: 'Create a git linked worktree for this claim. Defaults to true in MCP context for multi-agent isolation. Set to false to work in the main checkout.' },
         worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
       },
       required: ['scope', 'description'],
@@ -1971,7 +1971,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const claimId = generateClaimId();
       let worktreePath: string | undefined;
       let worktreeWarn = '';
-      if (args.createWorktree) {
+      // Auto-create worktree by default in MCP context (multi-agent isolation).
+      // Agents can opt out with createWorktree: false.
+      const shouldCreateWorktree = args.createWorktree !== false;
+      if (shouldCreateWorktree) {
         const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
         const worktreeBranch = (args.worktreeBranch as string | undefined)?.trim() || `feat/${branchSlug}`;
         try {
