@@ -530,7 +530,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_claim',
-    description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim (opt out with createWorktree: false). Requires contributor trust level or above.',
+    description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim. Requires contributor trust level or above.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -539,8 +539,8 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent or person name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         planId: { type: 'string', description: 'Optional linked plan item ID.' },
+        project: { type: 'string', description: 'Project name or path. Use this when working on a project different from the MCP server workspace (e.g. CLI agents in a different directory).' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
-        createWorktree: { type: 'boolean', description: 'Create a git linked worktree for this claim. Defaults to true in MCP context for multi-agent isolation. Set to false to work in the main checkout.' },
         worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
       },
       required: ['scope', 'description'],
@@ -1947,8 +1947,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_claim') {
+      // Resolve project-scoped cwd before store resolution (fixes worktree in wrong project)
+      let effectiveClaimCwd = cwd;
+      const claimProjectArg = args.project as string | undefined;
+      if (claimProjectArg) {
+        const resolvedProject = resolveProjectRef(claimProjectArg, cwd);
+        if (resolvedProject) effectiveClaimCwd = resolvedProject;
+      }
       const storeTarget = (args.store as StoreTarget | undefined) ?? 'local';
-      const claimCwd = resolveTargetStore(cwd, storeTarget);
+      const claimCwd = resolveTargetStore(effectiveClaimCwd, storeTarget);
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -1971,10 +1978,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const claimId = generateClaimId();
       let worktreePath: string | undefined;
       let worktreeWarn = '';
-      // Auto-create worktree by default in MCP context (multi-agent isolation).
-      // Agents can opt out with createWorktree: false.
-      const shouldCreateWorktree = args.createWorktree !== false;
-      if (shouldCreateWorktree) {
+      // Always create worktree in MCP context for multi-agent isolation.
+      // The createWorktree param is no longer exposed in the schema.
+      {
         const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
         const worktreeBranch = (args.worktreeBranch as string | undefined)?.trim() || `feat/${branchSlug}`;
         try {
