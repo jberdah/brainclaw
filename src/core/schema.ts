@@ -298,10 +298,41 @@ export const RedactionConfigSchema = z.object({
   patterns: z.array(z.string()),
 });
 
+export const PreinstallThresholdsSchema = z.object({
+  composite_pass: z.number().min(0).max(100).default(70),
+  composite_warn: z.number().min(0).max(100).default(50),
+  supply_chain_block: z.number().min(0).max(100).default(30),
+  vulnerability_block: z.number().min(0).max(100).default(20),
+});
+export type PreinstallThresholds = z.infer<typeof PreinstallThresholdsSchema>;
+
+export const PreinstallWeightsSchema = z.object({
+  supply_chain: z.number().min(0).max(1).default(0.35),
+  vulnerability: z.number().min(0).max(1).default(0.30),
+  quality: z.number().min(0).max(1).default(0.15),
+  maintenance: z.number().min(0).max(1).default(0.15),
+  license: z.number().min(0).max(1).default(0.05),
+});
+export type PreinstallWeights = z.infer<typeof PreinstallWeightsSchema>;
+
+export const PreinstallConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  mode: z.enum(['advisory', 'enforced']).default('advisory'),
+  thresholds: PreinstallThresholdsSchema.default({}),
+  weights: PreinstallWeightsSchema.default({}),
+  cache_ttl_hours: z.number().positive().default(24),
+  fallback_on_error: z.enum(['warn', 'pass', 'block']).default('warn'),
+  allowlist: z.array(z.string()).default([]),
+  denylist: z.array(z.string()).default([]),
+  socket_endpoint: z.string().default('https://mcp.socket.dev/'),
+});
+export type PreinstallConfig = z.infer<typeof PreinstallConfigSchema>;
+
 export const SecurityConfigSchema = z.object({
   mode: z.enum(['warn', 'strict']).default('warn'),
   strict_redaction: z.boolean().default(false),
   block_sensitive_paths: z.boolean().default(true),
+  preinstall: PreinstallConfigSchema.optional(),
 });
 
 export const MarkdownConfigSchema = z.object({

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
@@ -1427,6 +1429,28 @@ export function runDoctor(options: DoctorOptions = {}): void {
       if (!options.json) console.log('✔ Documentation is up to date with source');
     }
   } catch { /* non-fatal — git may not be available */ }
+
+  // --- Security preinstall gate check ---
+  if (config.security?.preinstall?.enabled) {
+    checks.push({ name: 'security_preinstall', status: 'ok', message: `Security preinstall gate is enabled (mode: ${config.security.preinstall.mode})` });
+    if (!options.json) console.log(`✔ Security preinstall gate is enabled (mode: ${config.security.preinstall.mode})`);
+
+    // Check if guard scripts exist
+    try {
+      const guardDir = path.join(memoryPath('security/bin', options.cwd), '.');
+      const guardExists = fs.existsSync(path.dirname(guardDir));
+      if (guardExists) {
+        checks.push({ name: 'security_guard_scripts', status: 'ok', message: 'Guard wrapper scripts are generated' });
+        if (!options.json) console.log('✔ Guard wrapper scripts are generated');
+      } else {
+        checks.push({ name: 'security_guard_scripts', status: 'warn', message: 'Guard wrapper scripts not found — run brainclaw setup-security' });
+        if (!options.json) console.warn('⚠ Guard wrapper scripts not found — run brainclaw setup-security');
+      }
+    } catch { /* non-fatal */ }
+  } else {
+    checks.push({ name: 'security_preinstall', status: 'ok', message: 'Security preinstall gate is not enabled (optional)' });
+    if (!options.json) console.log('ℹ Security preinstall gate is not enabled (optional — run brainclaw setup-security to activate)');
+  }
 
   if (options.json) {
     console.log(JSON.stringify({

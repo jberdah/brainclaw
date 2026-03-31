@@ -430,6 +430,18 @@ export const MCP_READ_TOOLS = [
       required: ['scope'],
     },
   },
+  {
+    name: 'bclaw_check_security',
+    description: 'Check supply chain security scores for packages via Socket.dev. Returns pass/warn/block verdict per package. Requires security.preinstall.enabled in config. Uses the free public Socket MCP endpoint (no auth needed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        packages: { type: 'string', description: 'Comma-separated package names (e.g. "axios,express" or "axios@1.14.1").' },
+        ecosystem: { type: 'string', description: 'Package ecosystem: npm or pypi. Defaults to npm.' },
+      },
+      required: ['packages'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
@@ -1564,6 +1576,12 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
   const { name, args, cwd, connectionSessionId } = payload;
 
   try {
+    // Async read: bclaw_check_security (requires network call to Socket MCP)
+    if (name === 'bclaw_check_security') {
+      const { handleCheckSecurity } = await import('./check-security-mcp.js');
+      return { response: toolResponse(await handleCheckSecurity(args, cwd)) };
+    }
+
     if (MCP_READ_TOOLS.some((tool) => tool.name === name)) {
       return {
         response: toolResponse(handleMcpReadToolCall(name, args, { cwd })),

@@ -1,4 +1,4 @@
-import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from './schema.js';
+import { ConfigSchema, type Config, type IgnoreStrategy, type PreinstallConfig, type ProjectMode, type ProjectStrategy, type TopologyMode } from './schema.js';
 import { memoryPath } from './io.js';
 import { loadVersionedYamlFile, saveVersionedYamlFile } from './migration.js';
 

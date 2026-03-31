@@ -54,6 +54,8 @@ import { runAdapterOpenclawImport } from './commands/adapter-openclaw-import.js'
 import { runInstallHooks } from './commands/install-hooks.js';
 import { runCheckConstraints } from './commands/check-constraints.js';
 import { runCheckPolicy } from './commands/check-policy.js';
+import { runCheckSecurity } from './commands/check-security.js';
+import { runSetupSecurity } from './commands/setup-security.js';
 import { runRegisterAgent } from './commands/register-agent.js';
 import { runEnableAgent } from './commands/enable-agent.js';
 import { runVersion } from './commands/version.js';
@@ -970,6 +972,30 @@ program
       action: options.action,
       json: options.json,
     });
+  });
+
+// --- check-security ---
+program
+  .command('check-security')
+  .description('Check supply chain security scores for packages via Socket.dev')
+  .requiredOption('--packages <names>', 'Comma-separated package names (e.g. "axios,express" or "axios@1.14.1")')
+  .option('--ecosystem <type>', 'Package ecosystem: npm or pypi', 'npm')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    await runCheckSecurity({
+      packages: options.packages,
+      ecosystem: options.ecosystem,
+      json: options.json,
+    });
+  });
+
+// --- setup-security ---
+program
+  .command('setup-security')
+  .description('Enable supply chain security gate: generate wrapper scripts and configure preinstall checks')
+  .option('--mode <mode>', 'Security mode: advisory (default) or enforced', 'advisory')
+  .action((options) => {
+    runSetupSecurity({ mode: options.mode });
   });
 
 // --- install-hooks ---
