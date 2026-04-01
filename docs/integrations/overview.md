@@ -89,7 +89,7 @@ The developer can dial back individual surfaces if needed, but the default is fu
 
 brainclaw's store mutations are serialized (MCP single-writer queue + file-based lock), so memory writes are safe even under contention. However, running multiple agents in parallel on the same checkout can still cause Git conflicts and confusing file-level state.
 
-For now, brainclaw works best when one agent works at a time in a given checkout. The next agent can pick up where the previous one stopped, using shared plans, claims, handoffs, and memory. Git worktree isolation per agent is planned but not yet available.
+For now, brainclaw works best when one agent works at a time in a given checkout. The next agent can pick up where the previous one stopped, using shared plans, claims, handoffs, and memory. Dedicated Git worktrees are available for stronger isolation, but shared-checkout parallel editing is still the riskier path and should not be the default team workflow.
 
 ## Next reads
 

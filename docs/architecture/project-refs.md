@@ -1,5 +1,7 @@
 # Project Refs for Multi-Project Navigation
 
+> Proposal / design note: this document describes a target navigation model, not the currently shipped CLI or MCP surface. For implemented multi-project commands today, use `brainclaw switch` and `brainclaw projects`.
+
 ## Goal
 
 In a multi-project workspace, agents should be able to address any known project from anywhere in the workspace without depending on the current working directory.

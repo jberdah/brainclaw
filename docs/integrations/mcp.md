@@ -33,7 +33,11 @@ The default dynamic workflow is:
 
 This keeps session continuity inside Brainclaw instead of pushing the agent back to manual CLI usage.
 
+When a human operator needs the CLI equivalent of `bclaw_write_note`, use `brainclaw runtime-note <text>`.
+
 ## Available Tools
+
+This section highlights the primary runtime tools agents are expected to use most often. It is not intended to be the full protocol registry.
 
 **Read tools** (any trust level):
 

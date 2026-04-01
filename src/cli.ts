@@ -916,6 +916,26 @@ program
     runRuntimeNote(text, { ...options, autoReflect: options.autoReflect });
   });
 
+// --- note create ---
+const noteCommand = program
+  .command('note')
+  .description('Manage runtime notes');
+
+noteCommand
+  .command('create <text>')
+  .description('Alias for runtime-note')
+  .option('--agent <agent>', 'Agent name; defaults to the configured current agent')
+  .option('--project <project>', 'Optional project namespace')
+  .option('--plan <id>', 'Optional linked plan item ID')
+  .option('--visibility <visibility>', 'Visibility: shared, machine, private', 'shared')
+  .option('--host <host>', 'Optional host identifier override for machine/private runtime notes')
+  .option('--tag <tags...>', 'Tags')
+  .option('--ttl <duration>', 'Time-to-live: 30m, 2h, 7d (note auto-expires after this duration)')
+  .option('--auto-reflect', 'Attempt to turn this runtime note into durable memory immediately')
+  .action((text, options) => {
+    runRuntimeNote(text, { ...options, autoReflect: options.autoReflect });
+  });
+
 // --- runtime-status ---
 program
   .command('runtime-status')

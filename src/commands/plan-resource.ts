@@ -11,7 +11,7 @@ interface PlanResourceOptions extends PlanOptions, UpdatePlanOptions {
   recursive?: boolean;
 }
 
-const KNOWN_SUBCOMMANDS = new Set(['create', 'list', 'ls', 'update', 'delete', 'show']);
+const KNOWN_SUBCOMMANDS = new Set(['create', 'list', 'ls', 'update', 'delete', 'show', 'get']);
 
 export function runPlanResource(subcommand: string, args: string[], options: PlanResourceOptions = {}): void {
   const normalized = subcommand.trim().toLowerCase();
@@ -39,11 +39,11 @@ export function runPlanResource(subcommand: string, args: string[], options: Pla
     return;
   }
 
-  if (normalized === 'show') {
+  if (normalized === 'show' || normalized === 'get') {
     const id = args[0];
     if (!id) {
-      console.error('Error: plan show requires <id>.');
-      console.error('  Usage: brainclaw plan show <id>');
+      console.error(`Error: plan ${normalized} requires <id>.`);
+      console.error(`  Usage: brainclaw plan ${normalized} <id>`);
       process.exit(1);
     }
     runShowPlan(id, options);
@@ -82,7 +82,7 @@ export function runPlanResource(subcommand: string, args: string[], options: Pla
   // Reject known-looking subcommands to prevent accidental plan creation
   if (normalized.startsWith('pln_') || KNOWN_SUBCOMMANDS.has(normalized)) {
     console.error(`Error: unknown plan subcommand "${subcommand}".`);
-    console.error('  Available: create, list, show, update, delete');
+    console.error('  Available: create, list, show, get, update, delete');
     process.exit(1);
   }
 

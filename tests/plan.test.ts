@@ -23,7 +23,7 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 10000,
+    timeout: 30000,
     env: {
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',

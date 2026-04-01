@@ -101,7 +101,7 @@ brainclaw is most effective today when one agent works at a time in a given chec
 
 ## Platform Support
 
-brainclaw targets Node.js 20+ across major developer operating systems, but real-world support is not perfectly even yet.
+brainclaw currently declares support for Node.js 18+ in `package.json`, and CI actively exercises Node 20 and 22 across the main Linux path. Real-world support is still not perfectly even yet.
 
 | Logo | Platform | Status today | Notes |
 |---|---|---|---|
@@ -246,19 +246,22 @@ If you are evaluating Brainclaw as a product, start with the agent-first runtime
 
 Detailed Markdown guides are bundled in the npm package under `docs/`.
 
+For release-visible surface changes, use `docs/release-maintenance.md` before publishing a local tarball or a new package version.
+
 ---
 
 ## Current Limitation
 
 For now, avoid having multiple coding agents edit the same project in parallel in the same checkout.
 
-brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, and handoffs. But until dedicated Git worktrees per agent or session are implemented, concurrent edits in the same checkout can still create conflicts, overwritten local state, or confusing Git transitions.
+brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, handoffs, and dedicated Git worktree support. But concurrent edits are still only safe when each session uses its own worktree and the team follows strict claim and handoff discipline. Shared-checkout parallelism can still create Git conflicts, overwritten local state, or confusing transitions.
 
 Recommended use today:
 
 1. let one agent work at a time in a given checkout
-2. use handoffs when switching from one agent to another
-3. use shared plans, claims, and context to preserve continuity
+2. if you need stronger isolation, use a dedicated worktree per session or agent
+3. use handoffs when switching from one agent to another
+4. use shared plans, claims, and context to preserve continuity
 
 ---
 
@@ -287,9 +290,11 @@ If you are integrating Brainclaw into an agent workflow, start with the agent-fa
 
 | | |
 |---|---|
+| `docs/index.md` | Documentation index grouped by getting started, guides, reference, and design |
 | `docs/integrations/overview.md` | Start here for agent integrations |
 | `docs/integrations/mcp.md` | MCP runtime path for capable agents |
 | `docs/quickstart.md` | Setup paths, including operator and brownfield flows |
+| `docs/server-operations.md` | Operator and remote-server workflow guide |
 | `docs/cli.md` | CLI reference for operators, scripts, and fallback use |
 | `docs/concepts/memory.md` | What "memory" means in brainclaw |
 | `docs/concepts/plans-and-claims.md` | Coordination layer |
