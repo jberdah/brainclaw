@@ -358,7 +358,8 @@ export type ExportFormat =
   | 'cline'
   | 'roo'
   | 'continue'
-  | 'gemini-md';
+  | 'gemini-md'
+  | 'board-md';
 
 export interface AgentExportTarget {
   agentName: string;
@@ -378,6 +379,7 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'roo',            format: 'roo',                  relativePath: '.roo/rules/brainclaw.md' },
   { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
+  { agentName: 'brainclaw',      format: 'board-md',             relativePath: 'BOARD.md' },
 ];
 
 export const FALLBACK_EXPORT_TARGET: AgentExportTarget = {
