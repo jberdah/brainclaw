@@ -438,6 +438,7 @@ const ALL_BCLAW_TOOLS = [
 const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
 const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
 const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
+const COPILOT_MCP_RELATIVE_PATH = '.vscode/settings.json';
 const WINDSURF_MCP_RELATIVE_PATH = '.codeium/windsurf/mcp_config.json';
 const CLAUDE_CODE_MCP_RELATIVE_PATH = '.mcp.json';
 const CLAUDE_CODE_COMMAND_RELATIVE_PATH = '.claude/commands/brainclaw.md';
@@ -698,6 +699,28 @@ Use this skill to fetch live project memory before significant edits or when ask
     updated,
     filePath,
     relativePath: COPILOT_SKILL_RELATIVE_PATH,
+  };
+}
+
+export function ensureCopilotMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.vscode', 'settings.json');
+  const existing = readJsonObject(filePath);
+  const copilotMcpKey = 'github.copilot.chat.mcpServers';
+  const mcpServers = isJsonObject(existing[copilotMcpKey]) ? { ...(existing[copilotMcpKey] as Record<string, unknown>) } : {};
+  mcpServers.brainclaw = brainclawMcpEntry('github-copilot', mcpServers.brainclaw, cwd);
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    [copilotMcpKey]: mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Copilot MCP settings (.vscode/settings.json)',
+    created,
+    updated,
+    filePath,
+    relativePath: COPILOT_MCP_RELATIVE_PATH,
   };
 }
 
@@ -1244,7 +1267,7 @@ export function writeDetectedAgentAutoConfig(
       return result ? [result] : [];
     }
     case 'github-copilot':
-      return [ensureCopilotSkill(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
     case 'cursor': {
       const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
@@ -1305,7 +1328,7 @@ export function writeExportCompanionFiles(
       return result ? [result] : [];
     }
     case 'copilot-instructions':
-      return [ensureCopilotSkill(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
     case 'cursor-rules': {
       const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
