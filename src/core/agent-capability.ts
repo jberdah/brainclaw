@@ -105,8 +105,8 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
   'github-copilot': {
     name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
-    instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'none', templateTier: 'C',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---

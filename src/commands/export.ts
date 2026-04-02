@@ -579,7 +579,7 @@ function generateBoardMd(_options: ExportOptions, cwd: string): string {
   if (board.open_handoffs.length > 0) {
     lines.push(`## Open Handoffs (${board.open_handoffs.length})\n`);
     for (const handoff of board.open_handoffs.slice(0, 10)) {
-      lines.push(`- **[${handoff.id}]** ${handoff.from ?? '?'} → ${handoff.to ?? '?'}: ${handoff.summary ?? handoff.text ?? ''}`);
+      lines.push(`- **[${handoff.id}]** ${handoff.from ?? '?'} → ${handoff.to ?? '?'}: ${handoff.text ?? ''}`);
     }
     lines.push('');
   }
