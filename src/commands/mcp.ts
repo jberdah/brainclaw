@@ -28,7 +28,7 @@ import {
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateId } from '../core/ids.js';
-import { buildOperationalIdentity } from '../core/identity.js';
+import { buildOperationalIdentity, loadSessionById } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
@@ -867,11 +867,19 @@ function getCancelledRequestId(params: Record<string, unknown>): JsonRpcId | und
   return undefined;
 }
 
-function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameField: string; idField: string }, cwd?: string) {
+function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameField: string; idField: string }, cwd?: string, sessionId?: string) {
   try {
+    // Session-pinned identity: if no explicit agent in args, use the session's pinned agent
+    let agentName = typeof args[fields.nameField] === 'string' ? String(args[fields.nameField]) : undefined;
+    if (!agentName && sessionId) {
+      const session = loadSessionById(sessionId, cwd);
+      if (session?.agent) {
+        agentName = session.agent;
+      }
+    }
     return {
       identity: requireRegisteredAgentIdentity({
-        agentName: typeof args[fields.nameField] === 'string' ? String(args[fields.nameField]) : undefined,
+        agentName,
         agentId: typeof args[fields.idField] === 'string' ? String(args[fields.idField]) : undefined,
         cwd,
         allowCurrent: true,
@@ -902,8 +910,9 @@ function ensureTrust(
   fields: { nameField: string; idField: string },
   level: 'contributor' | 'trusted' | 'curator',
   cwd?: string,
+  sessionId?: string,
 ): { identity?: ReturnType<typeof requireRegisteredAgentIdentity>; error?: McpToolErrorShape } {
-  const resolved = resolveMutationIdentity(args, fields, cwd);
+  const resolved = resolveMutationIdentity(args, fields, cwd, sessionId);
   if ('error' in resolved) {
     return resolved;
   }
@@ -1726,7 +1735,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_write_note') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -1801,7 +1810,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_create_candidate') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -1923,6 +1932,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         { nameField: 'by', idField: 'byId' },
         'trusted',
         cwd,
+        connectionSessionId,
       );
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -1947,6 +1957,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         { nameField: 'by', idField: 'byId' },
         'trusted',
         cwd,
+        connectionSessionId,
       );
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -1974,7 +1985,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       const storeTarget = (args.store as StoreTarget | undefined) ?? 'local';
       const claimCwd = resolveTargetStore(effectiveClaimCwd, storeTarget);
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2107,7 +2118,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_session_start') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2182,7 +2193,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_session_end') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2228,7 +2239,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_create_plan') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2271,7 +2282,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_update_plan') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2305,7 +2316,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_add_step') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2333,7 +2344,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_complete_step') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2362,7 +2373,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_delete_memory') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2397,7 +2408,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_update_memory') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2462,7 +2473,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!capName || !capDesc) {
         return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
       }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2493,7 +2504,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!toolName || !toolDesc) {
         return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
       }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -2526,7 +2537,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!handoffId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
