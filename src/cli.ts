@@ -1022,6 +1022,7 @@ program
   .command('prune')
   .description('Prune expired constraints and stale memory')
   .option('--expired', 'Also prune expired runtime notes and traps')
+  .option('--archive', 'Archive done plans and closed handoffs (>30 days) to cold storage JSONL')
   .action((options) => {
     runPrune(options);
   });

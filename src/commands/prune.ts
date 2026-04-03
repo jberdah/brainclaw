@@ -4,9 +4,12 @@ import { mutate } from '../core/mutation-pipeline.js';
 import { rebuildProjectMd } from '../core/markdown.js';
 import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
 import { expireStaleActiveClaims } from '../core/claims.js';
+import { archiveStalePlansAndHandoffs } from '../core/archival.js';
+import { rotateAuditLogIfNeeded } from '../core/audit.js';
 
 export interface PruneOptions {
   expired?: boolean;
+  archive?: boolean;
 }
 
 export function runPrune(options: PruneOptions = {}): void {
@@ -52,9 +55,21 @@ export function runPrune(options: PruneOptions = {}): void {
     rebuildProjectMd(loadState(cwd), cwd);
   });
 
+  // Archive and rotate outside the mutation lock (they manage their own IO)
+  let archiveMsg = '';
+  if (options.archive) {
+    const archiveResults = archiveStalePlansAndHandoffs(cwd);
+    if (archiveResults.length > 0) {
+      const parts = archiveResults.map(r => `${r.archived} ${r.entity}`);
+      archiveMsg = `, archived ${parts.join(' + ')} to cold storage`;
+    }
+  }
+  const rotated = rotateAuditLogIfNeeded(cwd);
+  const rotateMsg = rotated ? ', rotated audit.log' : '';
+
   if (options.expired) {
-    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredNotesCount} expired runtime notes, ${expiredClaimsCount} expired claims.`);
+    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredNotesCount} expired runtime notes, ${expiredClaimsCount} expired claims${archiveMsg}${rotateMsg}.`);
   } else {
-    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredClaimsCount} expired claims.`);
+    console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredClaimsCount} expired claims${archiveMsg}${rotateMsg}.`);
   }
 }

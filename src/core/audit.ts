@@ -8,6 +8,7 @@ import { appendEvent } from './event-log.js';
 import type { EventAction, EventItemType } from './event-log.js';
 
 const AUDIT_LOG_FILE = 'audit.log';
+const MAX_AUDIT_LOG_BYTES = 10 * 1024 * 1024; // 10MB
 
 /** Map audit actions to event-log actions (subset that overlaps) */
 const AUDIT_TO_EVENT_ACTION: Partial<Record<AuditAction, EventAction>> = {
@@ -64,6 +65,7 @@ function auditLogPath(cwd?: string): string {
 export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAction; actor: string }, cwd?: string): void {
   try {
     mutate({ cwd }, () => {
+      rotateAuditLogIfNeeded(cwd);
       const full: AuditEntry = {
         timestamp: nowISO(),
         actor: entry.actor,
@@ -127,4 +129,26 @@ export function readAuditLog(options: { since?: string; actor?: string; action?:
   }
 
   return entries;
+}
+
+/**
+ * Rotate audit.log if it exceeds MAX_AUDIT_LOG_BYTES.
+ * Archives to audit.{timestamp}.log in the same directory.
+ */
+export function rotateAuditLogIfNeeded(cwd?: string): boolean {
+  const logPath = auditLogPath(cwd);
+  if (!fs.existsSync(logPath)) return false;
+
+  try {
+    const stat = fs.statSync(logPath);
+    if (stat.size < MAX_AUDIT_LOG_BYTES) return false;
+
+    const archiveName = `audit.${Date.now()}.log`;
+    const archivePath = path.join(memoryDir(cwd), archiveName);
+    fs.renameSync(logPath, archivePath);
+    return true;
+  } catch (err) {
+    logger.debug('Failed to rotate audit log:', err);
+    return false;
+  }
 }
