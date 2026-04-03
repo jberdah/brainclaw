@@ -2,6 +2,7 @@ import { findAgentIdentityByName, resolveAgentScope, resolveCurrentAgentIdentity
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { listClaims } from './claims.js';
+import { resolveCrossProjectLinks } from './cross-project.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
@@ -101,6 +102,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     reputation_summary: reputationSummary,
     agent_reputation: agentReputation,
     other_agents: buildOtherAgentsSummary(filteredClaims, filteredNotes, agent),
+    linked_projects: buildLinkedProjectsSummary(options.cwd),
   };
 }
 
@@ -139,4 +141,49 @@ function buildOtherAgentsSummary(
 
   const result = [...agentMap.values()];
   return result.length > 0 ? result : undefined;
+}
+
+interface LinkedProjectSummary {
+  name: string;
+  path: string;
+  role: string;
+  available: boolean;
+  active_claims: number;
+  active_plans: number;
+  agents: string[];
+}
+
+function buildLinkedProjectsSummary(cwd?: string): LinkedProjectSummary[] | undefined {
+  const links = resolveCrossProjectLinks(cwd);
+  if (links.length === 0) return undefined;
+
+  const summaries: LinkedProjectSummary[] = [];
+  for (const link of links) {
+    const summary: LinkedProjectSummary = {
+      name: link.projectName,
+      path: link.path,
+      role: link.role,
+      available: link.available,
+      active_claims: 0,
+      active_plans: 0,
+      agents: [],
+    };
+
+    if (link.available) {
+      try {
+        const claims = listClaims(link.absolutePath).filter(c => c.status === 'active');
+        const state = loadState(link.absolutePath);
+        const plans = state.plan_items.filter(p => p.status !== 'done' && p.status !== 'dropped');
+        summary.active_claims = claims.length;
+        summary.active_plans = plans.length;
+        const agentSet = new Set<string>();
+        for (const c of claims) agentSet.add(c.agent);
+        summary.agents = [...agentSet];
+      } catch { /* linked project read failed, skip */ }
+    }
+
+    summaries.push(summary);
+  }
+
+  return summaries.length > 0 ? summaries : undefined;
 }

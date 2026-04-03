@@ -914,6 +914,7 @@ export const CrossProjectLinkSchema = z.object({
   path: z.string(),
   name: z.string().optional(),
   role: z.enum(['subscriber', 'publisher']).default('subscriber'),
+  channels: z.array(z.string()).optional(),
 });
 export type CrossProjectLink = z.infer<typeof CrossProjectLinkSchema>;
 

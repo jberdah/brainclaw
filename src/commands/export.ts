@@ -624,6 +624,17 @@ function generateBoardMd(_options: ExportOptions, cwd: string): string {
     lines.push('');
   }
 
+  // Linked projects
+  if (board.linked_projects && board.linked_projects.length > 0) {
+    lines.push(`## Linked Projects (${board.linked_projects.length})\n`);
+    for (const lp of board.linked_projects) {
+      const status = lp.available ? 'available' : 'unavailable';
+      const agents = lp.agents.length > 0 ? ` — agents: ${lp.agents.join(', ')}` : '';
+      lines.push(`- **${lp.name}** (${lp.role}, ${status}) — ${lp.active_plans} plans, ${lp.active_claims} claims${agents}`);
+    }
+    lines.push('');
+  }
+
   lines.push(buildHygieneSection());
 
   return lines.join('\n');
