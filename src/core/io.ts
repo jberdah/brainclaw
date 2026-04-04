@@ -110,6 +110,63 @@ export function memoryExists(cwd?: string, preferredDirName?: string): boolean {
   return fs.existsSync(memoryDir(cwd, preferredDirName));
 }
 
+/**
+ * Read the project vision from the first available source:
+ * 1. PROJECT.md at workspace root (human-written, canonical)
+ * 2. .brainclaw/project.md first non-header paragraph (legacy project.md export)
+ * Returns undefined if no vision is found.
+ */
+export function readProjectVision(cwd: string = process.cwd()): string | undefined {
+  // 1. PROJECT.md at workspace root — canonical source
+  const projectMdPath = path.join(cwd, 'PROJECT.md');
+  if (fs.existsSync(projectMdPath)) {
+    try {
+      const content = fs.readFileSync(projectMdPath, 'utf-8').trim();
+      if (content) return content;
+    } catch { /* fall through */ }
+  }
+
+  // 2. .brainclaw/project.md — extract description from first paragraph after title
+  const legacyPath = path.join(cwd, MEMORY_DIR, 'project.md');
+  if (fs.existsSync(legacyPath)) {
+    try {
+      const content = fs.readFileSync(legacyPath, 'utf-8');
+      const vision = extractVisionFromProjectMd(content);
+      if (vision) return vision;
+    } catch { /* fall through */ }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract the vision paragraph from the legacy .brainclaw/project.md format.
+ * Looks for a description/vision section or the first non-header, non-list paragraph.
+ */
+function extractVisionFromProjectMd(content: string): string | undefined {
+  const lines = content.split('\n');
+  // Look for a line that starts with a descriptive phrase, skip headers and list items
+  const descriptionLines: string[] = [];
+  let inSection = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip empty lines, markdown headers, sentinel lines, and list items at start
+    if (!trimmed) {
+      if (inSection && descriptionLines.length > 0) break; // end of paragraph
+      continue;
+    }
+    if (trimmed.startsWith('#') || trimmed.startsWith('>') || trimmed.startsWith('- **[')) continue;
+    if (trimmed.startsWith('- (none)')) continue;
+
+    // Found a content line
+    inSection = true;
+    descriptionLines.push(trimmed);
+  }
+
+  return descriptionLines.length > 0 ? descriptionLines.join('\n') : undefined;
+}
+
 export function ensureMemoryDir(cwd?: string, preferredDirName?: string): void {
   const dir = memoryDir(cwd, preferredDirName);
   if (!fs.existsSync(dir)) {

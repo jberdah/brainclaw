@@ -20,6 +20,8 @@ export interface InstructionTemplateInput {
   projectName: string;
   brainclawVersion: string;
   resolvedInstructions: string[];
+  /** Project vision text from PROJECT.md (injected as first content section). */
+  projectVision?: string;
   /** Maximum number of traps to include for tier B (default: 5) */
   maxTraps?: number;
   /** Maximum number of plans to include for tier C (default: 10) */
@@ -55,8 +57,9 @@ function renderTierA(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
-  sections.push(renderWhySection(input.profile));
-  included.push('why');
+  const vision = renderVisionSection(input);
+  if (vision) { sections.push(vision); included.push('vision'); }
+  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
   sections.push(renderProtocolTierA());
   included.push('protocol');
@@ -89,8 +92,9 @@ function renderTierB(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
-  sections.push(renderWhySection(input.profile));
-  included.push('why');
+  const vision = renderVisionSection(input);
+  if (vision) { sections.push(vision); included.push('vision'); }
+  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
   sections.push(renderProtocolTierB());
   included.push('protocol');
@@ -127,8 +131,9 @@ function renderTierC(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
-  sections.push(renderWhySection(input.profile));
-  included.push('why');
+  const vision = renderVisionSection(input);
+  if (vision) { sections.push(vision); included.push('vision'); }
+  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
   sections.push(renderProtocolTierC(input.profile));
   included.push('protocol');
@@ -160,6 +165,16 @@ function renderTierC(input: InstructionTemplateInput): InstructionTemplateOutput
 }
 
 // ─── Shared section renderers ────────────────────────────────────────────────
+
+function renderVisionSection(input: InstructionTemplateInput): string | undefined {
+  if (!input.projectVision?.trim()) return undefined;
+
+  return [
+    `## brainclaw — this project`,
+    '',
+    input.projectVision.trim(),
+  ].join('\n');
+}
 
 function renderHeader(input: InstructionTemplateInput): string {
   return [

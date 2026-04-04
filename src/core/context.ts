@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readProjectVision } from './io.js';
 import { loadActiveProject, type ActiveProject } from './active-project.js';
 import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from './brainclaw-version.js';
 import { loadConfig } from './config.js';
@@ -97,6 +98,7 @@ export interface ContextResult {
   active_project?: ActiveProject;
   claim_conflicts?: ClaimConflict[];
   workflow_hints?: string[];
+  project_vision?: string;
   selected: ContextItem[];
 }
 
@@ -617,6 +619,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     project_mode: projectMode,
     project_strategy: projectStrategy,
     current_host: currentHost,
+    project_vision: readProjectVision(contextCwd),
     host_filter: options.host,
     all_hosts: options.allHosts ?? false,
     memory_version: memoryVersion,
@@ -698,6 +701,9 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   }
   if (result.agent_id && result.agent) {
     lines.push(`Agent ID: ${result.agent_id}`);
+  }
+  if (result.project_vision) {
+    lines.push(`Project vision: ${result.project_vision.split('\n')[0]}`);
   }
   lines.push(`Project mode: ${result.project_mode} (${result.project_strategy})`);
   if (result.active_project) {
@@ -950,6 +956,9 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
     lines.push(`project_mode: ${result.project_mode}`);
     lines.push(`project_strategy: ${result.project_strategy}`);
+    if (result.project_vision) {
+      lines.push(`project_vision: "${result.project_vision.split('\n')[0]}"`);
+    }
     if (result.active_project) {
       lines.push(`active_project: ${result.active_project.name ?? result.active_project.path}`);
       lines.push(`active_project_switched: ${result.active_project.switched_at}`);

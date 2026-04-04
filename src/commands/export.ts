@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryExists } from '../core/io.js';
+import { memoryExists, readProjectVision } from '../core/io.js';
 import { loadState } from '../core/state.js';
 import { loadConfig, saveConfig } from '../core/config.js';
 import { isAgentIntegrationName, upsertAgentIntegrationDeclaration } from '../core/agent-integrations.js';
@@ -272,6 +272,7 @@ function generateAdaptiveExport(agentName: string, options: ExportOptions, cwd: 
     projectName: config.project_name,
     brainclawVersion: getInstalledBrainclawVersion(),
     resolvedInstructions: instructions,
+    projectVision: readProjectVision(cwd),
   });
 
   return result.content;
