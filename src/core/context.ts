@@ -32,7 +32,7 @@ export interface ContextOptions {
   host?: string;
   allHosts?: boolean;
   includePending?: boolean;
-  profile?: 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick';
+  profile?: 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing';
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
@@ -149,7 +149,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const agent = options.agent?.trim() || currentAgentIdentity?.agent_name;
   // Profile resolution: explicit param > agent default > config default > 'dev'
   const profile = options.profile ?? currentAgentIdentity?.context_profile ?? config.profile ?? 'dev';
-  const profileMaxItems: Record<string, number> = { dense: 20, compact: 6, copilot: 5, quick: 3 };
+  const profileMaxItems: Record<string, number> = { dense: 20, compact: 6, copilot: 5, quick: 3, briefing: 5 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
   // Instructions will be resolved after parent-store merge below (line ~460)
@@ -161,6 +161,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     compact:  ['plan', 'constraint'],
     copilot:  ['constraint', 'trap'],
     quick:    ['constraint', 'plan'],
+    briefing: ['trap', 'constraint', 'decision'],
   };
   const allowedSections = profileSections[profile] as Section[] | undefined;
 
@@ -1131,6 +1132,72 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     }
   }
   lines.push('```');
+  return lines.join('\n');
+}
+
+/**
+ * Render context as an ultra-compact scope briefing (< 500 chars).
+ * Designed for pre-action injection: only what matters for THIS scope, NOW.
+ *
+ * Output example:
+ *   scope: src/core/agent-files.ts
+ *   traps: [high] MCP server hérite env vars VS Code
+ *   claims: no conflict
+ *   decisions: brainclawMcpEntry preserves existing command
+ *   confidence: high (3 items, freshest 2d ago)
+ */
+export function renderContextBriefing(result: ContextResult): string {
+  const lines: string[] = [];
+
+  if (result.target) {
+    lines.push(`scope: ${result.target}`);
+  }
+
+  // Traps (high severity first, max 2)
+  const traps = result.selected
+    .filter(i => i.section === 'trap')
+    .slice(0, 2);
+  if (traps.length > 0) {
+    for (const t of traps) {
+      const severity = t.extra?.match(/\b(high|medium|low)\b/)?.[0] ?? '';
+      const text = t.text.length > 80 ? t.text.slice(0, 77) + '...' : t.text;
+      lines.push(`trap: [${severity}] ${text}`);
+    }
+  }
+
+  // Claim conflicts
+  if (result.claim_conflicts && result.claim_conflicts.length > 0) {
+    for (const c of result.claim_conflicts.slice(0, 2)) {
+      lines.push(`conflict: ${c.other_agent} claims ${c.other_scope}`);
+    }
+  } else {
+    lines.push('claims: no conflict');
+  }
+
+  // Recent decisions (max 1, truncated)
+  const decisions = result.selected
+    .filter(i => i.section === 'decision')
+    .slice(0, 1);
+  if (decisions.length > 0) {
+    const text = decisions[0]!.text.length > 80 ? decisions[0]!.text.slice(0, 77) + '...' : decisions[0]!.text;
+    lines.push(`decision: ${text}`);
+  }
+
+  // Confidence score based on item count and scope activity
+  const totalItems = result.selected.length;
+  const hasActivity = result.scoped_activity != null;
+
+  let confidence = 'low';
+  if (totalItems >= 3 && hasActivity) {
+    confidence = 'high';
+  } else if (totalItems >= 1) {
+    confidence = 'medium';
+  }
+  lines.push(`confidence: ${confidence} (${totalItems} items${hasActivity ? ', scope has recent activity' : ''})`);
+
+  // Sequence position placeholder (populated when Sequences land)
+  // lines.push(`sequence: ...`);
+
   return lines.join('\n');
 }
 

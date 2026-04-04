@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectTarget, writeCrossProjectNote } from '../core/cross-project.js';
-import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
+import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
@@ -131,7 +131,7 @@ export const MCP_READ_TOOLS = [
         agent: { type: 'string', description: 'Optional agent name for agent-layer instruction resolution.' },
         host: { type: 'string', description: 'Optional host identifier used to include machine-local runtime context.' },
         allHosts: { type: 'boolean', description: 'Include machine-local runtime context from all hosts.' },
-        profile: { type: 'string', description: 'Optional profile override: dev (default), dense (all sections, max items), compact (plans+constraints), copilot (constraints+traps), quick (minimal), openclaw, ops, research.' },
+        profile: { type: 'string', description: 'Optional profile override: dev (default), dense (all sections, max items), compact (plans+constraints), copilot (constraints+traps), quick (minimal), briefing (ultra-compact scope briefing < 500 chars), openclaw, ops, research.' },
         includePending: { type: 'boolean', description: 'Include pending candidates in the context.' },
         maxItems: { type: 'number', description: 'Maximum number of ranked items to return.' },
         maxChars: { type: 'number', description: 'Approximate character budget applied after ranking.' },
@@ -581,7 +581,7 @@ const MCP_WRITE_TOOLS = [
         context: { type: 'string', description: 'Context target path.' },
         includeContext: { type: 'boolean', description: 'Include project memory context in the response (equivalent to bclaw_get_context).' },
         includeBoard: { type: 'boolean', description: 'Include agent board (plans, claims, handoffs) in the response (equivalent to bclaw_get_agent_board).' },
-        contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev (default), dense, compact, copilot, quick, openclaw, ops, research. If unset, uses the agent default profile.' },
+        contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev (default), dense, compact, copilot, quick, briefing, openclaw, ops, research. If unset, uses the agent default profile.' },
         contextFormat: { type: 'string', description: 'Context format when includeContext is true: markdown, json, or template.' },
       },
     },
@@ -1557,6 +1557,10 @@ export function renderContextForMcp(
   format: ContextFormat,
   options: { explain?: boolean; compactTemplate?: boolean },
 ): string {
+  // Briefing profile always uses its own ultra-compact renderer
+  if (result.profile === 'briefing') {
+    return renderContextBriefing(result);
+  }
   if (format === 'json') {
     return JSON.stringify(result, null, 2);
   }
@@ -2180,7 +2184,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const ctxResult = buildContext({
           target: args.context as string | undefined,
           agent: resolved.identity?.agent_name,
-          profile: args.contextProfile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | undefined,
+          profile: args.contextProfile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing' | undefined,
           cwd,
         });
         const format = normaliseFormat(args.contextFormat);
