@@ -23,6 +23,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   
   private _watcher?: cp.ChildProcess;
   private _board: any = null;
+  private _refreshTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly _cwd: string) {
     this._startWatch();
@@ -42,8 +43,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
   }
 
+  /** Debounced refresh — collapses rapid NDJSON events into a single exec. */
+  private _debouncedRefresh(): void {
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(() => this.refresh(), 500);
+  }
+
   dispose() {
     this._watcher?.kill();
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
   }
 
   private _startWatch() {
@@ -61,7 +69,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
           if (['added', 'changed', 'removed', 'plan_added', 'constraint_added',
                'claim_created', 'claim_released', 'handoff_added', 'decision_added'
           ].includes(event.event)) {
-            this.refresh();
+            this._debouncedRefresh();
           }
         } catch { } // skip malformed
       }

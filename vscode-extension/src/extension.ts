@@ -70,7 +70,8 @@ export function activate(context: vscode.ExtensionContext) {
   if (cwd) {
     const treeProvider = new BrainclawBoardProvider(cwd);
     context.subscriptions.push(
-      vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider)
+      vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider),
+      { dispose: () => treeProvider.dispose() }
     );
 
     context.subscriptions.push(
