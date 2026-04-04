@@ -10,7 +10,7 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:.brainclaw/**"
+    "workspaceContains:.brainclaw"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -27,8 +27,7 @@
       "brainclaw-explorer": [
         {
           "id": "brainclaw.agentBoard",
-          "name": "Live Coordination Board",
-          "when": "brainclaw.active"
+          "name": "Live Coordination Board"
         }
       ]
     },

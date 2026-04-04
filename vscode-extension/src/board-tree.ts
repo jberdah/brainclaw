@@ -25,22 +25,34 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _board: any = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
 
+  private _resolvedCmd: string | undefined | null = null; // null = not yet resolved
+
   constructor(private readonly _cwd: string) {
-    this._startWatch();
+    // Defer to avoid blocking extension host activation
+    setTimeout(() => this._startWatch(), 0);
   }
 
   public refresh(): void {
-    const bclaw = resolveBrainclawCmd(this._cwd);
-    if (bclaw) {
-      cp.exec(`${bclaw} agent-board --json`, { cwd: this._cwd }, (err, stdout) => {
-        if (!err && stdout) {
-          try {
-            this._board = JSON.parse(stdout);
-            this._onDidChangeTreeData.fire();
-          } catch {}
-        }
-      });
+    const bclaw = this._resolveCmd();
+    if (!bclaw) {
+      console.warn('[brainclaw] No brainclaw command found');
+      return;
     }
+    const cmd = `${bclaw} agent-board --json`;
+    cp.exec(cmd, { cwd: this._cwd }, (err: cp.ExecException | null, stdout: string, stderr: string) => {
+      if (err) {
+        console.error(`[brainclaw] ${cmd} failed:`, stderr || err.message);
+        return;
+      }
+      if (stdout) {
+        try {
+          this._board = JSON.parse(stdout);
+          this._onDidChangeTreeData.fire();
+        } catch (e) {
+          console.error('[brainclaw] JSON parse error:', (e as Error).message);
+        }
+      }
+    });
   }
 
   /** Debounced refresh — collapses rapid NDJSON events into a single exec. */
@@ -54,13 +66,20 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
   }
 
+  private _resolveCmd(): string | undefined {
+    if (this._resolvedCmd === null) {
+      this._resolvedCmd = resolveBrainclawCmd(this._cwd);
+    }
+    return this._resolvedCmd;
+  }
+
   private _startWatch() {
-    const bclaw = resolveBrainclawCmd(this._cwd);
+    const bclaw = this._resolveCmd();
     if (!bclaw) return;
 
     this.refresh(); // Initial load
 
-    this._watcher = cp.spawn(bclaw, ['watch'], { cwd: this._cwd, shell: true });
+    this._watcher = cp.spawn(`${bclaw} watch`, [], { cwd: this._cwd, shell: true });
     this._watcher.stdout?.on('data', (data: Buffer) => {
       const lines = data.toString().split('\n').filter(Boolean);
       for (const line of lines) {
@@ -143,14 +162,23 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 }
 
 export function resolveBrainclawCmd(cwd: string): string | undefined {
+  const opts = { stdio: 'ignore' as const, timeout: 3000 };
+
   const local = path.join(cwd, 'node_modules', '.bin', 'brainclaw');
   try {
-    cp.execSync(`"${local}" --version`, { stdio: 'ignore' });
+    cp.execSync(`"${local}" --version`, opts);
     return `"${local}"`;
   } catch { }
 
+  // Fallback: dist/cli.js in the workspace (dev mode)
+  const distCli = path.join(cwd, 'dist', 'cli.js');
   try {
-    cp.execSync('brainclaw --version', { stdio: 'ignore' });
+    cp.execSync(`node "${distCli}" --version`, opts);
+    return `node "${distCli}"`;
+  } catch { }
+
+  try {
+    cp.execSync('brainclaw --version', opts);
     return 'brainclaw';
   } catch { }
   return undefined;

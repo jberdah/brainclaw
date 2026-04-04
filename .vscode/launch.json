@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Brainclaw Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode-extension",
+        "${workspaceFolder}"
+      ],
+      "outFiles": ["${workspaceFolder}/vscode-extension/out/**/*.js"]
+    }
+  ]
+}

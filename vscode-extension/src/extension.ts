@@ -5,6 +5,11 @@ import * as path from 'path';
 
 import { BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
 
+class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  getTreeItem(el: vscode.TreeItem) { return el; }
+  getChildren() { return [new vscode.TreeItem('No workspace open')]; }
+}
+
 // --- Event bus types (mirror of core/event-log.ts) ---
 
 interface MemoryEvent {
@@ -65,21 +70,22 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'brainclaw.active', true);
 
   const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  console.log('[brainclaw] activate — cwd:', cwd ?? 'NONE');
 
-  // Board Tree Provider
-  if (cwd) {
-    const treeProvider = new BrainclawBoardProvider(cwd);
-    context.subscriptions.push(
-      vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider),
-      { dispose: () => treeProvider.dispose() }
-    );
-
-    context.subscriptions.push(
-      vscode.commands.registerCommand('brainclaw.refreshBoard', () => {
-        treeProvider.refresh();
-      })
-    );
+  // Board Tree Provider — always register to avoid "no data provider" error
+  const treeProvider = cwd ? new BrainclawBoardProvider(cwd) : undefined;
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
+  );
+  if (treeProvider) {
+    context.subscriptions.push({ dispose: () => treeProvider.dispose() });
   }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainclaw.refreshBoard', () => {
+      treeProvider?.refresh();
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('brainclaw.showBoard', () => {
