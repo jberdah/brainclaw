@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runSetup } from './commands/setup.js';
 import { runUpgrade } from './commands/upgrade.js';
+import { patchAllMcpConfigs } from './core/agent-files.js';
 import { runReconcile } from './commands/reconcile.js';
 import { getMemoryLog, rollbackMemory, hasMemoryRepo } from './core/memory-git.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile, renderMachineProfileSummary } from './core/machine-profile.js';
@@ -210,6 +211,27 @@ program
       selfUpdate: options.selfUpdate,
     });
   });
+
+// --- patch-configs ---
+  program
+    .command('patch-configs')
+    .description('Patch all MCP config files to use the current brainclaw binary path')
+    .option('--json', 'Output as JSON')
+    .action((options) => {
+      const cwd = process.env.BRAINCLAW_CWD ?? process.cwd();
+      const results = patchAllMcpConfigs(cwd);
+      if (options.json) {
+        console.log(JSON.stringify(results, null, 2));
+      } else if (results.length === 0) {
+        console.log('✔ All MCP configs are already up to date.');
+      } else {
+        for (const r of results) {
+          const tag = r.created ? 'created' : 'updated';
+          console.log(`✔ ${r.filePath} (${tag}) — ${r.label}`);
+        }
+        console.log(`\n${results.length} MCP config(s) patched.`);
+      }
+    });
 
 // --- machine-profile ---
   program

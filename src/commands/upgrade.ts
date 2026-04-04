@@ -12,6 +12,7 @@ import {
   buildClaudeCodeCommandText,
   ensureClaudeCodeCommand,
   hasBrainclawSection,
+  patchAllMcpConfigs,
 } from '../core/agent-files.js';
 import { loadConfig } from '../core/config.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
@@ -203,6 +204,9 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
 
   const refreshedAgentFiles = refreshManagedWorkspaceAgentFiles(cwd);
 
+  // Patch all MCP config files to use the newly resolved brainclaw binary
+  const patchedMcpConfigs = patchAllMcpConfigs(cwd);
+
   // Clean up empty legacy directories (recursively removes empty subdirs first)
   let removedDirs = 0;
   for (const { legacy } of ENTITY_DIRS) {
@@ -221,6 +225,7 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     `${outdated.length} schema(s) migrated`,
     `${refreshedAgentFiles.length} managed agent file(s) refreshed`,
   ];
+  if (patchedMcpConfigs.length > 0) parts.push(`${patchedMcpConfigs.length} MCP config(s) patched`);
   if (removedDirs > 0) parts.push(`${removedDirs} empty legacy dir(s) removed`);
   console.log(`✔ Upgrade complete: ${parts.join(', ')}.`);
 }

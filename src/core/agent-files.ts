@@ -133,6 +133,14 @@ function getBrainclawMcpCommand(): { command: string; args: string[] } {
   return cachedMcpCommand;
 }
 
+/** Reset the cached MCP command so it gets re-resolved on next access. */
+export function resetMcpCommandCache(): void {
+  cachedMcpCommand = undefined;
+}
+
+/** Module-level flag: when true, brainclawMcpEntry overwrites existing paths. */
+let _forceResolve = false;
+
 /**
  * Build a complete MCP server entry with relay model env injection.
  * Merges with the existing entry to preserve manual edits (e.g. custom command
@@ -147,10 +155,12 @@ function brainclawMcpEntry(agentName: string, existing?: unknown, workspacePath?
   const ex = isJsonObject(existing) ? existing : {};
   const exEnv = isJsonObject(ex.env) ? ex.env : {};
 
+  // When _forceResolve is true (post-upgrade), always use newly resolved paths.
+  // Otherwise preserve existing command if it's an absolute path (manual edit).
+  const useExisting = !_forceResolve && typeof ex.command === 'string' && ex.command !== 'npx';
+
   return {
-    // Preserve existing command if it's an absolute path (manual edit),
-    // otherwise use the resolved default
-    command: (typeof ex.command === 'string' && ex.command !== 'npx') ? ex.command : defaults.command,
+    command: useExisting ? ex.command : defaults.command,
     args: defaults.args,
     // Merge env: preserve user-added vars, ensure BRAINCLAW_AGENT is set
     env: {
@@ -158,6 +168,8 @@ function brainclawMcpEntry(agentName: string, existing?: unknown, workspacePath?
       BRAINCLAW_AGENT: agentName,
       ...(workspacePath ? { BRAINCLAW_CWD: workspacePath } : {}),
     },
+    // Preserve timeout if set
+    ...(typeof ex.timeout === 'number' ? { timeout: ex.timeout } : {}),
   };
 }
 
@@ -1350,4 +1362,56 @@ export function writeExportCompanionFiles(
     default:
       return [];
   }
+}
+
+/**
+ * Patch all MCP config files to use the currently resolved brainclaw binary.
+ *
+ * Called after upgrade / version --publish-local to fix stale paths.
+ * Re-resolves the brainclaw command, then re-runs all ensure*McpConfig()
+ * functions with forceResolve=true so existing absolute paths are overwritten.
+ *
+ * Returns the list of configs that were actually updated (not just created).
+ */
+export function patchAllMcpConfigs(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AutoConfigWriteResult[] {
+  // 1. Clear cached path so resolution picks up the new install location
+  resetMcpCommandCache();
+
+  // 2. Set force-resolve mode so brainclawMcpEntry overwrites existing paths
+  _forceResolve = true;
+
+  const results: AutoConfigWriteResult[] = [];
+  const homeDir = resolveHomeDir(env);
+
+  try {
+    // Workspace-level configs
+    results.push(ensureClaudeCodeMcpConfig(cwd));
+    results.push(ensureCopilotMcpConfig(cwd));
+    results.push(ensureClineMcpConfig(cwd));
+    results.push(ensureRooMcpConfig(cwd));
+    results.push(ensureContinueMcpConfig(cwd));
+    results.push(ensureOpenCodeMcpConfig(cwd));
+
+    // Machine-level configs (in ~ or platform-specific)
+    const userConfigs = [
+      ensureClaudeCodeUserSettings(homeDir, env),
+      ensureCursorMcpConfig(homeDir),
+      ensureWindsurfMcpConfig(homeDir),
+      ensureContinueUserMcpConfig(homeDir),
+      ensureAntigravityMcpConfig(homeDir),
+      ensureOpenClawMcpConfig(homeDir),
+      ensureCodexMcpConfig(homeDir, env),
+    ];
+    for (const r of userConfigs) {
+      if (r) results.push(r);
+    }
+  } finally {
+    // Always reset force-resolve mode
+    _forceResolve = false;
+  }
+
+  return results.filter(r => r.created || r.updated);
 }
