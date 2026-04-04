@@ -7,6 +7,7 @@ import { startSession } from '../../src/commands/session-start.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
+import { createSequence } from '../../src/core/sequence.js';
 import { saveState } from '../../src/core/state.js';
 import type { State } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -199,6 +200,29 @@ describe('commands/mcp read tools', () => {
       visibility: 'shared',
       note_type: 'observation',
     }, workspace.dir);
+    createSequence({
+      name: 'post-gpt4-review',
+      status: 'active',
+      author: 'copilot',
+      owner: 'copilot',
+      items: [
+        { planId: 'PROJECT.md', rank: 1, lane: 'vision' },
+        { planId: 'constraint-categorization', rank: 2, lane: 'export-foundation' },
+        { planId: 'context-metrics', rank: 3, lane: 'hooks' },
+        {
+          planId: 'export-restructure',
+          rank: 4,
+          lane: 'export-foundation',
+          hard_after: ['PROJECT.md', 'constraint-categorization'],
+        },
+        {
+          planId: 'tier-reclassification',
+          rank: 5,
+          lane: 'export-foundation',
+          soft_after: ['export-restructure'],
+        },
+      ],
+    }, workspace.dir);
 
     const board = handleMcpReadToolCall('bclaw_get_agent_board', {
       agent: 'copilot',
@@ -209,13 +233,30 @@ describe('commands/mcp read tools', () => {
     const boardStructured = board.structuredContent as {
       active_plans: Array<{ id: string }>;
       active_claims: Array<{ id: string }>;
+      active_sequence?: { name: string; items: Array<{ planId: string }> };
       runtime_notes: Array<{ id: string }>;
       reputation_summary?: { enabled: boolean };
     };
     assert.deepEqual(boardStructured.active_plans.map((item) => item.id), ['pln_mcp']);
     assert.deepEqual(boardStructured.active_claims.map((item) => item.id), ['clm_mcp']);
+    assert.equal(boardStructured.active_sequence?.name, 'post-gpt4-review');
+    assert.deepEqual(
+      boardStructured.active_sequence?.items.map((item) => item.planId),
+      ['PROJECT.md', 'constraint-categorization', 'context-metrics', 'export-restructure', 'tier-reclassification'],
+    );
     assert.deepEqual(boardStructured.runtime_notes.map((item) => item.id), ['rtn_mcp_board']);
     assert.equal(boardStructured.reputation_summary?.enabled, true);
+
+    const sequences = handleMcpReadToolCall('bclaw_list_sequences', {
+      status: 'active',
+    }, { cwd: workspace.dir });
+    const sequenceStructured = sequences.structuredContent as {
+      total: number;
+      sequences: Array<{ name: string; status: string }>;
+    };
+    assert.equal(sequenceStructured.total, 1);
+    assert.equal(sequenceStructured.sequences[0].name, 'post-gpt4-review');
+    assert.equal(sequenceStructured.sequences[0].status, 'active');
 
     const search = handleMcpReadToolCall('bclaw_search', {
       query: 'auth rollout',

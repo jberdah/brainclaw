@@ -20,6 +20,7 @@ import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
 import { listClaims } from '../core/claims.js';
+import { listSequences } from '../core/sequence.js';
 import {
   listAgentIdentities,
   resolveAgentScope,
@@ -40,7 +41,7 @@ import { listAvailableProjects, switchProject } from './switch.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
-import type { BootstrapInterviewAnswer, PlanStatus, PlanType } from '../core/schema.js';
+import type { BootstrapInterviewAnswer, PlanStatus, PlanType, SequenceStatus } from '../core/schema.js';
 import {
   type McpToolResponse,
   type McpReadToolContext,
@@ -380,6 +381,16 @@ export function handleMcpReadToolCall(
       const session = claim.session_id ? ` session=${claim.session_id}` : '';
       lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}`);
     }
+    lines.push(`Active sequence: ${board.active_sequence ? `1 (${board.active_sequence.name})` : '0'}`);
+    if (board.active_sequence) {
+      lines.push(`- [${board.active_sequence.id}] ${board.active_sequence.name} (${board.active_sequence.status})`);
+      for (const item of board.active_sequence.items.slice(0, 10)) {
+        const lane = item.lane ? ` lane=${item.lane}` : '';
+        const hardAfter = item.hard_after.length ? ` hard_after=${item.hard_after.join(',')}` : '';
+        const softAfter = item.soft_after.length ? ` soft_after=${item.soft_after.join(',')}` : '';
+        lines.push(`  #${item.rank} ${item.planId}${lane}${hardAfter}${softAfter}`);
+      }
+    }
     const sessionMetaHint = board.session_meta_hidden > 0 ? ` (+${board.session_meta_hidden} session lifecycle notes hidden — pass includeSessionMeta to show)` : '';
     lines.push(`Runtime notes: ${board.runtime_notes.length}${sessionMetaHint}`);
     for (const note of board.runtime_notes.slice(-10)) {
@@ -563,6 +574,37 @@ export function handleMcpReadToolCall(
         plans: outputPlans,
         ...(descendantGroups.length > 0 ? { descendants: descendantGroups, total_with_descendants: totalFiltered + totalDescendantPlans } : {}),
       },
+    };
+  }
+
+  if (name === 'bclaw_list_sequences') {
+    const status = args.status as SequenceStatus | undefined;
+    const id = args.id as string | undefined;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    let sequences = listSequences(cwd);
+    if (status) {
+      sequences = sequences.filter((sequence) => sequence.status === status);
+    }
+    if (id) {
+      sequences = sequences.filter((sequence) => sequence.id === id || sequence.short_label === id);
+    }
+
+    const total = sequences.length;
+    const page = sequences.slice(offset, offset + limit);
+    const compact = args.compact === true;
+    const lines = page.length === 0
+      ? ['No sequences found.']
+      : [
+          `${total} sequence(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((sequence) => compact
+            ? `[${sequence.id}] ${sequence.name} (${sequence.status})`
+            : `[${sequence.id}] ${sequence.name} (${sequence.status}, items=${sequence.items.length})`),
+        ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, sequences: page },
     };
   }
 

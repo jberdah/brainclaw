@@ -62,6 +62,17 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
     console.log(`  [${claim.id}] ${claim.agent} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}`);
   }
   console.log('');
+  console.log(`Active sequence: ${board.active_sequence ? `1 (${board.active_sequence.name})` : '0'}`);
+  if (board.active_sequence) {
+    console.log(`  [${board.active_sequence.id}] ${board.active_sequence.name} (${board.active_sequence.status})`);
+    for (const item of board.active_sequence.items.slice(0, 10)) {
+      const lane = item.lane ? ` lane=${item.lane}` : '';
+      const hardAfter = item.hard_after.length ? ` hard_after=${item.hard_after.join(',')}` : '';
+      const softAfter = item.soft_after.length ? ` soft_after=${item.soft_after.join(',')}` : '';
+      console.log(`    #${item.rank} ${item.planId}${lane}${hardAfter}${softAfter}`);
+    }
+  }
+  console.log('');
   const sessionMetaHint = board.session_meta_hidden > 0 ? ` (+${board.session_meta_hidden} session lifecycle notes hidden — use --include-session-meta to show)` : '';
   console.log(`Runtime notes: ${board.runtime_notes.length}${sessionMetaHint}`);
   for (const note of board.runtime_notes.slice(-10)) {

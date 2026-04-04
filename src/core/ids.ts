@@ -11,6 +11,7 @@ const PREFIXES: Record<string, string> = {
   open_handoffs: 'hnd',
   plan_items: 'pln',
   plan_steps: 'stp',
+  sequences: 'seq',
   instruction_entries: 'ins',
   ai_surface_tasks: 'ast',
 };

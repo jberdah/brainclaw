@@ -212,6 +212,42 @@ export const PlanItemSchema = z.object({
 });
 export type PlanItem = z.infer<typeof PlanItemSchema>;
 
+export const SequenceStatusSchema = z.enum(['draft', 'active', 'archived']);
+export type SequenceStatus = z.infer<typeof SequenceStatusSchema>;
+
+export const SequenceItemSchema = z.object({
+  planId: z.string(),
+  rank: z.number().int().positive(),
+  hard_after: z.array(z.string()).default([]),
+  soft_after: z.array(z.string()).default([]),
+  lane: z.string().optional(),
+  scope_hint: z.string().optional(),
+  rationale: z.string().optional(),
+});
+export type SequenceItemInput = z.input<typeof SequenceItemSchema>;
+export type SequenceItem = z.infer<typeof SequenceItemSchema>;
+
+export const SequenceSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+  name: z.string(),
+  description: z.string().optional(),
+  status: SequenceStatusSchema.default('draft'),
+  items: z.array(SequenceItemSchema).default([]),
+  owner: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  author: z.string(),
+  author_id: z.string().optional(),
+  model: z.string().optional(),
+  project_id: z.string().optional(),
+  host_id: z.string().optional(),
+  session_id: z.string().optional(),
+  tags: TagsSchema,
+});
+export type Sequence = z.infer<typeof SequenceSchema>;
+
 export const InstructionLayerSchema = z.enum(['global', 'project', 'agent']);
 export type InstructionLayer = z.infer<typeof InstructionLayerSchema>;
 

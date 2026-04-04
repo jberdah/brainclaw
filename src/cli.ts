@@ -20,6 +20,7 @@ import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
 import { runDeletePlan } from './commands/delete-plan.js';
 import { runPlanResource } from './commands/plan-resource.js';
+import { runSequenceResource } from './commands/sequence.js';
 import { runAddStep } from './commands/add-step.js';
 import { runEstimationReport } from './commands/estimation-report.js';
 import { runCompleteStep } from './commands/complete-step.js';
@@ -442,6 +443,21 @@ program
   .option('--recursive', 'Include plans from descendant brainclaw projects')
   .action((options) => {
     runListPlans(options);
+  });
+
+program
+  .command('sequence <subcommand> [args...]')
+  .description('Manage coordination sequences (create, list, show, update)')
+  .option('--json', 'Output as JSON')
+  .option('--description <text>', 'Optional sequence description')
+  .option('--status <status>', 'Sequence status: draft, active, archived')
+  .option('--owner <owner>', 'Optional sequence owner')
+  .option('--items <json>', 'Sequence items JSON array')
+  .option('--name <name>', 'Optional sequence name for update')
+  .option('--tag <tags...>', 'Tags for this sequence')
+  .option('--author <author>', 'Author name')
+  .action((subcommand, args, options) => {
+    runSequenceResource(subcommand, args, options);
   });
 
 // --- add-step ---

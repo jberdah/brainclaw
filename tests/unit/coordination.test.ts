@@ -5,6 +5,7 @@ import { saveClaim } from '../../src/core/claims.js';
 import { buildCoordinationSnapshot } from '../../src/core/coordination.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
+import { createSequence } from '../../src/core/sequence.js';
 import { saveState } from '../../src/core/state.js';
 import { loadState } from '../../src/core/state.js';
 import type { Candidate, Claim, RuntimeNote, State } from '../../src/core/schema.js';
@@ -206,6 +207,30 @@ describe('core/coordination', () => {
       saveRuntimeNote(note, workspace.dir);
     }
 
+    createSequence({
+      name: 'post-gpt4-review',
+      status: 'active',
+      author: copilot.agent_name,
+      owner: copilot.agent_name,
+      items: [
+        { planId: 'PROJECT.md', rank: 1, lane: 'vision' },
+        { planId: 'constraint-categorization', rank: 2, lane: 'export-foundation' },
+        { planId: 'context-metrics', rank: 3, lane: 'hooks' },
+        {
+          planId: 'export-restructure',
+          rank: 4,
+          lane: 'export-foundation',
+          hard_after: ['PROJECT.md', 'constraint-categorization'],
+        },
+        {
+          planId: 'tier-reclassification',
+          rank: 5,
+          lane: 'export-foundation',
+          soft_after: ['export-restructure'],
+        },
+      ],
+    }, workspace.dir);
+
     const accepted: Candidate = {
       id: 'cnd_copilot_accepted',
       type: 'decision',
@@ -241,6 +266,10 @@ describe('core/coordination', () => {
     assert.equal(board.active_plans[0].claims.length, 1);
     assert.equal(board.active_claims.length, 1);
     assert.equal(board.active_claims[0].id, 'clm_auth');
+    assert.equal(board.active_sequence?.name, 'post-gpt4-review');
+    assert.equal(board.active_sequence?.items[0].lane, 'vision');
+    assert.deepEqual(board.active_sequence?.items[3].hard_after, ['PROJECT.md', 'constraint-categorization']);
+    assert.deepEqual(board.active_sequence?.items[4].soft_after, ['export-restructure']);
     assert.equal(board.runtime_notes.length, 2);
     assert.deepEqual(
       board.runtime_notes.map((note) => note.id),

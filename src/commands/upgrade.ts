@@ -44,6 +44,7 @@ const ENTITY_DIRS: Array<{ legacy: string; entity: string }> = [
   { legacy: 'traps', entity: 'memory/traps' },
   { legacy: 'instructions', entity: 'memory/instructions' },
   { legacy: 'plans', entity: 'coordination/plans' },
+  { legacy: 'sequences', entity: 'coordination/sequences' },
   { legacy: 'claims', entity: 'coordination/claims' },
   { legacy: 'handoffs', entity: 'coordination/handoffs' },
   { legacy: 'sessions', entity: 'coordination/sessions' },

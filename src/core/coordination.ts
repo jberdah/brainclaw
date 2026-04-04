@@ -2,6 +2,7 @@ import { findAgentIdentityByName, resolveAgentScope, resolveCurrentAgentIdentity
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { listClaims } from './claims.js';
+import { getActiveSequence } from './sequence.js';
 import { resolveCrossProjectLinks } from './cross-project.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
@@ -32,6 +33,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     ? (options.agent ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
     : undefined;
   const claims = listClaims(options.cwd).filter((claim) => claim.status === 'active');
+  const activeSequence = getActiveSequence(options.cwd);
   const runtimeNotes = listRuntimeNotes({
     agent,
     hostId: options.host,
@@ -95,6 +97,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     active_claims: agent
       ? filteredClaims.filter((claim) => claim.agent === agent)
       : filteredClaims,
+    active_sequence: activeSequence,
     runtime_notes: filteredNotes,
     session_meta_hidden: sessionMetaHidden,
     open_handoffs: filteredHandoffs,

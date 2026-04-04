@@ -28,6 +28,7 @@ export type EventItemType =
   | 'trap'
   | 'handoff'
   | 'plan'
+  | 'sequence'
   | 'claim'
   | 'candidate'
   | 'runtime_note'

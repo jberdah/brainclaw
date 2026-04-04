@@ -18,6 +18,7 @@ import {
   HandoffSchema,
   InstructionEntrySchema,
   PlanItemSchema,
+  SequenceSchema,
   ProjectIdentityDocumentSchema,
   RuntimeNoteSchema,
   SessionSnapshotSchema,
@@ -42,6 +43,7 @@ export type VersionedDocumentType =
   | 'instruction'
   | 'memory_seed'
   | 'plan'
+  | 'sequence'
   | 'project_identity'
   | 'runtime_note'
   | 'ai_surface_task'
@@ -111,6 +113,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   instruction: createRegistryEntry(InstructionEntrySchema),
   memory_seed: createRegistryEntry(MemorySeedDocumentSchema),
   plan: createRegistryEntry(PlanItemSchema),
+  sequence: createRegistryEntry(SequenceSchema),
   project_identity: createRegistryEntry(ProjectIdentityDocumentSchema),
   runtime_note: createRegistryEntry(RuntimeNoteSchema),
   ai_surface_task: createRegistryEntry(AiSurfaceTaskRequestSchema),
@@ -275,6 +278,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, resolveEntityDir('traps-private', effectiveCwd, 'read'), 'trap', true);
   collectDirectory(entries, resolveEntityDir('handoffs', effectiveCwd, 'read'), 'handoff');
   collectDirectory(entries, resolveEntityDir('plans', effectiveCwd, 'read'), 'plan');
+  collectDirectory(entries, resolveEntityDir('sequences', effectiveCwd, 'read'), 'sequence');
   collectDirectory(entries, resolveEntityDir('inbox', effectiveCwd, 'read'), 'candidate');
   collectDirectory(entries, resolveEntityDir('inbox/accepted', effectiveCwd, 'read'), 'candidate');
   collectDirectory(entries, resolveEntityDir('inbox/rejected', effectiveCwd, 'read'), 'candidate');

@@ -11,6 +11,7 @@ import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
+import { createSequence, updateSequence } from '../core/sequence.js';
 import { checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
@@ -46,7 +47,7 @@ import {
 import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
-import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority } from '../core/schema.js';
+import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
@@ -252,6 +253,20 @@ export const MCP_READ_TOOLS = [
         offset: { type: 'number', description: 'Number of plans to skip (for pagination).' },
         recursive: { type: 'boolean', description: 'Include plans from descendant brainclaw projects. Shows aggregated view with provenance.' },
         compact: { type: 'boolean', description: 'Return only key fields (id, short_label, text, status, priority) to reduce output size.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_sequences',
+    description: 'List coordination sequences with optional filters on status and id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter by status: draft, active, archived.' },
+        id: { type: 'string', description: 'Get a single sequence by ID or short label.' },
+        limit: { type: 'number', description: 'Maximum number of sequences to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of sequences to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields (id, name, status) to reduce output size.' },
       },
     },
   },
@@ -618,6 +633,43 @@ const MCP_WRITE_TOOLS = [
         assignee: { type: 'string', description: 'Assignee agent or person name.' },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'bclaw_create_sequence',
+    description: 'Create a coordination sequence shared by agents.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Sequence name.' },
+        description: { type: 'string', description: 'Optional sequence description.' },
+        status: { type: 'string', description: 'Status: draft, active, archived.' },
+        owner: { type: 'string', description: 'Optional sequence owner.' },
+        items: { type: 'array', description: 'Sequence items in rank order.', items: { type: 'object' } },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'bclaw_update_sequence',
+    description: 'Update a coordination sequence status, metadata, or items.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Sequence ID or short label.' },
+        name: { type: 'string', description: 'Optional new sequence name.' },
+        description: { type: 'string', description: 'Optional new description.' },
+        status: { type: 'string', description: 'Status: draft, active, archived.' },
+        owner: { type: 'string', description: 'Optional sequence owner.' },
+        items: { type: 'array', description: 'Optional replacement items array.', items: { type: 'object' } },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional replacement tags.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -2209,6 +2261,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         for (const claim of board.active_claims.slice(0, 10)) {
           boardLines.push(`- [${claim.id}] ${claim.agent} -> ${claim.scope}`);
         }
+        if (board.active_sequence) {
+          boardLines.push(`Active sequence: ${board.active_sequence.name} (${board.active_sequence.status})`);
+          for (const item of board.active_sequence.items.slice(0, 5)) {
+            const lane = item.lane ? ` lane=${item.lane}` : '';
+            boardLines.push(`- #${item.rank} ${item.planId}${lane}`);
+          }
+        }
         boardLines.push(`Open handoffs: ${board.open_handoffs.length}`);
         for (const handoff of board.open_handoffs.slice(0, 5)) {
           boardLines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}`);
@@ -2312,6 +2371,75 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         };
       } catch (err: unknown) {
         return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_create_sequence') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const sequenceName = String(args.name ?? '').trim();
+      if (!sequenceName) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: name') };
+      }
+      try {
+        const result = createSequence({
+          name: sequenceName,
+          description: args.description as string | undefined,
+          status: args.status as SequenceStatus | undefined,
+          owner: args.owner as string | undefined,
+          items: Array.isArray(args.items) ? args.items as SequenceItemInput[] : [],
+          tags: Array.isArray(args.tags) ? args.tags as string[] : [],
+          author: resolved.identity!.agent_name,
+          authorId: resolved.identity!.agent_id,
+          model: currentModel,
+        }, cwd);
+        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: result.id, item_type: 'sequence' }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Sequence added: [${result.id}] ${sequenceName}` }],
+            sequence_id: result.id,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_update_sequence') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const sequenceId = String(args.id ?? '').trim();
+      if (!sequenceId) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      }
+      try {
+        const result = updateSequence({
+          id: sequenceId,
+          name: args.name as string | undefined,
+          description: args.description as string | undefined,
+          status: args.status as SequenceStatus | undefined,
+          owner: args.owner as string | undefined,
+          items: Array.isArray(args.items) ? args.items as SequenceItemInput[] : undefined,
+          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
+        }, cwd);
+        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'sequence' }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Sequence updated: [${result.id}] ${result.name}` }],
+            sequence_id: result.id,
+            status: result.status,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
+        }
+        return { response: createToolErrorResponse('operation_error', msg) };
       }
     }
 

@@ -33,6 +33,7 @@ const ENTITY_DIR_MAP: Record<string, string> = {
 
   // coordination/ — Agent↔Project: active work state
   'plans': 'coordination/plans',
+  'sequences': 'coordination/sequences',
   'claims': 'coordination/claims',
   'handoffs': 'coordination/handoffs',
   'sessions': 'coordination/sessions',
@@ -175,7 +176,7 @@ export function ensureMemoryDir(cwd?: string, preferredDirName?: string): void {
   // Ensure entity-aligned subdirectories exist
   const entityDirs = [
     'memory/constraints', 'memory/decisions', 'memory/traps', 'memory/instructions',
-    'coordination/plans', 'coordination/claims', 'coordination/handoffs', 'coordination/sessions',
+    'coordination/plans', 'coordination/sequences', 'coordination/claims', 'coordination/handoffs', 'coordination/sessions',
     'coordination/inbox',
     'discovery',
     'agents',
