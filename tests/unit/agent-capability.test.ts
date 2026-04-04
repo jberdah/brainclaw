@@ -75,20 +75,38 @@ describe('agent-capability', () => {
       assert.ok(profile.hasSkills);
     });
 
-    it('github-copilot is tier C', () => {
+    it('github-copilot is tier A with hooks and skills', () => {
       const profile = getAgentCapabilityProfile('github-copilot')!;
-      assert.equal(profile.templateTier, 'C');
-      assert.ok(!profile.hasMcp);
+      assert.equal(profile.templateTier, 'A');
+      assert.ok(profile.hasMcp);
+      assert.ok(profile.hasHooks);
       assert.ok(profile.hasSkills);
     });
 
-    it('cursor is tier B with machine-level MCP', () => {
+    it('cursor is tier A with hooks and machine-level MCP', () => {
       const profile = getAgentCapabilityProfile('cursor')!;
-      assert.equal(profile.templateTier, 'B');
+      assert.equal(profile.templateTier, 'A');
       assert.ok(profile.hasMcp);
-      assert.ok(!profile.hasHooks);
-      assert.ok(!profile.hasAutoApprove);
+      assert.ok(profile.hasHooks);
+      assert.ok(profile.hasSkills);
       assert.equal(profile.mcpConfigScope, 'machine');
+    });
+
+    it('all reclassified agents are tier A with hooks', () => {
+      for (const name of ['cursor', 'windsurf', 'cline', 'codex', 'github-copilot']) {
+        const profile = getAgentCapabilityProfile(name)!;
+        assert.equal(profile.templateTier, 'A', `${name} should be tier A`);
+        assert.ok(profile.hasHooks, `${name} should have hooks`);
+        assert.ok(profile.hasSkills, `${name} should have skills`);
+      }
+    });
+
+    it('roo, continue, antigravity stay tier B without hooks', () => {
+      for (const name of ['roo', 'continue', 'antigravity']) {
+        const profile = getAgentCapabilityProfile(name)!;
+        assert.equal(profile.templateTier, 'B', `${name} should be tier B`);
+        assert.ok(!profile.hasHooks, `${name} should NOT have hooks`);
+      }
     });
   });
 
@@ -102,10 +120,11 @@ describe('agent-capability', () => {
       assert.ok(surfaces.some((s) => s.includes('skill')));
     });
 
-    it('lists limited surfaces for github-copilot', () => {
+    it('lists full surfaces for github-copilot (tier A)', () => {
       const surfaces = describeAgentSurfaces('github-copilot');
-      assert.ok(!surfaces.some((s) => s.includes('MCP')));
+      assert.ok(surfaces.some((s) => s.includes('MCP')));
       assert.ok(surfaces.some((s) => s.includes('Instruction file')));
+      assert.ok(surfaces.some((s) => s.includes('hooks')));
       assert.ok(surfaces.some((s) => s.includes('skill')));
     });
 
