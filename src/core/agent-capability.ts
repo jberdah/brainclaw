@@ -4,9 +4,14 @@
  * integration depth, and pressure level accordingly.
  *
  * Three profile tiers drive instruction file templates:
- *   A (full)    — MCP + hooks + auto-approve → lightweight instructions
- *   B (standard) — MCP, no hooks → directive instructions with top traps
+ *   A (full)    — MCP + hooks → lightweight instructions (context via hooks/MCP)
+ *   B (standard) — MCP, no hooks → working rules + architecture + top traps
  *   C (limited) — no MCP → rich static content (plans, traps, decisions)
+ *
+ * Tier A agents (as of 2026-04): Claude Code, Copilot, Codex, Cursor,
+ * Windsurf (12 hooks!), Cline (macOS/Linux only).
+ * Note: Cline hooks don't work on Windows — but templateTier stays A
+ * because brainclaw generates hooks that gracefully degrade.
  */
 
 export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
@@ -65,18 +70,18 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
   cursor: {
     name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
-    instructionFile: '.cursor/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
+    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.cursor/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'A',
   },
   windsurf: {
     name: 'windsurf', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
-    instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
+    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
   },
   cline: {
     name: 'cline', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
-    instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
+    hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
+    instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'A',
   },
   roo: {
     name: 'roo', category: 'code-agent', workflowModel: 'interactive',
@@ -95,8 +100,8 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
-    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
-    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
+    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
@@ -105,8 +110,8 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
   'github-copilot': {
     name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
-    instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
+    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'A',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---
