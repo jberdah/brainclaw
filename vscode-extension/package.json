@@ -3,11 +3,35 @@
   "displayName": "Brainclaw",
   "description": "Real-time agent coordination board for brainclaw",
   "version": "0.1.0",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": ["workspaceContains:.brainclaw/**"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:.brainclaw/**"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "brainclaw-explorer",
+          "title": "Brainclaw",
+          "icon": "media/brainclaw-logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "brainclaw-explorer": [
+        {
+          "id": "brainclaw.agentBoard",
+          "name": "Live Coordination Board",
+          "when": "brainclaw.active"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "brainclaw.showBoard",
@@ -16,15 +40,19 @@
       {
         "command": "brainclaw.clearNotifications",
         "title": "Brainclaw: Clear Event Notifications"
+      },
+      {
+        "command": "brainclaw.refreshBoard",
+        "title": "Brainclaw: Refresh Board",
+        "icon": "$(refresh)"
       }
     ],
-    "views": {
-      "explorer": [
+    "menus": {
+      "view/title": [
         {
-          "type": "webview",
-          "id": "brainclaw.agentBoard",
-          "name": "Brainclaw Board",
-          "when": "brainclaw.active"
+          "command": "brainclaw.refreshBoard",
+          "when": "view == brainclaw.agentBoard",
+          "group": "navigation"
         }
       ]
     }
@@ -34,6 +62,7 @@
     "watch": "tsc -watch -p ./tsconfig.json"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0"
   }
