@@ -2,13 +2,17 @@
  * Adaptive instruction file templates — generates brainclaw section content
  * based on the agent's capability profile (tier A/B/C).
  *
- * Core (static) vs Run (dynamic) separation:
- *   Core: protocol, "why brainclaw", constraints, instructions, estimation rule
- *   Run:  traps, plans, decisions, claims, handoffs, runtime notes
+ * 5-section ordering (not all tiers include all sections):
+ *   1. Vision   — project identity from PROJECT.md
+ *   2. Protocol — session workflow, adapted per tier
+ *   3. Working rules — constraints categorised as process/reliability/compatibility
+ *   4. Architecture — constraints categorised as architecture
+ *   5. Stable traps — high-severity, shared traps (Tier B/C only)
  *
- * Tier A (MCP + hooks): lightweight — hooks inject run content automatically
- * Tier B (MCP, no hooks): directive — includes top traps, forces MCP calls
- * Tier C (no MCP): rich — includes plans, traps, decisions (only source)
+ * Core (static) vs Run (dynamic) separation:
+ *   Tier A (MCP + hooks): sections 1-2 only — hooks inject everything else
+ *   Tier B (MCP, no hooks): sections 1-4 + top traps
+ *   Tier C (no MCP): all sections + plans + decisions (only source)
  */
 
 import type { AgentCapabilityProfile } from './agent-capability.js';
@@ -49,6 +53,7 @@ export function renderBrainclawSection(input: InstructionTemplateInput): Instruc
 }
 
 // ─── Tier A: Full integration (MCP + hooks) ─────────────────────────────────
+// Minimal: vision + protocol. Everything else arrives via hooks/MCP.
 
 function renderTierA(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
@@ -57,22 +62,15 @@ function renderTierA(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
+  // Section 1: Vision (replaces boilerplate "why this matters")
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
-  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
+  // Section 2: Protocol (compact, includes estimation + version check inline)
   sections.push(renderProtocolTierA());
   included.push('protocol');
 
-  sections.push(renderEstimationRule());
-  included.push('estimation');
-
-  sections.push(renderVersionCheckRule());
-  included.push('version-check');
-
-  const constraints = renderConstraints(input.state);
-  if (constraints) { sections.push(constraints); included.push('constraints'); }
-
+  // Instructions only (no constraints/traps — hooks deliver those)
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
@@ -84,6 +82,7 @@ function renderTierA(input: InstructionTemplateInput): InstructionTemplateOutput
 }
 
 // ─── Tier B: Standard integration (MCP, no hooks) ───────────────────────────
+// Medium: vision + protocol + working rules + architecture + top traps.
 
 function renderTierB(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
@@ -92,26 +91,27 @@ function renderTierB(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
+  // Section 1: Vision
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
-  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
+  // Section 2: Protocol
   sections.push(renderProtocolTierB());
   included.push('protocol');
 
-  sections.push(renderEstimationRule());
-  included.push('estimation');
+  // Section 3: Working rules (process + reliability + compatibility constraints)
+  const rules = renderWorkingRules(input.state);
+  if (rules) { sections.push(rules); included.push('working-rules'); }
 
-  sections.push(renderVersionCheckRule());
-  included.push('version-check');
+  // Section 4: Architecture constraints
+  const arch = renderArchitecture(input.state);
+  if (arch) { sections.push(arch); included.push('architecture'); }
 
-  const constraints = renderConstraints(input.state);
-  if (constraints) { sections.push(constraints); included.push('constraints'); }
-
+  // Instructions
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
-  // Tier B includes top traps statically (agent has no hooks to get them)
+  // Section 5: Top traps (agent has no hooks to get them dynamically)
   const traps = renderTopTraps(input.state, input.maxTraps ?? 5);
   if (traps) { sections.push(traps); included.push('traps'); }
 
@@ -123,6 +123,7 @@ function renderTierB(input: InstructionTemplateInput): InstructionTemplateOutput
 }
 
 // ─── Tier C: Limited integration (no MCP) ────────────────────────────────────
+// Rich: all sections + plans + decisions (instruction file is the only source).
 
 function renderTierC(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
@@ -131,26 +132,31 @@ function renderTierC(input: InstructionTemplateInput): InstructionTemplateOutput
   sections.push(renderHeader(input));
   included.push('header');
 
+  // Section 1: Vision
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
-  else { sections.push(renderWhySection(input.profile)); included.push('why'); }
 
+  // Section 2: Protocol (skill-based)
   sections.push(renderProtocolTierC(input.profile));
   included.push('protocol');
 
-  sections.push(renderEstimationRule());
-  included.push('estimation');
+  // Section 3: Working rules
+  const rules = renderWorkingRules(input.state);
+  if (rules) { sections.push(rules); included.push('working-rules'); }
 
-  const constraints = renderConstraints(input.state);
-  if (constraints) { sections.push(constraints); included.push('constraints'); }
+  // Section 4: Architecture
+  const arch = renderArchitecture(input.state);
+  if (arch) { sections.push(arch); included.push('architecture'); }
 
+  // Instructions
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
-  // Tier C includes everything statically — it's the only source of context
+  // Section 5: Top traps (more generous limit — only source)
   const traps = renderTopTraps(input.state, input.maxTraps ?? 10);
   if (traps) { sections.push(traps); included.push('traps'); }
 
+  // Additional run content (Tier C only — no MCP to query)
   const plans = renderActivePlans(input.state, input.maxPlans ?? 10);
   if (plans) { sections.push(plans); included.push('plans'); }
 
@@ -183,32 +189,6 @@ function renderHeader(input: InstructionTemplateInput): string {
   ].join('\n');
 }
 
-function renderWhySection(profile: AgentCapabilityProfile): string {
-  const lines = [
-    '## brainclaw — why this matters',
-    '',
-    'This project uses brainclaw for shared memory and multi-agent coordination.',
-  ];
-
-  if (profile.hasMcp) {
-    lines.push(
-      'Other agents and developers work in this repo. Without brainclaw context:',
-      '- You may edit files another agent is actively working on',
-      '- You will miss known traps and architectural decisions',
-      '- You will duplicate or contradict planned work',
-    );
-  } else {
-    lines.push(
-      'Project context is maintained in brainclaw memory. This includes:',
-      '- Active constraints that must be respected',
-      '- Known traps to avoid repeating mistakes',
-      '- Plans and decisions for ongoing work coordination',
-    );
-  }
-
-  return lines.join('\n');
-}
-
 function renderProtocolTierA(): string {
   return [
     '## brainclaw — session protocol',
@@ -219,6 +199,9 @@ function renderProtocolTierA(): string {
     '2. Call `bclaw_get_context(target)` for deeper memory on a specific scope',
     '3. Call `bclaw_claim(scope)` before editing if other agents are active',
     '4. Call `bclaw_session_end(auto_release: true)` when done',
+    '',
+    'Estimate duration in minutes when creating plans. Report actual effort when completing.',
+    'Call `bclaw_get_execution_context` at session start to check for brainclaw updates.',
   ].join('\n');
 }
 
@@ -235,6 +218,8 @@ function renderProtocolTierB(): string {
     '5. Call `bclaw_claim(scope)` before editing',
     '6. Call `bclaw_write_note(text)` to record observations',
     '7. Call `bclaw_session_end(auto_release: true)` when done',
+    '',
+    'Estimate duration in minutes when creating plans. Report actual effort when completing.',
   ].join('\n');
 }
 
@@ -264,33 +249,34 @@ function renderProtocolTierC(profile: AgentCapabilityProfile): string {
   return lines.join('\n');
 }
 
-function renderEstimationRule(): string {
+// ─── Constraint sections (split by category) ────────────────────────────────
+
+const RULE_CATEGORIES = new Set(['process', 'reliability', 'compatibility', 'security', 'other']);
+const ARCH_CATEGORIES = new Set(['architecture', 'performance']);
+
+function renderWorkingRules(state: State): string | undefined {
+  const rules = state.active_constraints.filter((c: Constraint) =>
+    c.status === 'active' && (!c.category || RULE_CATEGORIES.has(c.category))
+  );
+  if (rules.length === 0) return undefined;
+
   return [
-    '## brainclaw — plans and estimation',
+    '## brainclaw — working rules',
     '',
-    'When creating a plan or step, always estimate duration in minutes.',
-    'When completing, report actual effort. This calibrates future estimates.',
+    ...rules.map((c: Constraint) => `- ${c.text}`),
   ].join('\n');
 }
 
-function renderVersionCheckRule(): string {
-  return [
-    '## brainclaw — version check',
-    '',
-    'Call `bclaw_get_execution_context` at session start to check for brainclaw updates.',
-    'If a newer version is available, inform the developer and suggest updating.',
-    'Brainclaw updates may include new features, bug fixes, and improved coordination.',
-  ].join('\n');
-}
-
-function renderConstraints(state: State): string | undefined {
-  const active = state.active_constraints.filter((c: Constraint) => c.status === 'active');
-  if (active.length === 0) return undefined;
+function renderArchitecture(state: State): string | undefined {
+  const arch = state.active_constraints.filter((c: Constraint) =>
+    c.status === 'active' && c.category && ARCH_CATEGORIES.has(c.category)
+  );
+  if (arch.length === 0) return undefined;
 
   return [
-    '## brainclaw — active constraints',
+    '## brainclaw — architecture',
     '',
-    ...active.map((c: Constraint) => `- ${c.text}`),
+    ...arch.map((c: Constraint) => `- ${c.text}`),
   ].join('\n');
 }
 
