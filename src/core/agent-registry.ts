@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isKnownAgent } from './agent-capability.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
@@ -385,13 +386,25 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
 
   if (agentName) {
     const resolved = findAgentIdentityByName(agentName, cwd, preferredDirName);
-    if (!resolved) {
-      throw new AgentIdentityResolutionError(
-        `Agent '${agentName}' is not registered. Run \`brainclaw register-agent ${agentName}\`.`,
-        { agent_name: agentName },
-      );
+    if (resolved) return resolved;
+
+    // Auto-register if the agent is a known brainclaw-supported agent
+    const normalizedName = normalizeAgentName(agentName);
+    if (isKnownAgent(normalizedName)) {
+      const autoRegistered = registerAgentIdentity({
+        agentName: normalizedName,
+        kind: 'agent',
+        trustLevel: 'contributor',
+        cwd,
+        preferredDirName,
+      });
+      return autoRegistered;
     }
-    return resolved;
+
+    throw new AgentIdentityResolutionError(
+      `Agent '${agentName}' is not registered. Run \`brainclaw register-agent ${agentName}\`.`,
+      { agent_name: agentName },
+    );
   }
 
   const current = options.allowCurrent !== false
@@ -405,13 +418,24 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
     const envAgent = resolveEnvAgentName(env);
     if (envAgent) {
       const resolved = findAgentIdentityByName(envAgent, cwd, preferredDirName);
-      if (!resolved) {
-        throw new AgentIdentityResolutionError(
-          `Environment agent '${envAgent}' is not registered.`,
-          { agent_name: envAgent },
-        );
+      if (resolved) return resolved;
+
+      // Auto-register env-declared agent if known
+      const normalizedEnv = normalizeAgentName(envAgent);
+      if (isKnownAgent(normalizedEnv)) {
+        return registerAgentIdentity({
+          agentName: normalizedEnv,
+          kind: 'agent',
+          trustLevel: 'contributor',
+          cwd,
+          preferredDirName,
+        });
       }
-      return resolved;
+
+      throw new AgentIdentityResolutionError(
+        `Environment agent '${envAgent}' is not registered.`,
+        { agent_name: envAgent },
+      );
     }
   }
 
