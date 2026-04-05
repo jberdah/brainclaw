@@ -42,24 +42,12 @@ export function runInstallHooks(options: InstallHooksOptions = {}): void {
     console.log('  Auto-releases claims whose scope was touched by the merge.');
   }
 
-  // Claude Code preToolUse hook
+  // Claude Code preToolUse hook (claim-warning)
   const claudeHookPath = path.join(hooksDir, 'claude-pre-tool.sh');
   if (!fs.existsSync(claudeHookPath) || options.force) {
     fs.writeFileSync(claudeHookPath, generateClaudePreToolScript(), { encoding: 'utf-8', mode: 0o755 });
     console.log(`✔ Claude Code preToolUse hook generated at ${claudeHookPath}`);
-
-    // Update claude.json if present
-    const claudeJsonPath = path.join(gitRoot, 'claude.json');
-    let claudeJson: any = {};
-    if (fs.existsSync(claudeJsonPath)) {
-      try {
-        claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8'));
-      } catch (e) {}
-    }
-    if (!claudeJson.hooks) claudeJson.hooks = {};
-    claudeJson.hooks.preToolUse = '.git/hooks/claude-pre-tool.sh';
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2), 'utf8');
-    console.log('  ✔ claude.json updated to use preToolUse hook.');
+    console.log('  To activate, add to .claude/settings.json hooks: { "PreToolUse": ".git/hooks/claude-pre-tool.sh" }');
   }
 }
 

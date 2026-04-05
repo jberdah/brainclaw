@@ -48,6 +48,7 @@ export interface CompactExecutionContextSnapshot {
   branch?: string;
   git_status: 'clean' | 'dirty' | 'unavailable';
   has_remote: boolean;
+  commits_behind_main?: number;
   toolchains: ExecutionToolVersion[];
 }
 
@@ -123,6 +124,7 @@ export function compactExecutionContext(snapshot: ExecutionContextSnapshot): Com
     branch: snapshot.branch,
     git_status: snapshot.git_status,
     has_remote: snapshot.has_remote,
+    commits_behind_main: snapshot.commits_behind_main,
     toolchains: snapshot.toolchains.filter((tool) => tool.available),
   };
 }
@@ -243,16 +245,20 @@ function detectCommitsBehindMain(cwd: string, currentBranch: string, runner: Com
   // Don't check if already on main branch
   if (currentBranch === 'master' || currentBranch === 'main') return undefined;
 
-  // Try master first, then main
+  // Try both master and main, return the highest count found.
+  // This handles repos where both branches exist but only one is the real reference.
+  let maxBehind: number | undefined;
   for (const mainBranch of ['master', 'main']) {
     const result = runner('git', ['rev-list', '--count', `${currentBranch}..${mainBranch}`], cwd);
     if (result.status === 0) {
       const count = parseInt(result.stdout.trim(), 10);
-      return isNaN(count) ? undefined : count;
+      if (!isNaN(count) && (maxBehind === undefined || count > maxBehind)) {
+        maxBehind = count;
+      }
     }
   }
 
-  return undefined;
+  return maxBehind;
 }
 
 function detectToolchains(cwd: string, runner: CommandRunner): ExecutionToolVersion[] {
