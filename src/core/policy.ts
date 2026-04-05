@@ -23,7 +23,8 @@ export type PolicyIssueKind =
   | 'claim_conflict'
   | 'constraint'
   | 'trap'
-  | 'instruction';
+  | 'instruction'
+  | 'cross_project_boundary';
 
 export type PolicySeverity = 'block' | 'warn';
 
@@ -54,6 +55,41 @@ export interface CheckPolicyOptions {
   agentId?: string;
   action?: string;
   cwd?: string;
+}
+
+export type CrossProjectEntity = 'candidate' | 'handoff' | 'runtime_note' | 'claim' | 'plan' | 'session';
+
+const CROSS_PROJECT_SIGNALING_ENTITIES = new Set<CrossProjectEntity>(['candidate', 'handoff', 'runtime_note']);
+
+export interface CrossProjectPolicyResult {
+  allowed: boolean;
+  issue?: PolicyIssue;
+}
+
+export function checkCrossProjectBoundary(entity: CrossProjectEntity, targetProject?: string): CrossProjectPolicyResult {
+  if (!targetProject) {
+    return { allowed: true };
+  }
+
+  if (CROSS_PROJECT_SIGNALING_ENTITIES.has(entity)) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    issue: {
+      kind: 'cross_project_boundary',
+      severity: 'block',
+      message: `Cross-project writes are limited to signaling entities (candidate, handoff, runtime_note). ${entity} stays local to the current project.`,
+    },
+  };
+}
+
+export function assertCrossProjectBoundary(entity: CrossProjectEntity, targetProject?: string): void {
+  const result = checkCrossProjectBoundary(entity, targetProject);
+  if (!result.allowed) {
+    throw new Error(result.issue?.message ?? 'Cross-project boundary violation.');
+  }
 }
 
 // ---------------------------------------------------------------------------

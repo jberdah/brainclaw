@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
-import { resolveCrossProjectTarget, writeCrossProjectNote } from '../core/cross-project.js';
+import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -12,7 +12,7 @@ import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
-import { checkPolicy } from '../core/policy.js';
+import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { createCandidateFromInput } from './reflect.js';
@@ -500,7 +500,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_write_note',
-    description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a notification note to a linked project (requires role: publisher in cross_project_links config).',
+    description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a runtime-note signal to a linked project (requires role: publisher in cross_project_links config).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -512,6 +512,7 @@ const MCP_WRITE_TOOLS = [
         ttl: { type: 'string', description: 'Optional TTL: 30m, 2h, 7d.' },
         autoReflect: { type: 'boolean', description: 'Attempt to reflect the runtime note into durable memory immediately.' },
         crossProject: { type: 'string', description: 'Push note to a linked project (name or path). Requires role: publisher in cross_project_links config.' },
+        cross_project: { type: 'string', description: 'Snake_case alias of crossProject.' },
       },
       required: ['text'],
     },
@@ -532,7 +533,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_create_candidate',
-    description: 'Create a memory candidate for review. Trusted/curator agents write through directly.',
+    description: 'Create a memory candidate for review. Trusted/curator agents write through directly. Use targetProject to push a candidate signal to a linked project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -547,7 +548,8 @@ const MCP_WRITE_TOOLS = [
         planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
         scope: { type: 'string', description: 'Memory scope: project (default), machine, or user. Machine-scoped items apply to all projects on this machine.' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace, user. Use "user" to write to ~/.brainclaw/ (visible across all projects).' },
-        targetProject: { type: 'string', description: 'Cross-project report: create this candidate in a linked project (name or path). The candidate appears in the target project pending inbox with source attribution.' },
+        targetProject: { type: 'string', description: 'Push this candidate as a cross-project signal to a linked project (name or path).' },
+        target_project: { type: 'string', description: 'Snake_case alias of targetProject.' },
       },
       required: ['text', 'type'],
     },
@@ -808,11 +810,13 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_update_handoff',
-    description: 'Update the status, recipient, or contract of an open handoff. Requires contributor trust level or above.',
+    description: 'Update the status, recipient, or contract of an open handoff. Requires contributor trust level or above. Use targetProject to push the resulting handoff state to a linked project.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Handoff ID to update.' },
+        targetProject: { type: 'string', description: 'Push the updated handoff as a cross-project signal to a linked project (name or path).' },
+        target_project: { type: 'string', description: 'Snake_case alias of targetProject.' },
         status: { type: 'string', description: 'New status: open, closed.' },
         to: { type: 'string', description: 'New recipient agent name.' },
         files_touched: { type: 'array', items: { type: 'string' }, description: 'Files touched in this handoff.' },
@@ -1719,6 +1723,30 @@ export function parseTtl(ttl: string): string | undefined {
   return new Date(Date.now() + ms).toISOString();
 }
 
+function getCrossProjectArg(args: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const raw = args[key];
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim();
+    }
+  }
+  return undefined;
+}
+
+function blockCrossProjectExecution(entity: 'claim' | 'plan' | 'session', args: Record<string, unknown>): McpToolResponse | undefined {
+  const targetProject = getCrossProjectArg(args, 'targetProject', 'target_project', 'crossProject', 'cross_project');
+  if (!targetProject) {
+    return undefined;
+  }
+
+  try {
+    assertCrossProjectBoundary(entity, targetProject);
+    return undefined;
+  } catch (error: unknown) {
+    return createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error));
+  }
+}
+
 // Read handlers moved to mcp-read-handlers.ts
 import { handleMcpReadToolCall } from './mcp-read-handlers.js';
 export { handleMcpReadToolCall };
@@ -1891,34 +1919,40 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const identity = resolved.identity!;
 
       // Cross-project push
-      if (args.crossProject) {
+      const crossProjectTarget = getCrossProjectArg(args, 'crossProject', 'cross_project');
+      if (crossProjectTarget) {
         try {
-          const link = resolveCrossProjectTarget(String(args.crossProject), cwd);
           const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
             agentId: identity.agent_id,
             sessionId: connectionSessionId,
           });
-          const noteId = generateId('rtn');
-          writeCrossProjectNote(link.absolutePath, {
-            schema_version: 2,
-            id: noteId,
-            agent: opIdentity.agent,
-            agent_id: opIdentity.agent_id,
-            project_id: opIdentity.project_id ?? '',
-            session_id: opIdentity.session_id,
-            text,
-            created_at: nowISO(),
-            tags,
-            visibility: 'shared',
-            host_id: opIdentity.host_id ?? '',
-            note_type: 'observation',
-          }, cwd);
+          const signal = writeCrossProjectSignal(
+            resolveCrossProjectWritableTarget(crossProjectTarget, 'runtime_note', cwd),
+            'runtime_note',
+            {
+              schema_version: 2,
+              id: generateId('rtn'),
+              agent: opIdentity.agent,
+              agent_id: opIdentity.agent_id,
+              project_id: opIdentity.project_id ?? '',
+              session_id: opIdentity.session_id,
+              text,
+              created_at: nowISO(),
+              tags,
+              visibility: 'shared',
+              host_id: opIdentity.host_id ?? '',
+              note_type: 'observation',
+            },
+            cwd,
+          );
           return {
             response: toolResponse({
-              content: [{ type: 'text', text: `✔ Cross-project note pushed to '${link.projectName}' [${noteId}]` }],
-              note_id: noteId,
-              target_project: link.projectName,
-              target_path: link.absolutePath,
+              content: [{ type: 'text', text: `✔ Cross-project runtime note signaled to '${signal.target_project.name}' [${signal.id}]` }],
+              signal_id: signal.id,
+              entity_type: signal.entity_type,
+              note_id: (signal.payload as { id: string }).id,
+              target_project: signal.target_project.name,
+              target_path: signal.target_project.path,
             }),
           };
         } catch (e: unknown) {
@@ -2060,41 +2094,41 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const candidateScope = args.scope as string | undefined;
       const targetStore = args.store as string | undefined;
 
-      // Cross-project report: save candidate in a linked project
-      const targetProjectArg = args.targetProject as string | undefined;
+      // Cross-project report: write candidate signal in a linked project inbox
+      const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
       if (targetProjectArg) {
-        const targetLink = resolveCrossProjectTarget(targetProjectArg, cwd);
-        if (!targetLink) {
-          return { response: createToolErrorResponse('not_found', `Cross-project target not found: ${targetProjectArg}. Declare it in cross_project_links config.`) };
+        try {
+          const targetLink = resolveCrossProjectWritableTarget(targetProjectArg, 'candidate', cwd);
+          const candId = generateCandidateIdWithLabel(cwd);
+          const candidate: any = {
+            id: candId.id, short_label: candId.short_label, type, text: candidateText,
+            created_at: nowISO(),
+            author: identity.agent, author_id: identity.agent_id,
+            project_id: identity.project_id, host_id: identity.host_id, session_id: identity.session_id,
+            source: `cross-project:${loadConfig(cwd).project_name ?? 'unknown'}`,
+            tags: [...candidateTags, 'cross-project-report'],
+            status: 'pending' as const,
+            severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
+            plan_id: candidatePlanId, scope: candidateScope,
+            model: currentModel,
+            star_count: 0, starred_by: [], usage_count: 0, usage_events: [],
+          };
+          const signal = writeCrossProjectSignal(targetLink, 'candidate', candidate, cwd);
+          appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: signal.id, item_type: 'candidate' }, cwd);
+          return {
+            response: toolResponse({
+              content: [{ type: 'text', text: `✔ Cross-project candidate signal [${signal.id}] sent to ${targetLink.projectName}` }],
+              signal_id: signal.id,
+              candidate_id: candId.id,
+              target_project: targetLink.projectName,
+              target_path: targetLink.absolutePath,
+              write_through: false,
+            }),
+            nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
+          };
+        } catch (error: unknown) {
+          return { response: createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error)) };
         }
-        const targetCwd = targetLink.absolutePath;
-        const candId = generateCandidateIdWithLabel(targetCwd);
-        const sourceConfig = loadConfig(cwd);
-        const candidate: any = {
-          id: candId.id, short_label: candId.short_label, type, text: candidateText,
-          created_at: nowISO(),
-          author: identity.agent, author_id: identity.agent_id,
-          project_id: identity.project_id, host_id: identity.host_id, session_id: identity.session_id,
-          source: `cross-project:${sourceConfig.project_name ?? 'unknown'}`,
-          tags: [...candidateTags, 'cross-project-report'],
-          status: 'pending' as const,
-          severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
-          plan_id: candidatePlanId, scope: candidateScope,
-          model: currentModel,
-          star_count: 0, starred_by: [], usage_count: 0, usage_events: [],
-        };
-        saveCandidate(candidate, targetCwd);
-        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Cross-project report [${candId.short_label}] sent to ${targetLink.projectName} (pending review in target project)` }],
-            candidate_id: candId.id,
-            target_project: targetLink.projectName,
-            target_path: targetLink.absolutePath,
-            write_through: false,
-          }),
-          nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
-        };
       }
 
       const candId = generateCandidateIdWithLabel(cwd);
@@ -2206,6 +2240,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_claim') {
+      const crossProjectError = blockCrossProjectExecution('claim', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       // Resolve project-scoped cwd before store resolution (fixes worktree in wrong project)
       let effectiveClaimCwd = cwd;
       const claimProjectArg = args.project as string | undefined;
@@ -2349,6 +2387,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_release_claim') {
+      const crossProjectError = blockCrossProjectExecution('claim', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const claimId = String(args.id ?? '').trim();
       if (!claimId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
@@ -2386,6 +2428,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_session_start') {
+      const crossProjectError = blockCrossProjectExecution('session', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2486,6 +2532,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_session_end') {
+      const crossProjectError = blockCrossProjectExecution('session', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2532,6 +2582,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_create_plan') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2644,6 +2698,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_update_plan') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2678,6 +2736,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_add_step') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2706,6 +2768,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_complete_step') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -2922,6 +2988,28 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       saveState(state, cwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'update', item_id: handoffId, item_type: 'handoff' }, cwd);
+      const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
+      if (targetProjectArg) {
+        try {
+          const targetLink = resolveCrossProjectWritableTarget(targetProjectArg, 'handoff', cwd);
+          const signal = writeCrossProjectSignal(targetLink, 'handoff', handoff, cwd);
+          return {
+            response: toolResponse({
+              content: [{ type: 'text', text: `✔ Handoff updated locally and signaled to ${targetLink.projectName} [${signal.id}]` }],
+              signal_id: signal.id,
+              entity_type: signal.entity_type,
+              handoff_id: handoffId,
+              status: handoff.status,
+              to: handoff.to,
+              target_project: targetLink.projectName,
+              target_path: targetLink.absolutePath,
+              schema_version: SCHEMA_VERSION,
+            }),
+          };
+        } catch (error: unknown) {
+          return { response: createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error)) };
+        }
+      }
       return {
         response: toolResponse({
           content: [{ type: 'text', text: `✔ Handoff updated: [${handoffId}] ${handoff.from} → ${handoff.to} (${handoff.status})` }],

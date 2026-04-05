@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { listClaims } from './claims.js';
 import { getActiveSequence } from './sequence.js';
-import { resolveCrossProjectLinks } from './cross-project.js';
+import { resolveCrossProjectLinks, listIncomingCrossProjectSignals, type CrossProjectSignalEnvelope } from './cross-project.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
@@ -106,6 +106,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     agent_reputation: agentReputation,
     other_agents: buildOtherAgentsSummary(filteredClaims, filteredNotes, agent),
     linked_projects: buildLinkedProjectsSummary(options.cwd),
+    incoming_signals: buildIncomingSignalsSummary(options.cwd),
   };
 }
 
@@ -189,4 +190,30 @@ function buildLinkedProjectsSummary(cwd?: string): LinkedProjectSummary[] | unde
   }
 
   return summaries.length > 0 ? summaries : undefined;
+}
+
+interface IncomingSignalSummary {
+  id: string;
+  entity_type: string;
+  from_project: string;
+  from_agent: string;
+  created_at: string;
+  preview: string;
+}
+
+function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | undefined {
+  const signals = listIncomingCrossProjectSignals(cwd);
+  if (signals.length === 0) return undefined;
+
+  return signals.map((signal) => {
+    const text = 'text' in signal.payload ? (signal.payload as { text: string }).text : '';
+    return {
+      id: signal.id,
+      entity_type: signal.entity_type,
+      from_project: signal.from_project.name,
+      from_agent: signal.from_agent.name,
+      created_at: signal.created_at,
+      preview: text.length > 120 ? text.slice(0, 117) + '...' : text,
+    };
+  });
 }
