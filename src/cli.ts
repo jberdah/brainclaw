@@ -71,7 +71,7 @@ import { runSessionEnd } from './commands/session-end.js';
 import { runWhoami } from './commands/whoami.js';
 import { runUsage } from './commands/usage.js';
 import { runSearch } from './commands/search.js';
-import { runExport } from './commands/export.js';
+import { runExport, runRefresh } from './commands/export.js';
 import { runHooks } from './commands/hooks.js';
 import { runWatch } from './commands/watch.js';
 import { runMetrics } from './commands/metrics.js';
@@ -1162,6 +1162,13 @@ program
   .option('--agent <agent>', 'Agent name for agent-layer instructions')
   .action((options) => {
     runExport(options);
+  });
+
+program
+  .command('refresh')
+  .description('Refresh live companion files with current state (plans, claims, traps, sequences). Gitignored, safe to run frequently.')
+  .action(() => {
+    runRefresh();
   });
 
 program

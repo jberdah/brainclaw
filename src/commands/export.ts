@@ -22,7 +22,7 @@ import {
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { logger } from '../core/logger.js';
 import { getAgentCapabilityProfile } from '../core/agent-capability.js';
-import { renderBrainclawSection } from '../core/instruction-templates.js';
+import { renderBrainclawSection, renderLiveSection } from '../core/instruction-templates.js';
 import { getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
 
 export type { ExportFormat };
@@ -157,6 +157,82 @@ function runExportAll(cwd: string, options: ExportOptions): void {
   }
 
   console.log(`✔ Exported ${written} agent file(s)`);
+}
+
+/**
+ * Refresh live companion files for all agents.
+ * These are gitignored files with current state (plans, claims, traps, sequences).
+ * Only Tier B/C agents get live companions; Tier A receives live context via hooks/MCP.
+ */
+export function runRefresh(cwd?: string): void {
+  const effectiveCwd = cwd ?? process.cwd();
+  if (!memoryExists(effectiveCwd)) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const state = loadState(effectiveCwd);
+  const config = loadConfig(effectiveCwd);
+  const instructions = getInstructionText({ project: undefined, agent: undefined }, effectiveCwd);
+  const seen = new Set<ExportFormat>();
+  const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
+    if (seen.has(t.format)) return false;
+    seen.add(t.format);
+    return true;
+  });
+
+  let written = 0;
+  const liveGitignoreEntries: string[] = [];
+
+  for (const target of targets) {
+    const profile = getAgentCapabilityProfile(target.agentName);
+    if (!profile) continue;
+
+    const input = {
+      profile,
+      state,
+      projectName: config.project_name,
+      brainclawVersion: getInstalledBrainclawVersion(),
+      resolvedInstructions: instructions,
+      projectVision: readProjectVision(effectiveCwd),
+    };
+
+    const live = renderLiveSection(input);
+    if (!live) continue; // Tier A — no live companion needed
+
+    const livePath = toLivePath(target.relativePath);
+    const fullPath = path.join(effectiveCwd, livePath);
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const existing = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : '';
+    if (existing !== live.content) {
+      fs.writeFileSync(fullPath, live.content, 'utf-8');
+      console.log(`✔ ${livePath} (refreshed)`);
+      written++;
+    }
+    liveGitignoreEntries.push(livePath);
+  }
+
+  if (liveGitignoreEntries.length > 0) {
+    ensureGitignoreEntries(effectiveCwd, liveGitignoreEntries);
+  }
+
+  if (written > 0) {
+    console.log(`✔ Refreshed ${written} live companion file(s)`);
+  } else {
+    console.log('✔ All live companions are up to date.');
+  }
+}
+
+/**
+ * Convert a stable export path to its live companion path.
+ * e.g. CLAUDE.md → CLAUDE.live.md, .cursor/rules/brainclaw.md → .cursor/rules/brainclaw.live.md
+ */
+function toLivePath(stablePath: string): string {
+  const ext = path.extname(stablePath);
+  const base = stablePath.slice(0, -ext.length);
+  return `${base}.live${ext}`;
 }
 
 export function writeAgentExportForAgent(

@@ -2,21 +2,18 @@
  * Adaptive instruction file templates — generates brainclaw section content
  * based on the agent's capability profile (tier A/B/C).
  *
- * 5-section ordering (not all tiers include all sections):
- *   1. Vision   — project identity from PROJECT.md
- *   2. Protocol — session workflow, adapted per tier
- *   3. Working rules — constraints categorised as process/reliability/compatibility
- *   4. Architecture — constraints categorised as architecture
- *   5. Stable traps — high-severity, shared traps (Tier B/C only)
+ * Two surface types:
+ *   STABLE (versioned, rare refresh) — vision, protocol, durable constraints, instructions
+ *   LIVE (gitignored, frequent refresh) — plans, claims, traps, decisions, sequences
  *
- * Core (static) vs Run (dynamic) separation:
- *   Tier A (MCP + hooks): sections 1-2 only — hooks inject everything else
- *   Tier B (MCP, no hooks): sections 1-4 + top traps
- *   Tier C (no MCP): all sections + plans + decisions (only source)
+ * Tier delivery:
+ *   Tier A (MCP + hooks): stable file only — live context via hooks/MCP
+ *   Tier B (MCP, no hooks): stable file + live companion file
+ *   Tier C (no MCP): stable file + live companion file (richer, only source)
  */
 
 import type { AgentCapabilityProfile } from './agent-capability.js';
-import type { State, Constraint, Decision, Trap, PlanItem } from './schema.js';
+import type { State, Constraint, Decision, Trap, PlanItem, Claim } from './schema.js';
 
 export interface InstructionTemplateInput {
   profile: AgentCapabilityProfile;
@@ -39,135 +36,161 @@ export interface InstructionTemplateOutput {
 }
 
 /**
- * Render the brainclaw section content for an instruction file,
- * adapted to the agent's capability profile.
+ * Render the STABLE brainclaw section content for an instruction file.
+ * This is the versioned file that changes rarely (on upgrade, convention change).
+ *
+ * For backward compatibility, this is also the entry point used by existing
+ * export code. Tier B/C stable output no longer includes traps/plans/decisions.
  */
 export function renderBrainclawSection(input: InstructionTemplateInput): InstructionTemplateOutput {
+  return renderStableSection(input);
+}
+
+/**
+ * Render stable content only: vision, protocol, constraints, instructions.
+ * No traps, plans, decisions, claims — those go in the live companion.
+ */
+export function renderStableSection(input: InstructionTemplateInput): InstructionTemplateOutput {
   const { profile } = input;
 
   switch (profile.templateTier) {
-    case 'A': return renderTierA(input);
-    case 'B': return renderTierB(input);
-    case 'C': return renderTierC(input);
+    case 'A': return renderStableTierA(input);
+    case 'B': return renderStableTierB(input);
+    case 'C': return renderStableTierC(input);
   }
 }
 
-// ─── Tier A: Full integration (MCP + hooks) ─────────────────────────────────
+/**
+ * Render LIVE companion content: traps, plans, decisions, claims, sequences.
+ * This is the gitignored file refreshed on plan/claim/sequence mutations.
+ *
+ * Returns undefined for Tier A (live content delivered via hooks/MCP).
+ */
+export function renderLiveSection(input: InstructionTemplateInput): InstructionTemplateOutput | undefined {
+  const { profile } = input;
+
+  switch (profile.templateTier) {
+    case 'A': return undefined; // hooks deliver live content
+    case 'B': return renderLiveTierB(input);
+    case 'C': return renderLiveTierC(input);
+  }
+}
+
+// ─── Tier A: Stable only ────────────────────────────────────────────────────
 // Minimal: vision + protocol. Everything else arrives via hooks/MCP.
 
-function renderTierA(input: InstructionTemplateInput): InstructionTemplateOutput {
+function renderStableTierA(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
   const included: string[] = [];
 
   sections.push(renderHeader(input));
   included.push('header');
 
-  // Section 1: Vision (replaces boilerplate "why this matters")
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  // Section 2: Protocol (compact, includes estimation + version check inline)
   sections.push(renderProtocolTierA());
   included.push('protocol');
 
-  // Instructions only (no constraints/traps — hooks deliver those)
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
-  return {
-    content: sections.join('\n\n'),
-    tier: 'A',
-    sectionsIncluded: included,
-  };
+  return { content: sections.join('\n\n'), tier: 'A', sectionsIncluded: included };
 }
 
-// ─── Tier B: Standard integration (MCP, no hooks) ───────────────────────────
-// Medium: vision + protocol + working rules + architecture + top traps.
+// ─── Tier B: Stable + Live ──────────────────────────────────────────────────
 
-function renderTierB(input: InstructionTemplateInput): InstructionTemplateOutput {
+function renderStableTierB(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
   const included: string[] = [];
 
   sections.push(renderHeader(input));
   included.push('header');
 
-  // Section 1: Vision
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  // Section 2: Protocol
   sections.push(renderProtocolTierB());
   included.push('protocol');
 
-  // Section 3: Working rules (process + reliability + compatibility constraints)
   const rules = renderWorkingRules(input.state);
   if (rules) { sections.push(rules); included.push('working-rules'); }
 
-  // Section 4: Architecture constraints
   const arch = renderArchitecture(input.state);
   if (arch) { sections.push(arch); included.push('architecture'); }
 
-  // Instructions
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
-  // Section 5: Top traps (agent has no hooks to get them dynamically)
+  return { content: sections.join('\n\n'), tier: 'B', sectionsIncluded: included };
+}
+
+function renderLiveTierB(input: InstructionTemplateInput): InstructionTemplateOutput {
+  const sections: string[] = [];
+  const included: string[] = [];
+
+  sections.push(renderLiveHeader(input));
+  included.push('live-header');
+
   const traps = renderTopTraps(input.state, input.maxTraps ?? 5);
   if (traps) { sections.push(traps); included.push('traps'); }
 
-  return {
-    content: sections.join('\n\n'),
-    tier: 'B',
-    sectionsIncluded: included,
-  };
+  const plans = renderActivePlans(input.state, input.maxPlans ?? 5);
+  if (plans) { sections.push(plans); included.push('plans'); }
+
+  const claims = renderActiveClaims(input.state);
+  if (claims) { sections.push(claims); included.push('claims'); }
+
+  return { content: sections.join('\n\n'), tier: 'B', sectionsIncluded: included };
 }
 
-// ─── Tier C: Limited integration (no MCP) ────────────────────────────────────
-// Rich: all sections + plans + decisions (instruction file is the only source).
+// ─── Tier C: Stable + Live (richer) ─────────────────────────────────────────
 
-function renderTierC(input: InstructionTemplateInput): InstructionTemplateOutput {
+function renderStableTierC(input: InstructionTemplateInput): InstructionTemplateOutput {
   const sections: string[] = [];
   const included: string[] = [];
 
   sections.push(renderHeader(input));
   included.push('header');
 
-  // Section 1: Vision
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  // Section 2: Protocol (skill-based)
   sections.push(renderProtocolTierC(input.profile));
   included.push('protocol');
 
-  // Section 3: Working rules
   const rules = renderWorkingRules(input.state);
   if (rules) { sections.push(rules); included.push('working-rules'); }
 
-  // Section 4: Architecture
   const arch = renderArchitecture(input.state);
   if (arch) { sections.push(arch); included.push('architecture'); }
 
-  // Instructions
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
-  // Section 5: Top traps (more generous limit — only source)
+  return { content: sections.join('\n\n'), tier: 'C', sectionsIncluded: included };
+}
+
+function renderLiveTierC(input: InstructionTemplateInput): InstructionTemplateOutput {
+  const sections: string[] = [];
+  const included: string[] = [];
+
+  sections.push(renderLiveHeader(input));
+  included.push('live-header');
+
   const traps = renderTopTraps(input.state, input.maxTraps ?? 10);
   if (traps) { sections.push(traps); included.push('traps'); }
 
-  // Additional run content (Tier C only — no MCP to query)
   const plans = renderActivePlans(input.state, input.maxPlans ?? 10);
   if (plans) { sections.push(plans); included.push('plans'); }
+
+  const claims = renderActiveClaims(input.state);
+  if (claims) { sections.push(claims); included.push('claims'); }
 
   const decisions = renderRecentDecisions(input.state);
   if (decisions) { sections.push(decisions); included.push('decisions'); }
 
-  return {
-    content: sections.join('\n\n'),
-    tier: 'C',
-    sectionsIncluded: included,
-  };
+  return { content: sections.join('\n\n'), tier: 'C', sectionsIncluded: included };
 }
 
 // ─── Shared section renderers ────────────────────────────────────────────────
@@ -186,6 +209,13 @@ function renderHeader(input: InstructionTemplateInput): string {
   return [
     `> Managed by brainclaw v${input.brainclawVersion} — do not edit manually.`,
     `> Regenerate: brainclaw export --format ${formatForAgent(input.profile.name)} --write`,
+  ].join('\n');
+}
+
+function renderLiveHeader(_input: InstructionTemplateInput): string {
+  return [
+    `> Brainclaw live state — auto-refreshed, do not edit.`,
+    `> Last updated: ${new Date().toISOString().slice(0, 19)}`,
   ].join('\n');
 }
 
@@ -239,11 +269,11 @@ function renderProtocolTierC(profile: AgentCapabilityProfile): string {
 
   lines.push(
     'Before working:',
-    '- Review the constraints and active plans below',
+    '- Review the constraints and active plans in the live companion file',
     '- Check the known traps section for pitfalls in your scope',
     '',
-    'The sections below are regenerated from brainclaw memory.',
-    'For the freshest state, use the brainclaw skill or ask the developer to run `brainclaw context`.',
+    'The live companion file is refreshed automatically.',
+    'For the freshest state, use the brainclaw skill or ask the developer to run `brainclaw refresh`.',
   );
 
   return lines.join('\n');
@@ -290,6 +320,8 @@ function renderInstructions(instructions: string[]): string | undefined {
   ].join('\n');
 }
 
+// ─── Live section renderers ─────────────────────────────────────────────────
+
 function renderTopTraps(state: State, limit: number): string | undefined {
   const traps = state.known_traps
     .filter((t: Trap) => t.visibility === 'shared' && (!t.status || t.status === 'active') && !t.platform_scope)
@@ -324,6 +356,17 @@ function renderActivePlans(state: State, limit: number): string | undefined {
       const assignee = p.assignee ? ` (@${p.assignee})` : '';
       return `- [${p.status}] ${p.text}${assignee}`;
     }),
+  ].join('\n');
+}
+
+function renderActiveClaims(state: State): string | undefined {
+  const claims = (state as any).active_claims as Claim[] | undefined;
+  if (!claims || claims.length === 0) return undefined;
+
+  return [
+    '## brainclaw — active claims',
+    '',
+    ...claims.map((c: Claim) => `- ${c.scope} (by ${c.agent ?? 'unknown'})`),
   ].join('\n');
 }
 

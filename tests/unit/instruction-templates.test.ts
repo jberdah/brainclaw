@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderBrainclawSection, type InstructionTemplateInput } from '../../src/core/instruction-templates.js';
+import { renderBrainclawSection, renderLiveSection, type InstructionTemplateInput } from '../../src/core/instruction-templates.js';
 import { getAgentCapabilityProfile } from '../../src/core/agent-capability.js';
 import type { State } from '../../src/core/schema.js';
 
@@ -82,6 +82,11 @@ describe('instruction-templates', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.ok(!result.content.includes('REQUIRED'));
     });
+
+    it('renderLiveSection returns undefined for tier A', () => {
+      const live = renderLiveSection(makeInput('claude-code'));
+      assert.equal(live, undefined, 'Tier A should not have a live companion');
+    });
   });
 
   describe('tier A agents reclassified from B', () => {
@@ -117,34 +122,40 @@ describe('instruction-templates', () => {
       assert.ok(result.content.includes('brainclaw — architecture'));
     });
 
-    it('includes top traps, excludes machine-visibility', () => {
+    it('stable output does NOT include traps, plans, or decisions', () => {
+      const state = makeState({
+        known_traps: [{ id: 'trp_1', text: 'Flaky test', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' }] as any,
+        plan_items: [{ id: 'pln_1', text: 'Plan', status: 'todo', tags: [], created_at: '', created_by: '' }] as any,
+        recent_decisions: [{ id: 'dec_1', text: 'Decision', tags: [], created_at: '', created_by: '' }] as any,
+      });
+      const result = renderBrainclawSection(makeInput('roo', { state }));
+      assert.ok(!result.sectionsIncluded.includes('traps'));
+      assert.ok(!result.sectionsIncluded.includes('plans'));
+      assert.ok(!result.sectionsIncluded.includes('decisions'));
+    });
+
+    it('live companion includes traps and plans, excludes machine-visibility', () => {
       const state = makeState({
         known_traps: [
           { id: 'trp_1', text: 'Flaky test', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' },
           { id: 'trp_2', text: 'Machine-only', severity: 'medium', visibility: 'machine', tags: [], created_at: '', created_by: '' },
         ] as any,
-      });
-      const result = renderBrainclawSection(makeInput('roo', { state }));
-      assert.ok(result.content.includes('Flaky test'));
-      assert.ok(!result.content.includes('Machine-only'));
-    });
-
-    it('does NOT include plans or decisions', () => {
-      const state = makeState({
         plan_items: [{ id: 'pln_1', text: 'Plan', status: 'todo', tags: [], created_at: '', created_by: '' }] as any,
-        recent_decisions: [{ id: 'dec_1', text: 'Decision', tags: [], created_at: '', created_by: '' }] as any,
       });
-      const result = renderBrainclawSection(makeInput('roo', { state }));
-      assert.ok(!result.sectionsIncluded.includes('plans'));
-      assert.ok(!result.sectionsIncluded.includes('decisions'));
+      const live = renderLiveSection(makeInput('roo', { state }));
+      assert.ok(live, 'Tier B should have a live companion');
+      assert.ok(live!.content.includes('Flaky test'));
+      assert.ok(!live!.content.includes('Machine-only'));
+      assert.ok(live!.sectionsIncluded.includes('plans'));
     });
 
-    it('limits traps to maxTraps', () => {
+    it('live companion limits traps to maxTraps', () => {
       const traps = Array.from({ length: 20 }, (_, i) => ({
         id: `trp_${i}`, text: `Trap ${i}`, severity: 'medium', visibility: 'shared', tags: [], created_at: '', created_by: '',
       }));
-      const result = renderBrainclawSection(makeInput('roo', { state: makeState({ known_traps: traps as any }), maxTraps: 3 }));
-      const trapLines = result.content.split('\n').filter(l => l.startsWith('- [medium]'));
+      const live = renderLiveSection(makeInput('roo', { state: makeState({ known_traps: traps as any }), maxTraps: 3 }));
+      assert.ok(live);
+      const trapLines = live!.content.split('\n').filter(l => l.startsWith('- [medium]'));
       assert.equal(trapLines.length, 3);
     });
   });
@@ -156,19 +167,32 @@ describe('instruction-templates', () => {
       assert.ok(result.content.includes('brainclaw-context skill'));
     });
 
-    it('includes plans, traps, AND decisions', () => {
+    it('stable output does NOT include traps, plans, or decisions', () => {
+      const state = makeState({
+        known_traps: [{ id: 'trp_1', text: 'Trap', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' }] as any,
+        plan_items: [{ id: 'pln_1', text: 'Auth rollout', status: 'in_progress', tags: [], created_at: '', created_by: '' }] as any,
+        recent_decisions: [{ id: 'dec_1', text: 'Use PostgreSQL 16', tags: [], created_at: '', created_by: '' }] as any,
+      });
+      const result = renderBrainclawSection(makeInput('openclaw', { state }));
+      assert.ok(!result.sectionsIncluded.includes('traps'));
+      assert.ok(!result.sectionsIncluded.includes('plans'));
+      assert.ok(!result.sectionsIncluded.includes('decisions'));
+    });
+
+    it('live companion includes traps, plans, AND decisions', () => {
       const state = makeState({
         known_traps: [{ id: 'trp_1', text: 'Trap', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' }] as any,
         plan_items: [{ id: 'pln_1', text: 'Auth rollout', status: 'in_progress', tags: [], created_at: '', created_by: '', assignee: 'Pierre' }] as any,
         recent_decisions: [{ id: 'dec_1', text: 'Use PostgreSQL 16', tags: [], created_at: '', created_by: '' }] as any,
       });
-      const result = renderBrainclawSection(makeInput('openclaw', { state }));
-      assert.ok(result.sectionsIncluded.includes('traps'));
-      assert.ok(result.sectionsIncluded.includes('plans'));
-      assert.ok(result.sectionsIncluded.includes('decisions'));
+      const live = renderLiveSection(makeInput('openclaw', { state }));
+      assert.ok(live, 'Tier C should have a live companion');
+      assert.ok(live!.sectionsIncluded.includes('traps'));
+      assert.ok(live!.sectionsIncluded.includes('plans'));
+      assert.ok(live!.sectionsIncluded.includes('decisions'));
     });
 
-    it('sorts plans: in_progress first, then by priority', () => {
+    it('live companion sorts plans: in_progress first, then by priority', () => {
       const state = makeState({
         plan_items: [
           { id: 'pln_1', text: 'Low todo', status: 'todo', priority: 'low', tags: [], created_at: '', created_by: '' },
@@ -176,8 +200,9 @@ describe('instruction-templates', () => {
           { id: 'pln_3', text: 'High todo', status: 'todo', priority: 'high', tags: [], created_at: '', created_by: '' },
         ] as any,
       });
-      const result = renderBrainclawSection(makeInput('openclaw', { state }));
-      const planLines = result.content.split('\n').filter(l => l.startsWith('- ['));
+      const live = renderLiveSection(makeInput('openclaw', { state }));
+      assert.ok(live);
+      const planLines = live!.content.split('\n').filter(l => l.startsWith('- ['));
       assert.ok(planLines[0]!.includes('In progress'));
       assert.ok(planLines[1]!.includes('High todo'));
       assert.ok(planLines[2]!.includes('Low todo'));
