@@ -35,6 +35,8 @@ export interface ExecutionContextSnapshot {
   has_remote: boolean;
   /** Git worktree details — undefined when not in a git repo. */
   git_worktree?: GitWorktreeInfo;
+  /** Number of commits the current branch is behind the main branch (master/main). */
+  commits_behind_main?: number;
   toolchains: ExecutionToolVersion[];
   env_signals: ExecutionEnvSignal[];
 }
@@ -107,6 +109,7 @@ export function buildExecutionContext(options: ExecutionContextOptions = {}): Ex
     git_status: gitStatus,
     has_remote: hasRemote,
     git_worktree: detectGitWorktree(cwd, runner),
+    commits_behind_main: branch ? detectCommitsBehindMain(cwd, branch, runner) : undefined,
     toolchains: detectToolchains(cwd, runner),
     env_signals: captureEnvSignals(env),
   };
@@ -146,6 +149,9 @@ export function renderExecutionContextSummary(
     }
   }
   lines.push(`Git remote: ${snapshot.has_remote ? 'configured' : 'none'}`);
+  if ('commits_behind_main' in snapshot && snapshot.commits_behind_main && snapshot.commits_behind_main > 0) {
+    lines.push(`⚠ Branch is ${snapshot.commits_behind_main} commit(s) behind master. Consider rebasing before editing.`);
+  }
 
   const availableToolchains = snapshot.toolchains.filter((tool) => tool.available);
   if (availableToolchains.length > 0) {
@@ -226,6 +232,27 @@ function detectGitRemote(cwd: string, runner: CommandRunner): boolean {
     return false;
   }
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length > 0;
+}
+
+/**
+ * Detect how many commits the current branch is behind the main branch.
+ * Tries master then main as the reference branch.
+ * Returns undefined if not in a git repo or on the main branch itself.
+ */
+function detectCommitsBehindMain(cwd: string, currentBranch: string, runner: CommandRunner): number | undefined {
+  // Don't check if already on main branch
+  if (currentBranch === 'master' || currentBranch === 'main') return undefined;
+
+  // Try master first, then main
+  for (const mainBranch of ['master', 'main']) {
+    const result = runner('git', ['rev-list', '--count', `${currentBranch}..${mainBranch}`], cwd);
+    if (result.status === 0) {
+      const count = parseInt(result.stdout.trim(), 10);
+      return isNaN(count) ? undefined : count;
+    }
+  }
+
+  return undefined;
 }
 
 function detectToolchains(cwd: string, runner: CommandRunner): ExecutionToolVersion[] {
