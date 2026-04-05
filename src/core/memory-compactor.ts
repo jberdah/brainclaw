@@ -176,8 +176,38 @@ export function suggestCompaction(state: State, options: CompactorOptions = {}):
 // ---------------------------------------------------------------------------
 
 /**
- * Apply a compaction report: merge clusters, archive stale items.
- * Runs inside the mutation lock. Non-destructive — originals go to JSONL.
+ * Analyze and apply compaction atomically under a single mutation lock.
+ * This prevents race conditions where another agent modifies state between
+ * analysis and application.
+ */
+export function analyzeAndApply(options: CompactorOptions = {}): { report: CompactionReport; result: CompactionResult } {
+  const cwd = options.cwd ?? process.cwd();
+  let report!: CompactionReport;
+  let archivedCount = 0;
+  let mergedClusters = 0;
+  let staleArchived = 0;
+
+  mutate({ cwd }, () => {
+    const state = loadState(cwd);
+    report = analyzeMemory(state, options);
+
+    if (report.archivableCount === 0) return;
+
+    const applied = applyReportToState(report, state, cwd);
+    archivedCount = applied.archivedCount;
+    mergedClusters = applied.mergedClusters;
+    staleArchived = applied.staleArchived;
+
+    saveState(state, cwd);
+  });
+
+  return { report, result: { archivedCount, mergedClusters, staleArchived } };
+}
+
+/**
+ * Apply a pre-computed compaction report. Re-validates that items still exist
+ * in the current state before archiving, to handle concurrent modifications.
+ * Runs inside the mutation lock.
  */
 export function applyCompaction(
   report: CompactionReport,
@@ -190,41 +220,63 @@ export function applyCompaction(
 
   mutate({ cwd }, () => {
     const state = loadState(cwd);
-
-    // Process clusters — merge tags into keeper, archive the rest
-    for (const cluster of report.clusters) {
-      const archiveIds = new Set(cluster.items.filter(i => i.id !== cluster.keepId).map(i => i.id));
-      if (archiveIds.size === 0) continue;
-
-      // Find the keeper in state and merge tags
-      const keeper = findInState(state, cluster.keepId, cluster.type);
-      if (keeper) {
-        const allTags = new Set(keeper.tags);
-        for (const item of cluster.items) {
-          for (const tag of item.tags) allTags.add(tag);
-        }
-        keeper.tags = [...allTags];
-      }
-
-      // Archive and remove the non-keeper items
-      const entityName = entityNameForType(cluster.type);
-      const archived = archiveItems(archiveIds, entityName, cwd);
-      removeFromState(state, archiveIds, cluster.type);
-      archivedCount += archived;
-      mergedClusters++;
-    }
-
-    // Archive stale items
-    for (const stale of report.staleItems) {
-      const entityName = entityNameForType(stale.type);
-      const archived = archiveItems(new Set([stale.id]), entityName, cwd);
-      removeFromState(state, new Set([stale.id]), stale.type);
-      staleArchived += archived;
-      archivedCount += archived;
-    }
-
+    const applied = applyReportToState(report, state, cwd);
+    archivedCount = applied.archivedCount;
+    mergedClusters = applied.mergedClusters;
+    staleArchived = applied.staleArchived;
     saveState(state, cwd);
   });
+
+  return { archivedCount, mergedClusters, staleArchived };
+}
+
+/** Shared logic: apply report mutations to a loaded state. Validates items still exist. */
+function applyReportToState(
+  report: CompactionReport,
+  state: State,
+  cwd: string,
+): CompactionResult {
+  let archivedCount = 0;
+  let mergedClusters = 0;
+  let staleArchived = 0;
+
+  for (const cluster of report.clusters) {
+    // Validate keeper still exists in state — skip cluster if not
+    const keeper = findInState(state, cluster.keepId, cluster.type);
+    if (!keeper) continue;
+
+    // Only archive items that still exist in current state
+    const archiveIds = new Set(
+      cluster.items
+        .filter(i => i.id !== cluster.keepId && findInState(state, i.id, cluster.type))
+        .map(i => i.id),
+    );
+    if (archiveIds.size === 0) continue;
+
+    // Merge tags into keeper
+    const allTags = new Set(keeper.tags);
+    for (const item of cluster.items) {
+      for (const tag of item.tags) allTags.add(tag);
+    }
+    keeper.tags = [...allTags];
+
+    const entityName = entityNameForType(cluster.type);
+    const archived = archiveItems(archiveIds, entityName, cwd);
+    removeFromState(state, archiveIds, cluster.type);
+    archivedCount += archived;
+    mergedClusters++;
+  }
+
+  for (const stale of report.staleItems) {
+    // Validate item still exists in current state
+    if (!findInState(state, stale.id, stale.type)) continue;
+
+    const entityName = entityNameForType(stale.type);
+    const archived = archiveItems(new Set([stale.id]), entityName, cwd);
+    removeFromState(state, new Set([stale.id]), stale.type);
+    staleArchived += archived;
+    archivedCount += archived;
+  }
 
   return { archivedCount, mergedClusters, staleArchived };
 }
