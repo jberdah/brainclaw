@@ -93,6 +93,19 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // --- Action commands ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainclaw.acceptCandidate', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.exec(`accept ${item.itemId}`);
+    }),
+    vscode.commands.registerCommand('brainclaw.rejectCandidate', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.exec(`reject ${item.itemId}`);
+    }),
+    vscode.commands.registerCommand('brainclaw.releaseClaim', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.exec(`claim release ${item.itemId}`);
+    }),
+  );
+
   // Status bar item — unseen event count
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   statusBarItem.command = 'brainclaw.clearNotifications';

@@ -8,6 +8,7 @@ export interface AgentBoardOptions {
   for?: string;
   host?: string;
   allHosts?: boolean;
+  allAgents?: boolean;
   json?: boolean;
   withReputation?: boolean;
   capabilities?: boolean;
@@ -22,7 +23,8 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
   }
 
   const board = buildCoordinationSnapshot({
-    agent: options.agent,
+    agent: options.allAgents ? undefined : options.agent,
+    skipAgentAutoDetect: options.allAgents,
     project: options.project,
     target: options.for,
     host: options.host,

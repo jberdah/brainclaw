@@ -935,6 +935,7 @@ program
   .option('--capabilities', 'List all registered agents with their declared capabilities')
   .option('--suggest <query>', 'Suggest agents whose capabilities match a query string')
   .option('--include-session-meta', 'Include session_start/session_end runtime notes (hidden by default)')
+  .option('--all-agents', 'Show unfiltered board (supervisor mode — all claims, all agents)')
   .action((options) => {
     runAgentBoard(options);
   });

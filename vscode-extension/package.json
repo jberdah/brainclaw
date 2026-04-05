@@ -44,6 +44,21 @@
         "command": "brainclaw.refreshBoard",
         "title": "Brainclaw: Refresh Board",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "brainclaw.acceptCandidate",
+        "title": "Accept",
+        "icon": "$(check)"
+      },
+      {
+        "command": "brainclaw.rejectCandidate",
+        "title": "Reject",
+        "icon": "$(close)"
+      },
+      {
+        "command": "brainclaw.releaseClaim",
+        "title": "Release Claim",
+        "icon": "$(unlock)"
       }
     ],
     "menus": {
@@ -52,6 +67,23 @@
           "command": "brainclaw.refreshBoard",
           "when": "view == brainclaw.agentBoard",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "brainclaw.acceptCandidate",
+          "when": "viewItem == candidate",
+          "group": "inline"
+        },
+        {
+          "command": "brainclaw.rejectCandidate",
+          "when": "viewItem == candidate",
+          "group": "inline"
+        },
+        {
+          "command": "brainclaw.releaseClaim",
+          "when": "viewItem == claim",
+          "group": "inline"
         }
       ]
     }

@@ -1,4 +1,4 @@
-import { findAgentIdentityByName, resolveAgentScope, resolveCurrentAgentIdentity } from './agent-registry.js';
+import { findAgentIdentityByName, listAgentIdentities, resolveAgentScope, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { listClaims } from './claims.js';
@@ -8,9 +8,12 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
 import { loadState, persistState } from './state.js';
+import { listCandidates } from './candidates.js';
 
 export interface CoordinationOptions {
   agent?: string;
+  /** Skip auto-detection of current agent — show unfiltered board (supervisor mode). */
+  skipAgentAutoDetect?: boolean;
   project?: string;
   target?: string;
   host?: string;
@@ -28,7 +31,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
   const state = loadState(options.cwd);
   const currentHost = resolveCurrentHostId();
   const project = options.project ?? inferProjectFromTarget(options.target, config);
-  const agent = resolveAgentScope(options.agent, options.cwd);
+  const agent = options.skipAgentAutoDetect ? undefined : resolveAgentScope(options.agent, options.cwd);
   const resolvedAgentIdentity = agent
     ? (options.agent ? findAgentIdentityByName(agent, options.cwd) : resolveCurrentAgentIdentity(options.cwd))
     : undefined;
@@ -104,29 +107,48 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     resolved_instructions: instructions,
     reputation_summary: reputationSummary,
     agent_reputation: agentReputation,
-    other_agents: buildOtherAgentsSummary(filteredClaims, filteredNotes, agent),
+    other_agents: buildOtherAgentsSummary(filteredClaims, runtimeNotes, agent, options.cwd),
     linked_projects: buildLinkedProjectsSummary(options.cwd),
     incoming_signals: buildIncomingSignalsSummary(options.cwd),
+    known_traps: state.known_traps
+      .filter((t) => t.visibility === 'shared' && (!t.status || t.status === 'active'))
+      .sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity)),
+    pending_candidates: listCandidates('pending', options.cwd),
   };
 }
 
 interface OtherAgentSummary {
   name: string;
+  trust_level: string;
   claim_count: number;
   scopes: string[];
   last_active?: string;
+  has_open_session: boolean;
 }
 
 function buildOtherAgentsSummary(
   claims: ReturnType<typeof listClaims>,
   notes: ReturnType<typeof listRuntimeNotes>,
   currentAgent?: string,
+  cwd?: string,
 ): OtherAgentSummary[] | undefined {
+  // Start from ALL registered agents — they always appear
   const agentMap = new Map<string, OtherAgentSummary>();
+  for (const identity of listAgentIdentities(cwd)) {
+    if (identity.agent_name === currentAgent) continue;
+    agentMap.set(identity.agent_name, {
+      name: identity.agent_name,
+      trust_level: identity.trust_level ?? 'contributor',
+      claim_count: 0,
+      scopes: [],
+      has_open_session: false,
+    });
+  }
 
+  // Enrich with active claims
   for (const claim of claims) {
     if (claim.agent === currentAgent) continue;
-    const existing = agentMap.get(claim.agent) ?? { name: claim.agent, claim_count: 0, scopes: [] };
+    const existing = agentMap.get(claim.agent) ?? { name: claim.agent, trust_level: 'contributor', claim_count: 0, scopes: [], has_open_session: false };
     existing.claim_count++;
     existing.scopes.push(claim.scope);
     if (!existing.last_active || claim.created_at > existing.last_active) {
@@ -135,11 +157,19 @@ function buildOtherAgentsSummary(
     agentMap.set(claim.agent, existing);
   }
 
+  // Enrich with runtime notes (including session lifecycle) for last_active + open session detection
   for (const note of notes) {
     if (note.agent === currentAgent) continue;
     const existing = agentMap.get(note.agent);
-    if (existing && (!existing.last_active || note.created_at > existing.last_active)) {
+    if (!existing) continue; // skip unregistered agents in notes
+    if (!existing.last_active || note.created_at > existing.last_active) {
       existing.last_active = note.created_at;
+    }
+    if ((note as any).note_type === 'session_start') {
+      existing.has_open_session = true;
+    }
+    if ((note as any).note_type === 'session_end') {
+      existing.has_open_session = false;
     }
   }
 
@@ -216,4 +246,13 @@ function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | un
       preview: text.length > 120 ? text.slice(0, 117) + '...' : text,
     };
   });
+}
+
+function severityOrder(severity: string): number {
+  switch (severity) {
+    case 'high': return 3;
+    case 'medium': return 2;
+    case 'low': return 1;
+    default: return 0;
+  }
 }
