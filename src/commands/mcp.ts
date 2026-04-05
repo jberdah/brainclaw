@@ -15,6 +15,7 @@ import { createSequence, updateSequence } from '../core/sequence.js';
 import { checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
+import { createCandidateFromInput } from './reflect.js';
 import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
 import { startSession } from './session-start.js';
@@ -119,6 +120,15 @@ export interface McpToolErrorShape {
 }
 
 export type McpToolExecutor = (payload: McpToolExecutionPayload, signal: AbortSignal) => Promise<McpToolExecutionOutcome>;
+
+type QuickCaptureTarget = 'decision' | 'trap' | 'note';
+
+interface QuickCaptureClassification {
+  target: QuickCaptureTarget;
+  reason: string;
+  decisionScore: number;
+  trapScore: number;
+}
 
 export const MCP_READ_TOOLS = [
   {
@@ -507,6 +517,20 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
+    name: 'bclaw_quick_capture',
+    description: 'Capture free-form text and classify it locally into a decision, trap, or fallback runtime note. Uses keyword heuristics only, never an LLM.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Free-form capture text.' },
+        context: { type: 'string', description: 'Optional file/path/scope context to associate with the capture.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
     name: 'bclaw_create_candidate',
     description: 'Create a memory candidate for review. Trusted/curator agents write through directly.',
     inputSchema: {
@@ -887,6 +911,68 @@ export function createToolErrorResponse(kind: string, message: string, details?:
 }
 
 // Bootstrap helpers moved to mcp-read-handlers.ts
+
+function scoreKeywordMatches(text: string, patterns: RegExp[]): number {
+  return patterns.reduce((score, pattern) => score + (pattern.test(text) ? 1 : 0), 0);
+}
+
+function classifyQuickCapture(text: string): QuickCaptureClassification {
+  const normalized = text.trim().toLowerCase();
+  const decisionPatterns = [
+    /\b(decide|decision|decided|prefer|preferred|policy|convention|standard|standardize|adopt|chosen|choose|settled on)\b/,
+    /\b(use|default to|go with|route through|switch to|migrate to|move to)\b/,
+    /^(use|prefer|adopt|standardize|route|switch|migrate)\b/,
+  ];
+  const trapPatterns = [
+    /\b(trap|warning|beware|avoid|never|don't|do not|risk|risky|gotcha|workaround)\b/,
+    /\b(bug|broken|breaks|failure|fails|failing|flaky|blocked|missing|crash|regression|timeout|deadlock|race condition|leak)\b/,
+    /\b(error|incident|problem|issue|hang|stuck|retry)\b/,
+  ];
+
+  const decisionScore = scoreKeywordMatches(normalized, decisionPatterns);
+  const trapScore = scoreKeywordMatches(normalized, trapPatterns);
+
+  if (decisionScore > 0 && trapScore > 0 && Math.abs(decisionScore - trapScore) <= 1) {
+    return {
+      target: 'note',
+      reason: 'ambiguous_keywords',
+      decisionScore,
+      trapScore,
+    };
+  }
+
+  if (trapScore >= 2 && trapScore >= decisionScore + 1) {
+    return {
+      target: 'trap',
+      reason: 'trap_keywords',
+      decisionScore,
+      trapScore,
+    };
+  }
+
+  if (decisionScore >= 2 && decisionScore >= trapScore + 1) {
+    return {
+      target: 'decision',
+      reason: 'decision_keywords',
+      decisionScore,
+      trapScore,
+    };
+  }
+
+  return {
+    target: 'note',
+    reason: decisionScore === trapScore && decisionScore > 0 ? 'ambiguous_keywords' : 'low_confidence',
+    decisionScore,
+    trapScore,
+  };
+}
+
+function formatQuickCaptureNoteText(text: string, context?: string): string {
+  if (!context) {
+    return text;
+  }
+  return `${text}\n\nContext: ${context}`;
+}
 
 function requireObjectParams(params: unknown, id: JsonRpcId): Record<string, unknown> {
   if (params === undefined) {
@@ -1862,6 +1948,93 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           skip_reason: result.skipReason,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.sessionId,
+      };
+    }
+
+    if (name === 'bclaw_quick_capture') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+
+      const text = String(args.text ?? '');
+      const inputValidation = validateMcpInput(text);
+      if (!inputValidation.ok) {
+        return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
+      }
+
+      const context = typeof args.context === 'string' ? args.context.trim() : undefined;
+      if (context) {
+        const contextCheck = validateMcpField(context, 'context');
+        if (!contextCheck.ok) {
+          return { response: createToolErrorResponse('validation_error', contextCheck.message) };
+        }
+      }
+
+      const identity = resolved.identity!;
+      const classification = classifyQuickCapture(text);
+      if (classification.target === 'note') {
+        const result = createRuntimeNote(formatQuickCaptureNoteText(text, context), {
+          agent: identity.agent_name,
+          agentId: identity.agent_id,
+          tag: ['quick-capture'],
+          visibility: 'shared',
+          cwd,
+          sessionId: connectionSessionId,
+          model: currentModel,
+        }, false);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Quick capture saved as runtime note [${result.noteId}]` }],
+            structuredContent: {
+              classification: classification.target,
+              classification_reason: classification.reason,
+              decision_score: classification.decisionScore,
+              trap_score: classification.trapScore,
+              note_id: result.noteId,
+              session_id: result.sessionId,
+              context,
+            },
+          }),
+          nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.sessionId,
+        };
+      }
+
+      const capture = createCandidateFromInput(text, classification.target, {
+        tag: ['quick-capture'],
+        author: identity.agent_name,
+        authorId: identity.agent_id,
+        sessionId: connectionSessionId,
+        source: 'mcp:quick-capture',
+        path: context,
+        cwd,
+      }, false, false, true);
+
+      const statusText = capture.writeThrough
+        ? `✔ Quick capture promoted as ${classification.target} [${capture.promotedItemId}]`
+        : `✔ Quick capture saved as ${classification.target} candidate [${capture.candidateId}]`;
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: statusText }],
+          structuredContent: {
+            classification: classification.target,
+            classification_reason: classification.reason,
+            decision_score: classification.decisionScore,
+            trap_score: classification.trapScore,
+            candidate_id: capture.candidateId,
+            promoted_item_id: capture.promotedItemId,
+            write_through: capture.writeThrough,
+            promotion_blocked_reason: capture.promotionBlockedReason,
+            contradiction_summary: capture.contradictionSummary,
+            contradictions_detected: capture.contradictionsDetected?.map((item) => ({
+              severity: item.severity,
+              reason: item.reason,
+              conflicts_with: item.conflicts_with,
+            })),
+            context,
+          },
+        }),
+        nextConnectionSessionId: undefined,
       };
     }
 
