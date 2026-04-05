@@ -1487,6 +1487,24 @@ export function runDoctor(options: DoctorOptions = {}): void {
     if (!options.json) console.log('ℹ Security preinstall gate is not enabled (optional — run brainclaw setup-security to activate)');
   }
 
+  // VS Code extension check
+  try {
+    const codeResult = childProcess.spawnSync('code', ['--list-extensions'], { stdio: 'pipe', timeout: 5000 });
+    if (codeResult.status === 0) {
+      const extensions = codeResult.stdout.toString().split('\n').map(e => e.trim().toLowerCase());
+      if (extensions.includes('brainclaw.brainclaw-vscode')) {
+        checks.push({ name: 'vscode_extension', status: 'ok', message: 'Brainclaw VS Code extension is installed' });
+        if (!options.json) console.log('✔ Brainclaw VS Code extension is installed');
+      } else {
+        checks.push({ name: 'vscode_extension', status: 'warn', message: 'VS Code detected but Brainclaw extension is not installed. Run `brainclaw setup` to install it.' });
+        if (!options.json) console.log('⚠ VS Code detected but Brainclaw extension is not installed. Run `brainclaw setup` to install it.');
+      }
+    }
+    // If `code` is not available, skip silently — VS Code not installed
+  } catch {
+    // Non-fatal
+  }
+
   if (options.json) {
     console.log(JSON.stringify({
       ok: !hasIssues,

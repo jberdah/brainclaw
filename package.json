@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/**/*.js",
+    "dist/brainclaw-vscode.vsix",
     "docs/**/*.md",
     "README.md",
     "LICENSE"
@@ -23,7 +24,8 @@
     "clean:build": "node scripts/clean-build.mjs dist dist-test",
     "clean:dist": "node scripts/clean-build.mjs dist",
     "clean:dist-test": "node scripts/clean-build.mjs dist-test",
-    "build": "npm run clean:dist && tsc",
+    "build": "npm run clean:dist && tsc && node scripts/build-vsix.mjs",
+    "build:cli": "npm run clean:dist && tsc",
     "dev": "npm run clean:dist && tsc && node dist/cli.js",
     "build:test": "npm run build && npm run clean:dist-test && tsc -p tsconfig.test.json",
     "pack:check": "node scripts/check-pack.mjs",

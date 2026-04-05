@@ -511,6 +511,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     env,
   );
 
+  // Step 7: VS Code extension
+  installVscodeExtension();
+
   // Save state
   writeSetupState({
     completed_at: new Date().toISOString(),
@@ -519,8 +522,39 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     global_configs_written: selectedAgents,
   }, env);
 
-  // Step 7: Reload reminder
+  // Step 8: Reload reminder
   printReloadReminder(detectedName);
 
   void configActions;
+}
+
+// ─── VS Code extension auto-install ──────────────────────────────────────────
+
+function installVscodeExtension(): void {
+  // Find the bundled vsix
+  const vsixPath = resolveVsixPath();
+  if (!vsixPath) return;
+
+  // Check if `code` CLI is available
+  const codeAvailable = spawnSync('code', ['--version'], { stdio: 'ignore', timeout: 5000 });
+  if (codeAvailable.status !== 0) return; // VS Code not installed or not in PATH — skip silently
+
+  // Install the extension
+  const result = spawnSync('code', ['--install-extension', vsixPath, '--force'], { stdio: 'pipe', timeout: 30000 });
+  if (result.status === 0) {
+    console.log('  ✔ Installed Brainclaw VS Code extension');
+  }
+}
+
+function resolveVsixPath(): string | undefined {
+  const thisDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/i, '$1'));
+  // 1. Bundled in dist/ (npm install) — dist/commands/setup.js → dist/brainclaw-vscode.vsix
+  const distVsix = path.join(thisDir, '..', 'brainclaw-vscode.vsix');
+  if (fs.existsSync(distVsix)) return distVsix;
+
+  // 2. Dev mode: vscode-extension/ directory
+  const devVsix = path.join(thisDir, '..', '..', 'vscode-extension', 'brainclaw-vscode-0.1.0.vsix');
+  if (fs.existsSync(devVsix)) return devVsix;
+
+  return undefined;
 }

@@ -173,34 +173,8 @@ function processNewEvents(cwd: string): void {
   unseenCount += events.length;
   updateStatusBar(unseenCount);
 
-  // Group events by agent for a compact notification
-  const byAgent = new Map<string, string[]>();
-  for (const evt of events) {
-    const actionLabel = ACTION_LABELS[evt.action] ?? evt.action;
-    const itemLabel = ITEM_LABELS[evt.item_type] ?? evt.item_type;
-    const desc = evt.action === 'session_start' || evt.action === 'session_end'
-      ? actionLabel
-      : `${actionLabel} ${itemLabel}${evt.item_id ? ` [${evt.item_id.slice(0, 8)}]` : ''}`;
-    const list = byAgent.get(evt.agent) ?? [];
-    list.push(desc);
-    byAgent.set(evt.agent, list);
-  }
-
-  // Show one notification per agent
-  for (const [agent, actions] of byAgent) {
-    const unique = [...new Set(actions)];
-    const summary = unique.length <= 3
-      ? unique.join(', ')
-      : `${unique.slice(0, 2).join(', ')} +${unique.length - 2} more`;
-    vscode.window.showInformationMessage(
-      `Brainclaw: ${agent} — ${summary}`,
-      'Show Board', 'Dismiss'
-    ).then(choice => {
-      if (choice === 'Show Board') {
-        vscode.commands.executeCommand('brainclaw.agentBoard.focus');
-      }
-    });
-  }
+  // Status bar badge is enough — no toast popups (too noisy with active agents).
+  // The user can click the status bar to see the board.
 }
 
 // --- Cursor-based event reading (mirrors core/event-log.ts logic) ---
