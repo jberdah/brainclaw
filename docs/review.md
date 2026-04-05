@@ -23,6 +23,8 @@ runtime-note → reflect-runtime-note → review candidate → accept / reject
 3. review the candidate (`brainclaw review`)
 4. accept or reject it (`brainclaw accept` / `brainclaw reject`)
 
+For MCP-capable agents, `brainclaw runtime-note` maps to `bclaw_write_note`.
+
 ## Star and use signals
 
 Before formal review, candidates can accumulate signals:

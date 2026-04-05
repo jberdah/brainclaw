@@ -76,12 +76,14 @@ This keeps non-code work visible to the project without overloading the active c
 
 brainclaw serializes all store mutations (file lock + MCP single-writer queue), so writes are safe. But running multiple agents in parallel on the same checkout can still cause Git conflicts and confusing state transitions.
 
-Use brainclaw for sequential collaboration: one agent works, finishes, and the next one picks up from shared context. Use `bclaw_session_end` to hand off cleanly.
+Use brainclaw for sequential collaboration by default: one agent works, finishes, and the next one picks up from shared context. If you need stronger isolation, use a dedicated Git worktree per session with `brainclaw worktree` or let MCP claims create one automatically where supported. Use `bclaw_session_end` to hand off cleanly.
 
 ## Next reads
 
 - [integrations/overview.md](integrations/overview.md) — how brainclaw adapts to each agent
 - [integrations/mcp.md](integrations/mcp.md) — the dynamic runtime path
+- [release-maintenance.md](release-maintenance.md) — release checklist when the shipped surface changes
+- [server-operations.md](server-operations.md) — operator and remote-server workflow guidance
 - [concepts/memory.md](concepts/memory.md) — what project memory includes
 - [concepts/plans-and-claims.md](concepts/plans-and-claims.md) — coordination layer
 - [cli.md](cli.md) — full CLI reference

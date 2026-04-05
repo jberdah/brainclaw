@@ -50,10 +50,11 @@ Plans can have sub-steps for multi-phase work:
 ```bash
 brainclaw add-step <plan-id> "write unit tests"
 brainclaw add-step <plan-id> "update docs"
-brainclaw complete-step <plan-id> <step-index>
+brainclaw complete-step <plan-id> <step-id>
 ```
 
 Steps show up in `brainclaw context` and `brainclaw board` so other agents and humans can see granular progress.
+`brainclaw plan update` changes the parent plan item only; step completion is handled through `complete-step`.
 
 ### Estimation and calibration
 
@@ -150,7 +151,7 @@ Policy warnings are also **automatically included** in the `bclaw_claim` respons
 
 1. create a plan item
 2. claim the target scope (policy warnings are surfaced automatically)
-3. create a feature branch (`git checkout -b feat/<name>`)
+3. create a feature branch (`git checkout -b feat/<name>`) or use a dedicated worktree when stronger isolation is needed
 4. work on the implementation
 5. update the plan status
 6. release the claim when done or blocked

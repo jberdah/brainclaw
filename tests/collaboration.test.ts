@@ -311,6 +311,16 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.deepEqual(note.tags, ['batch']);
     });
 
+    it('accepts note create as an alias for runtime-note', () => {
+      const res = run(['note', 'create', 'Started processing batch', '--agent', 'codex', '--tag', 'batch'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.match(res.stdout, /\[rtn_[a-f0-9]+\]/);
+
+      const noteDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'codex');
+      const files = fs.readdirSync(noteDir).filter(f => f.endsWith('.json'));
+      assert.equal(files.length, 1);
+    });
+
     it('uses the configured current agent when --agent is omitted', () => {
       const res = run(['runtime-note', 'Implicit current-agent note'], dir, { BRAINCLAW_SESSION_ID: 'sess_note_1' });
       assert.equal(res.exitCode, 0);

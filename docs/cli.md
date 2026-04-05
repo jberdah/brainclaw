@@ -513,12 +513,16 @@ brainclaw instruction "Summarize blockers explicitly" --layer agent --agent open
 
 Record an operational observation during a session.
 
+This is the CLI counterpart of the MCP tool `bclaw_write_note`.
+Use it for session observations, host-specific operator notes, and in-progress findings that are not yet durable decisions or traps.
+For operators who expect a resource-style verb, `brainclaw note create <text>` is accepted as an alias.
+
 | Option | Description |
 |---|---|
-| `--agent <name>` | Authoring agent |
+| `--agent <name>` | Authoring agent; defaults to the configured current agent |
 | `--project <name>` | Associated project |
 | `--plan <id>` | Associated plan ID |
-| `--visibility <scope>` | Visibility scope (e.g. `machine`) |
+| `--visibility <scope>` | Visibility scope: `shared`, `machine`, `private` |
 | `--host <name>` | Pin to a specific host |
 | `--tag <tag>` | Tag for categorization (repeatable) |
 | `--ttl <duration>` | Time-to-live (e.g. `7d`, `24h`) |
@@ -528,6 +532,17 @@ Record an operational observation during a session.
 brainclaw runtime-note "Started auth rollout" --agent copilot
 brainclaw runtime-note "Node not on PATH on this host" --visibility machine
 brainclaw runtime-note "Use auth gateway for new routes" --auto-reflect
+```
+
+### `brainclaw note create <text>`
+
+Resource-style alias for `brainclaw runtime-note <text>`.
+
+Use the same options as `runtime-note` when an operator workflow or wrapper expects `create` semantics.
+
+```bash
+brainclaw note create "Observed host-specific CUDA mismatch on dgx-a"
+brainclaw note create "Need follow-up on launcher script" --plan pln_abc123
 ```
 
 ---
@@ -806,6 +821,8 @@ Legacy compatibility: `brainclaw plan "Coordinate auth rollout"`
 
 Display details of a specific plan item.
 
+Use `plan show` for the canonical syntax. `plan get` is accepted as a read alias for operator convenience.
+
 | Option | Description |
 |---|---|
 | `--json` | Output as JSON |
@@ -813,6 +830,7 @@ Display details of a specific plan item.
 ```bash
 brainclaw plan show pln_abc123
 brainclaw plan show pln_abc123 --json
+brainclaw plan get pln_abc123
 ```
 
 ### `brainclaw add-step <planId> <text>`
@@ -832,13 +850,18 @@ brainclaw add-step pln_001 "Deploy to staging" --assign devops-bot
 
 Mark a step in a plan as completed. No options.
 
+Use the plan item ID plus the step ID returned by `plan show` or `plan list --json`.
+`brainclaw plan update` updates plan items only; it does not operate on `stp_*` step IDs.
+
 ```bash
-brainclaw complete-step pln_001 step_001
+brainclaw complete-step pln_001 stp_001
 ```
 
 ### `brainclaw plan update <id>`
 
 Update plan status or ownership.
+
+This command expects a plan ID (`pln_*`), not a step ID. To complete a step, use `brainclaw complete-step <planId> <stepId>`.
 
 | Option | Description |
 |---|---|
@@ -1512,6 +1535,8 @@ brainclaw version --publish-local --release-notes "Add estimation-report command
 - if `brainclaw_update_source` is configured, use it
 - otherwise, fall back to the public npm channel `brainclaw@latest`
 
+If the release changes CLI, MCP, or context-schema behavior, run the release checklist in [release-maintenance.md](release-maintenance.md) before `--publish-local`.
+
 ### `brainclaw release-notes`
 
 Generate agent-first release notes from git history.
@@ -1554,14 +1579,68 @@ Migrate memory items between stores (e.g. promote machine-scoped items to user s
 | `--dry-run` | Show what would be migrated without making changes |
 | `--json` | Output as JSON |
 
+### `brainclaw runtime-status`
+
+Show runtime notes.
+
+| Option | Description |
+|---|---|
+| `--agent <agent>` | Filter by agent |
+| `--plan <id>` | Filter by linked plan item |
+| `--visibility <visibility>` | Visibility filter: `shared`, `machine`, `private`, `all` |
+| `--host <host>` | Include machine-local notes for a specific host |
+| `--all-hosts` | Include machine-local notes from all hosts |
+| `--json` | Output as JSON |
+
+### `brainclaw check-security`
+
+Check supply chain security scores for packages via Socket.dev.
+
+| Option | Description |
+|---|---|
+| `--packages <names>` | Comma-separated package names such as `axios,express` or `axios@1.14.1` |
+| `--ecosystem <type>` | Package ecosystem: `npm` or `pypi` |
+| `--json` | Output as JSON |
+
+### `brainclaw setup-security`
+
+Enable the supply chain security gate by generating wrapper scripts and configuring preinstall checks.
+
+| Option | Description |
+|---|---|
+| `--mode <mode>` | Security mode: `advisory` or `enforced` |
+
+### `brainclaw worktree`
+
+Manage Git worktrees for stronger agent isolation.
+
+Subcommands:
+
+- `brainclaw worktree create <branch>` — create a linked worktree for a branch
+- `brainclaw worktree list` — list known worktrees for the current project
+- `brainclaw worktree remove <path>` — remove a linked worktree
+- `brainclaw worktree prune` — prune stale Git worktree administrative files
+
+`create` options:
+
+| Option | Description |
+|---|---|
+| `--session-id <id>` | Associate the worktree with a brainclaw session |
+| `--agent <name>` | Associate the worktree with an agent name |
+
+`remove` options:
+
+| Option | Description |
+|---|---|
+| `--force` | Force removal even with uncommitted changes |
+
 ### `brainclaw memory-log`
 
 Show recent memory change history from the internal git repo.
 
 | Option | Description |
 |---|---|
-| `--limit <n>` | Number of entries to show |
-| `--json` | Output as JSON |
+| `-n, --limit <count>` | Number of entries to show |
 
 ### `brainclaw memory-rollback <ref>`
 
@@ -1573,6 +1652,7 @@ Detect all installed AI coding agents and their capabilities on this machine.
 
 | Option | Description |
 |---|---|
+| `--refresh` | Force regeneration even if an inventory already exists |
 | `--json` | Output as JSON |
 
 ### `brainclaw projects`
@@ -1581,6 +1661,8 @@ List all brainclaw-initialized projects on this machine from the global registry
 
 | Option | Description |
 |---|---|
+| `--scan <roots>` | Comma-separated directories to scan for projects |
+| `--register` | Register the current project in the global registry |
 | `--json` | Output as JSON |
 
 ### `brainclaw check-events`
