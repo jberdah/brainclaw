@@ -13,6 +13,7 @@ import { appendAuditEntry, readAuditLog, type AuditAction, type AuditEntry } fro
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
 import { extractFilesFromDiff } from '../commands/handoff.js';
+import { suggestCompaction } from '../core/memory-compactor.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -50,6 +51,8 @@ export interface SessionEndResult {
     questions: string[];
     instruction: string;
   };
+  /** Hint about memory compaction opportunities. */
+  compaction_hint?: string;
 }
 
 export interface OpenWorkWarning {
@@ -116,6 +119,9 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
       for (const warning of result.session_stats.warnings) {
         console.log(`    warning: ${warning}`);
       }
+    }
+    if (result.compaction_hint) {
+      console.log(`  💡 ${result.compaction_hint}`);
     }
     if (result.reflection_prompt) {
       console.log('\n📝 Session reflection:');
@@ -294,6 +300,12 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     cwd: options.cwd,
   });
 
+  // Memory compaction hint (best-effort, non-fatal)
+  let compactionHint: string | undefined;
+  try {
+    compactionHint = suggestCompaction(state);
+  } catch { /* non-fatal */ }
+
   appendAuditEntry({
     action: 'session_end',
     actor: actor.agent,
@@ -315,6 +327,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     summary: summaryText,
     open_work_warning: openWorkWarning,
     session_stats: sessionStats,
+    compaction_hint: compactionHint,
   };
 
   if (options.reflect) {

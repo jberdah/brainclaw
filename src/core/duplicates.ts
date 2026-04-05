@@ -60,14 +60,14 @@ export function detectDuplicates(
   return matches;
 }
 
-function normalise(text: string): string {
+export function normalise(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /**
  * Bigram-based similarity (Dice coefficient). Fast, no dependencies.
  */
-function similarity(a: string, b: string): number {
+export function similarity(a: string, b: string): number {
   if (a === b) return 1;
   if (a.length < 2 || b.length < 2) return 0;
 
