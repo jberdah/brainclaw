@@ -11,6 +11,7 @@ import { writeContextMarker } from '../core/freshness.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
+import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
@@ -63,6 +64,7 @@ export interface SessionStartResult extends SessionSnapshot {
   };
   inventory_advisory?: string[];
   shared_checkout_warning?: SharedCheckoutWarning;
+  stale_claims_released?: Array<{ id: string; agent: string; scope: string }>;
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -115,6 +117,12 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
     if (snapshot.inventory_advisory) {
       for (const line of snapshot.inventory_advisory) {
         console.warn(`⚠ ${line}`);
+      }
+    }
+    if (snapshot.stale_claims_released) {
+      console.warn(`⚠ Auto-released ${snapshot.stale_claims_released.length} stale claim(s):`);
+      for (const c of snapshot.stale_claims_released) {
+        console.warn(`  ${c.agent} → ${c.scope}`);
       }
     }
   } catch (e: unknown) {
@@ -256,6 +264,15 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     } catch { /* non-fatal */ }
   }
 
+  // Stale claim auto-release: release claims from OTHER agents that are older than threshold
+  let staleClaimsReleased: Array<{ id: string; agent: string; scope: string }> | undefined;
+  try {
+    const staleResult = releaseStaleClaimsFromOtherAgents(actor.agent, options.cwd);
+    if (staleResult.released.length > 0) {
+      staleClaimsReleased = staleResult.released.map(c => ({ id: c.id, agent: c.agent, scope: c.scope }));
+    }
+  } catch { /* non-fatal */ }
+
   return {
     ...snapshot,
     ...(agentGitHygiene.isGitRepo && (agentGitHygiene.missingGitignorePaths.length > 0 || agentGitHygiene.trackedPaths.length > 0)
@@ -268,6 +285,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
       : {}),
     ...(inventoryAdvisory ? { inventory_advisory: inventoryAdvisory } : {}),
     ...(sharedCheckoutWarning ? { shared_checkout_warning: sharedCheckoutWarning } : {}),
+    ...(staleClaimsReleased ? { stale_claims_released: staleClaimsReleased } : {}),
   };
 }
 

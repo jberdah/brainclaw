@@ -888,6 +888,21 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'claim_plan_link', status: 'ok', message: 'No active claims to check' });
   }
 
+  // Stale claims check
+  const staleThresholdHours = config?.claims?.auto_release_after_hours ?? 24;
+  const staleClaims = activeClaims.filter(c => {
+    const ageMs = Date.now() - new Date(c.created_at).getTime();
+    return ageMs > staleThresholdHours * 3600_000;
+  });
+  if (staleClaims.length > 0) {
+    const details = staleClaims.map(c => `${c.agent} → ${c.scope}`).join(', ');
+    checks.push({ name: 'claims_stale', status: 'warn', message: `${staleClaims.length} stale claim(s) (>${staleThresholdHours}h): ${details}` });
+    if (!options.json) console.warn(`⚠ ${staleClaims.length} stale claim(s) older than ${staleThresholdHours}h: ${details}`);
+    hasIssues = true;
+  } else {
+    checks.push({ name: 'claims_stale', status: 'ok', message: `No stale claims (threshold: ${staleThresholdHours}h)` });
+  }
+
   // Expired-but-still-active claims (TTL passed but prune not run)
   const expiredActive = activeClaims.filter((c) => isClaimExpired(c));
   if (expiredActive.length > 0) {

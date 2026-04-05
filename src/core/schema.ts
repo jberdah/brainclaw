@@ -1042,5 +1042,8 @@ export const ConfigSchema = z.object({
   cross_project_links: z.array(CrossProjectLinkSchema).optional().default([]),
   implicit_session_ttl: z.string().default('4h'),
   auto_reflect_notes: z.boolean().default(false),
+  claims: z.object({
+    auto_release_after_hours: z.number().default(24),
+  }).default({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;

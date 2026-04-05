@@ -402,17 +402,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const seq = this._board?.active_sequence;
     if (!seq?.items) return [];
 
-    // Resolve plan status for each sequence item
-    const planMap = new Map<string, any>();
-    for (const p of this._board?.active_plans ?? []) {
-      planMap.set(p.id, p);
-    }
-
+    // Sequence items are enriched with plan_status/plan_text by the backend
     const items = seq.items as any[];
-    const doneCount = items.filter((item: any) => {
-      const plan = planMap.get(item.planId);
-      return plan?.status === 'done';
-    }).length;
+    const doneCount = items.filter((item: any) => item.plan_status === 'done').length;
 
     const progressBar = this._renderProgressBar(doneCount, items.length);
     const result: BrainclawTreeItem[] = [
@@ -420,11 +412,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     ];
 
     for (const item of items) {
-      const plan = planMap.get(item.planId);
-      const status = plan?.status ?? 'unknown';
+      const status = item.plan_status ?? 'unknown';
       const icon = status === 'done' ? 'pass' : status === 'in_progress' ? 'play-circle' : 'circle-outline';
       const lane = item.lane ? `[${item.lane}] ` : '';
-      const text = plan?.text?.slice(0, 60) ?? item.planId;
+      const text = item.plan_text ?? item.planId;
       result.push(new BrainclawTreeItem(
         `#${item.rank} ${lane}${text}`,
         vscode.TreeItemCollapsibleState.None,

@@ -100,7 +100,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     active_claims: agent
       ? filteredClaims.filter((claim) => claim.agent === agent)
       : filteredClaims,
-    active_sequence: activeSequence,
+    active_sequence: enrichSequenceWithPlanStatus(activeSequence, state.plan_items),
     runtime_notes: filteredNotes,
     session_meta_hidden: sessionMetaHidden,
     open_handoffs: filteredHandoffs,
@@ -114,6 +114,24 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
       .filter((t) => t.visibility === 'shared' && (!t.status || t.status === 'active'))
       .sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity)),
     pending_candidates: listCandidates('pending', options.cwd),
+  };
+}
+
+function enrichSequenceWithPlanStatus(sequence: ReturnType<typeof getActiveSequence>, allPlans: { id: string; status: string; text: string; priority?: string; assignee?: string }[]): typeof sequence {
+  if (!sequence) return sequence;
+  const planMap = new Map(allPlans.map(p => [p.id, p]));
+  return {
+    ...sequence,
+    items: sequence.items.map((item: any) => {
+      const plan = planMap.get(item.planId);
+      return {
+        ...item,
+        plan_status: plan?.status ?? 'unknown',
+        plan_text: plan?.text?.slice(0, 80) ?? item.planId,
+        plan_priority: plan?.priority,
+        plan_assignee: plan?.assignee,
+      };
+    }),
   };
 }
 
