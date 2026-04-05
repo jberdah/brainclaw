@@ -593,7 +593,7 @@ const MCP_WRITE_TOOLS = [
         project: { type: 'string', description: 'Project name or path. Use this when working on a project different from the MCP server workspace (e.g. CLI agents in a different directory).' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
         worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
-        handoffMode: { type: 'string', description: 'Handoff mode: "self-commit" (worker commits+merges) or "integrator" (another agent reviews+merges). Default: self-commit.' },
+        handoffMode: { type: 'string', enum: ['self-commit', 'integrator'], description: 'Handoff mode: "self-commit" (worker commits+merges) or "integrator" (another agent reviews+merges). Default: self-commit.' },
       },
       required: ['scope', 'description'],
     },
@@ -2253,7 +2253,11 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       const claimTtl = args.ttl as string | undefined;
       const claimExpiresAt = claimTtl ? parseTtl(claimTtl) : undefined;
-      const handoffMode = (args.handoffMode as string | undefined) === 'integrator' ? 'integrator' as const : undefined;
+      const rawHandoffMode = args.handoffMode as string | undefined;
+      if (rawHandoffMode && rawHandoffMode !== 'self-commit' && rawHandoffMode !== 'integrator') {
+        return { response: toolResponse({ content: [{ type: 'text', text: `Invalid handoffMode: "${rawHandoffMode}". Must be "self-commit" or "integrator".` }], isError: true }) };
+      }
+      const handoffMode = (rawHandoffMode as 'self-commit' | 'integrator' | undefined) ?? 'self-commit';
       saveClaim({
         id: claimId,
         agent: identity.agent,
