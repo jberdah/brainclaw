@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { saveClaim, generateClaimId } from '../../src/core/claims.js';
 import { loadState, saveState } from '../../src/core/state.js';
 import { createInstruction } from '../../src/core/instructions.js';
-import { checkPolicy } from '../../src/core/policy.js';
+import { checkCrossProjectBoundary, checkPolicy } from '../../src/core/policy.js';
 import { nowISO } from '../../src/core/ids.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { Claim } from '../../src/core/schema.js';
@@ -302,5 +302,16 @@ describe('checkPolicy', () => {
 
     assert.equal(result.allowed, true);
     assert.equal(result.blocks.length, 0);
+  });
+
+  it('allows only signaling entities for cross-project writes', () => {
+    assert.equal(checkCrossProjectBoundary('candidate', 'brainclaw-site').allowed, true);
+    assert.equal(checkCrossProjectBoundary('handoff', 'brainclaw-site').allowed, true);
+    assert.equal(checkCrossProjectBoundary('runtime_note', 'brainclaw-site').allowed, true);
+
+    const blocked = checkCrossProjectBoundary('plan', 'brainclaw-site');
+    assert.equal(blocked.allowed, false);
+    assert.equal(blocked.issue?.kind, 'cross_project_boundary');
+    assert.match(blocked.issue?.message ?? '', /limited to signaling entities/);
   });
 });

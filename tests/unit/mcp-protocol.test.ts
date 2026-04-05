@@ -1,5 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { loadConfig, saveConfig } from '../../src/core/config.js';
+import { listIncomingCrossProjectSignals } from '../../src/core/cross-project.js';
+import { listCandidates } from '../../src/core/candidates.js';
+import { loadState, saveState } from '../../src/core/state.js';
 import {
   MCP_SERVER_NOT_INITIALIZED,
   McpServerConnection,
@@ -264,6 +268,95 @@ describe('commands/mcp protocol core', () => {
       });
       assert.equal(trusted.response.isError, true);
       assert.ok(typeof (trusted.response.structuredContent as { error: { kind: string } }).error.kind === 'string');
+    } finally {
+      workspace.cleanup();
+    }
+  });
+
+  it('materializes candidate, runtime-note, and handoff signals into the target inbox', async () => {
+    const source = createTestWorkspace({ prefix: 'bclaw-mcp-source-', currentAgent: 'codex' });
+    const target = createTestWorkspace({ prefix: 'bclaw-mcp-target-', currentAgent: 'copilot' });
+    try {
+      const config = loadConfig(source.dir);
+      config.cross_project_links = [{ path: target.dir, name: 'target-project', role: 'publisher' }];
+      saveConfig(config, source.dir);
+
+      const candidateResult = await executeMcpToolCall({
+        name: 'bclaw_create_candidate',
+        args: { agent: source.currentAgent.agent_name, text: 'Share rollout checklist', type: 'decision', target_project: 'target-project' },
+        cwd: source.dir,
+      });
+      assert.equal(candidateResult.response.isError, false);
+
+      const noteResult = await executeMcpToolCall({
+        name: 'bclaw_write_note',
+        args: { agent: source.currentAgent.agent_name, text: 'Target needs review visibility', cross_project: 'target-project' },
+        cwd: source.dir,
+      });
+      assert.equal(noteResult.response.isError, false);
+
+      const state = loadState(source.dir);
+      state.open_handoffs.push({
+        id: 'hnd_signal01',
+        short_label: 'hnd#1',
+        from: source.currentAgent.agent_name,
+        to: 'copilot',
+        text: 'Validate the linked project migration',
+        created_at: new Date().toISOString(),
+        author: source.currentAgent.agent_name,
+        author_id: source.currentAgent.agent_id,
+        project_id: 'prj_source',
+        session_id: 'sess_source',
+        status: 'open',
+        tags: ['cross-project'],
+      });
+      saveState(state, source.dir);
+
+      const handoffResult = await executeMcpToolCall({
+        name: 'bclaw_update_handoff',
+        args: { id: 'hnd_signal01', agent: source.currentAgent.agent_name, targetProject: 'target-project', narrative: 'Please pick this up in the linked repo.' },
+        cwd: source.dir,
+      });
+      assert.equal(handoffResult.response.isError, false);
+
+      const signals = listIncomingCrossProjectSignals(target.dir);
+      assert.equal(signals.length, 3);
+      assert.deepEqual(signals.map((signal) => signal.entity_type), ['candidate', 'runtime_note', 'handoff']);
+      assert.equal(listCandidates(undefined, target.dir).length, 0);
+    } finally {
+      source.cleanup();
+      target.cleanup();
+    }
+  });
+
+  it('blocks cross-project targets for claim, plan, and session entities', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-', currentAgent: 'codex' });
+    try {
+      const claimResult = await executeMcpToolCall({
+        name: 'bclaw_claim',
+        args: { agent: workspace.currentAgent.agent_name, scope: 'src/core', description: 'Take scope', targetProject: 'linked-project' },
+        cwd: workspace.dir,
+      });
+      assert.equal(claimResult.response.isError, true);
+      assert.equal((claimResult.response.structuredContent as { error: { kind: string } }).error.kind, 'validation_error');
+
+      const planResult = await executeMcpToolCall({
+        name: 'bclaw_create_plan',
+        args: { agent: workspace.currentAgent.agent_name, text: 'Create shared rollout plan', target_project: 'linked-project' },
+        cwd: workspace.dir,
+      });
+      assert.equal(planResult.response.isError, true);
+
+      const sessionResult = await executeMcpToolCall({
+        name: 'bclaw_session_start',
+        args: { agent: workspace.currentAgent.agent_name, crossProject: 'linked-project' },
+        cwd: workspace.dir,
+      });
+      assert.equal(sessionResult.response.isError, true);
+      assert.match(
+        ((sessionResult.response.structuredContent as { error: { message: string } }).error.message),
+        /limited to signaling entities/,
+      );
     } finally {
       workspace.cleanup();
     }

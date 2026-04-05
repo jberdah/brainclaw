@@ -3,12 +3,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { resolveCrossProjectLinks, detectCrossProjectCycles, loadCrossProjectState, resolveCrossProjectTarget } from '../../src/core/cross-project.js';
+import {
+  resolveCrossProjectLinks,
+  detectCrossProjectCycles,
+  loadCrossProjectState,
+  resolveCrossProjectTarget,
+  resolveCrossProjectWritableTarget,
+  writeCrossProjectSignal,
+  listIncomingCrossProjectSignals,
+} from '../../src/core/cross-project.js';
 import { saveState } from '../../src/core/state.js';
 import { defaultConfig, loadConfig, saveConfig } from '../../src/core/config.js';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import type { State } from '../../src/core/schema.js';
+import type { Candidate, State } from '../../src/core/schema.js';
 
 function initProject(dir: string): void {
   ensureMemoryDir(dir);
@@ -104,5 +112,51 @@ describe('cross-project', () => {
 
     const cycles = detectCrossProjectCycles(workspace.dir);
     assert.deepEqual(cycles, []);
+  });
+
+  it('resolveCrossProjectWritableTarget enforces publisher role and channels', () => {
+    const config = loadConfig(workspace.dir);
+    config.cross_project_links = [{ path: linkedDir, name: 'brainclaw-website', role: 'publisher', channels: ['candidate'] }];
+    saveConfig(config, workspace.dir);
+
+    const link = resolveCrossProjectWritableTarget('brainclaw-website', 'candidate', workspace.dir);
+    assert.equal(link.role, 'publisher');
+    assert.throws(
+      () => resolveCrossProjectWritableTarget('brainclaw-website', 'handoff', workspace.dir),
+      /does not allow handoff signals/,
+    );
+  });
+
+  it('writes and lists structured incoming cross-project signals', () => {
+    const config = loadConfig(workspace.dir);
+    config.cross_project_links = [{ path: linkedDir, name: 'brainclaw-website', role: 'publisher' }];
+    saveConfig(config, workspace.dir);
+
+    const candidate: Candidate = {
+      id: 'cnd_signal01',
+      short_label: 'cnd#1',
+      type: 'decision',
+      text: 'Route API calls through the shared gateway',
+      created_at: new Date().toISOString(),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_xp_main',
+      session_id: 'sess_signal',
+      tags: ['cross-project'],
+      status: 'pending',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    };
+
+    const signal = writeCrossProjectSignal('brainclaw-website', 'candidate', candidate, workspace.dir);
+    assert.equal(signal.entity_type, 'candidate');
+
+    const incoming = listIncomingCrossProjectSignals(linkedDir);
+    assert.equal(incoming.length, 1);
+    assert.equal(incoming[0].entity_type, 'candidate');
+    assert.equal(incoming[0].from_project.name, 'brainclaw-tests');
+    assert.equal((incoming[0].payload as Candidate).id, 'cnd_signal01');
   });
 });
