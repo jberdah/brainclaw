@@ -29,7 +29,7 @@ import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/b
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
-import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries } from '../core/agent-files.js';
+import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
@@ -47,6 +47,7 @@ export interface DoctorOptions {
   cwd?: string;
   migrationCheck?: boolean;
   fixAgentIgnore?: boolean;
+  fix?: boolean;
 }
 
 interface DoctorCheck {
@@ -364,17 +365,32 @@ export function runDoctor(options: DoctorOptions = {}): void {
 
   const integrationReadiness = assessAgentIntegrationReadiness(config, options.cwd ?? process.cwd());
   const missingIntegrations = integrationReadiness.filter((entry) => !entry.ready);
+  
+  if (options.fix && missingIntegrations.some(m => m.missing_surfaces.some(s => s.kind === 'mcp') || m.drifting_surfaces.length > 0)) {
+    const results = patchAllMcpConfigs(options.cwd ?? process.cwd());
+    if (!options.json) {
+      console.log(`\n✔ Applied --fix: Patched ${results.length} MCP config(s) automatically.`);
+    }
+    // Re-evaluate readiness
+    const refreshedReadiness = assessAgentIntegrationReadiness(config, options.cwd ?? process.cwd());
+    missingIntegrations.length = 0;
+    missingIntegrations.push(...refreshedReadiness.filter((entry) => !entry.ready));
+  }
+
   if (missingIntegrations.length > 0) {
     checks.push({
       name: 'agent_integrations',
       status: 'warn',
-      message: `${missingIntegrations.length} declared agent integration(s) are not fully activated on this machine/workspace.`,
+      message: `${missingIntegrations.length} declared agent integration(s) are not fully activated or are drifting.`,
       details: missingIntegrations,
     });
     if (!options.json) {
-      console.warn(`⚠ ${missingIntegrations.length} declared agent integration(s) are not fully activated on this machine/workspace.`);
+      console.warn(`⚠ ${missingIntegrations.length} declared agent integration(s) are not fully activated or are drifting.`);
       for (const m of missingIntegrations) {
         console.warn(`  - ${m.agent_name} -> Effective Tier: ${m.effective_tier}`);
+        for (const drift of m.drifting_surfaces) {
+          console.warn(`    ↳ Drift: ${drift.drift_message}`);
+        }
         for (const g of m.self_healing_guidance) {
           console.warn(`    ↳ ${g}`);
         }

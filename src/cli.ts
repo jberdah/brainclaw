@@ -548,6 +548,7 @@ program
   .option('--json', 'Output as JSON dashboard')
   .option('--migration-check', 'Report versioned documents that need schema migration')
   .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
+  .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
   .action((options) => {
     runDoctor(options);
   });
