@@ -1126,6 +1126,18 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
   }
 
   if (existing.includes('[mcp_servers.brainclaw]')) {
+    if (!_forceResolve) {
+      return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
+    }
+    // Force-resolve: replace the existing brainclaw block with updated paths
+    const replaced = existing.replace(
+      /\[mcp_servers\.brainclaw\][^\[]*/s,
+      brainclawBlock.slice(1) + '\n\n',  // slice(1) to remove leading \n
+    );
+    if (replaced !== existing) {
+      fs.writeFileSync(filePath, replaced, 'utf-8');
+      return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: true, filePath };
+    }
     return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
   }
 
