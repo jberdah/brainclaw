@@ -201,6 +201,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Add agent instruction files to .gitignore (they are generated, not source)
   if (!skipAgentBootstrap) {
     const generatedWorkspacePaths = detectedAutoConfig
+      .filter((item) => item.kind !== 'recommendation')
       .map((item) => item.relativePath)
       .filter((item): item is string => item !== undefined)
       .filter((item) => !item.startsWith('.codeium/'));

@@ -20,6 +20,8 @@ import {
   type ExportFormat,
 } from '../core/agent-files.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
+import { listClaims } from '../core/claims.js';
+import { listCandidates } from '../core/candidates.js';
 import { logger } from '../core/logger.js';
 import { getAgentCapabilityProfile } from '../core/agent-capability.js';
 import { renderBrainclawSection, renderLiveSection } from '../core/instruction-templates.js';
@@ -174,6 +176,8 @@ export function runRefresh(cwd?: string): void {
   const state = loadState(effectiveCwd);
   const config = loadConfig(effectiveCwd);
   const instructions = getInstructionText({ project: undefined, agent: undefined }, effectiveCwd);
+  const activeClaims = listClaims(effectiveCwd).filter((c) => c.status === 'active');
+  const pendingCandidates = listCandidates('pending', effectiveCwd);
   const seen = new Set<ExportFormat>();
   const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
     if (seen.has(t.format)) return false;
@@ -195,6 +199,8 @@ export function runRefresh(cwd?: string): void {
       brainclawVersion: getInstalledBrainclawVersion(),
       resolvedInstructions: instructions,
       projectVision: readProjectVision(effectiveCwd),
+      activeClaims,
+      pendingCandidates,
     };
 
     const live = renderLiveSection(input);

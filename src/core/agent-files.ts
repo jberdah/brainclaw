@@ -329,6 +329,7 @@ export function collectWorkspaceGitignoreEntries(
   for (const result of results) {
     if (!result.relativePath) continue;
     if (result.relativePath === 'package.json') continue;
+    if (result.relativePath === VSCODE_EXTENSIONS_RELATIVE_PATH) continue;
 
     const expectedWorkspacePath = path.resolve(workspaceRoot, result.relativePath);
     const actualPath = path.resolve(result.filePath);
@@ -438,7 +439,7 @@ export function writeExportFile(
 }
 
 export interface AutoConfigWriteResult {
-  kind: 'mcp' | 'skill' | 'rule';
+  kind: 'mcp' | 'skill' | 'rule' | 'recommendation';
   label: string;
   created: boolean;
   updated: boolean;
@@ -473,6 +474,7 @@ const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
+const VSCODE_EXTENSIONS_RELATIVE_PATH = '.vscode/extensions.json';
 
 /**
  * Directories exclusively managed by brainclaw — safe to gitignore as a whole.
@@ -772,6 +774,34 @@ export function ensureVscodeMcpConfig(cwd: string): AutoConfigWriteResult {
     updated,
     filePath,
     relativePath: VSCODE_MCP_RELATIVE_PATH,
+  };
+}
+
+const BRAINCLAW_EXTENSION_ID = 'brainclaw.brainclaw-vscode';
+
+export function ensureVscodeExtensionRecommendation(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.vscode', 'extensions.json');
+  const existing = readJsonObject(filePath);
+  const recommendations: string[] = Array.isArray(existing.recommendations)
+    ? [...existing.recommendations as string[]]
+    : [];
+
+  if (!recommendations.includes(BRAINCLAW_EXTENSION_ID)) {
+    recommendations.push(BRAINCLAW_EXTENSION_ID);
+  }
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    recommendations,
+  });
+
+  return {
+    kind: 'recommendation',
+    label: 'VS Code extension recommendation (.vscode/extensions.json)',
+    created,
+    updated,
+    filePath,
+    relativePath: VSCODE_EXTENSIONS_RELATIVE_PATH,
   };
 }
 
@@ -1314,6 +1344,7 @@ export function writeDetectedAgentAutoConfig(
         ensureClaudeCodeMcpConfig(cwd),
         ensureClaudeCodeCommand(cwd),
         ensureClaudeCodeSettings(cwd),
+        ensureVscodeExtensionRecommendation(cwd),
       ];
       const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
       if (userSettings) results.push(userSettings);
@@ -1330,7 +1361,7 @@ export function writeDetectedAgentAutoConfig(
       return result ? [result] : [];
     }
     case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
     case 'cursor': {
       const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
@@ -1441,6 +1472,7 @@ export function patchAllMcpConfigs(
     // Workspace-level configs
     results.push(ensureClaudeCodeMcpConfig(cwd));
     results.push(ensureVscodeMcpConfig(cwd));
+    results.push(ensureVscodeExtensionRecommendation(cwd));
     results.push(ensureCopilotMcpConfig(cwd));
     results.push(ensureClineMcpConfig(cwd));
     results.push(ensureRooMcpConfig(cwd));

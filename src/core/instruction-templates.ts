@@ -13,7 +13,7 @@
  */
 
 import type { AgentCapabilityProfile } from './agent-capability.js';
-import type { State, Constraint, Decision, Trap, PlanItem, Claim } from './schema.js';
+import type { State, Constraint, Decision, Trap, PlanItem, Claim, Candidate } from './schema.js';
 
 export interface InstructionTemplateInput {
   profile: AgentCapabilityProfile;
@@ -27,6 +27,10 @@ export interface InstructionTemplateInput {
   maxTraps?: number;
   /** Maximum number of plans to include for tier C (default: 10) */
   maxPlans?: number;
+  /** Active claims (loaded separately from state). */
+  activeClaims?: Claim[];
+  /** Pending candidates (loaded separately from state). */
+  pendingCandidates?: Candidate[];
 }
 
 export interface InstructionTemplateOutput {
@@ -138,8 +142,11 @@ function renderLiveTierB(input: InstructionTemplateInput): InstructionTemplateOu
   const plans = renderActivePlans(input.state, input.maxPlans ?? 5);
   if (plans) { sections.push(plans); included.push('plans'); }
 
-  const claims = renderActiveClaims(input.state);
+  const claims = renderActiveClaimsFromInput(input);
   if (claims) { sections.push(claims); included.push('claims'); }
+
+  const candidates = renderPendingCandidates(input);
+  if (candidates) { sections.push(candidates); included.push('candidates'); }
 
   return { content: sections.join('\n\n'), tier: 'B', sectionsIncluded: included };
 }
@@ -184,8 +191,11 @@ function renderLiveTierC(input: InstructionTemplateInput): InstructionTemplateOu
   const plans = renderActivePlans(input.state, input.maxPlans ?? 10);
   if (plans) { sections.push(plans); included.push('plans'); }
 
-  const claims = renderActiveClaims(input.state);
+  const claims = renderActiveClaimsFromInput(input);
   if (claims) { sections.push(claims); included.push('claims'); }
+
+  const candidates = renderPendingCandidates(input);
+  if (candidates) { sections.push(candidates); included.push('candidates'); }
 
   const decisions = renderRecentDecisions(input.state);
   if (decisions) { sections.push(decisions); included.push('decisions'); }
@@ -359,14 +369,25 @@ function renderActivePlans(state: State, limit: number): string | undefined {
   ].join('\n');
 }
 
-function renderActiveClaims(state: State): string | undefined {
-  const claims = (state as any).active_claims as Claim[] | undefined;
+function renderActiveClaimsFromInput(input: InstructionTemplateInput): string | undefined {
+  const claims = input.activeClaims;
   if (!claims || claims.length === 0) return undefined;
 
   return [
     '## brainclaw — active claims',
     '',
     ...claims.map((c: Claim) => `- ${c.scope} (by ${c.agent ?? 'unknown'})`),
+  ].join('\n');
+}
+
+function renderPendingCandidates(input: InstructionTemplateInput): string | undefined {
+  const candidates = input.pendingCandidates;
+  if (!candidates || candidates.length === 0) return undefined;
+
+  return [
+    '## brainclaw — open candidates',
+    '',
+    ...candidates.slice(0, 5).map((c: Candidate) => `- [${c.type}] ${c.text} (by ${c.author ?? 'unknown'})`),
   ].join('\n');
 }
 
