@@ -1082,6 +1082,8 @@ program
   .description('Prune expired constraints and stale memory')
   .option('--expired', 'Also prune expired runtime notes and traps')
   .option('--archive', 'Archive done plans and closed handoffs (>30 days) to cold storage JSONL')
+  .option('--semantic', 'Detect near-duplicate clusters and stale items via semantic analysis')
+  .option('--dry-run', 'Preview compaction without applying (use with --semantic)')
   .action((options) => {
     runPrune(options);
   });

@@ -6,10 +6,13 @@ import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
 import { expireStaleActiveClaims } from '../core/claims.js';
 import { archiveStalePlansAndHandoffs } from '../core/archival.js';
 import { rotateAuditLogIfNeeded } from '../core/audit.js';
+import { analyzeMemory, analyzeAndApply, formatReport } from '../core/memory-compactor.js';
 
 export interface PruneOptions {
   expired?: boolean;
   archive?: boolean;
+  semantic?: boolean;
+  dryRun?: boolean;
 }
 
 export function runPrune(options: PruneOptions = {}): void {
@@ -19,6 +22,31 @@ export function runPrune(options: PruneOptions = {}): void {
     process.exit(1);
   }
 
+  // Semantic compaction mode
+  if (options.semantic) {
+    if (options.dryRun) {
+      // Dry-run: read-only analysis, no lock needed
+      const state = loadState(cwd);
+      const report = analyzeMemory(state, { cwd });
+      console.log(formatReport(report));
+      return;
+    }
+
+    // Apply: analyze + apply atomically under a single mutation lock
+    const { report, result } = analyzeAndApply({ cwd });
+
+    if (report.archivableCount === 0) {
+      console.log('No compaction opportunities found.');
+      return;
+    }
+
+    console.log(formatReport(report));
+    console.log('');
+    console.log(`✔ Compaction applied: ${result.archivedCount} items archived (${result.mergedClusters} clusters merged, ${result.staleArchived} stale items).`);
+    return;
+  }
+
+  // Original prune logic
   const now = new Date().toISOString();
   let prunedCount = 0;
   let expiredClaimsCount = 0;
