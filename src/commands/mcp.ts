@@ -2132,9 +2132,28 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           }
         } catch { /* git not available, skip warning */ }
       }
+      // Stale-branch detection: warn if behind master
+      let staleBranchWarn = '';
+      try {
+        const { execSync: execSyncSB } = await import('node:child_process');
+        const currentBranch = execSyncSB('git branch --show-current', { cwd: claimCwd, encoding: 'utf-8' }).trim();
+        if (currentBranch && currentBranch !== 'master' && currentBranch !== 'main') {
+          for (const mainBranch of ['master', 'main']) {
+            try {
+              const behind = execSyncSB(`git rev-list --count ${currentBranch}..${mainBranch}`, { cwd: claimCwd, encoding: 'utf-8' }).trim();
+              const count = parseInt(behind, 10);
+              if (count > 0) {
+                staleBranchWarn = `\n⚠ Branch is ${count} commit(s) behind ${mainBranch}. Consider rebasing before editing.`;
+              }
+              break;
+            } catch { /* branch doesn't exist, try next */ }
+          }
+        }
+      } catch { /* git not available */ }
+
       const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
       const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
-      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${branchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({
