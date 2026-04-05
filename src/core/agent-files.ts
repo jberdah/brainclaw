@@ -371,7 +371,12 @@ export type ExportFormat =
   | 'roo'
   | 'continue'
   | 'gemini-md'
-  | 'board-md';
+  | 'board-md'
+  | 'openclaw'
+  | 'nanoclaw'
+  | 'nemoclaw'
+  | 'picoclaw'
+  | 'zeroclaw';
 
 export interface AgentExportTarget {
   agentName: string;
@@ -392,6 +397,11 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
   { agentName: 'brainclaw',      format: 'board-md',             relativePath: 'BOARD.md' },
+  { agentName: 'openclaw',       format: 'openclaw',             relativePath: 'skills/openclaw/SKILL.md' },
+  { agentName: 'nanoclaw',       format: 'nanoclaw',             relativePath: 'skills/nanoclaw/SKILL.md' },
+  { agentName: 'nemoclaw',       format: 'nemoclaw',             relativePath: 'skills/nemoclaw/SKILL.md' },
+  { agentName: 'picoclaw',       format: 'picoclaw',             relativePath: 'skills/picoclaw/SKILL.md' },
+  { agentName: 'zeroclaw',       format: 'zeroclaw',             relativePath: 'skills/zeroclaw/SKILL.md' },
 ];
 
 export const FALLBACK_EXPORT_TARGET: AgentExportTarget = {

@@ -57,6 +57,10 @@ export const ALL_KNOWN_AGENTS = [
   'continue',
   'roo',
   'openclaw',
+  'nanoclaw',
+  'nemoclaw',
+  'picoclaw',
+  'zeroclaw',
 ];
 
 const BRAINCLAW_ASCII = [

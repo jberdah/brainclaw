@@ -368,11 +368,19 @@ export function runDoctor(options: DoctorOptions = {}): void {
   
   if (options.fix && missingIntegrations.some(m => m.missing_surfaces.some(s => s.kind === 'mcp') || m.drifting_surfaces.length > 0)) {
     const results = patchAllMcpConfigs(options.cwd ?? process.cwd());
-    if (!options.json) {
-      console.log(`\n✔ Applied --fix: Patched ${results.length} MCP config(s) automatically.`);
-    }
     // Re-evaluate readiness
     const refreshedReadiness = assessAgentIntegrationReadiness(config, options.cwd ?? process.cwd());
+    const fixedAgents = missingIntegrations.filter(initial => {
+      const current = refreshedReadiness.find(r => r.agent_name === initial.agent_name);
+      return current?.ready;
+    }).map(r => r.agent_name);
+    
+    if (!options.json) {
+      console.log(`\n✔ Applied --fix: Patched ${results.length} MCP config(s) automatically.`);
+      if (fixedAgents.length > 0) {
+        console.log(`✔ Successfully restored: ${fixedAgents.join(', ')}`);
+      }
+    }
     missingIntegrations.length = 0;
     missingIntegrations.push(...refreshedReadiness.filter((entry) => !entry.ready));
   }

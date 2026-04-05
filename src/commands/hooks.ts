@@ -4,7 +4,7 @@ import { memoryExists } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
 import { BRAINCLAW_SECTION_START, BRAINCLAW_SECTION_END, upsertBrainclawSection, ensureClaudeCodeSettings } from '../core/agent-files.js';
 
-export type HookTarget = 'cursor' | 'windsurf' | 'claude-code' | 'all';
+export type HookTarget = 'cursor' | 'windsurf' | 'claude-code' | 'codex' | 'cline' | 'github-copilot' | 'all';
 
 export interface HooksOptions {
   target?: HookTarget;
@@ -58,6 +58,35 @@ brainclaw session-end --auto-release
 export function generateWindsurfHook(projectName: string): string {
   return `# Brainclaw session trigger — ${projectName}
 # This block is always active. Windsurf Cascade reads .windsurfrules on every activation.
+
+## SESSION START (always run first)
+
+Before responding to any request, execute:
+
+\`\`\`bash
+brainclaw context
+\`\`\`
+
+This gives you: active constraints, recent decisions, known traps, open plans, active claims,
+and the last handoff note. Do not skip this step.
+
+## SESSION END (before finishing)
+
+\`\`\`bash
+brainclaw claim release <id>               # for each claim you hold
+brainclaw plan update <id> --status done   # for each plan item you completed
+# or:
+brainclaw session-end --auto-release
+\`\`\`
+`;
+}
+
+/**
+ * Generate a generic markdown session-trigger section.
+ */
+export function generateMarkdownHook(agentName: string, projectName: string): string {
+  return `# Brainclaw session trigger — ${projectName}
+# This block is always active. ${agentName} reads this file on every activation.
 
 ## SESSION START (always run first)
 
@@ -136,6 +165,21 @@ export function runHooks(options: HooksOptions = {}): void {
     });
   }
 
+  if (target === 'cline' || target === 'all') {
+    const content = generateMarkdownHook('Cline', config.project_name);
+    results.push(writeHook(content, '.clinerules/brainclaw.md', cwd));
+  }
+
+  if (target === 'codex' || target === 'all') {
+    const content = generateMarkdownHook('Codex', config.project_name);
+    results.push(writeHook(content, 'AGENTS.md', cwd));
+  }
+
+  if (target === 'github-copilot' || target === 'all') {
+    const content = generateMarkdownHook('GitHub Copilot', config.project_name);
+    results.push(writeHook(content, '.github/copilot-instructions.md', cwd));
+  }
+
   for (const r of results) {
     console.log(`✔ Hook written to ${r.relativePath} (${r.created ? 'created' : 'updated'})`);
   }
@@ -169,6 +213,21 @@ export function writeDetectedAgentHooks(
       relativePath: autoResult.relativePath ?? '.claude/settings.local.json',
       created: autoResult.created,
     });
+  }
+
+  if (agentName === 'cline') {
+    const content = generateMarkdownHook('Cline', projectName);
+    results.push(writeHook(content, '.clinerules/brainclaw.md', cwd));
+  }
+
+  if (agentName === 'codex') {
+    const content = generateMarkdownHook('Codex', projectName);
+    results.push(writeHook(content, 'AGENTS.md', cwd));
+  }
+
+  if (agentName === 'github-copilot') {
+    const content = generateMarkdownHook('GitHub Copilot', projectName);
+    results.push(writeHook(content, '.github/copilot-instructions.md', cwd));
   }
 
   return results;
