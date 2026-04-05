@@ -131,7 +131,7 @@ describe('hooks — writeDetectedAgentHooks', () => {
   it('returns empty array for unknown agents', () => {
     const dir = tmpDir();
     try {
-      const results = writeDetectedAgentHooks('github-copilot', 'my-project', dir);
+      const results = writeDetectedAgentHooks('unknown-agent-xyz', 'my-project', dir);
       assert.equal(results.length, 0);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

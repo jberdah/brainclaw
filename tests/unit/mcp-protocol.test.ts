@@ -141,7 +141,8 @@ describe('commands/mcp protocol core', () => {
       method: 'initialize',
       params: { protocolVersion: '2099-01-01' },
     }));
-    assert.equal((negotiatedSent[0]?.result as { protocolVersion: string }).protocolVersion, '2025-11-25');
+    // Server negotiates down to the oldest supported version for maximum compatibility
+    assert.equal((negotiatedSent[0]?.result as { protocolVersion: string }).protocolVersion, '2024-11-05');
   });
 
   it('rejects initialize requests with missing or non-string protocol versions', () => {

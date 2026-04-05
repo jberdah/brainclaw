@@ -160,11 +160,11 @@ describe('instruction-templates', () => {
     });
   });
 
-  describe('tier C (openclaw — no MCP)', () => {
-    it('renders a rich section with skill reference', () => {
+  describe('tier B (openclaw — MCP enabled)', () => {
+    it('renders a tier B section with protocol', () => {
       const result = renderBrainclawSection(makeInput('openclaw'));
-      assert.equal(result.tier, 'C');
-      assert.ok(result.content.includes('brainclaw-context skill'));
+      assert.equal(result.tier, 'B');
+      assert.ok(result.content.includes('session protocol'));
     });
 
     it('stable output does NOT include traps, plans, or decisions', () => {
@@ -179,17 +179,16 @@ describe('instruction-templates', () => {
       assert.ok(!result.sectionsIncluded.includes('decisions'));
     });
 
-    it('live companion includes traps, plans, AND decisions', () => {
+    it('live companion includes traps and plans', () => {
       const state = makeState({
         known_traps: [{ id: 'trp_1', text: 'Trap', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' }] as any,
         plan_items: [{ id: 'pln_1', text: 'Auth rollout', status: 'in_progress', tags: [], created_at: '', created_by: '', assignee: 'Pierre' }] as any,
         recent_decisions: [{ id: 'dec_1', text: 'Use PostgreSQL 16', tags: [], created_at: '', created_by: '' }] as any,
       });
       const live = renderLiveSection(makeInput('openclaw', { state }));
-      assert.ok(live, 'Tier C should have a live companion');
+      assert.ok(live, 'Tier B should have a live companion');
       assert.ok(live!.sectionsIncluded.includes('traps'));
       assert.ok(live!.sectionsIncluded.includes('plans'));
-      assert.ok(live!.sectionsIncluded.includes('decisions'));
     });
 
     it('live companion sorts plans: in_progress first, then by priority', () => {

@@ -134,10 +134,10 @@ describe('export command formats', () => {
       assert.ok(fs.existsSync(filePath), `${expectedFile} should exist`);
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(content.includes('brainclaw'), 'should mention brainclaw');
-      // Adaptive templates include "why this matters" and protocol sections
+      // Adaptive templates include project header and protocol sections
       assert.ok(
-        content.includes('why this matters') || content.includes('brainclaw context'),
-        'should contain adaptive "why" section or legacy hygiene',
+        content.includes('Managed by brainclaw') || content.includes('brainclaw context') || content.includes('this project'),
+        'should contain adaptive header or project context',
       );
       assert.ok(
         content.includes('session protocol') || content.includes('project coordination') || content.includes('brainclaw claim release'),

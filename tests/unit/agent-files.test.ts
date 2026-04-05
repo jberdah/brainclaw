@@ -448,8 +448,9 @@ describe('core/agent-files — auto-config writers', () => {
       assert.equal(cursorResults[0]?.relativePath, '.cursor/rules/brainclaw-mcp-shim.mdc');
 
       const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
-      assert.equal(copilotResults.length, 1);
-      assert.equal(copilotResults[0]?.relativePath, '.github/skills/brainclaw-context/SKILL.md');
+      assert.equal(copilotResults.length, 2);
+      assert.ok(copilotResults.some(r => r.relativePath === '.vscode/settings.json'));
+      assert.ok(copilotResults.some(r => r.relativePath === '.github/skills/brainclaw-context/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
