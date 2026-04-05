@@ -479,6 +479,9 @@ export type ReputationConfig = z.infer<typeof ReputationConfigSchema>;
 export const ClaimStatusSchema = z.enum(['active', 'released', 'stale']);
 export type ClaimStatus = z.infer<typeof ClaimStatusSchema>;
 
+export const ClaimHandoffModeSchema = z.enum(['self-commit', 'integrator']);
+export type ClaimHandoffMode = z.infer<typeof ClaimHandoffModeSchema>;
+
 export const ClaimSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -500,6 +503,8 @@ export const ClaimSchema = z.object({
   model: z.string().optional(),
   /** Absolute path to the git worktree associated with this claim, if one was created. */
   worktree_path: z.string().optional(),
+  /** Handoff mode: "self-commit" = worker commits+merges, "integrator" = another agent reviews+merges. */
+  handoff_mode: ClaimHandoffModeSchema.optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 

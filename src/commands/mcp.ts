@@ -593,6 +593,7 @@ const MCP_WRITE_TOOLS = [
         project: { type: 'string', description: 'Project name or path. Use this when working on a project different from the MCP server workspace (e.g. CLI agents in a different directory).' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
         worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
+        handoffMode: { type: 'string', description: 'Handoff mode: "self-commit" (worker commits+merges) or "integrator" (another agent reviews+merges). Default: self-commit.' },
       },
       required: ['scope', 'description'],
     },
@@ -2252,6 +2253,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
       const claimTtl = args.ttl as string | undefined;
       const claimExpiresAt = claimTtl ? parseTtl(claimTtl) : undefined;
+      const handoffMode = (args.handoffMode as string | undefined) === 'integrator' ? 'integrator' as const : undefined;
       saveClaim({
         id: claimId,
         agent: identity.agent,
@@ -2268,6 +2270,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         model: currentModel,
         worktree_path: worktreePath,
         expires_at: claimExpiresAt,
+        handoff_mode: handoffMode,
       }, claimCwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: claimScope, session_id: identity.session_id, host_id: identity.host_id }, claimCwd);
 
@@ -2326,7 +2329,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
 
       const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
       const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
-      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const handoffNote = handoffMode ? `\n  Handoff: ${handoffMode} (another agent will review and merge)` : '';
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${handoffNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: toolResponse({
