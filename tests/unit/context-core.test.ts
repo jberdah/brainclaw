@@ -824,4 +824,49 @@ describe('core/context', () => {
       assert.ok(planIdx < firstDecisionIdx, 'plan should rank before decisions');
     }
   });
+
+  it('adds compact session metrics for the current session context', () => {
+    const previousSession = process.env.BRAINCLAW_SESSION_ID;
+    const previousAgent = process.env.BRAINCLAW_AGENT_NAME;
+    process.env.BRAINCLAW_SESSION_ID = 'sess_ctx_metrics';
+    process.env.BRAINCLAW_AGENT_NAME = workspace.currentAgent.agent_name;
+
+    try {
+      runSessionStart({ context: 'auth', cwd: workspace.dir });
+      saveRuntimeNote({
+        id: 'rtn_ctx_metrics',
+        agent: workspace.currentAgent.agent_name,
+        agent_id: workspace.currentAgent.agent_id,
+        project_id: 'prj_ctx_test',
+        session_id: 'sess_ctx_metrics',
+        text: 'Captured a compact runtime checkpoint',
+        created_at: new Date().toISOString(),
+        tags: ['auth'],
+        visibility: 'shared',
+        note_type: 'observation',
+      }, workspace.dir);
+
+      const result = buildContext({
+        target: 'auth',
+        cwd: workspace.dir,
+      });
+
+      assert.ok(result.session_metrics);
+      assert.equal(result.session_metrics?.active_claims, 0);
+      assert.equal(result.session_metrics?.edits_since_last_memory, 0);
+      assert.ok((result.session_metrics?.session_duration_minutes ?? -1) >= 0);
+      assert.ok(result.session_metrics?.last_brainclaw_write);
+
+      const template = renderContextPromptTemplate(result, false);
+      assert.match(template, /session_metrics:/);
+      assert.match(template, /active_claims: 0/);
+      assert.match(template, /edits_since_last_memory: 0/);
+      assert.match(template, /last_brainclaw_write:/);
+    } finally {
+      if (previousSession === undefined) delete process.env.BRAINCLAW_SESSION_ID;
+      else process.env.BRAINCLAW_SESSION_ID = previousSession;
+      if (previousAgent === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
+      else process.env.BRAINCLAW_AGENT_NAME = previousAgent;
+    }
+  });
 });

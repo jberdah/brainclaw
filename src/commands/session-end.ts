@@ -5,10 +5,11 @@ import { buildContextDiff } from '../core/context-diff.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { loadState } from '../core/state.js';
+import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
 import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
-import { appendAuditEntry } from '../core/audit.js';
+import { appendAuditEntry, readAuditLog, type AuditAction, type AuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
 import { extractFilesFromDiff } from '../commands/handoff.js';
@@ -43,6 +44,7 @@ export interface SessionEndResult {
   context_diff?: string;
   summary: string;
   open_work_warning?: OpenWorkWarning;
+  session_stats?: SessionStatsSummary;
   /** When reflect=true, these questions should be answered by the agent via bclaw_write_note with tag [reflection]. */
   reflection_prompt?: {
     questions: string[];
@@ -54,6 +56,17 @@ export interface OpenWorkWarning {
   active_claims: { id: string; scope: string; description: string }[];
   in_progress_plans: { id: string; text: string }[];
   auto_released: boolean;
+}
+
+export interface SessionStatsSummary {
+  session_duration_minutes: number;
+  file_edits_count: number;
+  claims_created: number;
+  memory_writes: number;
+  plan_updates: number;
+  candidates_created: number;
+  last_brainclaw_write?: string;
+  warnings: string[];
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
@@ -88,6 +101,21 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     }
     if (result.context_diff) {
       console.log(`  ${result.context_diff}`);
+    }
+    if (result.session_stats) {
+      console.log('  Session stats:');
+      console.log(`    duration: ${result.session_stats.session_duration_minutes} min`);
+      console.log(`    file edits: ${result.session_stats.file_edits_count}`);
+      console.log(`    claims created: ${result.session_stats.claims_created}`);
+      console.log(`    memory writes: ${result.session_stats.memory_writes}`);
+      console.log(`    plan updates: ${result.session_stats.plan_updates}`);
+      console.log(`    candidates created: ${result.session_stats.candidates_created}`);
+      if (result.session_stats.last_brainclaw_write) {
+        console.log(`    last brainclaw write: ${result.session_stats.last_brainclaw_write}`);
+      }
+      for (const warning of result.session_stats.warnings) {
+        console.log(`    warning: ${warning}`);
+      }
     }
     if (result.reflection_prompt) {
       console.log('\n📝 Session reflection:');
@@ -177,9 +205,6 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     note_type: 'session_end',
   }, options.cwd);
 
-  appendAuditEntry({ action: 'session_end', actor: actor.agent, actor_id: actor.agent_id, item_id: sessionId, item_type: 'session', session_id: sessionId, host_id: actor.host_id }, options.cwd);
-  clearCurrentSession(options.cwd, sessionId);
-
   // Reflect-handoff: generate a handoff candidate from git commits since session start
   if (options.reflectHandoff) {
     try {
@@ -260,6 +285,27 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     }
   }
 
+  const sessionStats = buildSessionStats({
+    sessionId,
+    sessionStartedAt: loadSessionSnapshot(sessionId, options.cwd)?.started_at,
+    agent: actor.agent,
+    agentId: actor.agent_id,
+    notesInSession: sessionNotes,
+    cwd: options.cwd,
+  });
+
+  appendAuditEntry({
+    action: 'session_end',
+    actor: actor.agent,
+    actor_id: actor.agent_id,
+    item_id: sessionId,
+    item_type: 'session',
+    session_id: sessionId,
+    host_id: actor.host_id,
+    after: sessionStats,
+  }, options.cwd);
+  clearCurrentSession(options.cwd, sessionId);
+
   const result: SessionEndResult = {
     session_id: sessionId,
     agent: actor.agent,
@@ -268,6 +314,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     context_diff: contextDiff,
     summary: summaryText,
     open_work_warning: openWorkWarning,
+    session_stats: sessionStats,
   };
 
   if (options.reflect) {
@@ -278,4 +325,110 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
   }
 
   return result;
+}
+
+const SESSION_MEMORY_WRITE_ACTIONS: AuditAction[] = ['create', 'update', 'delete', 'accept', 'reject', 'trust_change', 'promote_direct', 'rollback'];
+
+function buildSessionStats(input: {
+  sessionId: string;
+  sessionStartedAt?: string;
+  agent: string;
+  agentId?: string;
+  notesInSession: ReturnType<typeof listRuntimeNotes>;
+  cwd?: string;
+}): SessionStatsSummary | undefined {
+  if (!input.sessionStartedAt) {
+    return undefined;
+  }
+
+  const startedAtMs = Date.parse(input.sessionStartedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    return undefined;
+  }
+
+  const auditEntries = readAuditLog({ since: input.sessionStartedAt, actor: input.agentId ?? input.agent }, input.cwd)
+    .filter((entry) => belongsToSession(entry, input.sessionId));
+  const runtimeWrites = input.notesInSession.filter((note) => (note.note_type ?? 'observation') === 'observation');
+  const claimsCreated = auditEntries.filter((entry) => entry.action === 'claim').length;
+  const planUpdates = auditEntries.filter((entry) =>
+    entry.item_type === 'plan' && ['create', 'update', 'delete'].includes(entry.action)).length;
+  const memoryWrites = auditEntries.filter((entry) => SESSION_MEMORY_WRITE_ACTIONS.includes(entry.action)).length + runtimeWrites.length;
+  const lastBrainclawWrite = [
+    ...runtimeWrites.map((note) => note.created_at),
+    ...auditEntries.filter((entry) => SESSION_MEMORY_WRITE_ACTIONS.includes(entry.action)).map((entry) => entry.timestamp),
+  ].sort().at(-1);
+  const candidatesCreated = countSessionCandidates(input.sessionId, input.cwd);
+  const fileEditsCount = countSessionEditedFiles(input.sessionId, input.cwd);
+
+  const warnings: string[] = [];
+  if (fileEditsCount > 0 && claimsCreated === 0) {
+    warnings.push(`${fileEditsCount} file edit(s) with 0 claims created`);
+  }
+  if (fileEditsCount > 0 && memoryWrites === 0) {
+    warnings.push(`${fileEditsCount} file edit(s) with 0 memory writes suggests decisions or traps may have been missed`);
+  }
+
+  return {
+    session_duration_minutes: Math.max(0, Math.floor((Date.now() - startedAtMs) / 60_000)),
+    file_edits_count: fileEditsCount,
+    claims_created: claimsCreated,
+    memory_writes: memoryWrites,
+    plan_updates: planUpdates,
+    candidates_created: candidatesCreated,
+    last_brainclaw_write: lastBrainclawWrite,
+    warnings,
+  };
+}
+
+function belongsToSession(entry: AuditEntry, sessionId: string): boolean {
+  return !entry.session_id || entry.session_id === sessionId;
+}
+
+function countSessionCandidates(sessionId: string, cwd?: string): number {
+  const authored = [
+    ...listCandidates(undefined, cwd),
+    ...listArchivedCandidates('accepted', cwd),
+    ...listArchivedCandidates('rejected', cwd),
+  ];
+  return authored.filter((candidate) => candidate.session_id === sessionId).length;
+}
+
+function countSessionEditedFiles(sessionId: string, cwd?: string): number {
+  const snapshot = loadSessionSnapshot(sessionId, cwd);
+  const repoCwd = cwd ?? process.cwd();
+
+  try {
+    const touched = new Set<string>();
+    if (snapshot?.git_sha) {
+      for (const pathEntry of execSync(`git diff --name-only ${snapshot.git_sha}..HEAD`, {
+        cwd: repoCwd,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).split(/\r?\n/).filter((entry) => Boolean(entry) && shouldCountEditedPath(entry))) {
+        touched.add(pathEntry);
+      }
+    }
+    for (const pathEntry of execSync('git diff --name-only HEAD', {
+      cwd: repoCwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).split(/\r?\n/).filter((entry) => Boolean(entry) && shouldCountEditedPath(entry))) {
+      touched.add(pathEntry);
+    }
+    for (const pathEntry of execSync('git ls-files --others --exclude-standard', {
+      cwd: repoCwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).split(/\r?\n/).filter((entry) => Boolean(entry) && shouldCountEditedPath(entry))) {
+      touched.add(pathEntry);
+    }
+    return touched.size;
+  } catch {
+    return 0;
+  }
+}
+
+function shouldCountEditedPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return !normalized.startsWith('.brainclaw/') && !normalized.startsWith('.git/');
 }

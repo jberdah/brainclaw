@@ -6,9 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { clearCurrentSession, loadCurrentSession } from '../../src/core/identity.js';
 import { runSessionEnd } from '../../src/commands/session-end.js';
 import { loadSessionSnapshot, runSessionStart, startSession } from '../../src/commands/session-start.js';
-import { listCandidates } from '../../src/core/candidates.js';
+import { listCandidates, saveCandidate } from '../../src/core/candidates.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
+import { appendAuditEntry } from '../../src/core/audit.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 function captureLogs(fn: () => void): string[] {
@@ -318,6 +319,94 @@ describe('session commands', { concurrency: false }, () => {
       assert.equal(pending.length, 1);
       assert.equal(pending[0].promotion_blocked_reason, 'contradiction_detected');
       assert.ok((pending[0].contradictions_detected?.length ?? 0) > 0);
+    } finally {
+      if (previousSession === undefined) {
+        delete process.env.BRAINCLAW_SESSION_ID;
+      } else {
+        process.env.BRAINCLAW_SESSION_ID = previousSession;
+      }
+    }
+  });
+
+  it('emits session discipline stats from session activity', () => {
+    const previousSession = process.env.BRAINCLAW_SESSION_ID;
+    process.env.BRAINCLAW_SESSION_ID = 'sess_stats_test';
+    try {
+      initGitRepo(workspace.dir);
+      fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 1;\n', 'utf-8');
+      git(['add', '-A'], workspace.dir);
+      git(['commit', '-m', 'init'], workspace.dir);
+
+      captureLogs(() => {
+        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      });
+
+      fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 2;\n', 'utf-8');
+      saveRuntimeNote({
+        id: 'rtn_stats_obs',
+        agent: workspace.currentAgent.agent_name,
+        agent_id: workspace.currentAgent.agent_id,
+        project_id: 'prj_session_test',
+        session_id: 'sess_stats_test',
+        text: 'Observed a stats-worthy checkpoint',
+        created_at: new Date().toISOString(),
+        tags: ['auth'],
+        visibility: 'shared',
+        note_type: 'observation',
+      }, workspace.dir);
+      appendAuditEntry({
+        action: 'claim',
+        actor: workspace.currentAgent.agent_name,
+        actor_id: workspace.currentAgent.agent_id,
+        item_id: 'clm_stats_01',
+        item_type: 'claim',
+        session_id: 'sess_stats_test',
+      }, workspace.dir);
+      appendAuditEntry({
+        action: 'update',
+        actor: workspace.currentAgent.agent_name,
+        actor_id: workspace.currentAgent.agent_id,
+        item_id: 'pln_stats_01',
+        item_type: 'plan',
+        session_id: 'sess_stats_test',
+      }, workspace.dir);
+      saveCandidate({
+        id: 'cnd_stats_01',
+        type: 'decision',
+        text: 'Track this as a session-created candidate',
+        created_at: new Date().toISOString(),
+        author: workspace.currentAgent.agent_name,
+        author_id: workspace.currentAgent.agent_id,
+        project_id: 'prj_session_test',
+        session_id: 'sess_stats_test',
+        tags: ['auth'],
+        status: 'pending',
+        star_count: 0,
+        starred_by: [],
+        usage_count: 0,
+        usage_events: [],
+      }, workspace.dir);
+
+      const result = JSON.parse(captureLogs(() => {
+        runSessionEnd({ session: 'sess_stats_test', json: true, cwd: workspace.dir });
+      })[0] ?? '{}') as {
+        session_stats?: {
+          file_edits_count: number;
+          claims_created: number;
+          memory_writes: number;
+          plan_updates: number;
+          candidates_created: number;
+          warnings: string[];
+        };
+      };
+
+      assert.ok(result.session_stats);
+      assert.ok((result.session_stats?.file_edits_count ?? 0) >= 1);
+      assert.equal(result.session_stats?.claims_created, 1);
+      assert.equal(result.session_stats?.memory_writes, 2);
+      assert.equal(result.session_stats?.plan_updates, 1);
+      assert.equal(result.session_stats?.candidates_created, 1);
+      assert.deepEqual(result.session_stats?.warnings, []);
     } finally {
       if (previousSession === undefined) {
         delete process.env.BRAINCLAW_SESSION_ID;

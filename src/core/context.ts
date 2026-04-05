@@ -1,3 +1,5 @@
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { readProjectVision } from './io.js';
 import { loadActiveProject, type ActiveProject } from './active-project.js';
@@ -16,6 +18,7 @@ import { resolveCurrentHostId } from './host.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type AgentResumeSummary } from './reputation.js';
 import { loadState } from './state.js';
+import { readAuditLog, type AuditAction, type AuditEntry } from './audit.js';
 import { listCandidates } from './candidates.js';
 import { listClaims, isClaimExpired } from './claims.js';
 import { listRuntimeNotes } from './runtime.js';
@@ -67,6 +70,13 @@ export interface OpenWorkSummary {
   in_progress_plans: Pick<PlanItem, 'id' | 'text' | 'assignee'>[];
 }
 
+export interface SessionMetricsSummary {
+  active_claims: number;
+  edits_since_last_memory: number;
+  session_duration_minutes: number;
+  last_brainclaw_write?: string;
+}
+
 export interface ContextResult {
   context_schema: string;
   profile: string;
@@ -92,6 +102,7 @@ export interface ContextResult {
   resolved_instructions: InstructionEntry[];
   resume_summary?: AgentResumeSummary;
   open_work?: OpenWorkSummary;
+  session_metrics?: SessionMetricsSummary;
   estimation_calibration?: string;
   stores?: Pick<StoreRef, 'cwd' | 'depth' | 'role'>[];
   cross_project_items?: ContextItem[];
@@ -560,6 +571,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   // Build open_work: active claims and in_progress plans owned by the current agent
   // Reuses myClaims computed in agent-layer scoring above
   let openWork: OpenWorkSummary | undefined;
+  const currentSession = loadCurrentSession(contextCwd);
   if (currentAgentIdentity || agent) {
     const claimPlanIds = new Set(myClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
     const inProgressPlans = state.plan_items.filter(
@@ -574,6 +586,15 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       };
     }
   }
+  const sessionMetrics = buildSessionMetrics({
+    cwd: contextCwd,
+    sessionId: currentSession?.session_id,
+    sessionStartedAt: currentSession?.started_at,
+    agentName: agentName,
+    agentId: currentAgentIdentity?.agent_id,
+    activeClaimsCount: openWork?.active_claims.length ?? 0,
+    runtimeNotes,
+  });
 
   // Cross-project items (subscriber links — read-only, always injected, bypass scoring)
   const crossProjectItems: ContextItem[] = [];
@@ -643,6 +664,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     open_work: openWork,
+    session_metrics: sessionMetrics,
     stores: storeChain.length > 1
       ? storeChain.map(({ cwd, depth, role }) => ({ cwd, depth, role }))
       : undefined,
@@ -689,6 +711,17 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
       for (const plan of result.open_work.in_progress_plans) {
         lines.push(`- [${plan.id}] ${plan.text}`);
       }
+    }
+    lines.push('');
+  }
+  if (result.session_metrics) {
+    lines.push('## Session metrics');
+    lines.push('');
+    lines.push(`- Active claims: ${result.session_metrics.active_claims}`);
+    lines.push(`- Edits since last Brainclaw write: ${result.session_metrics.edits_since_last_memory}`);
+    lines.push(`- Session duration: ${result.session_metrics.session_duration_minutes} min`);
+    if (result.session_metrics.last_brainclaw_write) {
+      lines.push(`- Last Brainclaw write: ${result.session_metrics.last_brainclaw_write}`);
     }
     lines.push('');
   }
@@ -1073,6 +1106,24 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       }
     }
   }
+  if (result.session_metrics) {
+    lines.push(compact ? 'sm:' : 'session_metrics:');
+    if (compact) {
+      lines.push(`  ac=${result.session_metrics.active_claims}`);
+      lines.push(`  ed=${result.session_metrics.edits_since_last_memory}`);
+      lines.push(`  dur=${result.session_metrics.session_duration_minutes}`);
+      if (result.session_metrics.last_brainclaw_write) {
+        lines.push(`  lbw=${result.session_metrics.last_brainclaw_write}`);
+      }
+    } else {
+      lines.push(`  active_claims: ${result.session_metrics.active_claims}`);
+      lines.push(`  edits_since_last_memory: ${result.session_metrics.edits_since_last_memory}`);
+      lines.push(`  session_duration_minutes: ${result.session_metrics.session_duration_minutes}`);
+      if (result.session_metrics.last_brainclaw_write) {
+        lines.push(`  last_brainclaw_write: ${result.session_metrics.last_brainclaw_write}`);
+      }
+    }
+  }
   lines.push(compact ? 'ins:' : 'instructions:');
   if (result.resolved_instructions.length === 0) {
     lines.push(compact ? '  - n' : '  - none');
@@ -1309,6 +1360,103 @@ function classifyMemoryDensity(selectedCount: number): 'low' | 'medium' | 'high'
   if (selectedCount < 3) return 'low';
   if (selectedCount <= 6) return 'medium';
   return 'high';
+}
+
+const BRAINCLAW_WRITE_ACTIONS: AuditAction[] = ['create', 'update', 'delete', 'accept', 'reject', 'trust_change', 'promote_direct', 'rollback'];
+
+function buildSessionMetrics(input: {
+  cwd: string;
+  sessionId?: string;
+  sessionStartedAt?: string;
+  agentName?: string;
+  agentId?: string;
+  activeClaimsCount: number;
+  runtimeNotes: ReturnType<typeof listRuntimeNotes>;
+}): SessionMetricsSummary | undefined {
+  if (!input.sessionId || !input.sessionStartedAt || !input.agentName) {
+    return undefined;
+  }
+
+  const sessionId = input.sessionId;
+  const startedAtMs = Date.parse(input.sessionStartedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    return undefined;
+  }
+
+  const runtimeWrites = input.runtimeNotes
+    .filter((note) =>
+      note.agent === input.agentName
+      && note.session_id === sessionId
+      && ((note.note_type ?? 'observation') === 'observation'))
+    .map((note) => note.created_at);
+  const auditWrites = readAuditLog({ since: input.sessionStartedAt, actor: input.agentId ?? input.agentName }, input.cwd)
+    .filter((entry) => belongsToSession(entry, sessionId))
+    .filter((entry) => BRAINCLAW_WRITE_ACTIONS.includes(entry.action))
+    .map((entry) => entry.timestamp);
+  const lastBrainclawWrite = [...runtimeWrites, ...auditWrites].sort().at(-1);
+  const editsSinceLastMemory = countChangedFilesSince(input.cwd, lastBrainclawWrite ?? input.sessionStartedAt);
+
+  return {
+    active_claims: input.activeClaimsCount,
+    edits_since_last_memory: editsSinceLastMemory,
+    session_duration_minutes: Math.max(0, Math.floor((Date.now() - startedAtMs) / 60_000)),
+    last_brainclaw_write: lastBrainclawWrite,
+  };
+}
+
+function belongsToSession(entry: AuditEntry, sessionId: string): boolean {
+  return !entry.session_id || entry.session_id === sessionId;
+}
+
+function countChangedFilesSince(cwd: string, since: string): number {
+  const sinceMs = Date.parse(since);
+  if (!Number.isFinite(sinceMs)) {
+    return 0;
+  }
+
+  try {
+    const output = execSync('git status --porcelain --untracked-files=normal', {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!output) {
+      return 0;
+    }
+
+    const changedPaths = new Set<string>();
+    for (const line of output.split(/\r?\n/)) {
+      const rawPath = line.slice(3).trim();
+      const resolvedPath = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop() ?? rawPath : rawPath;
+      if (resolvedPath && shouldCountEditedPath(resolvedPath)) {
+        changedPaths.add(resolvedPath);
+      }
+    }
+
+    let count = 0;
+    for (const relativePath of changedPaths) {
+      const absolutePath = path.join(cwd, relativePath);
+      try {
+        if (!fs.existsSync(absolutePath)) {
+          count++;
+          continue;
+        }
+        if (fs.statSync(absolutePath).mtimeMs >= sinceMs) {
+          count++;
+        }
+      } catch {
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+function shouldCountEditedPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return !normalized.startsWith('.brainclaw/') && !normalized.startsWith('.git/');
 }
 
 function summariseAgentTooling(
