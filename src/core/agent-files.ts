@@ -451,6 +451,7 @@ const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
 const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
 const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
 const COPILOT_MCP_RELATIVE_PATH = '.vscode/settings.json';
+const VSCODE_MCP_RELATIVE_PATH = '.vscode/mcp.json';
 const WINDSURF_MCP_RELATIVE_PATH = '.codeium/windsurf/mcp_config.json';
 const CLAUDE_CODE_MCP_RELATIVE_PATH = '.mcp.json';
 const CLAUDE_CODE_COMMAND_RELATIVE_PATH = '.claude/commands/brainclaw.md';
@@ -480,6 +481,8 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   CURSOR_MDC_RELATIVE_PATH,
   CURSOR_MCP_RELATIVE_PATH,
   COPILOT_SKILL_RELATIVE_PATH,
+  COPILOT_MCP_RELATIVE_PATH,
+  VSCODE_MCP_RELATIVE_PATH,
   CLAUDE_CODE_MCP_RELATIVE_PATH,
   CLAUDE_CODE_COMMAND_RELATIVE_PATH,
   CLAUDE_CODE_SETTINGS_RELATIVE_PATH,
@@ -733,6 +736,32 @@ export function ensureCopilotMcpConfig(cwd: string): AutoConfigWriteResult {
     updated,
     filePath,
     relativePath: COPILOT_MCP_RELATIVE_PATH,
+  };
+}
+
+/**
+ * Write .vscode/mcp.json — the VS Code-native universal MCP config.
+ * Works for Copilot, Claude Code (VS Code extension), and any MCP-consuming
+ * VS Code extension. Uses the { servers: { ... } } format.
+ */
+export function ensureVscodeMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.vscode', 'mcp.json');
+  const existing = readJsonObject(filePath);
+  const servers = isJsonObject(existing.servers) ? { ...existing.servers } : {};
+  servers.brainclaw = brainclawMcpEntry('github-copilot', servers.brainclaw, cwd);
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    servers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'VS Code MCP config (.vscode/mcp.json)',
+    created,
+    updated,
+    filePath,
+    relativePath: VSCODE_MCP_RELATIVE_PATH,
   };
 }
 
@@ -1340,7 +1369,7 @@ export function writeExportCompanionFiles(
       return result ? [result] : [];
     }
     case 'copilot-instructions':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
+      return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
     case 'cursor-rules': {
       const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
@@ -1389,6 +1418,7 @@ export function patchAllMcpConfigs(
   try {
     // Workspace-level configs
     results.push(ensureClaudeCodeMcpConfig(cwd));
+    results.push(ensureVscodeMcpConfig(cwd));
     results.push(ensureCopilotMcpConfig(cwd));
     results.push(ensureClineMcpConfig(cwd));
     results.push(ensureRooMcpConfig(cwd));
