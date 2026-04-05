@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getAgentCapabilityProfile } from './agent-capability.js';
 import type {
   AgentIntegrationDeclaration,
   AgentIntegrationDeclarationSource,
@@ -30,7 +31,8 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set<AgentIntegrationName>([
 const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> = {
   'github-copilot': [
     { kind: 'instructions', location: 'workspace', path: '.github/copilot-instructions.md' },
-    { kind: 'skill', location: 'workspace', path: '.github/skills/brainclaw-context/SKILL.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.vscode/settings.json' },
+    { kind: 'skill',        location: 'workspace', path: '.github/skills/brainclaw-context/SKILL.md' },
   ],
   'claude-code': [
     { kind: 'instructions', location: 'workspace', path: 'CLAUDE.md' },
@@ -124,12 +126,16 @@ export interface AgentIntegrationSurfaceReadiness extends AgentIntegrationSurfac
   exists: boolean;
 }
 
+export type EffectiveTier = 'tier-a' | 'tier-b' | 'tier-c';
+
 export interface AgentIntegrationReadiness {
   agent_name: AgentIntegrationName;
   declaration_source: AgentIntegrationDeclarationSource;
   ready: boolean;
   missing_surfaces: AgentIntegrationSurfaceReadiness[];
   surfaces: AgentIntegrationSurfaceReadiness[];
+  effective_tier: EffectiveTier;
+  self_healing_guidance: string[];
 }
 
 function resolveDeclaredSurfacePath(surface: AgentIntegrationSurface, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -162,12 +168,39 @@ export function assessAgentIntegrationReadiness(
   return (config.agent_integrations?.declarations ?? []).map((declaration) => {
     const surfaces = declaration.surfaces.map((surface) => surfaceExists(surface, cwd, env));
     const missingSurfaces = surfaces.filter((surface) => !surface.exists);
+      
+      let effectiveTier: EffectiveTier = 'tier-b';
+      const selfHealingGuidance: string[] = [];
+      
+      const hasMissingMcpOrHook = missingSurfaces.some((s) => s.kind === 'mcp' || s.kind === 'hook');
+      const isPrimaryTierA = getAgentCapabilityProfile(declaration.agent_name)?.templateTier === 'A';
+    if (isPrimaryTierA) {
+      if (hasMissingMcpOrHook) {
+        effectiveTier = 'tier-b';
+        selfHealingGuidance.push(`Agent ${declaration.agent_name} is degraded to Tier B because MCP or hooks are missing. Run 'brainclaw setup ${declaration.agent_name}' or check integrations.`);
+      } else {
+        effectiveTier = 'tier-a';
+      }
+    } else {
+      effectiveTier = 'tier-b'; // Inherently Tier B because context relies on native rules
+      if (hasMissingMcpOrHook) {
+        selfHealingGuidance.push(`Agent ${declaration.agent_name} is missing MCP or hook configurations. Run 'brainclaw setup ${declaration.agent_name}'.`);
+      }
+    }
+
+    if (missingSurfaces.length === surfaces.length && surfaces.length > 0) {
+      effectiveTier = 'tier-c';
+      selfHealingGuidance.push(`Agent ${declaration.agent_name} has no configured surfaces and is falling back to compact Tier C behavior.`);
+    }
+
     return {
       agent_name: declaration.agent_name,
       declaration_source: declaration.declaration_source,
       ready: missingSurfaces.length === 0,
       missing_surfaces: missingSurfaces,
       surfaces,
+      effective_tier: effectiveTier,
+      self_healing_guidance: selfHealingGuidance,
     };
   });
 }

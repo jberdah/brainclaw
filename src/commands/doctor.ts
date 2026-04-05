@@ -373,6 +373,12 @@ export function runDoctor(options: DoctorOptions = {}): void {
     });
     if (!options.json) {
       console.warn(`⚠ ${missingIntegrations.length} declared agent integration(s) are not fully activated on this machine/workspace.`);
+      for (const m of missingIntegrations) {
+        console.warn(`  - ${m.agent_name} -> Effective Tier: ${m.effective_tier}`);
+        for (const g of m.self_healing_guidance) {
+          console.warn(`    ↳ ${g}`);
+        }
+      }
     }
     hasIssues = true;
   } else {
@@ -381,6 +387,11 @@ export function runDoctor(options: DoctorOptions = {}): void {
       status: 'ok',
       message: `${integrationReadiness.length} declared agent integration(s) are fully activated`,
     });
+    if (!options.json) {
+      for (const r of integrationReadiness) {
+        console.info(`✓ ${r.agent_name} is active -> Effective Tier: ${r.effective_tier}`);
+      }
+    }
   }
 
   const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
