@@ -77,7 +77,7 @@ describe('core/agent-integrations', () => {
       assert.ok(readinessBefore[0]?.missing_surfaces.some((surface) => surface.location === 'machine'));
 
       fs.mkdirSync(path.join(homeDir, '.codeium', 'windsurf'), { recursive: true });
-      fs.writeFileSync(path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'), '{}', 'utf-8');
+      fs.writeFileSync(path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'), JSON.stringify({ mcpServers: { brainclaw: { command: 'brainclaw', args: ['mcp'] } } }), 'utf-8');
       const readinessAfter = assessAgentIntegrationReadiness(config, dir, { ...process.env, HOME: homeDir, USERPROFILE: homeDir });
       assert.equal(readinessAfter[0]?.ready, true);
     } finally {

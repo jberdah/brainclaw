@@ -117,8 +117,8 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   // --- Autonomous agents (headless, task-based or scheduled) ---
   openclaw: {
     name: 'openclaw', category: 'autonomous-agent', workflowModel: 'task-based',
-    hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
-    instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
   },
   nanoclaw: {
     name: 'nanoclaw', category: 'autonomous-agent', workflowModel: 'task-based',

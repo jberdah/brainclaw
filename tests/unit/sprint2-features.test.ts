@@ -202,7 +202,9 @@ describe('doctor effective tier', () => {
       // Create the expected surface files
       fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
       fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'test');
-      fs.writeFileSync(path.join(dir, '.mcp.json'), '{}');
+      fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify({
+        mcpServers: { brainclaw: { command: 'npx', args: ['brainclaw', 'mcp'] } }
+      }));
 
       const config = {
         agent_integrations: {
