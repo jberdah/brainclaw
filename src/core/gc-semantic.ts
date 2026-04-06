@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadState, persistState } from './state.js';
+import { loadState, mutateState } from './state.js';
 import { resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
 import { generateIdWithLabel, nowISO } from './ids.js';
@@ -137,13 +137,7 @@ export function assessMemoryPressure(cwd?: string): AssessmentResult {
   };
 }
 
-export function compact(options: CompactionOptions = {}): CompactionResult {
-  const cwd = options.cwd ?? process.cwd();
-  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
-  const minAgeDays = options.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
-  const dryRun = options.dryRun ?? false;
-  const state = loadState(cwd);
-  const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+function collectEligible(state: ReturnType<typeof loadState>, cutoff: string): CompactableItem[] {
   const eligible: CompactableItem[] = [];
   for (const plan of state.plan_items) {
     if (plan.status !== 'done' && plan.status !== 'dropped') continue;
@@ -157,8 +151,19 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
     eligible.push(handoffToCompactable(handoff));
   }
   eligible.sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const selected = eligible.slice(0, maxItems);
-  if (dryRun || selected.length === 0) {
+  return eligible;
+}
+
+export function compact(options: CompactionOptions = {}): CompactionResult {
+  const cwd = options.cwd ?? process.cwd();
+  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
+  const minAgeDays = options.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
+  const dryRun = options.dryRun ?? false;
+  const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  if (dryRun) {
+    const state = loadState(cwd);
+    const eligible = collectEligible(state, cutoff);
+    const selected = eligible.slice(0, maxItems);
     return {
       dry_run: true,
       eligible_count: eligible.length,
@@ -167,16 +172,31 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
       template: selected.length > 0 ? buildCompactionTemplate(selected) : undefined,
     };
   }
-  const backupPath = createBackup(selected, cwd);
-  const archived = archiveCompactedItems(selected, cwd);
-  return {
-    dry_run: false,
-    eligible_count: eligible.length,
-    archived_count: archived.length,
-    archived_items: archived,
-    backup_path: backupPath,
-    template: buildCompactionTemplate(archived),
-  };
+  return mutateState((state) => {
+    const eligible = collectEligible(state, cutoff);
+    const selected = eligible.slice(0, maxItems);
+    if (selected.length === 0) {
+      return {
+        dry_run: false,
+        eligible_count: eligible.length,
+        archived_count: 0,
+        archived_items: [] as CompactableItem[],
+      } as CompactionResult;
+    }
+    const backupPath = createBackup(selected, cwd);
+    const archived = archiveCompactedItems(selected, cwd);
+    const archivedIds = new Set(archived.map(a => a.id));
+    state.plan_items = state.plan_items.filter(p => !archivedIds.has(p.id));
+    state.open_handoffs = state.open_handoffs.filter(h => !archivedIds.has(h.id));
+    return {
+      dry_run: false,
+      eligible_count: eligible.length,
+      archived_count: archived.length,
+      archived_items: archived,
+      backup_path: backupPath,
+      template: buildCompactionTemplate(archived),
+    };
+  }, cwd);
 }
 
 export function buildCompactionTemplate(items: CompactableItem[]): string {
@@ -223,56 +243,58 @@ export function buildCompactionTemplate(items: CompactableItem[]): string {
 
 export function applyCompaction(options: ApplyCompactionOptions): ApplyCompactionResult {
   const cwd = options.cwd ?? process.cwd();
-  const state = loadState(cwd);
-  const toArchive: CompactableItem[] = [];
-  for (const id of options.archiveIds) {
-    const plan = state.plan_items.find(p => p.id === id);
-    if (plan && (plan.status === 'done' || plan.status === 'dropped')) {
-      toArchive.push(planToCompactable(plan));
-      continue;
-    }
-    const handoff = state.open_handoffs.find(h => h.id === id);
-    if (handoff && handoff.status === 'closed') {
-      toArchive.push(handoffToCompactable(handoff));
-    }
-  }
-  const backupPath = createBackup(toArchive, cwd);
-  const archived = archiveCompactedItems(toArchive, cwd);
-  const createdIds: string[] = [];
-  if (options.newItems && options.newItems.length > 0) {
-    const freshState = loadState(cwd);
-    const author = options.author ?? 'compaction';
-    const authorId = options.authorId;
-    for (const newItem of options.newItems) {
-      const { id, short_label } = generateIdWithLabel(newItem.type, cwd);
-      const now = nowISO();
-      const base = {
-        id, short_label, text: newItem.text, created_at: now, author,
-        ...(authorId ? { author_id: authorId } : {}),
-        tags: newItem.tags ?? ['compaction'],
-      };
-      if (newItem.type === 'constraint') {
-        freshState.active_constraints.push({ ...base, status: 'active' } as Constraint);
-      } else if (newItem.type === 'decision') {
-        freshState.recent_decisions.push({ ...base } as Decision);
-      } else if (newItem.type === 'trap') {
-        freshState.known_traps.push({
-          ...base, status: 'active',
-          severity: (newItem.severity as 'low' | 'medium' | 'high') ?? 'medium',
-          visibility: 'shared',
-        } as Trap);
+  return mutateState((state) => {
+    const toArchive: CompactableItem[] = [];
+    for (const id of options.archiveIds) {
+      const plan = state.plan_items.find(p => p.id === id);
+      if (plan && (plan.status === 'done' || plan.status === 'dropped')) {
+        toArchive.push(planToCompactable(plan));
+        continue;
       }
-      createdIds.push(id);
+      const handoff = state.open_handoffs.find(h => h.id === id);
+      if (handoff && handoff.status === 'closed') {
+        toArchive.push(handoffToCompactable(handoff));
+      }
     }
-    persistState(freshState, cwd);
-  }
-  return {
-    archived_count: archived.length,
-    archived_ids: archived.map(a => a.id),
-    created_count: createdIds.length,
-    created_ids: createdIds,
-    backup_path: backupPath,
-  };
+    const backupPath = createBackup(toArchive, cwd);
+    const archived = archiveCompactedItems(toArchive, cwd);
+    const archivedIds = new Set(archived.map(a => a.id));
+    state.plan_items = state.plan_items.filter(p => !archivedIds.has(p.id));
+    state.open_handoffs = state.open_handoffs.filter(h => !archivedIds.has(h.id));
+    const createdIds: string[] = [];
+    if (options.newItems && options.newItems.length > 0) {
+      const author = options.author ?? 'compaction';
+      const authorId = options.authorId;
+      for (const newItem of options.newItems) {
+        const { id, short_label } = generateIdWithLabel(newItem.type, cwd);
+        const now = nowISO();
+        const base = {
+          id, short_label, text: newItem.text, created_at: now, author,
+          ...(authorId ? { author_id: authorId } : {}),
+          tags: newItem.tags ?? ['compaction'],
+        };
+        if (newItem.type === 'constraint') {
+          state.active_constraints.push({ ...base, status: 'active' } as Constraint);
+        } else if (newItem.type === 'decision') {
+          state.recent_decisions.push({ ...base } as Decision);
+        } else if (newItem.type === 'trap') {
+          state.known_traps.push({
+            ...base, status: 'active',
+            severity: (newItem.severity as 'low' | 'medium' | 'high') ?? 'medium',
+            visibility: 'shared',
+          } as Trap);
+        }
+        createdIds.push(id);
+      }
+    }
+    return {
+      archived_count: archived.length,
+      archived_ids: archived.map(a => a.id),
+      created_count: createdIds.length,
+      created_ids: createdIds,
+      backup_path: backupPath,
+    };
+  }, cwd);
 }
 
 function archiveCompactedItems(items: CompactableItem[], cwd: string): CompactableItem[] {
@@ -294,7 +316,6 @@ function archiveCompactedItems(items: CompactableItem[], cwd: string): Compactab
       parsed._compaction_type = 'semantic';
       fs.mkdirSync(path.dirname(archivePath), { recursive: true });
       fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
-      fs.unlinkSync(sourcePath);
       archived.push(item);
     } catch (err) {
       logger.debug('gc-semantic: failed to archive ' + item.id + ':', err);
