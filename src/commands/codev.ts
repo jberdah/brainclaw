@@ -127,7 +127,18 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     }, cwd);
 
     if (options.spawn) {
-      spawnConsultant(brief, cwd);
+      spawnConsultant(brief, threadId, persona.name, cwd);
+    }
+  }
+
+  if (options.spawn) {
+    const baseline = getThread(threadId, cwd).length;
+    console.log(`Waiting for ${personas.length} clarification responses (timeout: 5 min)...`);
+    const poll = awaitThreadGrowth(threadId, baseline, personas.length, cwd);
+    if (poll.timedOut) {
+      console.log(`Warning: timed out — received ${poll.received}/${personas.length} clarification responses.`);
+    } else {
+      console.log(`All ${personas.length} clarification responses received.`);
     }
   }
 
@@ -158,7 +169,18 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     }, cwd);
 
     if (options.spawn) {
-      spawnConsultant(brief, cwd);
+      spawnConsultant(brief, threadId, persona.name, cwd);
+    }
+  }
+
+  if (options.spawn) {
+    const baseline = getThread(threadId, cwd).length;
+    console.log(`Waiting for ${personas.length} consultation responses (timeout: 5 min)...`);
+    const poll = awaitThreadGrowth(threadId, baseline, personas.length, cwd);
+    if (poll.timedOut) {
+      console.log(`Warning: timed out — received ${poll.received}/${personas.length} consultation responses.`);
+    } else {
+      console.log(`All ${personas.length} consultation responses received.`);
     }
   }
 
@@ -206,12 +228,58 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
 
 // ── Spawn helper ──────────────────────────────────────────────
 
-function spawnConsultant(brief: string, cwd: string): void {
-  spawn('claude', ['-p', brief, '--allowedTools', 'Read,Glob,Grep'], {
+function spawnConsultant(brief: string, threadId: string, personaName: string, cwd: string): void {
+  const responseInstruction = [
+    '',
+    '## Response Protocol',
+    'After formulating your response, you MUST post it back to the brainclaw thread.',
+    'Run this command in Bash (adapt quoting as needed for your response content):',
+    '',
+    `brainclaw inbox send coordinator "$(cat <<'CODEV_RESPONSE'`,
+    '<YOUR RESPONSE HERE>',
+    `CODEV_RESPONSE`,
+    `)" --type rfc --thread ${threadId} --agent ${personaName}`,
+    '',
+    'Replace <YOUR RESPONSE HERE> with your actual response text.',
+    'This is REQUIRED — your work is lost if you do not post it.',
+  ].join('\n');
+
+  const fullBrief = brief + responseInstruction;
+
+  spawn('claude', ['-p', fullBrief, '--allowedTools', 'Read,Glob,Grep,Bash'], {
     detached: true,
     stdio: 'ignore',
     cwd,
   }).unref();
+}
+
+// ── Polling helpers ──────────────────────────────────────────
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function awaitThreadGrowth(
+  threadId: string,
+  baselineCount: number,
+  expectedNew: number,
+  cwd: string,
+  timeoutMs = 300_000,
+  intervalMs = 30_000,
+): { received: number; timedOut: boolean } {
+  const target = baselineCount + expectedNew;
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const thread = getThread(threadId, cwd);
+    if (thread.length >= target) {
+      return { received: thread.length - baselineCount, timedOut: false };
+    }
+    sleepSync(intervalMs);
+  }
+
+  const thread = getThread(threadId, cwd);
+  return { received: thread.length - baselineCount, timedOut: true };
 }
 
 // ── Exposition builder ────────────────────────────────────────
