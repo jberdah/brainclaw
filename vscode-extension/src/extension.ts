@@ -3,7 +3,7 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
+import { BoardProject, BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
 
 class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   getTreeItem(el: vscode.TreeItem) { return el; }
@@ -32,6 +32,22 @@ interface AgentCursor {
 const EVENTS_FILE = 'events.jsonl';
 const CURSORS_DIR = '.cursors';
 const VSCODE_AGENT = 'vscode-extension';
+const PROJECT_SCAN_SKIP_DIRS = new Set([
+  '.brainclaw',
+  '.git',
+  'node_modules',
+  'dist',
+  'dist-test',
+  'build',
+  'coverage',
+  '.next',
+  '.nuxt',
+  '.venv',
+  'venv',
+  '__pycache__',
+  'target',
+  'vendor',
+]);
 
 // Human-readable labels for event actions
 const ACTION_LABELS: Record<string, string> = {
@@ -60,20 +76,67 @@ const ITEM_LABELS: Record<string, string> = {
   state: 'state',
 };
 
+function discoverBrainclawProjects(workspaceFolders: readonly vscode.WorkspaceFolder[]): BoardProject[] {
+  const discovered = new Map<string, BoardProject>();
+  for (const folder of workspaceFolders) {
+    scanWorkspaceFolder(folder.uri.fsPath, folder.uri.fsPath, 0, discovered);
+  }
+
+  return [...discovered.values()].sort((left, right) => {
+    if (left.isWorkspaceRoot !== right.isWorkspaceRoot) {
+      return left.isWorkspaceRoot ? -1 : 1;
+    }
+    return left.relativePath.localeCompare(right.relativePath) || left.path.localeCompare(right.path);
+  });
+}
+
+function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: number, discovered: Map<string, BoardProject>): void {
+  if (depth > 6) {
+    return;
+  }
+
+  const normalizedPath = path.resolve(currentPath);
+  if (fs.existsSync(path.join(normalizedPath, '.brainclaw'))) {
+    const relativePath = path.relative(rootPath, normalizedPath) || '.';
+    discovered.set(normalizedPath, {
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      relativePath,
+      isWorkspaceRoot: relativePath === '.',
+    });
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (PROJECT_SCAN_SKIP_DIRS.has(entry.name)) continue;
+    if (entry.name.startsWith('.') && entry.name !== '.brainclaw') continue;
+    scanWorkspaceFolder(rootPath, path.join(normalizedPath, entry.name), depth + 1, discovered);
+  }
+}
+
 // --- Activation ---
 
 let statusBarItem: vscode.StatusBarItem;
-let eventWatcher: fs.FSWatcher | undefined;
+let eventWatchers: fs.FSWatcher[] = [];
 let unseenCount = 0;
 
 export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'brainclaw.active', true);
 
-  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  console.log('[brainclaw] activate — cwd:', cwd ?? 'NONE');
+  const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+  const cwd = workspaceFolders[0]?.uri.fsPath;
+  const projects = discoverBrainclawProjects(workspaceFolders);
+  console.log('[brainclaw] activate — cwd:', cwd ?? 'NONE', 'projects:', projects.map((project) => project.path).join(', ') || 'none');
 
   // Board Tree Provider — always register to avoid "no data provider" error
-  const treeProvider = cwd ? new BrainclawBoardProvider(cwd) : undefined;
+  const treeProvider = cwd ? new BrainclawBoardProvider(cwd, projects) : undefined;
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
   );
@@ -96,13 +159,13 @@ export function activate(context: vscode.ExtensionContext) {
   // --- Action commands ---
   context.subscriptions.push(
     vscode.commands.registerCommand('brainclaw.acceptCandidate', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`accept ${item.itemId}`);
+      if (item.itemId) treeProvider?.exec(`accept ${item.itemId}`, item.projectPath);
     }),
     vscode.commands.registerCommand('brainclaw.rejectCandidate', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`reject ${item.itemId}`);
+      if (item.itemId) treeProvider?.exec(`reject ${item.itemId}`, item.projectPath);
     }),
     vscode.commands.registerCommand('brainclaw.releaseClaim', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`claim release ${item.itemId}`);
+      if (item.itemId) treeProvider?.exec(`claim release ${item.itemId}`, item.projectPath);
     }),
   );
 
@@ -117,9 +180,8 @@ export function activate(context: vscode.ExtensionContext) {
   // Clear notifications command
   context.subscriptions.push(
     vscode.commands.registerCommand('brainclaw.clearNotifications', () => {
-      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (cwd) {
-        advanceCursor(cwd);
+      for (const project of projects) {
+        advanceCursor(project.path);
       }
       unseenCount = 0;
       updateStatusBar(0);
@@ -127,42 +189,45 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Start watching events.jsonl
-  if (cwd) {
-    startEventBusWatcher(cwd);
+  if (projects.length > 0) {
+    startEventBusWatchers(projects.map((project) => project.path));
   }
 }
 
 export function deactivate() {
-  eventWatcher?.close();
-  eventWatcher = undefined;
+  for (const watcher of eventWatchers) {
+    watcher.close();
+  }
+  eventWatchers = [];
 }
 
 // --- Event bus watcher ---
 
-function startEventBusWatcher(cwd: string): void {
-  const brainclawDir = path.join(cwd, '.brainclaw');
-  const eventsPath = path.join(brainclawDir, EVENTS_FILE);
+function startEventBusWatchers(cwds: string[]): void {
+  for (const watcher of eventWatchers) {
+    watcher.close();
+  }
+  eventWatchers = [];
 
-  // Initial read to set baseline cursor (don't notify for pre-existing events)
-  advanceCursor(cwd);
+  const uniqueCwds = [...new Set(cwds.map((cwd) => path.resolve(cwd)))];
+  for (const cwd of uniqueCwds) {
+    const brainclawDir = path.join(cwd, '.brainclaw');
+    if (!fs.existsSync(brainclawDir)) {
+      continue;
+    }
 
-  // Watch for changes to events.jsonl
-  // We watch the .brainclaw directory and filter for events.jsonl changes,
-  // because the file may be recreated on rotation.
-  try {
-    eventWatcher = fs.watch(brainclawDir, (eventType: string, filename: string | Buffer | null) => {
-      if (filename === EVENTS_FILE || filename === EVENTS_FILE.replace(/\//g, '\\')) {
-        processNewEvents(cwd);
-      }
-    });
-  } catch {
-    // .brainclaw dir may not exist yet — fall back to polling
-    const poll = setInterval(() => {
-      if (fs.existsSync(brainclawDir)) {
-        clearInterval(poll);
-        startEventBusWatcher(cwd);
-      }
-    }, 5000);
+    advanceCursor(cwd);
+
+    try {
+      const watcher = fs.watch(brainclawDir, (_eventType: string, filename: string | Buffer | null) => {
+        if (filename === EVENTS_FILE || filename === EVENTS_FILE.replace(/\//g, '\\')) {
+          processNewEvents(cwd);
+        }
+      });
+      eventWatchers.push(watcher);
+    } catch {
+      // Ignore watcher failures for individual projects.
+    }
   }
 }
 
