@@ -28,6 +28,7 @@ import {
   resolveCurrentAgentName,
 } from '../core/agent-registry.js';
 import { readAuditLog, type AuditAction } from '../core/audit.js';
+import { readInbox, getThread } from '../core/messaging.js';
 import { checkPolicy } from '../core/policy.js';
 import { buildGovernanceReport, renderGovernanceMarkdown } from '../core/governance.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
@@ -1186,6 +1187,52 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: { total: entries.length, returned: sliced.length, entries: sliced, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_read_inbox') {
+    const agentName = (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd);
+    const markAsRead = args.markAsRead !== false; // default: true
+    const result = readInbox({
+      agent: agentName,
+      status: args.status as import('../core/schema.js').MessageStatus | undefined,
+      type: args.type as import('../core/schema.js').MessageType | undefined,
+      thread_id: args.thread_id as string | undefined,
+      limit: args.limit as number | undefined,
+      offset: args.offset as number | undefined,
+      markAsRead,
+    }, cwd);
+
+    const lines: string[] = [`Inbox for ${agentName} — ${result.total} message(s):`];
+    for (const msg of result.messages) {
+      const ack = msg.requires_ack ? ' [ACK required]' : '';
+      const thread = msg.thread_id ? ` thread:${msg.thread_id}` : '';
+      lines.push(`  [${msg.short_label ?? msg.id}] ${msg.type} from ${msg.from} (${msg.status})${ack}${thread}`);
+      lines.push(`    ${msg.text.slice(0, 200)}${msg.text.length > 200 ? '...' : ''}`);
+    }
+    if (result.messages.length === 0) {
+      lines.push('  (no messages)');
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { ...result, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_get_thread') {
+    const threadId = String(args.thread_id ?? '');
+    if (!threadId) {
+      throw new Error('Missing required argument: thread_id');
+    }
+    const messages = getThread(threadId, cwd);
+    const lines: string[] = [`Thread ${threadId} — ${messages.length} message(s):`];
+    for (const msg of messages) {
+      lines.push(`  [${msg.short_label ?? msg.id}] ${msg.from} → ${msg.to} (${msg.type}, ${msg.status})`);
+      lines.push(`    ${msg.text.slice(0, 200)}${msg.text.length > 200 ? '...' : ''}`);
+    }
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { thread_id: threadId, total: messages.length, messages, schema_version: SCHEMA_VERSION },
     };
   }
 

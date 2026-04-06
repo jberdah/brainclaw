@@ -14,6 +14,7 @@ const PREFIXES: Record<string, string> = {
   sequences: 'seq',
   instruction_entries: 'ins',
   ai_surface_tasks: 'ast',
+  inbox_messages: 'msg',
 };
 
 const ID_COUNTER_FILE = '.id-counter.json';

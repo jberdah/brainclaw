@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -50,6 +51,7 @@ import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPrevie
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
+import { sendMessage, ackMessage, countPending } from '../core/messaging.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -467,9 +469,71 @@ export const MCP_READ_TOOLS = [
       required: ['packages'],
     },
   },
+  {
+    name: 'bclaw_read_inbox',
+    description: 'Read messages from an agent inbox. Returns pending messages by default. Use markAsRead to auto-mark pending messages as read. Supports filtering by status, type, and thread_id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Agent name whose inbox to read. Defaults to calling agent.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+        status: { type: 'string', description: 'Filter by status: pending, read, acknowledged, archived.' },
+        type: { type: 'string', description: 'Filter by message type: assign, review, rfc, info, reply.' },
+        thread_id: { type: 'string', description: 'Filter by thread ID to see a conversation.' },
+        markAsRead: { type: 'boolean', description: 'Auto-mark pending messages as read. Default: true.' },
+        limit: { type: 'number', description: 'Maximum messages to return (default: 20).' },
+        offset: { type: 'number', description: 'Skip N messages for pagination.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_get_thread',
+    description: 'Get all messages in a thread across all agent inboxes. Useful for following RFC discussions or review rounds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thread_id: { type: 'string', description: 'Thread ID to retrieve.' },
+      },
+      required: ['thread_id'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
+  {
+    name: 'bclaw_send_message',
+    description: 'Send a message to another agent\'s inbox. Used for work assignment (type: assign), review requests (type: review), RFC discussions (type: rfc), notifications (type: info), and threaded replies (type: reply). Requires contributor trust.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Target agent name.' },
+        type: { type: 'string', description: 'Message type: assign, review, rfc, info, reply.' },
+        text: { type: 'string', description: 'Message body.' },
+        ref: { type: 'string', description: 'Reference to a plan, sequence, handoff, or other entity ID.' },
+        payload: { type: 'object', description: 'Structured data (brief, criteria, context).' },
+        scope: { type: 'string', description: 'File scope relevant to this message.' },
+        requires_ack: { type: 'boolean', description: 'Require recipient to acknowledge. Default: false.' },
+        thread_id: { type: 'string', description: 'Thread ID for multi-turn conversations. Omit to start a new thread.' },
+        agent: { type: 'string', description: 'Sender agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+      },
+      required: ['to', 'type', 'text'],
+    },
+  },
+  {
+    name: 'bclaw_ack_message',
+    description: 'Acknowledge a message in your inbox. Use after processing an assignment or review request.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Message ID or short label to acknowledge.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id'],
+    },
+  },
   {
     name: 'bclaw_switch',
     description: 'Switch active project in a multi-project workspace. Session-scoped by default: only this agent sees the switch, other agents are unaffected. Use list=true to see available projects.',
@@ -2469,13 +2533,23 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (staleInstructionsWarn) sessionStartMsgParts.push(staleInstructionsWarn);
       if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
       if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);
+      // Inbox notification
+      const agentNameForInbox = resolved.identity?.agent_name;
+      if (agentNameForInbox) {
+        const pendingCount = countPending(agentNameForInbox, cwd);
+        if (pendingCount > 0) {
+          sessionStartMsgParts.push(`\n📬 You have ${pendingCount} pending message(s) in your inbox. Use bclaw_read_inbox to check.`);
+        }
+      }
       const sessionStartMsg = sessionStartMsgParts.join('\n');
 
       const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: sessionStartMsg }];
+      const inboxPending = agentNameForInbox ? countPending(agentNameForInbox, cwd) : 0;
       const structured: Record<string, unknown> = {
         session_id: result.session_id,
         agent: result.agent,
         context_target: result.context_target,
+        inbox_pending: inboxPending,
       };
 
       if (args.includeContext) {
@@ -2579,6 +2653,85 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         }),
         nextConnectionSessionId: undefined,
       };
+    }
+
+    if (name === 'bclaw_send_message') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const to = String(args.to ?? '').trim();
+      if (!to) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: to') };
+      }
+      const msgType = String(args.type ?? '').trim();
+      if (!['assign', 'review', 'rfc', 'info', 'reply'].includes(msgType)) {
+        return { response: createToolErrorResponse('validation_error', 'type must be one of: assign, review, rfc, info, reply') };
+      }
+      const msgText = String(args.text ?? '').trim();
+      if (!msgText) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      }
+      const textCheck = validateMcpField(msgText, 'text');
+      if (!textCheck.ok) {
+        return { response: createToolErrorResponse('validation_error', textCheck.message) };
+      }
+      // Auto-generate thread_id for new rfc/review threads
+      let threadId = args.thread_id as string | undefined;
+      if (!threadId && (msgType === 'rfc' || msgType === 'review')) {
+        threadId = `thread_${crypto.randomBytes(4).toString('hex')}`;
+      }
+      try {
+        const result = sendMessage({
+          from: resolved.identity!.agent_name,
+          to,
+          type: msgType as import('../core/schema.js').MessageType,
+          text: msgText,
+          ref: args.ref as string | undefined,
+          payload: args.payload as Record<string, unknown> | undefined,
+          scope: args.scope as string | undefined,
+          requires_ack: args.requires_ack as boolean | undefined,
+          thread_id: threadId,
+          tags: (args.tags as string[]) ?? [],
+          author_id: resolved.identity!.agent_id,
+          session_id: connectionSessionId,
+        }, cwd);
+        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: result.id, item_type: 'message', scope: to }, cwd);
+        const threadInfo = threadId ? ` thread:${threadId}` : '';
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Message sent: [${result.shortLabel}] ${msgType} → ${to}${threadInfo}` }],
+            message_id: result.id,
+            thread_id: threadId,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_ack_message') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const msgId = String(args.id ?? '').trim();
+      if (!msgId) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      }
+      try {
+        const result = ackMessage(msgId, resolved.identity!.agent_name, cwd);
+        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'message' }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Message acknowledged: [${result.id}]` }],
+            message_id: result.id,
+            status: result.status,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
     }
 
     if (name === 'bclaw_create_plan') {

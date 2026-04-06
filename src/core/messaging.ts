@@ -1,0 +1,253 @@
+/**
+ * Inter-agent messaging operations.
+ *
+ * Messages are stored per-recipient agent in:
+ *   .brainclaw/coordination/inbox/{agent_name}/{msg_id}.json
+ *
+ * No console.log, no process.exit, no MCP formatting.
+ * Both CLI commands and MCP handlers call these functions.
+ *
+ * @module
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { generateIdWithLabel, generateId, nowISO } from './ids.js';
+import { memoryDir } from './io.js';
+import { mutate } from './mutation-pipeline.js';
+import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
+import { InboxMessageSchema, type InboxMessage, type MessageType, type MessageStatus } from './schema.js';
+import { commitMemoryChange } from './memory-git.js';
+
+// ── Paths ───────────────────────────────────────────────────
+
+function inboxDir(cwd: string): string {
+  return path.join(memoryDir(cwd), 'coordination', 'inbox');
+}
+
+function agentInboxDir(agent: string, cwd: string): string {
+  // Normalise agent name for filesystem (lowercase, replace spaces)
+  const safe = agent.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  return path.join(inboxDir(cwd), safe);
+}
+
+function ensureAgentInboxDir(agent: string, cwd: string): string {
+  const dir = agentInboxDir(agent, cwd);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// ── Load helpers ────────────────────────────────────────────
+
+function loadMessagesFromDir(dirPath: string): InboxMessage[] {
+  if (!fs.existsSync(dirPath)) return [];
+  const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'));
+  const items: InboxMessage[] = [];
+  for (const file of files) {
+    try {
+      const result = loadVersionedJsonFile<InboxMessage>('message' as VersionedDocumentType, path.join(dirPath, file));
+      items.push(InboxMessageSchema.parse(result.document));
+    } catch {
+      // skip invalid files
+    }
+  }
+  return items.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+// ── Send Message ────────────────────────────────────────────
+
+export interface SendMessageInput {
+  from: string;
+  to: string;
+  type: MessageType;
+  text: string;
+  ref?: string;
+  payload?: Record<string, unknown>;
+  scope?: string;
+  requires_ack?: boolean;
+  thread_id?: string;
+  tags?: string[];
+  author_id?: string;
+  model?: string;
+  project_id?: string;
+  host_id?: string;
+  session_id?: string;
+}
+
+export interface SendMessageResult {
+  id: string;
+  shortLabel: string;
+  to: string;
+  type: MessageType;
+}
+
+export function sendMessage(input: SendMessageInput, cwd: string): SendMessageResult {
+  return mutate({ cwd }, () => {
+    const { id, short_label } = generateIdWithLabel('inbox_messages', cwd);
+    const timestamp = nowISO();
+
+    const message: InboxMessage = {
+      id,
+      short_label,
+      from: input.from,
+      to: input.to,
+      type: input.type,
+      text: input.text,
+      ref: input.ref,
+      payload: input.payload,
+      scope: input.scope,
+      requires_ack: input.requires_ack ?? false,
+      thread_id: input.thread_id,
+      status: 'pending',
+      created_at: timestamp,
+      updated_at: timestamp,
+      author: input.from,
+      author_id: input.author_id,
+      model: input.model,
+      project_id: input.project_id,
+      host_id: input.host_id,
+      session_id: input.session_id,
+      tags: input.tags ?? [],
+    };
+
+    const dir = ensureAgentInboxDir(input.to, cwd);
+    saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${id}.json`), message);
+    commitMemoryChange(`message ${id} sent to ${input.to}`, cwd);
+
+    return { id, shortLabel: short_label, to: input.to, type: input.type };
+  });
+}
+
+// ── Read Inbox ──────────────────────────────────────────────
+
+export interface ReadInboxInput {
+  agent: string;
+  status?: MessageStatus;
+  type?: MessageType;
+  thread_id?: string;
+  limit?: number;
+  offset?: number;
+  markAsRead?: boolean;
+}
+
+export interface ReadInboxResult {
+  total: number;
+  offset: number;
+  limit: number;
+  messages: InboxMessage[];
+}
+
+export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
+  const dir = agentInboxDir(input.agent, cwd);
+  let messages = loadMessagesFromDir(dir);
+
+  // Apply filters
+  if (input.status) {
+    messages = messages.filter(m => m.status === input.status);
+  }
+  if (input.type) {
+    messages = messages.filter(m => m.type === input.type);
+  }
+  if (input.thread_id) {
+    messages = messages.filter(m => m.thread_id === input.thread_id);
+  }
+
+  const total = messages.length;
+  const offset = input.offset ?? 0;
+  const limit = input.limit ?? 20;
+  const page = messages.slice(offset, offset + limit);
+
+  // Optionally mark pending messages as read
+  if (input.markAsRead) {
+    mutate({ cwd }, () => {
+      const timestamp = nowISO();
+      for (const msg of page) {
+        if (msg.status === 'pending') {
+          msg.status = 'read';
+          msg.read_at = timestamp;
+          msg.updated_at = timestamp;
+          const msgPath = path.join(dir, `${msg.id}.json`);
+          saveVersionedJsonFile('message' as VersionedDocumentType, msgPath, msg);
+        }
+      }
+      commitMemoryChange(`inbox read by ${input.agent}`, cwd);
+    });
+  }
+
+  return { total, offset, limit, messages: page };
+}
+
+// ── Acknowledge Message ─────────────────────────────────────
+
+export interface AckMessageResult {
+  id: string;
+  status: MessageStatus;
+}
+
+export function ackMessage(messageId: string, agent: string, cwd: string): AckMessageResult {
+  return mutate({ cwd }, () => {
+    const dir = agentInboxDir(agent, cwd);
+    const messages = loadMessagesFromDir(dir);
+    const msg = messages.find(m => m.id === messageId || m.short_label === messageId);
+    if (!msg) {
+      throw new Error(`Message '${messageId}' not found in ${agent}'s inbox.`);
+    }
+
+    const timestamp = nowISO();
+    msg.status = 'acknowledged';
+    msg.ack_at = timestamp;
+    msg.updated_at = timestamp;
+    saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${msg.id}.json`), msg);
+    commitMemoryChange(`message ${msg.id} acknowledged by ${agent}`, cwd);
+
+    return { id: msg.id, status: msg.status };
+  });
+}
+
+// ── Archive Message ─────────────────────────────────────────
+
+export function archiveMessage(messageId: string, agent: string, cwd: string): AckMessageResult {
+  return mutate({ cwd }, () => {
+    const dir = agentInboxDir(agent, cwd);
+    const messages = loadMessagesFromDir(dir);
+    const msg = messages.find(m => m.id === messageId || m.short_label === messageId);
+    if (!msg) {
+      throw new Error(`Message '${messageId}' not found in ${agent}'s inbox.`);
+    }
+
+    msg.status = 'archived';
+    msg.updated_at = nowISO();
+    saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${msg.id}.json`), msg);
+    commitMemoryChange(`message ${msg.id} archived by ${agent}`, cwd);
+
+    return { id: msg.id, status: msg.status };
+  });
+}
+
+// ── Get Thread ──────────────────────────────────────────────
+
+export function getThread(threadId: string, cwd: string): InboxMessage[] {
+  // Search across all agent inboxes for messages in this thread
+  const baseDir = inboxDir(cwd);
+  if (!fs.existsSync(baseDir)) return [];
+
+  const agents = fs.readdirSync(baseDir).filter(f => {
+    try { return fs.statSync(path.join(baseDir, f)).isDirectory(); } catch { return false; }
+  });
+
+  const allMessages: InboxMessage[] = [];
+  for (const agent of agents) {
+    const agentDir = path.join(baseDir, agent);
+    const messages = loadMessagesFromDir(agentDir);
+    allMessages.push(...messages.filter(m => m.thread_id === threadId));
+  }
+
+  return allMessages.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+// ── Count Pending ───────────────────────────────────────────
+
+export function countPending(agent: string, cwd: string): number {
+  const dir = agentInboxDir(agent, cwd);
+  const messages = loadMessagesFromDir(dir);
+  return messages.filter(m => m.status === 'pending').length;
+}

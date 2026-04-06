@@ -26,6 +26,7 @@ import {
   AiSurfaceTaskRequestSchema,
   ProjectCapabilitySchema,
   ProjectToolSchema,
+  InboxMessageSchema,
 } from './schema.js';
 
 export type VersionedDocumentType =
@@ -50,7 +51,8 @@ export type VersionedDocumentType =
   | 'session_snapshot'
   | 'capability'
   | 'tool'
-  | 'trap';
+  | 'trap'
+  | 'message';
 
 export type MigrationErrorKind =
   | 'parse'
@@ -121,6 +123,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   capability: createRegistryEntry(ProjectCapabilitySchema),
   tool: createRegistryEntry(ProjectToolSchema),
   trap: createRegistryEntry(TrapSchema),
+  message: createRegistryEntry(InboxMessageSchema),
 };
 
 function createRegistryEntry<T>(schema: ZodType<T, ZodTypeDef, unknown>): MigrationRegistryEntry<T> {

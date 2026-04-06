@@ -314,6 +314,54 @@ export const ProjectToolSchema = z.object({
 });
 export type ProjectTool = z.infer<typeof ProjectToolSchema>;
 
+// --- Message schema (inter-agent inbox) ---
+
+export const MessageTypeSchema = z.enum(['assign', 'review', 'rfc', 'info', 'reply']);
+export type MessageType = z.infer<typeof MessageTypeSchema>;
+
+export const MessageStatusSchema = z.enum(['pending', 'read', 'acknowledged', 'archived']);
+export type MessageStatus = z.infer<typeof MessageStatusSchema>;
+
+export const InboxMessageSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+  /** Sender agent name */
+  from: z.string(),
+  /** Target agent name */
+  to: z.string(),
+  /** Message type: assign (work), review (feedback request), rfc (ideation), info (notification), reply (response in thread) */
+  type: MessageTypeSchema,
+  /** Human-readable message body */
+  text: z.string(),
+  /** Reference to a plan, sequence, handoff, or RFC thread */
+  ref: z.string().optional(),
+  /** Structured payload — brief, context, criteria, or any structured data */
+  payload: z.record(z.unknown()).optional(),
+  /** File scope relevant to this message */
+  scope: z.string().optional(),
+  /** Whether the recipient must acknowledge */
+  requires_ack: z.boolean().default(false),
+  /** Thread ID for multi-turn conversations (RFC ideation, review rounds) */
+  thread_id: z.string().optional(),
+  /** Status tracking */
+  status: MessageStatusSchema.default('pending'),
+  /** When the message was read */
+  read_at: z.string().optional(),
+  /** When the message was acknowledged */
+  ack_at: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  author: z.string(),
+  author_id: z.string().optional(),
+  model: z.string().optional(),
+  project_id: z.string().optional(),
+  host_id: z.string().optional(),
+  session_id: z.string().optional(),
+  tags: TagsWithDefaultSchema,
+});
+export type InboxMessage = z.infer<typeof InboxMessageSchema>;
+
 // --- State schema ---
 
 export const StateSchema = z.object({
