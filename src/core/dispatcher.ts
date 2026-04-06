@@ -1,22 +1,21 @@
 /**
- * Local dispatcher — Phase 2 of pln_59bddae5.
+ * Local dispatcher — coordinator/worker model for autonomous agent spawning.
  *
  * The dispatcher is an agent-coordinator that reads the active sequence,
- * identifies ready lanes, generates briefs, and sends assignment messages
- * to target agents via the messaging system.
- *
- * Brainclaw is a passive coordination layer — the dispatcher is an agent
- * like any other, not an orchestrator that spawns processes.
+ * identifies ready lanes, generates briefs, and either:
+ * - Spawns CLI agents directly (if invoke template available)
+ * - Deposits briefs in agent inboxes (for IDE-only agents)
  *
  * @module
  */
+import { spawn } from 'node:child_process';
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
 import { listClaims } from './claims.js';
-import { listAgentIdentities } from './agent-registry.js';
+import { listAgentIdentities, findAgentIdentityByName } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
-import { buildContext, renderContextMarkdown } from './context.js';
-import type { Sequence, SequenceItem, PlanItem, Handoff, Claim } from './schema.js';
+import { getDefaultInvokeTemplate, type DefaultInvokeTemplate } from './agent-capability.js';
+import type { Sequence, SequenceItem, PlanItem, Handoff, Claim, AgentInvoke } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -58,13 +57,19 @@ export interface DispatchAnalysis {
   available_agents: string[];
 }
 
+export interface DispatchedItem {
+  agent: string;
+  plan_id: string;
+  message_id: string;
+  lane?: string;
+  /** How the assignment was delivered */
+  channel: 'spawn' | 'inbox';
+  /** PID of the spawned process (only for spawn channel) */
+  pid?: number;
+}
+
 export interface DispatchResult {
-  messages_sent: Array<{
-    agent: string;
-    plan_id: string;
-    message_id: string;
-    lane?: string;
-  }>;
+  messages_sent: DispatchedItem[];
   skipped: Array<{
     plan_id: string;
     reason: string;
@@ -291,6 +296,8 @@ export interface DispatchOptions {
   maxAssignments?: number;
   /** Dry run — analyze but don't send messages */
   dryRun?: boolean;
+  /** Enable autonomous spawning of CLI agents (agents with invoke templates) */
+  spawn?: boolean;
   /** Dispatcher agent identity */
   dispatcherAgent: string;
   dispatcherAgentId?: string;
@@ -354,20 +361,21 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     const brief = generateBrief(readyItem.plan, readyItem.item, cwd);
 
     if (options.dryRun) {
+      const invokeTemplate = resolveInvokeTemplate(targetAgent, cwd);
       result.messages_sent.push({
         agent: targetAgent,
         plan_id: readyItem.plan.id,
         message_id: '(dry-run)',
         lane: readyItem.lane,
+        channel: (options.spawn && invokeTemplate) ? 'spawn' : 'inbox',
       });
       assigned++;
-      // Remove agent from pool (one assignment per agent)
       const idx = agentPool.indexOf(targetAgent);
       if (idx >= 0) agentPool.splice(idx, 1);
       continue;
     }
 
-    // Send assignment message
+    // Send assignment message (always — serves as audit trail)
     const msgResult = sendMessage({
       from: options.dispatcherAgent,
       to: targetAgent,
@@ -389,18 +397,97 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       session_id: options.sessionId,
     }, cwd);
 
+    // Spawn CLI agent if enabled and invoke template available
+    let channel: 'spawn' | 'inbox' = 'inbox';
+    let pid: number | undefined;
+
+    if (options.spawn) {
+      const invokeTemplate = resolveInvokeTemplate(targetAgent, cwd);
+      if (invokeTemplate) {
+        const spawnResult = spawnAgent(invokeTemplate, brief, cwd);
+        channel = 'spawn';
+        pid = spawnResult.pid;
+      }
+    }
+
     result.messages_sent.push({
       agent: targetAgent,
       plan_id: readyItem.plan.id,
       message_id: msgResult.id,
       lane: readyItem.lane,
+      channel,
+      pid,
     });
 
     assigned++;
-    // Remove agent from pool (one assignment per agent)
     const idx = agentPool.indexOf(targetAgent);
     if (idx >= 0) agentPool.splice(idx, 1);
   }
 
   return { analysis, result };
+}
+
+// ── Invoke Resolution ───────────────────────────────────────
+
+/**
+ * Resolve the invoke template for an agent.
+ * Priority: agent identity document > default template from capability profile.
+ */
+function resolveInvokeTemplate(agentName: string, cwd: string): { command: string; timeout: number; env?: Record<string, string> } | undefined {
+  // Check agent identity for custom invoke
+  const identity = findAgentIdentityByName(agentName, cwd);
+  if (identity?.invoke) {
+    return {
+      command: identity.invoke.command,
+      timeout: identity.invoke.timeout ?? 600,
+      env: identity.invoke.env,
+    };
+  }
+
+  // Fall back to default template
+  const defaultTemplate = getDefaultInvokeTemplate(agentName);
+  if (defaultTemplate) {
+    return {
+      command: defaultTemplate.command,
+      timeout: defaultTemplate.timeout,
+    };
+  }
+
+  return undefined;
+}
+
+/**
+ * Spawn a CLI agent as a detached background process.
+ * The process is fire-and-forget — the coordinator doesn't wait for completion.
+ * The spawned agent is expected to use brainclaw (claim, session, handoff) for coordination.
+ */
+function spawnAgent(
+  template: { command: string; timeout: number; env?: Record<string, string> },
+  brief: string,
+  cwd: string,
+): { pid: number } {
+  // Replace {prompt} placeholder with the brief, escaping for shell
+  const escapedBrief = brief.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const command = template.command.replace('{prompt}', escapedBrief);
+
+  // Replace {cwd} if present
+  const finalCommand = command.replace('{cwd}', cwd);
+
+  // Spawn as detached process
+  const child = spawn(finalCommand, [], {
+    shell: true,
+    detached: true,
+    stdio: 'ignore',
+    cwd,
+    env: {
+      ...process.env,
+      ...template.env,
+      BRAINCLAW_CWD: cwd,
+    },
+  });
+
+  // Unref so the coordinator doesn't wait
+  child.unref();
+
+  return { pid: child.pid ?? 0 };
 }

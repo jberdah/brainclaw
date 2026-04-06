@@ -688,6 +688,18 @@ export const ProjectIdentityDocumentSchema = z.object({
 });
 export type ProjectIdentityDocument = z.infer<typeof ProjectIdentityDocumentSchema>;
 
+export const AgentInvokeSchema = z.object({
+  /** CLI command template with {prompt} and {cwd} placeholders */
+  command: z.string(),
+  /** Delivery channel: spawn (launch CLI process) or inbox (deposit message) */
+  channel: z.enum(['spawn', 'inbox']).default('spawn'),
+  /** Max execution time in seconds (default: 600 = 10min) */
+  timeout: z.number().int().positive().default(600),
+  /** Environment variables to set when spawning */
+  env: z.record(z.string()).optional(),
+}).strict();
+export type AgentInvoke = z.infer<typeof AgentInvokeSchema>;
+
 export const AgentIdentityDocumentSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
@@ -700,6 +712,8 @@ export const AgentIdentityDocumentSchema = z.object({
   identity_key: AgentIdentityKeySchema.optional(),
   model: z.string().optional(),
   context_profile: z.enum(['dev', 'dense', 'compact', 'copilot', 'quick', 'openclaw', 'ops', 'research']).optional(),
+  /** CLI invoke template for autonomous spawning by coordinator agents */
+  invoke: AgentInvokeSchema.optional(),
 });
 export type AgentIdentityDocument = z.infer<typeof AgentIdentityDocumentSchema>;
 

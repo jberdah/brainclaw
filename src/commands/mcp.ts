@@ -521,6 +521,7 @@ const MCP_WRITE_TOOLS = [
         lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
         dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
+        spawn: { type: 'boolean', description: 'Autonomously launch CLI agents with invoke templates (detached background processes). Default: false (inbox only).' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -2695,6 +2696,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           lanes: args.lanes as string[] | undefined,
           maxAssignments: args.maxAssignments as number | undefined,
           dryRun: args.dryRun as boolean | undefined,
+          spawn: args.spawn as boolean | undefined,
           dispatcherAgent: resolved.identity!.agent_name,
           dispatcherAgentId: resolved.identity!.agent_id,
           sessionId: connectionSessionId,
@@ -2721,7 +2723,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           lines.push(args.dryRun ? '  Would assign:' : '  Assigned:');
           for (const msg of dispatchResult.messages_sent) {
             const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-            lines.push(`    → ${msg.agent}: ${msg.plan_id}${lane}`);
+            const ch = msg.channel === 'spawn' ? ' [spawned' + (msg.pid ? ` pid:${msg.pid}` : '') + ']' : ' [inbox]';
+            lines.push(`    → ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
           }
         }
 

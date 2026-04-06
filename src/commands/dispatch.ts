@@ -17,6 +17,7 @@ export interface DispatchCommandOptions {
   lanes?: string;
   max?: number;
   dry?: boolean;
+  spawn?: boolean;
   agent?: string;
   json?: boolean;
   cwd?: string;
@@ -95,6 +96,7 @@ export function runDispatch(options: DispatchCommandOptions): void {
     lanes: options.lanes?.split(',').map(l => l.trim()),
     maxAssignments: options.max,
     dryRun: options.dry,
+    spawn: options.spawn,
     dispatcherAgent,
   }, effectiveCwd);
 
@@ -122,7 +124,8 @@ export function runDispatch(options: DispatchCommandOptions): void {
     console.log(`\n  ${options.dry ? 'Would assign' : 'Assigned'}:`);
     for (const msg of dispatchResult.messages_sent) {
       const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane}`);
+      const ch = msg.channel === 'spawn' ? ' [spawned' + (msg.pid ? ` pid:${msg.pid}` : '') + ']' : ' [inbox]';
+      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
     }
   }
 

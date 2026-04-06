@@ -142,6 +142,43 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
 };
 
+// ── Default invoke templates for CLI-spawnable agents ──────
+
+export interface DefaultInvokeTemplate {
+  command: string;
+  channel: 'spawn' | 'inbox';
+  timeout: number;
+  /** Binary that must be in PATH for this template to work */
+  binary: string;
+}
+
+const DEFAULT_INVOKE_TEMPLATES: Partial<Record<AgentName, DefaultInvokeTemplate>> = {
+  codex:           { command: 'codex exec --full-auto "{prompt}"', channel: 'spawn', timeout: 600, binary: 'codex' },
+  'claude-code':   { command: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"', channel: 'spawn', timeout: 600, binary: 'claude' },
+  'github-copilot': { command: 'gh copilot -p "{prompt}"', channel: 'spawn', timeout: 600, binary: 'gh' },
+  cline:           { command: 'cline "{prompt}"', channel: 'spawn', timeout: 600, binary: 'cline' },
+  antigravity:     { command: 'gemini -p "{prompt}"', channel: 'spawn', timeout: 600, binary: 'gemini' },
+  opencode:        { command: 'opencode run "{prompt}"', channel: 'spawn', timeout: 600, binary: 'opencode' },
+  // IDE-only agents default to inbox — no invoke template
+};
+
+/**
+ * Get the default invoke template for a known agent.
+ * Returns undefined for IDE-only agents or unknown agents.
+ */
+export function getDefaultInvokeTemplate(name: string): DefaultInvokeTemplate | undefined {
+  return DEFAULT_INVOKE_TEMPLATES[name as AgentName];
+}
+
+/**
+ * Get all agents that have a default invoke template (CLI-spawnable).
+ */
+export function getSpawnableAgents(): Array<{ name: string; template: DefaultInvokeTemplate }> {
+  return Object.entries(DEFAULT_INVOKE_TEMPLATES)
+    .filter((entry): entry is [string, DefaultInvokeTemplate] => entry[1] !== undefined)
+    .map(([name, template]) => ({ name, template }));
+}
+
 /**
  * Get the capability profile for a known agent.
  * Returns undefined for unknown agent names.

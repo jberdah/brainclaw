@@ -1257,6 +1257,7 @@ dispatchCmd
   .option('--lanes <names>', 'Comma-separated list of lanes to dispatch')
   .option('--max <n>', 'Maximum assignments', parseInt)
   .option('--dry', 'Preview assignments without sending messages')
+  .option('--spawn', 'Autonomously launch CLI agents with invoke templates')
   .option('--agent <name>', 'Dispatcher agent name')
   .option('--json', 'Output as JSON')
   .action((options) => {
@@ -1265,6 +1266,7 @@ dispatchCmd
       lanes: options.lanes,
       max: options.max,
       dry: options.dry,
+      spawn: options.spawn,
       agent: options.agent,
       json: options.json,
     });
