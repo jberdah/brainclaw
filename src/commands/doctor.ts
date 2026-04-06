@@ -31,10 +31,19 @@ import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
-import { InboxMessageSchema, type InboxMessage } from '../core/schema.js';
+import { InboxMessageSchema, type Handoff, type InboxMessage } from '../core/schema.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
 const NON_MESSAGE_INBOX_SUBDIRS = new Set(['accepted', 'rejected', 'cross-project']);
+const ACTIONABLE_BACKLOG_LINE_PATTERNS: Array<{ name: string; re: RegExp }> = [
+  { name: 'unchecked_task', re: /^\s*(?:[-*•]\s*)?\[\s*\]\s+.+$/i },
+  { name: 'todo_line', re: /^\s*(?:[-*•]\s*)?TODO\b.*$/i },
+  { name: 'backlog_line', re: /^\s*(?:[-*•]\s*)?backlog:\s*.+$/i },
+  { name: 'next_steps_line', re: /^\s*(?:[-*•]\s*)?next steps:\s*.+$/i },
+  { name: 'should_do_line', re: /^\s*(?:[-*•]\s*)?should do\b.*$/i },
+  { name: 'needs_to_be_done_line', re: /^\s*(?:[-*•]\s*)?needs to be done\b.*$/i },
+];
+const FORMAL_PLAN_REFERENCE_RE = /\bpln_[a-z0-9]+\b/i;
 
 function hasBacklogPatterns(text: string): boolean {
   const lines = text.split(/\r?\n/);
@@ -42,6 +51,58 @@ function hasBacklogPatterns(text: string): boolean {
     (l) => /^\s*[-*•]\s+\w/.test(l) || /^\s*\d+\.\s+\w/.test(l),
   );
   return bulletOrNumbered || BACKLOG_KEYWORDS.test(text) || /\[[ x]\]/.test(text);
+}
+
+interface BacklogWithoutPlanFinding {
+  handoff_id: string;
+  matched_pattern: string;
+  snippet: string;
+  suggestion: string;
+}
+
+function truncateDoctorSnippet(text: string, maxLength = 140): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+
+  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function hasFormalPlanLink(handoff: Handoff): boolean {
+  return Boolean(handoff.plan_id)
+    || FORMAL_PLAN_REFERENCE_RE.test(handoff.text)
+    || Boolean(handoff.contract?.linked_plans?.length);
+}
+
+export function extractBacklogWithoutPlanFindings(handoff: Handoff): BacklogWithoutPlanFinding[] {
+  if (hasFormalPlanLink(handoff)) {
+    return [];
+  }
+
+  const findings: BacklogWithoutPlanFinding[] = [];
+  for (const line of handoff.text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    for (const pattern of ACTIONABLE_BACKLOG_LINE_PATTERNS) {
+      if (!pattern.re.test(line)) {
+        continue;
+      }
+
+      findings.push({
+        handoff_id: handoff.id,
+        matched_pattern: pattern.name,
+        snippet: truncateDoctorSnippet(trimmed),
+        suggestion: 'Create a formal plan item with `brainclaw plan create "<text>"` and link the handoff to the resulting pln_xxx.',
+      });
+      break;
+    }
+  }
+
+  return findings;
 }
 
 export interface DoctorOptions {
@@ -1290,6 +1351,33 @@ export function runDoctor(options: DoctorOptions = {}): void {
   // --- Backlog patterns in open handoffs ---
   try {
     const openHandoffs = state.open_handoffs.filter((h) => h.status === 'open');
+    const backlogWithoutPlans = openHandoffs.flatMap((handoff) => extractBacklogWithoutPlanFindings(handoff));
+    if (backlogWithoutPlans.length > 0) {
+      const ids = [...new Set(backlogWithoutPlans.map((finding) => finding.handoff_id))].join(', ');
+      checks.push({
+        name: 'backlog_without_plans',
+        status: 'warn',
+        message: `${backlogWithoutPlans.length} actionable backlog item(s) in open handoff(s) lack a formal plan: ${ids}. Create a pln_xxx plan and link it.`,
+        details: backlogWithoutPlans,
+      });
+      if (!options.json) {
+        console.warn(`⚠ ${backlogWithoutPlans.length} actionable backlog item(s) in open handoff(s) lack a formal plan: ${ids}`);
+        for (const finding of backlogWithoutPlans.slice(0, 10)) {
+          console.warn(`  - [${finding.handoff_id}] ${finding.snippet}`);
+          console.warn(`    ${finding.suggestion}`);
+        }
+      }
+      hasIssues = true;
+    } else {
+      checks.push({
+        name: 'backlog_without_plans',
+        status: 'ok',
+        message: openHandoffs.length > 0
+          ? `${openHandoffs.length} open handoff(s) checked — no actionable backlog without plans detected`
+          : 'No open handoffs to check',
+      });
+    }
+
     const handoffsWithBacklog = openHandoffs.filter((h) => !h.plan_id && hasBacklogPatterns(h.text));
     if (handoffsWithBacklog.length > 0) {
       const ids = handoffsWithBacklog.map((h) => h.id).join(', ');
