@@ -97,7 +97,7 @@ import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runCodev } from './commands/codev.js';
 import { runRunProfile } from './commands/run-profile.js';
-import { compact as gcCompact } from './core/gc-semantic.js';
+import { runCompact } from './commands/compact.js';
 
 const program = new Command();
 
@@ -1098,33 +1098,12 @@ program
 program
   .command('compact')
   .description('LLM-driven semantic memory compaction — archive old items and get a summary template')
+  .option('--assess', 'Show pressure assessment and compaction template without archiving')
   .option('--dry-run', 'Preview eligible items without archiving')
   .option('--max-items <n>', 'Maximum items to compact (default: 20)', parseInt)
   .option('--min-age <days>', 'Minimum age in days for eligibility (default: 7)', parseInt)
   .action((options) => {
-    if (!memoryExists(process.cwd())) {
-      console.error('Project memory not initialized. Run `brainclaw init` first.');
-      process.exit(1);
-    }
-    const result = gcCompact({
-      dryRun: options.dryRun,
-      maxItems: options.maxItems,
-      minAgeDays: options.minAge,
-    });
-    if (result.dry_run) {
-      console.log(`🔍 Dry run — ${result.eligible_count} item(s) eligible for compaction.`);
-    } else {
-      console.log(`✔ Compacted ${result.archived_count}/${result.eligible_count} item(s).`);
-      if (result.backup_path) {
-        console.log(`Backup: ${result.backup_path}`);
-      }
-    }
-    if (result.template) {
-      console.log('');
-      console.log(result.template);
-    } else if (result.eligible_count === 0) {
-      console.log('No items eligible for compaction.');
-    }
+    runCompact(options);
   });
 
 // --- mcp ---
