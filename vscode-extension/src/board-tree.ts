@@ -252,6 +252,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       case SECTION.SPRINT: return Promise.resolve(this._buildSprint());
       case SECTION.TRAPS: return Promise.resolve(this._buildTraps());
       case SECTION.CROSS_PROJECT: return Promise.resolve(this._buildCrossProject());
+      case 'linked-project': return Promise.resolve(this._buildLinkedProjectSignals(element.itemId!));
       default: return Promise.resolve([]);
     }
   }
@@ -310,11 +311,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       sections.push(this._sectionHeader(label, SECTION.TRAPS, 'warning', traps.length));
     }
 
-    // Cross-project
+    // Cross-project (hidden when no links configured)
     const linked = b.linked_projects ?? [];
     const signals = b.incoming_signals ?? [];
-    if (linked.length > 0 || signals.length > 0) {
-      sections.push(this._sectionHeader(`Cross-Project (${linked.length})`, SECTION.CROSS_PROJECT, 'globe', linked.length + signals.length));
+    if (linked.length > 0) {
+      const sigLabel = signals.length > 0 ? `, ${signals.length} signal${signals.length !== 1 ? 's' : ''}` : '';
+      sections.push(this._sectionHeader(`Cross-Project (${linked.length} linked${sigLabel})`, SECTION.CROSS_PROJECT, 'globe', linked.length + signals.length));
     }
 
     return sections;
@@ -539,22 +541,32 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _buildCrossProject(): BrainclawTreeItem[] {
     const items: BrainclawTreeItem[] = [];
-
     const linked = this._board?.linked_projects ?? [];
+    const signals = this._board?.incoming_signals ?? [];
+    const linkedNames = new Set(linked.map((lp: any) => lp.name));
+
     for (const lp of linked) {
+      const projectSignals = signals.filter((s: any) => s.from_project === lp.name);
+      const signalInfo = projectSignals.length > 0 ? ` · ${projectSignals.length} signal${projectSignals.length !== 1 ? 's' : ''}` : '';
       const status = lp.available ? 'available' : 'unavailable';
       const agents = lp.agents?.length > 0 ? lp.agents.join(', ') : 'no agents';
+      const collapsible = projectSignals.length > 0
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.None;
       items.push(new BrainclawTreeItem(
         lp.name,
-        vscode.TreeItemCollapsibleState.None,
-        `${lp.role} · ${lp.active_plans} plans · ${lp.active_claims} claims · ${agents}`,
-        new vscode.ThemeIcon(lp.available ? 'remote' : 'remote-explorer'),
+        collapsible,
+        `${lp.role} · ${status}${signalInfo}`,
+        new vscode.ThemeIcon('link-external'),
         `Project: ${lp.name}\nRole: ${lp.role}\nStatus: ${status}\nPlans: ${lp.active_plans}\nClaims: ${lp.active_claims}\nAgents: ${agents}`,
+        'linked-project',
+        lp.name,
       ));
     }
 
-    const signals = this._board?.incoming_signals ?? [];
-    for (const sig of signals) {
+    // Signals from projects not in the linked list (orphan signals)
+    const orphanSignals = signals.filter((s: any) => !linkedNames.has(s.from_project));
+    for (const sig of orphanSignals) {
       const ago = sig.created_at ? timeAgo(sig.created_at) : '';
       items.push(new BrainclawTreeItem(
         sig.preview?.slice(0, 80) ?? sig.id,
@@ -565,11 +577,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       ));
     }
 
-    if (items.length === 0) {
-      items.push(new BrainclawTreeItem('No linked projects', vscode.TreeItemCollapsibleState.None));
-    }
-
     return items;
+  }
+
+  private _buildLinkedProjectSignals(projectName: string): BrainclawTreeItem[] {
+    const signals = (this._board?.incoming_signals ?? [])
+      .filter((s: any) => s.from_project === projectName);
+    return signals.map((sig: any) => {
+      const ago = sig.created_at ? timeAgo(sig.created_at) : '';
+      return new BrainclawTreeItem(
+        sig.preview?.slice(0, 80) ?? sig.id,
+        vscode.TreeItemCollapsibleState.None,
+        `${sig.entity_type} from ${sig.from_agent} · ${ago}`,
+        new vscode.ThemeIcon('mail'),
+        `Signal: ${sig.entity_type}\nFrom: ${sig.from_project} / ${sig.from_agent}\n${sig.preview}`,
+      );
+    });
   }
 }
 
