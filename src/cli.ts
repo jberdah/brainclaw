@@ -87,7 +87,7 @@ import { runCapability } from './commands/capability.js';
 import { runTool } from './commands/tool.js';
 import { runExplore } from './commands/explore.js';
 import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
-import { cleanOrphanFiles, memoryDir } from './core/io.js';
+import { cleanOrphanFiles, memoryDir, memoryExists } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
@@ -97,6 +97,7 @@ import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runCodev } from './commands/codev.js';
 import { runRunProfile } from './commands/run-profile.js';
+import { runCompact } from './commands/compact.js';
 
 const program = new Command();
 
@@ -1091,6 +1092,18 @@ program
   .option('--dry-run', 'Preview compaction without applying (use with --semantic)')
   .action((options) => {
     runPrune(options);
+  });
+
+// --- compact ---
+program
+  .command('compact')
+  .description('LLM-driven semantic memory compaction — archive old items and get a summary template')
+  .option('--assess', 'Show pressure assessment and compaction template without archiving')
+  .option('--dry-run', 'Preview eligible items without archiving')
+  .option('--max-items <n>', 'Maximum items to compact (default: 20)', parseInt)
+  .option('--min-age <days>', 'Minimum age in days for eligibility (default: 7)', parseInt)
+  .action((options) => {
+    runCompact(options);
   });
 
 // --- mcp ---

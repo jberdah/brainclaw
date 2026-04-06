@@ -54,6 +54,7 @@ import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updat
 import { sendMessage, ackMessage, countPending, countActionable } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
+import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -935,6 +936,34 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'bclaw_compact',
+    description: 'LLM-driven semantic memory compaction (two-phase). Phase 1 (no args or assess=true): returns pressure assessment and compaction template listing eligible items. Phase 2 (archiveIds + optional newItems): archives specified items and creates new durable memory entries. Safety: creates a backup before archiving.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assess: { type: 'boolean', description: 'Phase 1: return pressure assessment and compaction template. Default when no archiveIds provided.' },
+        archiveIds: { type: 'array', items: { type: 'string' }, description: 'Phase 2: IDs of items to archive (from assessment eligible list).' },
+        newItems: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['constraint', 'decision', 'trap'], description: 'Memory item type.' },
+              text: { type: 'string', description: 'Content of the new memory item.' },
+              tags: { type: 'array', items: { type: 'string' }, description: 'Tags for the new item.' },
+              severity: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Severity (traps only). Default: medium.' },
+            },
+            required: ['type', 'text'],
+          },
+          description: 'Phase 2: new durable memory items from your compaction summaries.',
+        },
+        maxItems: { type: 'number', description: 'Max items to show in assessment. Default: 20.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
     },
   },
 ] as const;
@@ -2575,6 +2604,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (staleInstructionsWarn) sessionStartMsgParts.push(staleInstructionsWarn);
       if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
       if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);
+      if (result.memory_pressure) {
+        sessionStartMsgParts.push(`\n⚠️ Memory pressure detected: ${result.memory_pressure.done_plans} done plans, ${result.memory_pressure.closed_handoffs} closed handoffs (${result.memory_pressure.eligible_items} eligible for compaction). Consider running bclaw_compact to archive old items and create durable summaries.`);
+      }
       // Inbox notification
       const agentNameForInbox = resolved.identity?.agent_name;
       if (agentNameForInbox) {
@@ -2592,6 +2624,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agent: result.agent,
         context_target: result.context_target,
         inbox_pending: inboxPending,
+        ...(result.memory_pressure ? { memory_pressure: result.memory_pressure } : {}),
       };
 
       if (args.includeContext) {
@@ -2697,6 +2730,70 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           ...(result.reflection_prompt ? { reflection_prompt: result.reflection_prompt } : {}),
         }),
         nextConnectionSessionId: undefined,
+      };
+    }
+
+    if (name === 'bclaw_compact') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+
+      const archiveIds = args.archiveIds as string[] | undefined;
+      const isPhase2 = archiveIds && archiveIds.length > 0;
+
+      if (isPhase2) {
+        // Phase 2: apply compaction — archive specified items and create new memories
+        const result = applyCompaction({
+          archiveIds,
+          newItems: args.newItems as Array<{ type: 'constraint' | 'decision' | 'trap'; text: string; tags?: string[]; severity?: string }> | undefined,
+          author: resolved.identity?.agent_name,
+          authorId: resolved.identity?.agent_id,
+          cwd,
+        });
+
+        const lines: string[] = [];
+        lines.push(`✔ Compacted ${result.archived_count} item(s).`);
+        if (result.created_count > 0) {
+          lines.push(`Created ${result.created_count} new memory item(s): ${result.created_ids.join(', ')}`);
+        }
+        lines.push(`Backup: ${result.backup_path}`);
+
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: lines.join('\n') }],
+            ...result,
+          }),
+        };
+      }
+
+      // Phase 1: assess pressure and return compaction template
+      const assessment = assessMemoryPressure(cwd);
+      const maxItems = (args.maxItems as number | undefined) ?? 20;
+      const selected = assessment.eligible_items.slice(0, maxItems);
+      const template = selected.length > 0 ? buildCompactionTemplate(selected) : undefined;
+
+      const lines: string[] = [];
+      lines.push(`Memory pressure: ${assessment.pressure ? 'YES' : 'no'} (${assessment.done_plans} done plans, ${assessment.closed_handoffs} closed handoffs)`);
+      lines.push(`Thresholds: plans >= ${assessment.thresholds.plans}, handoffs >= ${assessment.thresholds.handoffs}`);
+      lines.push(`Eligible items: ${assessment.eligible_items.length}`);
+
+      if (template) {
+        lines.push('');
+        lines.push(template);
+      } else {
+        lines.push('No items eligible for compaction.');
+      }
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: lines.join('\n') }],
+          pressure: assessment.pressure,
+          done_plans: assessment.done_plans,
+          closed_handoffs: assessment.closed_handoffs,
+          eligible_count: assessment.eligible_items.length,
+          eligible_ids: selected.map(i => i.id),
+        }),
       };
     }
 
