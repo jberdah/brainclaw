@@ -51,7 +51,7 @@ import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPrevie
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
-import { sendMessage, ackMessage, countPending } from '../core/messaging.js';
+import { sendMessage, ackMessage, countPending, countActionable } from '../core/messaging.js';
 import { analyzeSequence, dispatch } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
@@ -481,7 +481,7 @@ export const MCP_READ_TOOLS = [
         status: { type: 'string', description: 'Filter by status: pending, read, acknowledged, archived.' },
         type: { type: 'string', description: 'Filter by message type: assign, review, rfc, info, reply.' },
         thread_id: { type: 'string', description: 'Filter by thread ID to see a conversation.' },
-        markAsRead: { type: 'boolean', description: 'Auto-mark pending messages as read. Default: true.' },
+        markAsRead: { type: 'boolean', description: 'Mark pending messages as read. Default: false.' },
         limit: { type: 'number', description: 'Maximum messages to return (default: 20).' },
         offset: { type: 'number', description: 'Skip N messages for pagination.' },
       },
@@ -2562,15 +2562,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       // Inbox notification
       const agentNameForInbox = resolved.identity?.agent_name;
       if (agentNameForInbox) {
-        const pendingCount = countPending(agentNameForInbox, cwd);
-        if (pendingCount > 0) {
-          sessionStartMsgParts.push(`\n📬 You have ${pendingCount} pending message(s) in your inbox. Use bclaw_read_inbox to check.`);
+        const actionableCount = countActionable(agentNameForInbox, cwd);
+        if (actionableCount > 0) {
+          sessionStartMsgParts.push(`\n📬 You have ${actionableCount} actionable message(s) in your inbox. Use bclaw_read_inbox to check.`);
         }
       }
       const sessionStartMsg = sessionStartMsgParts.join('\n');
 
       const contentParts: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: sessionStartMsg }];
-      const inboxPending = agentNameForInbox ? countPending(agentNameForInbox, cwd) : 0;
+      const inboxPending = agentNameForInbox ? countActionable(agentNameForInbox, cwd) : 0;
       const structured: Record<string, unknown> = {
         session_id: result.session_id,
         agent: result.agent,

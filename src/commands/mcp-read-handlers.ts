@@ -1257,7 +1257,7 @@ export function handleMcpReadToolCall(
 
   if (name === 'bclaw_read_inbox') {
     const agentName = (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd);
-    const markAsRead = args.markAsRead !== false; // default: true
+    const markAsRead = args.markAsRead === true; // default: false — reading doesn't imply processing
     const result = readInbox({
       agent: agentName,
       status: args.status as import('../core/schema.js').MessageStatus | undefined,

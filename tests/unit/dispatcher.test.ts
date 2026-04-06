@@ -421,5 +421,30 @@ describe('core/dispatcher', () => {
       const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir);
       assert.equal(result, null);
     });
+
+    it('is idempotent — does not duplicate assignments on second run', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      // First dispatch — sends assignment
+      const result1 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      assert.equal(result1.result.messages_sent.length, 1);
+
+      // Second dispatch — should skip because assignment already exists
+      const result2 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      assert.equal(result2.result.messages_sent.length, 0);
+      assert.equal(result2.result.skipped.length, 1);
+      assert.ok(result2.result.skipped[0]!.reason.includes('Already assigned'));
+    });
   });
 });

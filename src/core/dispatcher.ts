@@ -14,7 +14,7 @@ import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
 import { listClaims } from './claims.js';
 import { listAgentIdentities } from './agent-registry.js';
-import { sendMessage, type SendMessageInput } from './messaging.js';
+import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { buildContext, renderContextMarkdown } from './context.js';
 import type { Sequence, SequenceItem, PlanItem, Handoff, Claim } from './schema.js';
 
@@ -337,6 +337,15 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       result.skipped.push({
         plan_id: readyItem.plan.id,
         reason: 'No available agent',
+      });
+      continue;
+    }
+
+    // Idempotency: skip if there's already a non-archived assign for this plan+agent
+    if (!options.dryRun && hasActiveAssignment(targetAgent, readyItem.plan.id, cwd)) {
+      result.skipped.push({
+        plan_id: readyItem.plan.id,
+        reason: `Already assigned to ${targetAgent} (existing message not archived)`,
       });
       continue;
     }

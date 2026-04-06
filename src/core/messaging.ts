@@ -138,40 +138,46 @@ export interface ReadInboxResult {
 
 export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   const dir = agentInboxDir(input.agent, cwd);
-  let messages = loadMessagesFromDir(dir);
 
-  // Apply filters
-  if (input.status) {
-    messages = messages.filter(m => m.status === input.status);
-  }
-  if (input.type) {
-    messages = messages.filter(m => m.type === input.type);
-  }
-  if (input.thread_id) {
-    messages = messages.filter(m => m.thread_id === input.thread_id);
-  }
-
-  const total = messages.length;
-  const offset = input.offset ?? 0;
-  const limit = input.limit ?? 20;
-  const page = messages.slice(offset, offset + limit);
-
-  // Optionally mark pending messages as read
+  // If markAsRead, do everything under a single lock to avoid race conditions.
+  // Re-read from disk inside the lock to get fresh state.
   if (input.markAsRead) {
-    mutate({ cwd }, () => {
+    return mutate({ cwd }, () => {
+      // Fresh read inside lock
+      let messages = loadMessagesFromDir(dir);
+      if (input.status) messages = messages.filter(m => m.status === input.status);
+      if (input.type) messages = messages.filter(m => m.type === input.type);
+      if (input.thread_id) messages = messages.filter(m => m.thread_id === input.thread_id);
+
+      const total = messages.length;
+      const offset = input.offset ?? 0;
+      const limit = input.limit ?? 20;
+      const page = messages.slice(offset, offset + limit);
+
       const timestamp = nowISO();
       for (const msg of page) {
         if (msg.status === 'pending') {
           msg.status = 'read';
           msg.read_at = timestamp;
           msg.updated_at = timestamp;
-          const msgPath = path.join(dir, `${msg.id}.json`);
-          saveVersionedJsonFile('message' as VersionedDocumentType, msgPath, msg);
+          saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${msg.id}.json`), msg);
         }
       }
       commitMemoryChange(`inbox read by ${input.agent}`, cwd);
+      return { total, offset, limit, messages: page };
     });
   }
+
+  // Read-only path: no lock needed
+  let messages = loadMessagesFromDir(dir);
+  if (input.status) messages = messages.filter(m => m.status === input.status);
+  if (input.type) messages = messages.filter(m => m.type === input.type);
+  if (input.thread_id) messages = messages.filter(m => m.thread_id === input.thread_id);
+
+  const total = messages.length;
+  const offset = input.offset ?? 0;
+  const limit = input.limit ?? 20;
+  const page = messages.slice(offset, offset + limit);
 
   return { total, offset, limit, messages: page };
 }
@@ -250,4 +256,32 @@ export function countPending(agent: string, cwd: string): number {
   const dir = agentInboxDir(agent, cwd);
   const messages = loadMessagesFromDir(dir);
   return messages.filter(m => m.status === 'pending').length;
+}
+
+/**
+ * Count actionable messages: pending + read-but-requires-ack (not yet acknowledged).
+ * This is the correct metric for board/session_start — a message that has been
+ * read but not acked is still actionable.
+ */
+export function countActionable(agent: string, cwd: string): number {
+  const dir = agentInboxDir(agent, cwd);
+  const messages = loadMessagesFromDir(dir);
+  return messages.filter(m =>
+    m.status === 'pending' ||
+    (m.status === 'read' && m.requires_ack)
+  ).length;
+}
+
+/**
+ * Check if there's already a non-archived assign message for a given plan+agent combo.
+ * Used by dispatcher to avoid duplicate assignments.
+ */
+export function hasActiveAssignment(agent: string, planId: string, cwd: string): boolean {
+  const dir = agentInboxDir(agent, cwd);
+  const messages = loadMessagesFromDir(dir);
+  return messages.some(m =>
+    m.type === 'assign' &&
+    m.ref === planId &&
+    m.status !== 'archived'
+  );
 }
