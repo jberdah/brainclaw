@@ -14,8 +14,12 @@ import { loadState } from './state.js';
 import { listClaims } from './claims.js';
 import { listAgentIdentities, findAgentIdentityByName } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
+import { memoryDir } from './io.js';
+import { loadVersionedJsonFile } from './migration.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getDefaultInvokeTemplate, type DefaultInvokeTemplate } from './agent-capability.js';
-import type { Sequence, SequenceItem, PlanItem, Handoff, Claim, AgentInvoke } from './schema.js';
+import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim, type AgentInvoke } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -490,4 +494,289 @@ function spawnAgent(
   child.unref();
 
   return { pid: child.pid ?? 0 };
+}
+
+// ── Review Dispatch ─────────────────────────────────────────
+
+export interface ReviewableHandoff {
+  handoff: Handoff;
+  plan?: PlanItem;
+}
+
+/**
+ * Find handoffs that are ready for review:
+ * - Status is 'accepted' or 'open' (not closed)
+ * - Linked to a plan that is done
+ * - No existing non-archived review message for this handoff
+ */
+export function findReviewableHandoffs(cwd: string): ReviewableHandoff[] {
+  const state = loadState(cwd);
+  const result: ReviewableHandoff[] = [];
+
+  for (const handoff of state.open_handoffs) {
+    if (handoff.status === 'closed') continue;
+
+    // Check linked plan is done
+    const plan = handoff.plan_id
+      ? state.plan_items.find(p => p.id === handoff.plan_id)
+      : undefined;
+    if (plan && plan.status !== 'done') continue;
+
+    // Check no existing review message for this handoff
+    if (hasActiveReviewMessage(handoff.id, cwd)) continue;
+
+    result.push({ handoff, plan });
+  }
+
+  return result;
+}
+
+/**
+ * Check if there's already a non-archived review message for a handoff.
+ */
+function hasActiveReviewMessage(handoffId: string, cwd: string): boolean {
+  const baseDir = path.join(memoryDir(cwd), 'coordination', 'inbox');
+  if (!fs.existsSync(baseDir)) return false;
+
+  const agents = fs.readdirSync(baseDir).filter(f => {
+    try { return fs.statSync(path.join(baseDir, f)).isDirectory(); } catch { return false; }
+  });
+
+  for (const agent of agents) {
+    const agentDir = path.join(baseDir, agent);
+    if (!fs.existsSync(agentDir)) continue;
+    const files = fs.readdirSync(agentDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const result = loadVersionedJsonFile<InboxMessage>('message', path.join(agentDir, file));
+        const msg = InboxMessageSchema.parse(result.document);
+        if (msg.type === 'review' && msg.ref === handoffId && msg.status !== 'archived') {
+          return true;
+        }
+      } catch { /* skip invalid */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * Generate a structured review brief from a handoff.
+ */
+export function generateReviewBrief(handoff: Handoff, plan?: PlanItem): string {
+  const parts: string[] = [];
+
+  parts.push('# Code Review Request');
+  parts.push('');
+  parts.push(`Handoff: ${handoff.id}${handoff.short_label ? ` (${handoff.short_label})` : ''}`);
+  parts.push(`Author: ${handoff.from}`);
+  if (plan) {
+    parts.push(`Plan: ${plan.id}${plan.short_label ? ` (${plan.short_label})` : ''}`);
+    parts.push(`Plan description: ${plan.text}`);
+  }
+  parts.push('');
+
+  // Narrative (the human-readable summary of what was done)
+  if (handoff.narrative) {
+    parts.push('## What was done');
+    parts.push(handoff.narrative);
+    parts.push('');
+  }
+
+  // Commits
+  if (handoff.text) {
+    parts.push('## Commits and changes');
+    parts.push(handoff.text.slice(0, 2000));
+    parts.push('');
+  }
+
+  // Diff snapshot
+  if (handoff.snapshot?.diff) {
+    parts.push('## Diff');
+    parts.push('```');
+    parts.push(handoff.snapshot.diff.slice(0, 5000));
+    parts.push('```');
+    parts.push('');
+  }
+
+  // Contract
+  if (handoff.contract) {
+    if (handoff.contract.files_touched?.length) {
+      parts.push('## Files touched');
+      for (const f of handoff.contract.files_touched) {
+        parts.push(`- ${f}`);
+      }
+      parts.push('');
+    }
+    if (handoff.contract.post_conditions?.length) {
+      parts.push('## Post-conditions to verify');
+      for (const c of handoff.contract.post_conditions) {
+        parts.push(`- ${c}`);
+      }
+      parts.push('');
+    }
+    if (handoff.contract.tests_to_verify?.length) {
+      parts.push('## Tests to verify');
+      for (const t of handoff.contract.tests_to_verify) {
+        parts.push(`- ${t}`);
+      }
+      parts.push('');
+    }
+  }
+
+  // Plan steps (for checking completeness)
+  if (plan?.steps?.length) {
+    parts.push('## Plan steps');
+    for (const step of plan.steps) {
+      const check = step.status === 'done' ? '[x]' : '[ ]';
+      parts.push(`- ${check} ${step.text}`);
+    }
+    parts.push('');
+  }
+
+  // Review criteria
+  parts.push('## Review criteria');
+  parts.push('Evaluate this work on the following criteria. Be direct and critical.');
+  parts.push('');
+  parts.push('1. **Scope**: Does the work match the plan description? Are there out-of-scope changes?');
+  parts.push('2. **Bugs/Regressions**: Any potential bugs, regressions, or logic errors in the changes?');
+  parts.push('3. **Completeness**: Are all plan steps addressed? Any missing pieces?');
+  parts.push('4. **Tests**: Are the changes adequately tested? Do the tests actually verify the behavior?');
+  parts.push('5. **Handoff quality**: Is the narrative clear enough for another agent to continue the work?');
+  parts.push('');
+  parts.push('## Output format');
+  parts.push('Respond with:');
+  parts.push('- **Verdict**: APPROVE or REQUEST_CHANGES');
+  parts.push('- **Blocking issues**: (list, or "none")');
+  parts.push('- **Non-blocking suggestions**: (list, or "none")');
+  parts.push('- **Summary**: 2-3 sentence overall assessment');
+  parts.push('');
+
+  return parts.join('\n');
+}
+
+export interface DispatchReviewOptions {
+  /** Specific handoff ID to review (otherwise auto-detect) */
+  handoffId?: string;
+  /** Specific reviewer agent (otherwise pick from available) */
+  reviewer?: string;
+  /** Spawn the reviewer CLI agent */
+  spawn?: boolean;
+  /** Dry run */
+  dryRun?: boolean;
+  /** Dispatcher identity */
+  dispatcherAgent: string;
+  dispatcherAgentId?: string;
+  sessionId?: string;
+}
+
+export interface DispatchReviewResult {
+  reviews_sent: Array<{
+    handoff_id: string;
+    plan_id?: string;
+    reviewer: string;
+    message_id: string;
+    channel: 'spawn' | 'inbox';
+    pid?: number;
+  }>;
+  skipped: Array<{
+    handoff_id: string;
+    reason: string;
+  }>;
+}
+
+/**
+ * Dispatch code reviews for completed handoffs.
+ */
+export function dispatchReview(options: DispatchReviewOptions, cwd: string): DispatchReviewResult {
+  const result: DispatchReviewResult = { reviews_sent: [], skipped: [] };
+
+  // Find reviewable handoffs
+  let reviewable: ReviewableHandoff[];
+  if (options.handoffId) {
+    const state = loadState(cwd);
+    const handoff = state.open_handoffs.find(h => h.id === options.handoffId || h.short_label === options.handoffId);
+    if (!handoff) {
+      result.skipped.push({ handoff_id: options.handoffId, reason: 'Handoff not found' });
+      return result;
+    }
+    const plan = handoff.plan_id ? state.plan_items.find(p => p.id === handoff.plan_id) : undefined;
+    reviewable = [{ handoff, plan }];
+  } else {
+    reviewable = findReviewableHandoffs(cwd);
+  }
+
+  if (reviewable.length === 0) return result;
+
+  // Find reviewer agent
+  const agents = listAgentIdentities(cwd);
+  const availableReviewers = agents
+    .filter(a => a.kind !== 'human')
+    .map(a => a.agent_name);
+
+  for (const { handoff, plan } of reviewable) {
+    // Pick reviewer: prefer explicit, then any available that isn't the author
+    let reviewer = options.reviewer;
+    if (!reviewer) {
+      reviewer = availableReviewers.find(a => a !== handoff.from);
+    }
+    if (!reviewer) {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'No available reviewer (all agents are the author)' });
+      continue;
+    }
+
+    const brief = generateReviewBrief(handoff, plan);
+
+    if (options.dryRun) {
+      const invokeTemplate = resolveInvokeTemplate(reviewer, cwd);
+      result.reviews_sent.push({
+        handoff_id: handoff.id,
+        plan_id: plan?.id,
+        reviewer,
+        message_id: '(dry-run)',
+        channel: (options.spawn && invokeTemplate) ? 'spawn' : 'inbox',
+      });
+      continue;
+    }
+
+    // Send review message
+    const msgResult = sendMessage({
+      from: options.dispatcherAgent,
+      to: reviewer,
+      type: 'review',
+      text: brief,
+      ref: handoff.id,
+      payload: {
+        handoff_id: handoff.id,
+        plan_id: plan?.id,
+        author: handoff.from,
+      },
+      requires_ack: true,
+      tags: ['review', 'auto-review'],
+      author_id: options.dispatcherAgentId,
+      session_id: options.sessionId,
+    }, cwd);
+
+    let channel: 'spawn' | 'inbox' = 'inbox';
+    let pid: number | undefined;
+
+    if (options.spawn) {
+      const invokeTemplate = resolveInvokeTemplate(reviewer, cwd);
+      if (invokeTemplate) {
+        const spawnResult = spawnAgent(invokeTemplate, brief, cwd);
+        channel = 'spawn';
+        pid = spawnResult.pid;
+      }
+    }
+
+    result.reviews_sent.push({
+      handoff_id: handoff.id,
+      plan_id: plan?.id,
+      reviewer,
+      message_id: msgResult.id,
+      channel,
+      pid,
+    });
+  }
+
+  return result;
 }

@@ -9,7 +9,7 @@
  * @module
  */
 import { memoryExists } from '../core/io.js';
-import { analyzeSequence, dispatch } from '../core/dispatcher.js';
+import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 
 export interface DispatchCommandOptions {
@@ -133,6 +133,66 @@ export function runDispatch(options: DispatchCommandOptions): void {
     console.log('\n  Skipped:');
     for (const skip of dispatchResult.skipped) {
       console.log(`    - ${skip.plan_id}: ${skip.reason}`);
+    }
+  }
+
+  console.log('');
+}
+
+// ── Dispatch Review ─────────────────────────────────────────
+
+export interface DispatchReviewCommandOptions {
+  handoff?: string;
+  reviewer?: string;
+  spawn?: boolean;
+  dry?: boolean;
+  agent?: string;
+  json?: boolean;
+  cwd?: string;
+}
+
+export function runDispatchReview(options: DispatchReviewCommandOptions): void {
+  const cwd = options.cwd;
+  if (!memoryExists(cwd)) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const effectiveCwd = cwd ?? process.cwd();
+  const dispatcherAgent = options.agent ?? resolveCurrentAgentName(effectiveCwd) ?? 'brainclaw';
+
+  const result = dispatchReview({
+    handoffId: options.handoff,
+    reviewer: options.reviewer,
+    spawn: options.spawn,
+    dryRun: options.dry,
+    dispatcherAgent,
+  }, effectiveCwd);
+
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (options.dry) {
+    console.log('\n🔍 Review dispatch dry run\n');
+  } else {
+    console.log('\n✔ Review dispatch complete\n');
+  }
+
+  if (result.reviews_sent.length > 0) {
+    for (const r of result.reviews_sent) {
+      const ch = r.channel === 'spawn' ? ' [spawned]' : ' [inbox]';
+      console.log(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''}${ch}`);
+    }
+  } else {
+    console.log('  No handoffs ready for review.');
+  }
+
+  if (result.skipped.length > 0) {
+    console.log('\n  Skipped:');
+    for (const s of result.skipped) {
+      console.log(`    - ${s.handoff_id}: ${s.reason}`);
     }
   }
 

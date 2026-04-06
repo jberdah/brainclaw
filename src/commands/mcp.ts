@@ -52,7 +52,7 @@ import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending, countActionable } from '../core/messaging.js';
-import { analyzeSequence, dispatch } from '../core/dispatcher.js';
+import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -522,6 +522,21 @@ const MCP_WRITE_TOOLS = [
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
         dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
         spawn: { type: 'boolean', description: 'Autonomously launch CLI agents with invoke templates (detached background processes). Default: false (inbox only).' },
+        agent: { type: 'string', description: 'Dispatcher agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_dispatch_review',
+    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox or spawn. Requires trusted trust level.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        handoffId: { type: 'string', description: 'Specific handoff ID to review. Default: auto-detect all reviewable handoffs.' },
+        reviewer: { type: 'string', description: 'Specific reviewer agent. Default: any available agent that is not the author.' },
+        spawn: { type: 'boolean', description: 'Spawn the reviewer CLI agent. Default: false (inbox only).' },
+        dryRun: { type: 'boolean', description: 'Preview without sending.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -2750,6 +2765,64 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             ...dispatchResult,
             sequence_id: analysis.sequence.id,
             dry_run: !!args.dryRun,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_dispatch_review') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const result = dispatchReview({
+          handoffId: args.handoffId as string | undefined,
+          reviewer: args.reviewer as string | undefined,
+          spawn: args.spawn as boolean | undefined,
+          dryRun: args.dryRun as boolean | undefined,
+          dispatcherAgent: resolved.identity!.agent_name,
+          dispatcherAgentId: resolved.identity!.agent_id,
+          sessionId: connectionSessionId,
+        }, cwd);
+
+        const lines: string[] = [];
+        if (args.dryRun) {
+          lines.push('🔍 Review dispatch dry run:');
+        } else {
+          lines.push('✔ Review dispatch complete:');
+        }
+
+        if (result.reviews_sent.length > 0) {
+          for (const r of result.reviews_sent) {
+            const ch = r.channel === 'spawn' ? ' [spawned]' : ' [inbox]';
+            lines.push(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''}${ch}`);
+          }
+        } else {
+          lines.push('  No handoffs ready for review.');
+        }
+
+        if (result.skipped.length > 0) {
+          lines.push('  Skipped:');
+          for (const s of result.skipped) {
+            lines.push(`    - ${s.handoff_id}: ${s.reason}`);
+          }
+        }
+
+        appendAuditEntry({
+          actor: resolved.identity!.agent_name,
+          actor_id: resolved.identity!.agent_id,
+          action: 'create',
+          item_type: 'review',
+          scope: `${result.reviews_sent.length} reviews`,
+        }, cwd);
+
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: lines.join('\n') }],
+            ...result,
           }),
         };
       } catch (err: unknown) {

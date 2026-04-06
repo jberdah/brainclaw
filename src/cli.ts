@@ -74,7 +74,7 @@ import { runSearch } from './commands/search.js';
 import { runExport, runRefresh } from './commands/export.js';
 import { runHooks } from './commands/hooks.js';
 import { runWatch } from './commands/watch.js';
-import { runDispatchAnalysis, runDispatch } from './commands/dispatch.js';
+import { runDispatchAnalysis, runDispatch, runDispatchReview } from './commands/dispatch.js';
 import { runInboxList, runInboxAck, runInboxArchive, runInboxSend, runInboxThread } from './commands/inbox.js';
 import { runMetrics } from './commands/metrics.js';
 import { runRollback } from './commands/rollback.js';
@@ -1267,6 +1267,26 @@ dispatchCmd
       max: options.max,
       dry: options.dry,
       spawn: options.spawn,
+      agent: options.agent,
+      json: options.json,
+    });
+  });
+
+dispatchCmd
+  .command('review')
+  .description('Dispatch code reviews for completed handoffs')
+  .option('--handoff <id>', 'Specific handoff ID to review')
+  .option('--reviewer <name>', 'Specific reviewer agent')
+  .option('--spawn', 'Launch the reviewer CLI agent')
+  .option('--dry', 'Preview without sending')
+  .option('--agent <name>', 'Dispatcher agent name')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runDispatchReview({
+      handoff: options.handoff,
+      reviewer: options.reviewer,
+      spawn: options.spawn,
+      dry: options.dry,
       agent: options.agent,
       json: options.json,
     });
