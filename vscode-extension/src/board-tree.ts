@@ -37,6 +37,23 @@ interface BoardData {
   incoming_signals?: any[];
 }
 
+// --- Session data shape (from brainclaw who --json) ---
+
+interface SessionInfo {
+  session_id: string;
+  agent: string;
+  agent_id: string;
+  branch: string | null;
+  isolation_mode: string;
+  claims: number;
+  started_at: string;
+  last_seen_at: string;
+  status: string;
+  model: string | null;
+  project: string | null;
+  pid?: number;
+}
+
 // --- Time helpers ---
 
 function timeAgo(isoDate: string): string {
@@ -48,6 +65,18 @@ function timeAgo(isoDate: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function formatDuration(isoDate: string): string {
+  const diff = Date.now() - new Date(isoDate).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '<1m';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return remMins > 0 ? `${hours}h${remMins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24}h`;
 }
 
 type Freshness = 'active' | 'idle' | 'stale';
@@ -70,10 +99,19 @@ function freshnessIcon(freshness: Freshness): vscode.ThemeIcon {
   }
 }
 
+function sessionStatusIcon(status: string): vscode.ThemeIcon {
+  switch (status) {
+    case 'active': return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('testing.iconPassed'));
+    case 'stale': return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('editorWarning.foreground'));
+    case 'dead': return new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('disabledForeground'));
+    default: return new vscode.ThemeIcon('circle-outline');
+  }
+}
+
 // --- Section IDs for getChildren routing ---
 
 const SECTION = {
-  AGENTS: 'section:agents',
+  SESSIONS: 'section:sessions',
   CANDIDATES: 'section:candidates',
   ACTIVITY: 'section:activity',
   PLANS: 'section:plans',
@@ -92,6 +130,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _watcher?: cp.ChildProcess;
   private _board: BoardData | null = null;
+  private _sessions: SessionInfo[] | null = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
   private _resolvedCmd: string | undefined | null = null;
 
@@ -119,6 +158,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         }
       }
     });
+    this._loadSessions(bclaw);
   }
 
   /** Run a brainclaw CLI command and refresh the board after. */
@@ -136,6 +176,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _debouncedRefresh(): void {
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
     this._refreshTimer = setTimeout(() => this.refresh(), 500);
+  }
+
+  private _loadSessions(bclaw: string): void {
+    cp.exec(`${bclaw} who --json`, { cwd: this._cwd, timeout: 5000 }, (err, stdout) => {
+      if (err) {
+        this._sessions = null;
+        return;
+      }
+      try {
+        const data = JSON.parse(stdout);
+        this._sessions = data.sessions ?? [];
+      } catch {
+        this._sessions = null;
+      }
+      this._onDidChangeTreeData.fire();
+    });
   }
 
   dispose() {
@@ -187,7 +243,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     // Children by section
     const id = element.contextValue;
     switch (id) {
-      case SECTION.AGENTS: return Promise.resolve(this._buildAgents());
+      case SECTION.SESSIONS: return Promise.resolve(this._buildSessions());
       case SECTION.CANDIDATES: return Promise.resolve(this._buildCandidates());
       case SECTION.ACTIVITY: return Promise.resolve(this._buildActivity());
       case SECTION.PLANS: return Promise.resolve(this._buildPlans());
@@ -206,9 +262,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const b = this._board!;
     const sections: BrainclawTreeItem[] = [];
 
-    // Agents actifs
-    const agents = b.other_agents ?? [];
-    sections.push(this._sectionHeader(`Agents (${agents.length})`, SECTION.AGENTS, 'pulse', agents.length));
+    // Sessions (live session data, falls back to agent count)
+    const sessionCount = this._sessions?.length ?? (b.other_agents ?? []).length;
+    sections.push(this._sectionHeader(`Sessions (${sessionCount})`, SECTION.SESSIONS, 'broadcast', sessionCount));
 
     // Candidates
     const candidates = b.pending_candidates ?? [];
@@ -275,14 +331,44 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     );
   }
 
-  // ─── Agents actifs ─────────────────────────────────────────────
+  // ─── Sessions (replaces Agents) ────────────────────────────────
 
-  private _buildAgents(): BrainclawTreeItem[] {
+  private _buildSessions(): BrainclawTreeItem[] {
+    if (this._sessions && this._sessions.length > 0) {
+      const sorted = [...this._sessions].sort((a, b) => {
+        const order: Record<string, number> = { active: 0, stale: 1, dead: 2 };
+        return (order[a.status] ?? 3) - (order[b.status] ?? 3);
+      });
+      return sorted.map(s => {
+        const shortId = s.session_id.replace(/^sess_/, '').slice(0, 8);
+        const duration = formatDuration(s.started_at);
+        const branch = s.branch ? ` · ${s.branch}` : '';
+        const worktree = s.isolation_mode === 'dedicated-worktree' ? ' · worktree' : '';
+        const claimInfo = s.claims > 0 ? ` · ${s.claims} claim(s)` : '';
+        const desc = `${shortId} · ${duration}${branch}${worktree}${claimInfo}`;
+        const model = s.model ? `\nModel: ${s.model}` : '';
+        const tooltip = `Session: ${s.session_id}\nAgent: ${s.agent}\nStatus: ${s.status}\nStarted: ${s.started_at}\nDuration: ${duration}${model}\nBranch: ${s.branch ?? 'none'}\nIsolation: ${s.isolation_mode}\nClaims: ${s.claims}`;
+        return new BrainclawTreeItem(
+          s.agent,
+          vscode.TreeItemCollapsibleState.None,
+          desc,
+          sessionStatusIcon(s.status),
+          tooltip,
+          'session',
+          s.session_id,
+        );
+      });
+    }
+
+    // Fallback: use agent data from board if who command failed
+    return this._buildAgentsFallback();
+  }
+
+  private _buildAgentsFallback(): BrainclawTreeItem[] {
     const agents = this._board?.other_agents ?? [];
     if (agents.length === 0) {
-      return [new BrainclawTreeItem('No agents registered', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('info'))];
+      return [new BrainclawTreeItem('No active sessions', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('info'))];
     }
-    // Sort: active first, then idle, then stale
     const sorted = [...agents].sort((a: any, b: any) => {
       const order = { active: 0, idle: 1, stale: 2 };
       return (order[agentFreshness(a)] ?? 3) - (order[agentFreshness(b)] ?? 3);
