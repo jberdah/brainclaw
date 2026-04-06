@@ -95,6 +95,7 @@ import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
+import { runCodev } from './commands/codev.js';
 
 const program = new Command();
 
@@ -1560,6 +1561,17 @@ worktreeCmd
   .action(() => {
     const globalOpts = program.opts();
     runWorktreePrune({ cwd: globalOpts.cwd });
+  });
+
+// --- codev ---
+program
+  .command('codev [topic]')
+  .description('Multi-perspective ideation session using persona-based consultation')
+  .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
+  .option('--checkpoint', 'Pause after clarification for human input')
+  .option('--json', 'Output as JSON')
+  .action((topic, options) => {
+    runCodev(topic, options);
   });
 
 program.parseAsync(process.argv).catch((err) => {
