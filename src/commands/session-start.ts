@@ -15,6 +15,7 @@ import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
+import { checkMemoryPressure, type MemoryPressureResult } from '../core/gc-semantic.js';
 
 function sessionsDir(cwd?: string): string {
   return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
@@ -65,6 +66,7 @@ export interface SessionStartResult extends SessionSnapshot {
   inventory_advisory?: string[];
   shared_checkout_warning?: SharedCheckoutWarning;
   stale_claims_released?: Array<{ id: string; agent: string; scope: string }>;
+  memory_pressure?: MemoryPressureResult;
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -273,6 +275,15 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     }
   } catch { /* non-fatal */ }
 
+  // Memory pressure check: hint agent to run bclaw_compact if store is large
+  let memoryPressure: MemoryPressureResult | undefined;
+  try {
+    const pressure = checkMemoryPressure(options.cwd);
+    if (pressure.memory_pressure) {
+      memoryPressure = pressure;
+    }
+  } catch { /* non-fatal */ }
+
   return {
     ...snapshot,
     ...(agentGitHygiene.isGitRepo && (agentGitHygiene.missingGitignorePaths.length > 0 || agentGitHygiene.trackedPaths.length > 0)
@@ -286,6 +297,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     ...(inventoryAdvisory ? { inventory_advisory: inventoryAdvisory } : {}),
     ...(sharedCheckoutWarning ? { shared_checkout_warning: sharedCheckoutWarning } : {}),
     ...(staleClaimsReleased ? { stale_claims_released: staleClaimsReleased } : {}),
+    ...(memoryPressure ? { memory_pressure: memoryPressure } : {}),
   };
 }
 

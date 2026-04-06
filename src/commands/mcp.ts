@@ -54,6 +54,7 @@ import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updat
 import { sendMessage, ackMessage, countPending, countActionable } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
+import { compact as gcCompact } from '../core/gc-semantic.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -935,6 +936,20 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'bclaw_compact',
+    description: 'LLM-driven semantic memory compaction. Archives old done plans and closed handoffs to cold storage, then returns a template for you to summarize patterns, traps, and decisions into durable memory entries. Use dryRun to preview. Safety: creates a backup before archiving, respects minimum item age.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dryRun: { type: 'boolean', description: 'Preview what would be compacted without archiving. Default: false.' },
+        maxItems: { type: 'number', description: 'Maximum items to compact in one pass. Default: 20.' },
+        minAgeDays: { type: 'number', description: 'Minimum age in days for items to be eligible. Default: 7.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
     },
   },
 ] as const;
@@ -2575,6 +2590,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (staleInstructionsWarn) sessionStartMsgParts.push(staleInstructionsWarn);
       if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
       if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);
+      if (result.memory_pressure) {
+        sessionStartMsgParts.push(`\n⚠️ Memory pressure detected: ${result.memory_pressure.done_plans} done plans, ${result.memory_pressure.closed_handoffs} closed handoffs (${result.memory_pressure.eligible_items} eligible for compaction). Consider running bclaw_compact to archive old items and create durable summaries.`);
+      }
       // Inbox notification
       const agentNameForInbox = resolved.identity?.agent_name;
       if (agentNameForInbox) {
@@ -2592,6 +2610,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agent: result.agent,
         context_target: result.context_target,
         inbox_pending: inboxPending,
+        ...(result.memory_pressure ? { memory_pressure: result.memory_pressure } : {}),
       };
 
       if (args.includeContext) {
@@ -2697,6 +2716,42 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           ...(result.reflection_prompt ? { reflection_prompt: result.reflection_prompt } : {}),
         }),
         nextConnectionSessionId: undefined,
+      };
+    }
+
+    if (name === 'bclaw_compact') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const compactResult = gcCompact({
+        dryRun: args.dryRun as boolean | undefined,
+        maxItems: args.maxItems as number | undefined,
+        minAgeDays: args.minAgeDays as number | undefined,
+        cwd,
+      });
+
+      const lines: string[] = [];
+      if (compactResult.dry_run) {
+        lines.push(`🔍 Dry run — ${compactResult.eligible_count} item(s) eligible for compaction.`);
+      } else {
+        lines.push(`✔ Compacted ${compactResult.archived_count}/${compactResult.eligible_count} item(s).`);
+        if (compactResult.backup_path) {
+          lines.push(`Backup: ${compactResult.backup_path}`);
+        }
+      }
+      if (compactResult.template) {
+        lines.push('');
+        lines.push(compactResult.template);
+      } else if (compactResult.eligible_count === 0) {
+        lines.push('No items eligible for compaction.');
+      }
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: lines.join('\n') }],
+          ...compactResult,
+        }),
       };
     }
 
