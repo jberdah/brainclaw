@@ -52,6 +52,7 @@ import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending } from '../core/messaging.js';
+import { analyzeSequence, dispatch } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
@@ -497,9 +498,34 @@ export const MCP_READ_TOOLS = [
       required: ['thread_id'],
     },
   },
+  {
+    name: 'bclaw_dispatch_analysis',
+    description: 'Analyze the active sequence and show lane status: which items are ready (all hard deps met), active (claimed by an agent), blocked (waiting on deps), or done. Shows available agents. Use this before bclaw_dispatch to preview assignments.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lanes: { type: 'array', items: { type: 'string' }, description: 'Only show specific lanes.' },
+      },
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
+  {
+    name: 'bclaw_dispatch',
+    description: 'Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to available agents. Each agent gets at most one assignment. Use dryRun to preview without sending. Requires trusted or curator trust level.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agents: { type: 'array', items: { type: 'string' }, description: 'Only dispatch to these agents. Default: all available.' },
+        lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
+        maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
+        dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
+        agent: { type: 'string', description: 'Dispatcher agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+    },
+  },
   {
     name: 'bclaw_send_message',
     description: 'Send a message to another agent\'s inbox. Used for work assignment (type: assign), review requests (type: review), RFC discussions (type: rfc), notifications (type: info), and threaded replies (type: reply). Requires contributor trust.',
@@ -2653,6 +2679,76 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         }),
         nextConnectionSessionId: undefined,
       };
+    }
+
+    if (name === 'bclaw_dispatch') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const result = dispatch({
+          agents: args.agents as string[] | undefined,
+          lanes: args.lanes as string[] | undefined,
+          maxAssignments: args.maxAssignments as number | undefined,
+          dryRun: args.dryRun as boolean | undefined,
+          dispatcherAgent: resolved.identity!.agent_name,
+          dispatcherAgentId: resolved.identity!.agent_id,
+          sessionId: connectionSessionId,
+        }, cwd);
+
+        if (!result) {
+          return { response: createToolErrorResponse('operation_error', 'No active sequence found. Create a sequence first.') };
+        }
+
+        const { analysis, result: dispatchResult } = result;
+        const lines: string[] = [];
+
+        if (args.dryRun) {
+          lines.push('🔍 Dispatch dry run (no messages sent):');
+        } else {
+          lines.push('✔ Dispatch cycle complete:');
+        }
+
+        lines.push(`  Sequence: ${analysis.sequence.name}`);
+        lines.push(`  Ready: ${analysis.ready.length} | Active: ${analysis.active.length} | Blocked: ${analysis.blocked.length} | Done: ${analysis.done.length}`);
+
+        if (dispatchResult.messages_sent.length > 0) {
+          lines.push('');
+          lines.push(args.dryRun ? '  Would assign:' : '  Assigned:');
+          for (const msg of dispatchResult.messages_sent) {
+            const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
+            lines.push(`    → ${msg.agent}: ${msg.plan_id}${lane}`);
+          }
+        }
+
+        if (dispatchResult.skipped.length > 0) {
+          lines.push('');
+          lines.push('  Skipped:');
+          for (const skip of dispatchResult.skipped) {
+            lines.push(`    - ${skip.plan_id}: ${skip.reason}`);
+          }
+        }
+
+        appendAuditEntry({
+          actor: resolved.identity!.agent_name,
+          actor_id: resolved.identity!.agent_id,
+          action: 'create',
+          item_type: 'dispatch',
+          scope: `${dispatchResult.messages_sent.length} assignments`,
+        }, cwd);
+
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: lines.join('\n') }],
+            ...dispatchResult,
+            sequence_id: analysis.sequence.id,
+            dry_run: !!args.dryRun,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
     }
 
     if (name === 'bclaw_send_message') {

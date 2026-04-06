@@ -29,6 +29,7 @@ import {
 } from '../core/agent-registry.js';
 import { readAuditLog, type AuditAction } from '../core/audit.js';
 import { readInbox, getThread } from '../core/messaging.js';
+import { analyzeSequence } from '../core/dispatcher.js';
 import { checkPolicy } from '../core/policy.js';
 import { buildGovernanceReport, renderGovernanceMarkdown } from '../core/governance.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
@@ -1187,6 +1188,70 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: { total: entries.length, returned: sliced.length, entries: sliced, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_dispatch_analysis') {
+    const analysis = analyzeSequence(cwd);
+    if (!analysis) {
+      return {
+        content: [{ type: 'text', text: 'No active sequence found.' }],
+        structuredContent: { active_sequence: false, schema_version: SCHEMA_VERSION },
+      };
+    }
+
+    const lanesFilter = args.lanes as string[] | undefined;
+    const lines: string[] = [`Dispatch analysis — Sequence: ${analysis.sequence.name}`];
+    lines.push('');
+
+    // Ready lanes
+    let ready = analysis.ready;
+    if (lanesFilter?.length) ready = ready.filter(r => r.lane && lanesFilter.includes(r.lane));
+    lines.push(`🟢 Ready (${ready.length}):`);
+    for (const r of ready) {
+      const lane = r.lane ? ` [${r.lane}]` : '';
+      const assignee = r.plan.assignee ? ` → ${r.plan.assignee}` : '';
+      lines.push(`  ${r.plan.short_label ?? r.plan.id}${lane}${assignee} — ${r.plan.text.slice(0, 80)}`);
+      lines.push(`    ${r.reason}`);
+    }
+
+    // Active lanes
+    let active = analysis.active;
+    if (lanesFilter?.length) active = active.filter(a => a.lane && lanesFilter.includes(a.lane));
+    if (active.length > 0) {
+      lines.push('');
+      lines.push(`🔵 Active (${active.length}):`);
+      for (const a of active) {
+        const lane = a.lane ? ` [${a.lane}]` : '';
+        lines.push(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} working`);
+      }
+    }
+
+    // Blocked lanes
+    let blocked = analysis.blocked;
+    if (lanesFilter?.length) blocked = blocked.filter(b => b.lane && lanesFilter.includes(b.lane));
+    if (blocked.length > 0) {
+      lines.push('');
+      lines.push(`🔴 Blocked (${blocked.length}):`);
+      for (const b of blocked) {
+        const lane = b.lane ? ` [${b.lane}]` : '';
+        lines.push(`  ${b.item.planId}${lane} — ${b.reason}`);
+      }
+    }
+
+    // Done
+    if (analysis.done.length > 0) {
+      lines.push('');
+      lines.push(`✅ Done (${analysis.done.length})`);
+    }
+
+    // Available agents
+    lines.push('');
+    lines.push(`Available agents: ${analysis.available_agents.length > 0 ? analysis.available_agents.join(', ') : '(none)'}`);
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { ...analysis, schema_version: SCHEMA_VERSION },
     };
   }
 

@@ -1,0 +1,425 @@
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { analyzeSequence, generateBrief, dispatch } from '../../src/core/dispatcher.js';
+import { saveSequence } from '../../src/core/sequence.js';
+import { saveClaim } from '../../src/core/claims.js';
+import { saveAgentIdentity } from '../../src/core/agent-registry.js';
+import { persistState, loadState } from '../../src/core/state.js';
+import type { Sequence, PlanItem, Claim, Handoff } from '../../src/core/schema.js';
+
+function createTestStore(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-dispatch-test-'));
+  const bc = path.join(dir, '.brainclaw');
+  // Create all needed directories
+  for (const sub of [
+    'coordination/plans', 'coordination/sequences', 'coordination/claims',
+    'coordination/handoffs', 'coordination/inbox', 'coordination/sessions',
+    'memory/constraints', 'memory/decisions', 'memory/traps',
+    'agents',
+  ]) {
+    fs.mkdirSync(path.join(bc, sub), { recursive: true });
+  }
+  fs.writeFileSync(path.join(bc, 'config.yaml'), 'project_id: prj_test\n');
+  return dir;
+}
+
+function cleanupTestStore(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function makePlan(overrides: Partial<PlanItem> & { id: string; text: string }): PlanItem {
+  return {
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+    author: 'test',
+    status: 'todo',
+    priority: 'medium',
+    tags: [],
+    depends_on: [],
+    ...overrides,
+  };
+}
+
+function makeSequence(items: Sequence['items']): Sequence {
+  return {
+    schema_version: 2,
+    id: 'seq_test1234',
+    name: 'test-sequence',
+    status: 'active',
+    items,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+    author: 'test',
+    tags: [],
+  };
+}
+
+function setupAgents(dir: string): void {
+  saveAgentIdentity({
+    version: 1,
+    agent_id: 'agt_claude',
+    agent_name: 'claude-code',
+    kind: 'agent',
+    trust_level: 'trusted',
+    capabilities: [],
+    created_at: '2026-04-01T00:00:00Z',
+  }, dir);
+  saveAgentIdentity({
+    version: 1,
+    agent_id: 'agt_codex',
+    agent_name: 'codex',
+    kind: 'agent',
+    trust_level: 'contributor',
+    capabilities: [],
+    created_at: '2026-04-01T00:00:00Z',
+  }, dir);
+}
+
+describe('core/dispatcher', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestStore();
+    setupAgents(testDir);
+  });
+
+  afterEach(() => {
+    cleanupTestStore(testDir);
+  });
+
+  describe('analyzeSequence', () => {
+    it('returns null when no active sequence', () => {
+      const result = analyzeSequence(testDir);
+      assert.equal(result, null);
+    });
+
+    it('identifies ready lanes when all deps are met', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'done' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_b', rank: 2, hard_after: ['pln_a'], soft_after: [] },
+      ]), testDir);
+
+      const result = analyzeSequence(testDir)!;
+      assert.ok(result);
+      assert.equal(result.done.length, 1);
+      assert.equal(result.ready.length, 1);
+      assert.equal(result.ready[0]!.plan.id, 'pln_b');
+    });
+
+    it('identifies blocked lanes with unmet hard deps', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_b', rank: 2, hard_after: ['pln_a'], soft_after: [] },
+      ]), testDir);
+
+      const result = analyzeSequence(testDir)!;
+      assert.equal(result.ready.length, 1);
+      assert.equal(result.ready[0]!.plan.id, 'pln_a');
+      assert.equal(result.blocked.length, 1);
+      assert.equal(result.blocked[0]!.item.planId, 'pln_b');
+      assert.ok(result.blocked[0]!.reason.includes('hard dependencies'));
+    });
+
+    it('identifies active lanes with claims', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'in_progress' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveClaim({
+        schema_version: 2,
+        id: 'clm_test1',
+        agent: 'claude-code',
+        scope: 'src/core/foo.ts',
+        description: 'Working on Task A',
+        created_at: '2026-04-01T00:00:00Z',
+        plan_id: 'pln_a',
+        status: 'active',
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = analyzeSequence(testDir)!;
+      assert.equal(result.active.length, 1);
+      assert.equal(result.active[0]!.agent, 'claude-code');
+      assert.equal(result.ready.length, 0);
+    });
+
+    it('marks busy agents as unavailable', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'in_progress' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveClaim({
+        schema_version: 2,
+        id: 'clm_test1',
+        agent: 'claude-code',
+        scope: 'src/foo.ts',
+        description: 'Working',
+        created_at: '2026-04-01T00:00:00Z',
+        plan_id: 'pln_a',
+        status: 'active',
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = analyzeSequence(testDir)!;
+      assert.ok(!result.available_agents.includes('claude-code'));
+      assert.ok(result.available_agents.includes('codex'));
+    });
+
+    it('handles parallel lanes correctly', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A (vscode)', status: 'todo' }),
+        makePlan({ id: 'pln_b', text: 'Task B (testing)', status: 'todo' }),
+        makePlan({ id: 'pln_c', text: 'Task C (coordination)', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [], lane: 'vscode' },
+        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [], lane: 'testing' },
+        { planId: 'pln_c', rank: 3, hard_after: [], soft_after: [], lane: 'coordination' },
+      ]), testDir);
+
+      const result = analyzeSequence(testDir)!;
+      assert.equal(result.ready.length, 3);
+      assert.deepEqual(result.ready.map(r => r.lane).sort(), ['coordination', 'testing', 'vscode']);
+    });
+  });
+
+  describe('generateBrief', () => {
+    it('generates a brief with plan details', () => {
+      const plan = makePlan({
+        id: 'pln_a',
+        text: 'Implement feature X',
+        priority: 'high',
+        tags: ['sprint-5'],
+        estimated_effort: 60,
+      });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: [plan],
+      }, testDir);
+
+      const item = { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [], lane: 'vscode', rationale: 'First priority' };
+      const brief = generateBrief(plan, item, testDir);
+
+      assert.ok(brief.includes('Implement feature X'));
+      assert.ok(brief.includes('Priority: high'));
+      assert.ok(brief.includes('Lane: vscode'));
+      assert.ok(brief.includes('First priority'));
+      assert.ok(brief.includes('60 minutes'));
+      assert.ok(brief.includes('bclaw_claim'));
+    });
+
+    it('includes handoff narrative from prior work', () => {
+      const plan = makePlan({ id: 'pln_a', text: 'Continue feature X' });
+      const handoff: Handoff = {
+        id: 'hnd_test1',
+        from: 'claude-code',
+        to: 'codex',
+        text: 'Started the work',
+        created_at: '2026-04-01T01:00:00Z',
+        author: 'claude-code',
+        status: 'open',
+        plan_id: 'pln_a',
+        narrative: 'I implemented the core logic but tests are still missing.',
+        tags: [],
+      };
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const item = { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] };
+      const brief = generateBrief(plan, item, testDir);
+
+      assert.ok(brief.includes('Prior work on this plan'));
+      assert.ok(brief.includes('I implemented the core logic'));
+    });
+  });
+
+  describe('dispatch', () => {
+    it('sends assignment messages to available agents', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [], lane: 'vscode' },
+        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [], lane: 'testing' },
+      ]), testDir);
+
+      const result = dispatch({
+        dispatcherAgent: 'coordinator',
+      }, testDir)!;
+
+      assert.ok(result);
+      assert.equal(result.result.messages_sent.length, 2);
+      // Each agent gets one assignment
+      const agents = result.result.messages_sent.map(m => m.agent);
+      assert.ok(agents.includes('claude-code'));
+      assert.ok(agents.includes('codex'));
+    });
+
+    it('respects plan assignee preference', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo', assignee: 'codex' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = dispatch({
+        dispatcherAgent: 'coordinator',
+      }, testDir)!;
+
+      assert.equal(result.result.messages_sent[0]!.agent, 'codex');
+    });
+
+    it('dry run does not send messages', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = dispatch({
+        dispatcherAgent: 'coordinator',
+        dryRun: true,
+      }, testDir)!;
+
+      assert.equal(result.result.messages_sent.length, 1);
+      assert.equal(result.result.messages_sent[0]!.message_id, '(dry-run)');
+
+      // Verify no actual message files created
+      const inboxDir = path.join(testDir, '.brainclaw', 'coordination', 'inbox');
+      const agentDirs = fs.readdirSync(inboxDir).filter(f =>
+        fs.statSync(path.join(inboxDir, f)).isDirectory()
+      );
+      assert.equal(agentDirs.length, 0);
+    });
+
+    it('skips when no agents available', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'in_progress' }),
+        makePlan({ id: 'pln_c', text: 'Task C', status: 'in_progress' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      // Both agents are busy
+      saveClaim({ schema_version: 2, id: 'clm_1', agent: 'claude-code', scope: 'src/a.ts', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_b', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_2', agent: 'codex', scope: 'src/b.ts', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_c', status: 'active' }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [] },
+        { planId: 'pln_c', rank: 3, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      assert.equal(result.result.messages_sent.length, 0);
+      assert.equal(result.result.skipped.length, 1);
+      assert.ok(result.result.skipped[0]!.reason.includes('No available agent'));
+    });
+
+    it('filters by lane', () => {
+      const plans = [
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+        makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [], lane: 'vscode' },
+        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [], lane: 'testing' },
+      ]), testDir);
+
+      const result = dispatch({
+        dispatcherAgent: 'coordinator',
+        lanes: ['testing'],
+      }, testDir)!;
+
+      assert.equal(result.result.messages_sent.length, 1);
+      assert.equal(result.result.messages_sent[0]!.lane, 'testing');
+    });
+
+    it('returns null when no active sequence', () => {
+      const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir);
+      assert.equal(result, null);
+    });
+  });
+});
