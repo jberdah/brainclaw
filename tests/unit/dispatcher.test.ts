@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { analyzeSequence, generateBrief, dispatch } from '../../src/core/dispatcher.js';
+import { analyzeSequence, generateBrief, dispatch, findReviewableHandoffs, generateReviewBrief, dispatchReview } from '../../src/core/dispatcher.js';
 import { saveSequence } from '../../src/core/sequence.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
@@ -39,6 +39,19 @@ function makePlan(overrides: Partial<PlanItem> & { id: string; text: string }): 
     priority: 'medium',
     tags: [],
     depends_on: [],
+    ...overrides,
+  };
+}
+
+function makeHandoff(overrides: Partial<Handoff> & { id: string }): Handoff {
+  return {
+    from: 'claude-code',
+    to: 'codex',
+    text: 'Work done',
+    created_at: '2026-04-01T00:00:00Z',
+    author: 'claude-code',
+    status: 'open',
+    tags: [],
     ...overrides,
   };
 }
@@ -445,6 +458,312 @@ describe('core/dispatcher', () => {
       assert.equal(result2.result.messages_sent.length, 0);
       assert.equal(result2.result.skipped.length, 1);
       assert.ok(result2.result.skipped[0]!.reason.includes('Already assigned'));
+    });
+  });
+
+  describe('findReviewableHandoffs', () => {
+    it('skips handoffs without plan_id', () => {
+      const handoff = makeHandoff({ id: 'hnd_noplan', status: 'open' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 0);
+    });
+
+    it('skips handoffs when linked plan is not found', () => {
+      const handoff = makeHandoff({ id: 'hnd_missing', status: 'open', plan_id: 'pln_ghost' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [],
+      }, testDir);
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 0);
+    });
+
+    it('skips handoffs when plan is not done', () => {
+      const handoff = makeHandoff({ id: 'hnd_notdone', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'in_progress' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 0);
+    });
+
+    it('skips closed handoffs', () => {
+      const handoff = makeHandoff({ id: 'hnd_closed', status: 'closed', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 0);
+    });
+
+    it('skips handoffs with active review message', () => {
+      const handoff = makeHandoff({ id: 'hnd_reviewed', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      // Create a review message in an agent inbox
+      const inboxDir = path.join(testDir, '.brainclaw', 'coordination', 'inbox', 'codex');
+      fs.mkdirSync(inboxDir, { recursive: true });
+      fs.writeFileSync(path.join(inboxDir, 'msg_review1.json'), JSON.stringify({
+        schema_version: 1,
+        id: 'msg_review1',
+        from: 'coordinator',
+        to: 'codex',
+        type: 'review',
+        text: 'Review this',
+        ref: 'hnd_reviewed',
+        status: 'pending',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T00:00:00Z',
+        author: 'coordinator',
+        tags: ['review'],
+      }));
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 0);
+    });
+
+    it('returns valid reviewable handoffs', () => {
+      const handoff = makeHandoff({ id: 'hnd_good', status: 'open', plan_id: 'pln_a', narrative: 'Did the work' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = findReviewableHandoffs(testDir);
+      assert.equal(result.length, 1);
+      assert.equal(result[0]!.handoff.id, 'hnd_good');
+      assert.equal(result[0]!.plan!.id, 'pln_a');
+    });
+  });
+
+  describe('dispatchReview', () => {
+    it('sends review to available agent', () => {
+      const handoff = makeHandoff({ id: 'hnd_ok', status: 'open', plan_id: 'pln_a', narrative: 'Completed the task' });
+      const plan = makePlan({ id: 'pln_a', text: 'Implement feature', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 1);
+      assert.equal(result.reviews_sent[0]!.handoff_id, 'hnd_ok');
+      assert.equal(result.reviews_sent[0]!.plan_id, 'pln_a');
+      assert.equal(result.reviews_sent[0]!.channel, 'inbox');
+      // Reviewer should not be the author
+      assert.notEqual(result.reviews_sent[0]!.reviewer, 'claude-code');
+    });
+
+    it('explicit handoffId applies same reviewability checks — closed', () => {
+      const handoff = makeHandoff({ id: 'hnd_closed2', status: 'closed', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        handoffId: 'hnd_closed2',
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 0);
+      assert.equal(result.skipped.length, 1);
+      assert.ok(result.skipped[0]!.reason.includes('closed'));
+    });
+
+    it('explicit handoffId applies same reviewability checks — no plan_id', () => {
+      const handoff = makeHandoff({ id: 'hnd_noplan2', status: 'open' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [],
+      }, testDir);
+
+      const result = dispatchReview({
+        handoffId: 'hnd_noplan2',
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 0);
+      assert.equal(result.skipped.length, 1);
+      assert.ok(result.skipped[0]!.reason.includes('no linked plan'));
+    });
+
+    it('explicit handoffId applies same reviewability checks — plan not done', () => {
+      const handoff = makeHandoff({ id: 'hnd_notdone2', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'in_progress' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        handoffId: 'hnd_notdone2',
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 0);
+      assert.equal(result.skipped.length, 1);
+      assert.ok(result.skipped[0]!.reason.includes('not done'));
+    });
+
+    it('explicit handoffId applies same reviewability checks — active review exists', () => {
+      const handoff = makeHandoff({ id: 'hnd_hasreview', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      // Create existing review message
+      const inboxDir = path.join(testDir, '.brainclaw', 'coordination', 'inbox', 'codex');
+      fs.mkdirSync(inboxDir, { recursive: true });
+      fs.writeFileSync(path.join(inboxDir, 'msg_rev2.json'), JSON.stringify({
+        schema_version: 1,
+        id: 'msg_rev2',
+        from: 'coordinator',
+        to: 'codex',
+        type: 'review',
+        text: 'Review this',
+        ref: 'hnd_hasreview',
+        status: 'pending',
+        created_at: '2026-04-01T00:00:00Z',
+        updated_at: '2026-04-01T00:00:00Z',
+        author: 'coordinator',
+        tags: ['review'],
+      }));
+
+      const result = dispatchReview({
+        handoffId: 'hnd_hasreview',
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 0);
+      assert.equal(result.skipped.length, 1);
+      assert.ok(result.skipped[0]!.reason.includes('review already exists'));
+    });
+
+    it('dry run does not send messages', () => {
+      const handoff = makeHandoff({ id: 'hnd_dry', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Task A', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        dispatcherAgent: 'coordinator',
+        dryRun: true,
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 1);
+      assert.equal(result.reviews_sent[0]!.message_id, '(dry-run)');
+      assert.equal(result.reviews_sent[0]!.handoff_id, 'hnd_dry');
+    });
+  });
+
+  describe('generateReviewBrief', () => {
+    it('includes plan text', () => {
+      const handoff = makeHandoff({ id: 'hnd_b1', status: 'open', plan_id: 'pln_a' });
+      const plan = makePlan({ id: 'pln_a', text: 'Implement the payment flow' });
+
+      const brief = generateReviewBrief(handoff, plan);
+      assert.ok(brief.includes('Implement the payment flow'));
+      assert.ok(brief.includes('pln_a'));
+    });
+
+    it('includes narrative', () => {
+      const handoff = makeHandoff({ id: 'hnd_b2', status: 'open', narrative: 'I refactored the auth module and added tests.' });
+
+      const brief = generateReviewBrief(handoff);
+      assert.ok(brief.includes('I refactored the auth module and added tests.'));
+      assert.ok(brief.includes('What was done'));
+    });
+
+    it('includes review criteria', () => {
+      const handoff = makeHandoff({ id: 'hnd_b3', status: 'open' });
+
+      const brief = generateReviewBrief(handoff);
+      assert.ok(brief.includes('Review criteria'));
+      assert.ok(brief.includes('Scope'));
+      assert.ok(brief.includes('Bugs/Regressions'));
+      assert.ok(brief.includes('Completeness'));
+      assert.ok(brief.includes('APPROVE or REQUEST_CHANGES'));
+    });
+
+    it('includes pre_conditions and linked_plans from contract', () => {
+      const handoff = makeHandoff({
+        id: 'hnd_b4',
+        status: 'open',
+        contract: {
+          pre_conditions: ['Auth module must be initialized', 'DB migrations applied'],
+          linked_plans: ['pln_x', 'pln_y'],
+          files_touched: ['src/auth.ts'],
+          post_conditions: ['Login works'],
+          tests_to_verify: ['auth.test.ts'],
+        },
+      });
+
+      const brief = generateReviewBrief(handoff);
+      assert.ok(brief.includes('Pre-conditions'));
+      assert.ok(brief.includes('Auth module must be initialized'));
+      assert.ok(brief.includes('DB migrations applied'));
+      assert.ok(brief.includes('Linked plans'));
+      assert.ok(brief.includes('pln_x'));
+      assert.ok(brief.includes('pln_y'));
+      assert.ok(brief.includes('Files touched'));
+      assert.ok(brief.includes('Post-conditions to verify'));
+      assert.ok(brief.includes('Tests to verify'));
+    });
+
+    it('includes plan steps', () => {
+      const plan = makePlan({
+        id: 'pln_steps',
+        text: 'Multi-step plan',
+        steps: [
+          { id: 'stp_1', text: 'Step one', status: 'done', created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+          { id: 'stp_2', text: 'Step two', status: 'todo', created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },
+        ],
+      });
+      const handoff = makeHandoff({ id: 'hnd_b5', status: 'open', plan_id: 'pln_steps' });
+
+      const brief = generateReviewBrief(handoff, plan);
+      assert.ok(brief.includes('Plan steps'));
+      assert.ok(brief.includes('[x] Step one'));
+      assert.ok(brief.includes('[ ] Step two'));
     });
   });
 });

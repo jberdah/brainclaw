@@ -516,11 +516,11 @@ export function findReviewableHandoffs(cwd: string): ReviewableHandoff[] {
   for (const handoff of state.open_handoffs) {
     if (handoff.status === 'closed') continue;
 
-    // Check linked plan is done
-    const plan = handoff.plan_id
-      ? state.plan_items.find(p => p.id === handoff.plan_id)
-      : undefined;
-    if (plan && plan.status !== 'done') continue;
+    // Must have a linked plan
+    if (!handoff.plan_id) continue;
+    const plan = state.plan_items.find(p => p.id === handoff.plan_id);
+    if (!plan) continue;
+    if (plan.status !== 'done') continue;
 
     // Check no existing review message for this handoff
     if (hasActiveReviewMessage(handoff.id, cwd)) continue;
@@ -600,6 +600,13 @@ export function generateReviewBrief(handoff: Handoff, plan?: PlanItem): string {
 
   // Contract
   if (handoff.contract) {
+    if (handoff.contract.pre_conditions?.length) {
+      parts.push('## Pre-conditions');
+      for (const c of handoff.contract.pre_conditions) {
+        parts.push(`- ${c}`);
+      }
+      parts.push('');
+    }
     if (handoff.contract.files_touched?.length) {
       parts.push('## Files touched');
       for (const f of handoff.contract.files_touched) {
@@ -618,6 +625,13 @@ export function generateReviewBrief(handoff: Handoff, plan?: PlanItem): string {
       parts.push('## Tests to verify');
       for (const t of handoff.contract.tests_to_verify) {
         parts.push(`- ${t}`);
+      }
+      parts.push('');
+    }
+    if (handoff.contract.linked_plans?.length) {
+      parts.push('## Linked plans');
+      for (const lp of handoff.contract.linked_plans) {
+        parts.push(`- ${lp}`);
       }
       parts.push('');
     }
@@ -699,7 +713,27 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
       result.skipped.push({ handoff_id: options.handoffId, reason: 'Handoff not found' });
       return result;
     }
-    const plan = handoff.plan_id ? state.plan_items.find(p => p.id === handoff.plan_id) : undefined;
+    if (handoff.status === 'closed') {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'Handoff is closed' });
+      return result;
+    }
+    if (!handoff.plan_id) {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'Handoff has no linked plan' });
+      return result;
+    }
+    const plan = state.plan_items.find(p => p.id === handoff.plan_id);
+    if (!plan) {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'Linked plan not found' });
+      return result;
+    }
+    if (plan.status !== 'done') {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'Linked plan is not done' });
+      return result;
+    }
+    if (hasActiveReviewMessage(handoff.id, cwd)) {
+      result.skipped.push({ handoff_id: handoff.id, reason: 'Active review already exists' });
+      return result;
+    }
     reviewable = [{ handoff, plan }];
   } else {
     reviewable = findReviewableHandoffs(cwd);
