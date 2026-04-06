@@ -90,7 +90,8 @@ function discoverBrainclawProjects(workspaceFolders: readonly vscode.WorkspaceFo
 }
 
 function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: number, discovered: Map<string, BoardProject>): void {
-  if (depth > 1) {
+  // Depth 3 supports monorepos (e.g. packages/foo/.brainclaw/) without scanning too deep
+  if (depth > 3) {
     return;
   }
 
