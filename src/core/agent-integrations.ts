@@ -147,6 +147,14 @@ export interface AgentIntegrationReadiness {
   self_healing_guidance: string[];
 }
 
+type CommandVersionProbe = (cmdPath: string, args?: string[]) => string | null;
+
+let commandVersionProbeForTests: CommandVersionProbe | undefined;
+
+export function setCommandVersionProbeForTests(probe?: CommandVersionProbe): void {
+  commandVersionProbeForTests = probe;
+}
+
 function resolveDeclaredSurfacePath(surface: AgentIntegrationSurface, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
   if (!surface.path) {
     return undefined;
@@ -160,7 +168,7 @@ function resolveDeclaredSurfacePath(surface: AgentIntegrationSurface, cwd: strin
   return path.join(homeDir, surface.path);
 }
 
-function extractMcpCommandVal(agentName: string, expectedPath: string): { command?: string; args?: string[]; is_valid: boolean } {
+export function extractMcpCommandVal(agentName: string, expectedPath: string): { command?: string; args?: string[]; is_valid: boolean } {
   let content: string;
   try {
     content = fs.readFileSync(expectedPath, 'utf-8');
@@ -173,7 +181,9 @@ function extractMcpCommandVal(agentName: string, expectedPath: string): { comman
     const argsMatch = content.match(/\[mcp_servers\.brainclaw\](?:[^\[]*)args\s*=\s*\[(.+?)\]/is);
     let args: string[] | undefined;
     if (argsMatch) {
-      args = argsMatch[1].split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+      args = argsMatch[1]
+        .split(',')
+        .map(s => s.trim().replace(/^["']|["']$/g, '').replace(/\\\\/g, '\\'));
     }
     return {
       command: cmdMatch ? cmdMatch[2].replace(/\\\\/g, '\\') : undefined,
@@ -212,6 +222,9 @@ function extractMcpCommandVal(agentName: string, expectedPath: string): { comman
 }
 
 function getCommandVersion(cmdPath: string, args?: string[]): string | null {
+  if (commandVersionProbeForTests) {
+    return commandVersionProbeForTests(cmdPath, args);
+  }
   if (cmdPath === 'npx') return null; // dynamic
   try {
     const isNode = cmdPath.endsWith('node') || cmdPath.endsWith('node.exe');

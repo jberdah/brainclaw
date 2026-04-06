@@ -1,6 +1,12 @@
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeMemory, suggestCompaction, formatReport } from '../../src/core/memory-compactor.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { analyzeAndApply, analyzeMemory, suggestCompaction, formatReport } from '../../src/core/memory-compactor.js';
+import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { ensureMemoryDir } from '../../src/core/io.js';
+import { loadState, saveState } from '../../src/core/state.js';
 import type { State } from '../../src/core/schema.js';
 
 function createState(): State {
@@ -13,6 +19,24 @@ function createState(): State {
     open_handoffs: [],
     plan_items: [],
   };
+}
+
+function createCompactorStore(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-compactor-test-'));
+  ensureMemoryDir(dir);
+  saveConfig(defaultConfig('compactor-tests', { projectId: 'prj_compactor_test' }), dir);
+  return dir;
+}
+
+function cleanupTestStore(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function readJsonLines(filepath: string): Array<Record<string, unknown>> {
+  return fs.readFileSync(filepath, 'utf-8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 const NOW = new Date().toISOString();
@@ -203,6 +227,104 @@ describe('core/memory-compactor', () => {
       // Low threshold — should cluster
       const loose = analyzeMemory(state, { similarityThreshold: 0.3 });
       assert.equal(loose.clusters.length, 1);
+    });
+  });
+
+  describe('analyzeAndApply', () => {
+    let storeDir: string;
+
+    beforeEach(() => {
+      storeDir = createCompactorStore();
+    });
+
+    afterEach(() => {
+      cleanupTestStore(storeDir);
+    });
+
+    it('archives duplicate constraints and decisions from a real store', () => {
+      const state = createState();
+      state.active_constraints.push(
+        {
+          id: 'cst_dup_old',
+          text: 'Validate JWT tokens before processing API requests',
+          created_at: '2026-04-01T09:00:00Z',
+          author: 'alice',
+          status: 'active',
+          tags: ['auth'],
+          related_paths: ['src/api/gateway.ts'],
+        },
+        {
+          id: 'cst_dup_new',
+          text: 'Validate JWT tokens before processing API requests in the gateway',
+          created_at: '2026-04-02T09:00:00Z',
+          author: 'bob',
+          status: 'active',
+          tags: ['security'],
+          related_paths: ['src/api/gateway.ts'],
+        },
+      );
+      state.recent_decisions.push(
+        {
+          id: 'dec_dup_old',
+          text: 'Use SQLite for local development and automated tests',
+          created_at: '2026-04-01T10:00:00Z',
+          author: 'alice',
+          tags: ['storage'],
+          related_paths: ['src/storage'],
+        },
+        {
+          id: 'dec_dup_new',
+          text: 'Use SQLite for local development and automated test runs',
+          created_at: '2026-04-02T10:00:00Z',
+          author: 'bob',
+          tags: ['local-dev'],
+          related_paths: ['src/storage'],
+        },
+      );
+      state.known_traps.push({
+        id: 'trp_keep',
+        text: 'Do not reuse session ids across hosts',
+        created_at: '2026-04-03T09:00:00Z',
+        author: 'alice',
+        status: 'active',
+        severity: 'high',
+        tags: ['sessions'],
+        visibility: 'shared',
+      });
+
+      saveState(state, storeDir);
+
+      const { report, result } = analyzeAndApply({ cwd: storeDir });
+
+      assert.equal(report.clusters.length, 2);
+      assert.equal(report.archivableCount, 2);
+      assert.equal(result.archivedCount, 2);
+      assert.equal(result.mergedClusters, 2);
+      assert.equal(result.staleArchived, 0);
+
+      const nextState = loadState(storeDir);
+      assert.equal(nextState.active_constraints.length, 1);
+      assert.equal(nextState.recent_decisions.length, 1);
+      assert.equal(nextState.known_traps.length, 1);
+      assert.deepEqual(nextState.active_constraints[0]!.tags.sort(), ['auth', 'security']);
+      assert.deepEqual(nextState.recent_decisions[0]!.tags.sort(), ['local-dev', 'storage']);
+
+      const constraintsDir = path.join(storeDir, '.brainclaw', 'memory', 'constraints');
+      const decisionsDir = path.join(storeDir, '.brainclaw', 'memory', 'decisions');
+      const constraintArchive = readJsonLines(path.join(constraintsDir, 'compacted.jsonl'));
+      const decisionArchive = readJsonLines(path.join(decisionsDir, 'compacted.jsonl'));
+
+      assert.equal(constraintArchive.length, 1);
+      assert.equal(constraintArchive[0]!.id, 'cst_dup_old');
+      assert.equal(typeof constraintArchive[0]!._compacted_at, 'string');
+      assert.equal(decisionArchive.length, 1);
+      assert.equal(decisionArchive[0]!.id, 'dec_dup_old');
+      assert.equal(typeof decisionArchive[0]!._compacted_at, 'string');
+
+      assert.equal(fs.existsSync(path.join(constraintsDir, 'cst_dup_old.json')), false);
+      assert.equal(fs.existsSync(path.join(decisionsDir, 'dec_dup_old.json')), false);
+      assert.equal(fs.existsSync(path.join(constraintsDir, 'cst_dup_new.json')), true);
+      assert.equal(fs.existsSync(path.join(decisionsDir, 'dec_dup_new.json')), true);
     });
   });
 
