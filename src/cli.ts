@@ -1570,6 +1570,7 @@ program
   .description('Multi-perspective ideation session using persona-based consultation')
   .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
   .option('--checkpoint', 'Pause after clarification for human input')
+  .option('--spawn', 'Spawn each consultant as a Claude CLI instance')
   .option('--json', 'Output as JSON')
   .action((topic, options) => {
     runCodev(topic, options);
