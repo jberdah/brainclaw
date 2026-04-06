@@ -1,0 +1,11 @@
+name: janitor
+description: Clean up stale claims, archive old notes, check for orphaned files
+trust_level: contributor
+trigger: manual
+prompt: >-
+  Clean up this project: prune stale claims, archive old runtime notes, check
+  for orphaned files. Use bclaw_doctor, prune, and release-claims.
+invoke: codex exec --full-auto "{prompt}"
+tags:
+  - maintenance
+  - built-in

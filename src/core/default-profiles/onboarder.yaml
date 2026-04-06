@@ -1,0 +1,11 @@
+name: onboarder
+description: Generate a project summary for new team members
+trust_level: observer
+trigger: manual
+prompt: >-
+  Generate a project summary for a new team member. Read the board, plans,
+  decisions, constraints, and produce a concise onboarding document.
+invoke: claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"
+tags:
+  - onboarding
+  - built-in

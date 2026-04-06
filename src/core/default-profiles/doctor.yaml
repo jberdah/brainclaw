@@ -1,0 +1,11 @@
+name: doctor
+description: Run diagnostics and fix issues automatically
+trust_level: trusted
+trigger: manual
+prompt: >-
+  Run bclaw_doctor, analyze the findings, and fix what can be fixed
+  automatically. For issues requiring human judgment, create plans.
+invoke: codex exec --full-auto "{prompt}"
+tags:
+  - diagnostics
+  - built-in
