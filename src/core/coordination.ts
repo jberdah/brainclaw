@@ -8,6 +8,7 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
 import { loadState, persistState } from './state.js';
+import { countPending, readInbox } from './messaging.js';
 import { listCandidates } from './candidates.js';
 
 export interface CoordinationOptions {
@@ -114,6 +115,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
       .filter((t) => t.visibility === 'shared' && (!t.status || t.status === 'active'))
       .sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity)),
     pending_candidates: listCandidates('pending', options.cwd),
+    inbox_pending: agent ? countPending(agent, options.cwd ?? process.cwd()) : 0,
   };
 }
 

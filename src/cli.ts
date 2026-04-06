@@ -74,6 +74,8 @@ import { runSearch } from './commands/search.js';
 import { runExport, runRefresh } from './commands/export.js';
 import { runHooks } from './commands/hooks.js';
 import { runWatch } from './commands/watch.js';
+import { runDispatchAnalysis, runDispatch } from './commands/dispatch.js';
+import { runInboxList, runInboxAck, runInboxArchive, runInboxSend, runInboxThread } from './commands/inbox.js';
 import { runMetrics } from './commands/metrics.js';
 import { runRollback } from './commands/rollback.js';
 import { runPull } from './commands/pull.js';
@@ -1233,6 +1235,97 @@ program
   .option('--agent <name>', 'Agent name for auto-claim')
   .action((options) => {
     runWatch({ ...options, autoClaim: options.autoClaim });
+  });
+
+// --- dispatch ---
+const dispatchCmd = program
+  .command('dispatch')
+  .description('Local agent dispatcher — analyze lanes and assign work');
+
+dispatchCmd
+  .command('analysis')
+  .description('Analyze the active sequence: show ready, active, blocked, and done lanes')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runDispatchAnalysis({ json: options.json });
+  });
+
+dispatchCmd
+  .command('run')
+  .description('Run a dispatch cycle: assign ready lanes to available agents')
+  .option('--agents <names>', 'Comma-separated list of agents to dispatch to')
+  .option('--lanes <names>', 'Comma-separated list of lanes to dispatch')
+  .option('--max <n>', 'Maximum assignments', parseInt)
+  .option('--dry', 'Preview assignments without sending messages')
+  .option('--agent <name>', 'Dispatcher agent name')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runDispatch({
+      agents: options.agents,
+      lanes: options.lanes,
+      max: options.max,
+      dry: options.dry,
+      agent: options.agent,
+      json: options.json,
+    });
+  });
+
+// --- inbox ---
+const inboxCmd = program
+  .command('inbox')
+  .description('Inter-agent messaging inbox');
+
+inboxCmd
+  .command('list')
+  .description('List inbox messages (default: pending only)')
+  .option('--agent <name>', 'Agent name')
+  .option('--status <status>', 'Filter by status: pending, read, acknowledged, archived')
+  .option('--type <type>', 'Filter by type: assign, review, rfc, info, reply')
+  .option('--thread <id>', 'Filter by thread ID')
+  .option('--all', 'Show all messages, not just pending')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runInboxList(options);
+  });
+
+inboxCmd
+  .command('ack <id>')
+  .description('Acknowledge a message')
+  .option('--agent <name>', 'Agent name')
+  .option('--json', 'Output as JSON')
+  .action((id, options) => {
+    runInboxAck(id, options);
+  });
+
+inboxCmd
+  .command('archive <id>')
+  .description('Archive a message')
+  .option('--agent <name>', 'Agent name')
+  .option('--json', 'Output as JSON')
+  .action((id, options) => {
+    runInboxArchive(id, options);
+  });
+
+inboxCmd
+  .command('send <to> <text>')
+  .description('Send a message to another agent')
+  .option('--type <type>', 'Message type: assign, review, rfc, info, reply (default: info)')
+  .option('--ref <id>', 'Reference to a plan, sequence, or other entity')
+  .option('--scope <path>', 'File scope')
+  .option('--thread <id>', 'Thread ID for conversations')
+  .option('--ack', 'Require acknowledgment')
+  .option('--agent <name>', 'Sender agent name')
+  .option('--json', 'Output as JSON')
+  .action((to, text, options) => {
+    runInboxSend(to, text, options);
+  });
+
+inboxCmd
+  .command('thread <id>')
+  .description('Show all messages in a thread')
+  .option('--json', 'Output as JSON')
+  .action((id, options) => {
+    runInboxThread(id, options);
   });
 
 // --- check-events ---

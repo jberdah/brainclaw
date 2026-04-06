@@ -2618,6 +2618,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         for (const handoff of board.open_handoffs.slice(0, 5)) {
           boardLines.push(`- [${handoff.id}] ${handoff.from} -> ${handoff.to}: ${handoff.text}`);
         }
+        if (board.inbox_pending > 0) {
+          boardLines.push(`📬 Inbox: ${board.inbox_pending} pending message(s)`);
+        }
         contentParts.push({ type: 'text', text: boardLines.join('\n') });
         structured.board = board;
       }
