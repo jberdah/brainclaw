@@ -269,6 +269,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         }
       }
     });
+    watcher.stderr?.on('data', () => { /* drain stderr to prevent buffer buildup */ });
+    watcher.on('error', () => {
+      this._watchers.delete(normalizedPath);
+    });
     watcher.on('exit', () => {
       this._watchers.delete(normalizedPath);
     });
@@ -344,7 +348,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     return new Promise<BoardData>((resolve, reject) => {
-      cp.exec(`${bclaw} agent-board --all-agents --json`, { cwd: projectPath, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      cp.exec(`${bclaw} agent-board --all-agents --json`, { cwd: projectPath, maxBuffer: 8 * 1024 * 1024, timeout: 15_000 }, (err, stdout, stderr) => {
         if (err) {
           reject(new Error(stderr?.trim() || err.message));
           return;

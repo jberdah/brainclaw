@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -91,7 +90,7 @@ function discoverBrainclawProjects(workspaceFolders: readonly vscode.WorkspaceFo
 }
 
 function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: number, discovered: Map<string, BoardProject>): void {
-  if (depth > 6) {
+  if (depth > 1) {
     return;
   }
 
