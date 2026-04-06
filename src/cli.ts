@@ -96,6 +96,7 @@ import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runCodev } from './commands/codev.js';
+import { runRunProfile } from './commands/run-profile.js';
 
 const program = new Command();
 
@@ -1572,6 +1573,17 @@ program
   .option('--json', 'Output as JSON')
   .action((topic, options) => {
     runCodev(topic, options);
+  });
+
+// --- run (agent profiles) ---
+program
+  .command('run [profile-name]')
+  .description('Run an agent profile (list profiles if no name given)')
+  .option('--dry', 'Print the resolved command without executing')
+  .option('--agent <agent>', 'Override the invoke template with a known agent')
+  .action((profileName, options) => {
+    const globalOpts = program.opts();
+    runRunProfile(profileName, { ...options, cwd: globalOpts.cwd });
   });
 
 program.parseAsync(process.argv).catch((err) => {

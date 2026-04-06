@@ -688,6 +688,23 @@ export const ProjectIdentityDocumentSchema = z.object({
 });
 export type ProjectIdentityDocument = z.infer<typeof ProjectIdentityDocumentSchema>;
 
+// --- Agent profile schemas ---
+
+export const AgentProfileTriggerSchema = z.enum(['manual', 'schedule', 'memory_pressure']);
+export type AgentProfileTrigger = z.infer<typeof AgentProfileTriggerSchema>;
+
+export const AgentProfileSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  trust_level: AgentTrustLevelSchema.default('contributor'),
+  trigger: AgentProfileTriggerSchema.default('manual'),
+  scope: z.string().optional(),
+  prompt: z.string().min(1),
+  invoke: z.string().min(1),
+  tags: TagsWithDefaultSchema,
+});
+export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+
 export const AgentInvokeSchema = z.object({
   /** CLI command template with {prompt} and {cwd} placeholders */
   command: z.string(),
