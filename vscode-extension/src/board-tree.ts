@@ -432,7 +432,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       ));
     }
 
-    if (this._workspaceBoard && this._rootProjectPath) {
+    // When multi-project view is active, don't duplicate root project sections at top level
+    // They are already visible by expanding the root project under Projects
+    if (this._projects.length === 0 && this._workspaceBoard && this._rootProjectPath) {
       sections.push(...this._buildBoardSections(this._workspaceBoard, this._rootProjectPath, true));
     }
 
