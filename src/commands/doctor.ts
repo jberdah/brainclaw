@@ -12,7 +12,7 @@ import { getVisibleMemoryVersion, readContextMarker } from '../core/freshness.js
 import { generateMarkdown } from '../core/markdown.js';
 import { loadProjectIdentity, projectIdentityExists } from '../core/project-registry.js';
 import { findInstructionConflicts, loadInstructions } from '../core/instructions.js';
-import { memoryExists, memoryPath, readFileSync } from '../core/io.js';
+import { memoryExists, memoryPath, readFileSync, resolveEntityDir } from '../core/io.js';
 import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { listClaims, isClaimExpired } from '../core/claims.js';
@@ -22,7 +22,7 @@ import { scanText } from '../core/security.js';
 import { listRuntimeEvents } from '../core/events.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
-import { scanMigrationStatus } from '../core/migration.js';
+import { loadVersionedJsonFile, scanMigrationStatus } from '../core/migration.js';
 import { buildAgentToolingContext } from '../core/agent-context.js';
 import { assessAgentIntegrationReadiness } from '../core/agent-integrations.js';
 import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/brainclaw-version.js';
@@ -31,8 +31,10 @@ import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
+import { InboxMessageSchema, type InboxMessage } from '../core/schema.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
+const NON_MESSAGE_INBOX_SUBDIRS = new Set(['accepted', 'rejected', 'cross-project']);
 
 function hasBacklogPatterns(text: string): boolean {
   const lines = text.split(/\r?\n/);
@@ -55,6 +57,112 @@ interface DoctorCheck {
   status: 'ok' | 'warn' | 'error';
   message: string;
   details?: unknown;
+}
+
+interface InboxMessageAudit {
+  checked: number;
+  invalid: Array<{ path: string; error: string }>;
+  orphaned: Array<{ path: string; reason: string }>;
+}
+
+function listJsonFilesRecursive(dirPath: string): string[] {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(dirPath).sort()) {
+    const fullPath = path.join(dirPath, entry);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      files.push(...listJsonFilesRecursive(fullPath));
+      continue;
+    }
+
+    if (entry.endsWith('.json')) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+function normalizeInboxAgentName(agent: string): string {
+  return agent.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+}
+
+function toRelativeDoctorPath(filepath: string, cwd?: string): string {
+  return path.relative(cwd ?? process.cwd(), filepath).replace(/\\/g, '/');
+}
+
+function auditInboxMessages(cwd?: string): InboxMessageAudit {
+  const effectiveCwd = cwd ?? process.cwd();
+  const inboxRoot = resolveEntityDir('inbox', effectiveCwd, 'read');
+  const result: InboxMessageAudit = {
+    checked: 0,
+    invalid: [],
+    orphaned: [],
+  };
+
+  if (!fs.existsSync(inboxRoot)) {
+    return result;
+  }
+
+  for (const entry of fs.readdirSync(inboxRoot).sort()) {
+    const fullPath = path.join(inboxRoot, entry);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      continue;
+    }
+
+    if (stat.isFile() && entry.endsWith('.json')) {
+      try {
+        loadVersionedJsonFile<InboxMessage>('message', fullPath);
+        result.orphaned.push({
+          path: toRelativeDoctorPath(fullPath, effectiveCwd),
+          reason: 'message file is stored at inbox root instead of an agent subdirectory',
+        });
+      } catch {
+        // Pending candidate files also live at inbox root; ignore non-message documents here.
+      }
+      continue;
+    }
+
+    if (!stat.isDirectory() || NON_MESSAGE_INBOX_SUBDIRS.has(entry)) {
+      continue;
+    }
+
+    for (const filepath of listJsonFilesRecursive(fullPath)) {
+      try {
+        const parsed = loadVersionedJsonFile<InboxMessage>('message', filepath);
+        const message = InboxMessageSchema.parse(parsed.document);
+        result.checked += 1;
+
+        const expectedDir = normalizeInboxAgentName(message.to);
+        if (expectedDir !== entry) {
+          result.orphaned.push({
+            path: toRelativeDoctorPath(filepath, effectiveCwd),
+            reason: `message targets '${message.to}' but is stored under '${entry}'`,
+          });
+        }
+      } catch (error: unknown) {
+        result.invalid.push({
+          path: toRelativeDoctorPath(filepath, effectiveCwd),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 export function runDoctor(options: DoctorOptions = {}): void {
@@ -837,6 +945,45 @@ export function runDoctor(options: DoctorOptions = {}): void {
     hasIssues = true;
   } else {
     checks.push({ name: 'expired_items', status: 'ok', message: 'No expired items found' });
+  }
+
+  // --- Inbox message layout checks ---
+  const inboxAudit = auditInboxMessages(options.cwd);
+  const inboxIssueCount = inboxAudit.invalid.length + inboxAudit.orphaned.length;
+  if (inboxIssueCount > 0) {
+    const status = inboxAudit.invalid.length > 0 ? 'error' : 'warn';
+    checks.push({
+      name: 'inbox_messages',
+      status,
+      message: `${inboxIssueCount} inbox message issue(s): ${inboxAudit.invalid.length} invalid, ${inboxAudit.orphaned.length} orphaned.`,
+      details: {
+        checked: inboxAudit.checked,
+        invalid: inboxAudit.invalid.slice(0, 10),
+        orphaned: inboxAudit.orphaned.slice(0, 10),
+      },
+    });
+    if (!options.json) {
+      console.warn(`⚠ Inbox messages: ${inboxAudit.invalid.length} invalid, ${inboxAudit.orphaned.length} orphaned.`);
+      for (const invalid of inboxAudit.invalid.slice(0, 10)) {
+        console.warn(`  - invalid: ${invalid.path} (${invalid.error})`);
+      }
+      for (const orphaned of inboxAudit.orphaned.slice(0, 10)) {
+        console.warn(`  - orphaned: ${orphaned.path} (${orphaned.reason})`);
+      }
+    }
+    hasIssues = true;
+  } else {
+    checks.push({
+      name: 'inbox_messages',
+      status: 'ok',
+      message: inboxAudit.checked > 0
+        ? `Inbox messages look valid (${inboxAudit.checked} agent message file(s) checked)`
+        : 'No inbox message files to check',
+      details: { checked: inboxAudit.checked },
+    });
+    if (!options.json && inboxAudit.checked > 0) {
+      console.log(`✔ Inbox messages: ${inboxAudit.checked} agent message file(s) checked`);
+    }
   }
 
   // --- Claims checks ---

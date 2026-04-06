@@ -37,6 +37,7 @@ const ENTITY_DIR_MAP: Record<string, string> = {
   'claims': 'coordination/claims',
   'handoffs': 'coordination/handoffs',
   'sessions': 'coordination/sessions',
+  // Shared root: pending candidate JSONs live at inbox/, agent messages at inbox/{agent}/.
   'inbox': 'coordination/inbox',
   'inbox/accepted': 'coordination/inbox/accepted',
   'inbox/rejected': 'coordination/inbox/rejected',
