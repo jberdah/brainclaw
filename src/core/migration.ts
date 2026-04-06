@@ -99,6 +99,7 @@ interface MigrationRegistryEntry<T> {
 }
 
 const CURRENT_SCHEMA_VERSION = 2;
+const NON_MESSAGE_INBOX_SUBDIRS = new Set(['accepted', 'rejected', 'cross-project']);
 
 const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> = {
   agent_identity: createRegistryEntry(AgentIdentityDocumentSchema),
@@ -283,6 +284,7 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, resolveEntityDir('plans', effectiveCwd, 'read'), 'plan');
   collectDirectory(entries, resolveEntityDir('sequences', effectiveCwd, 'read'), 'sequence');
   collectDirectory(entries, resolveEntityDir('inbox', effectiveCwd, 'read'), 'candidate');
+  collectInboxMessages(entries, resolveEntityDir('inbox', effectiveCwd, 'read'));
   collectDirectory(entries, resolveEntityDir('inbox/accepted', effectiveCwd, 'read'), 'candidate');
   collectDirectory(entries, resolveEntityDir('inbox/rejected', effectiveCwd, 'read'), 'candidate');
   collectDirectory(entries, resolveEntityDir('claims', effectiveCwd, 'read'), 'claim');
@@ -321,6 +323,30 @@ function collectDirectory(
   }
   for (const filepath of listJsonFiles(dirPath, recursive)) {
     entries.push(buildCheckEntry(filepath, documentType));
+  }
+}
+
+function collectInboxMessages(entries: MigrationCheckEntry[], inboxRoot: string): void {
+  if (!fs.existsSync(inboxRoot)) {
+    return;
+  }
+
+  for (const entry of fs.readdirSync(inboxRoot).sort()) {
+    const fullPath = path.join(inboxRoot, entry);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      continue;
+    }
+
+    if (!stat.isDirectory() || NON_MESSAGE_INBOX_SUBDIRS.has(entry)) {
+      continue;
+    }
+
+    for (const filepath of listJsonFiles(fullPath, true)) {
+      entries.push(buildCheckEntry(filepath, 'message'));
+    }
   }
 }
 
