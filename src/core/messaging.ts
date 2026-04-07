@@ -250,6 +250,48 @@ export function getThread(threadId: string, cwd: string): InboxMessage[] {
   return allMessages.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
+/**
+ * Lightweight thread message count — reads file content as raw strings
+ * and checks for the thread_id without full JSON parsing. Used for polling
+ * to avoid OOM from repeated full-message loads.
+ */
+export function getThreadCount(threadId: string, cwd: string): number {
+  const baseDir = inboxDir(cwd);
+  if (!fs.existsSync(baseDir)) return 0;
+
+  let agents: string[];
+  try {
+    agents = fs.readdirSync(baseDir).filter(f => {
+      try { return fs.statSync(path.join(baseDir, f)).isDirectory(); } catch { return false; }
+    });
+  } catch { return 0; }
+
+  let count = 0;
+  const needle = `"thread_id":"${threadId}"`;
+  const needleSpaced = `"thread_id": "${threadId}"`;
+
+  for (const agent of agents) {
+    const agentDir = path.join(baseDir, agent);
+    let files: string[];
+    try {
+      files = fs.readdirSync(agentDir).filter(f => f.endsWith('.json'));
+    } catch { continue; }
+
+    for (const file of files) {
+      try {
+        const raw = fs.readFileSync(path.join(agentDir, file), 'utf-8');
+        if (raw.includes(needle) || raw.includes(needleSpaced)) {
+          count++;
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+
+  return count;
+}
+
 // ── Count Pending ───────────────────────────────────────────
 
 export function countPending(agent: string, cwd: string): number {

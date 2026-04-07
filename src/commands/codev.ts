@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { memoryExists, readProjectVision } from '../core/io.js';
-import { sendMessage, getThread } from '../core/messaging.js';
+import { sendMessage, getThread, getThreadCount } from '../core/messaging.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { CODEV_PERSONAS, listPersonas } from '../core/codev-personas.js';
 import type { CodevPersona } from '../core/codev-personas.js';
@@ -158,7 +158,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }
 
   if (options.spawn) {
-    const baseline = getThread(threadId, cwd).length;
+    const baseline = getThreadCount(threadId, cwd);
     console.log(`Waiting for ${personas.length} clarification responses (timeout: 5 min)...`);
     const poll = awaitThreadGrowth(threadId, baseline, personas.length, cwd);
     if (poll.timedOut) {
@@ -203,7 +203,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }
 
   if (options.spawn) {
-    const baseline = getThread(threadId, cwd).length;
+    const baseline = getThreadCount(threadId, cwd);
     console.log(`Waiting for ${personas.length} consultation responses (timeout: 5 min)...`);
     const poll = awaitThreadGrowth(threadId, baseline, personas.length, cwd);
     if (poll.timedOut) {
@@ -388,15 +388,16 @@ function awaitThreadGrowth(
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    const thread = getThread(threadId, cwd);
-    if (thread.length >= target) {
-      return { received: thread.length - baselineCount, timedOut: false };
+    // Use lightweight count to avoid OOM from loading full messages each poll
+    const count = getThreadCount(threadId, cwd);
+    if (count >= target) {
+      return { received: count - baselineCount, timedOut: false };
     }
     sleepSync(intervalMs);
   }
 
-  const thread = getThread(threadId, cwd);
-  return { received: thread.length - baselineCount, timedOut: true };
+  const count = getThreadCount(threadId, cwd);
+  return { received: count - baselineCount, timedOut: true };
 }
 
 // ── Exposition builder ────────────────────────────────────────
