@@ -794,4 +794,3 @@ export function runCodevMetrics(threadSlug: string | undefined, options: { cwd?:
   }
   console.log('');
 }
-}

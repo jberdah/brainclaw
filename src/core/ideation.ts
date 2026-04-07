@@ -58,6 +58,15 @@ export function loadIdeationRound(
   }
 }
 
+export function listIdeationThreads(cwd?: string): string[] {
+  const base = path.join(memoryDir(cwd), 'coordination', 'ideation');
+  if (!fs.existsSync(base)) return [];
+  return fs.readdirSync(base, { withFileTypes: true })
+    .filter(e => e.isDirectory())
+    .map(e => e.name)
+    .sort();
+}
+
 export function listIdeationRounds(threadSlug: string, cwd?: string): IdeationRound[] {
   const dir = ideationDir(threadSlug, cwd);
   if (!fs.existsSync(dir)) {
