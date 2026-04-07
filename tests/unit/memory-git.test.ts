@@ -90,6 +90,145 @@ describe('memory-git', () => {
     assert.equal(rolledBack.recent_decisions.length, 0);
   });
 
+  it('rollback preserves durable audit, archive, backup, and compaction artifacts', () => {
+    initMemoryRepo(workspace.dir);
+    const initialHead = getMemoryHead(workspace.dir)!;
+
+    const state = emptyState();
+    state.recent_decisions.push({
+      id: 'dec_rollback',
+      text: 'Will be rolled back',
+      created_at: new Date().toISOString(),
+      author: 'testuser',
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_memgit_test',
+      tags: [],
+    } as any);
+    saveState(state, workspace.dir);
+
+    const auditPath = path.join(workspace.dir, '.brainclaw', 'audit.log');
+    fs.writeFileSync(auditPath, '{"action":"update"}\n', 'utf-8');
+
+    const archivePath = path.join(workspace.dir, '.brainclaw', 'coordination', 'plans', 'archive.jsonl');
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(archivePath, '{"id":"pln_archived"}\n', 'utf-8');
+
+    const backupPath = path.join(workspace.dir, '.brainclaw', 'gc-backups', 'compact-test.jsonl');
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+    fs.writeFileSync(backupPath, '{"id":"backup"}\n', 'utf-8');
+
+    const compactedPath = path.join(workspace.dir, '.brainclaw', 'memory', 'decisions', 'compacted.jsonl');
+    fs.mkdirSync(path.dirname(compactedPath), { recursive: true });
+    fs.writeFileSync(compactedPath, '{"id":"dec_old"}\n', 'utf-8');
+
+    assert.equal(commitMemoryChange('durable artifacts', workspace.dir), true);
+
+    const success = rollbackMemory(initialHead, workspace.dir);
+    assert.equal(success, true);
+
+    const rolledBack = loadState(workspace.dir);
+    assert.equal(rolledBack.recent_decisions.length, 0);
+    assert.equal(fs.readFileSync(auditPath, 'utf-8'), '{"action":"update"}\n');
+    assert.equal(fs.readFileSync(archivePath, 'utf-8'), '{"id":"pln_archived"}\n');
+    assert.equal(fs.readFileSync(backupPath, 'utf-8'), '{"id":"backup"}\n');
+    assert.equal(fs.readFileSync(compactedPath, 'utf-8'), '{"id":"dec_old"}\n');
+  });
+
+  it('rollback only affects the current project memory store', () => {
+    initMemoryRepo(workspace.dir);
+    const initialHead = getMemoryHead(workspace.dir)!;
+
+    const state = emptyState();
+    state.recent_decisions.push({
+      id: 'dec_local',
+      text: 'Current project decision',
+      created_at: new Date().toISOString(),
+      author: 'testuser',
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_memgit_test',
+      tags: [],
+    } as any);
+    saveState(state, workspace.dir);
+
+    const siblingDir = fs.mkdtempSync(path.join(path.dirname(workspace.dir), 'bclaw-memgit-sibling-'));
+    try {
+      const siblingStore = path.join(siblingDir, '.brainclaw');
+      fs.mkdirSync(siblingStore, { recursive: true });
+      fs.writeFileSync(path.join(siblingStore, 'config.yaml'), 'project_name: sibling\nproject_id: prj_sibling\n', 'utf-8');
+      assert.equal(initMemoryRepo(siblingDir), true);
+
+      fs.mkdirSync(path.join(siblingDir, '.brainclaw', 'memory', 'decisions'), { recursive: true });
+      const siblingDecisionPath = path.join(siblingDir, '.brainclaw', 'memory', 'decisions', 'dec_sibling.json');
+      fs.writeFileSync(
+        siblingDecisionPath,
+        JSON.stringify({
+          id: 'dec_sibling',
+          text: 'Sibling project decision',
+          created_at: new Date().toISOString(),
+          author: 'other-user',
+          tags: [],
+        }),
+        'utf-8',
+      );
+      assert.equal(commitMemoryChange('sibling baseline', siblingDir), true);
+      const siblingHeadBefore = getMemoryHead(siblingDir);
+
+      const success = rollbackMemory(initialHead, workspace.dir);
+      assert.equal(success, true);
+
+      const rolledBack = loadState(workspace.dir);
+      assert.equal(rolledBack.recent_decisions.length, 0);
+      assert.equal(fs.existsSync(siblingDecisionPath), true);
+      const sibling = JSON.parse(fs.readFileSync(siblingDecisionPath, 'utf-8')) as { id: string; text: string };
+      assert.equal(sibling.id, 'dec_sibling');
+      assert.equal(sibling.text, 'Sibling project decision');
+      assert.equal(getMemoryHead(siblingDir), siblingHeadBefore);
+    } finally {
+      fs.rmSync(siblingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rollback restores config, state, session, and legacy yaml live files', () => {
+    initMemoryRepo(workspace.dir);
+
+    const configPath = path.join(workspace.dir, '.brainclaw', 'config.yaml');
+    const statePath = path.join(workspace.dir, '.brainclaw', 'state.yaml');
+    const sessionPath = path.join(workspace.dir, '.brainclaw', 'coordination', 'sessions', 'sess_rollback.json');
+    const legacyConstraintPath = path.join(workspace.dir, '.brainclaw', 'constraints', 'cst_legacy.yaml');
+    const durableArchivePath = path.join(workspace.dir, '.brainclaw', 'coordination', 'plans', 'archive.jsonl');
+
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'project_name: before\nproject_id: prj_before\n', 'utf-8');
+    fs.writeFileSync(statePath, 'version: 1\nwrite_version: 1\n', 'utf-8');
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, '{"session_id":"sess_rollback","phase":"before"}\n', 'utf-8');
+    fs.mkdirSync(path.dirname(legacyConstraintPath), { recursive: true });
+    fs.writeFileSync(legacyConstraintPath, 'id: cst_legacy\ntext: before\n', 'utf-8');
+    fs.mkdirSync(path.dirname(durableArchivePath), { recursive: true });
+    fs.writeFileSync(durableArchivePath, '{"id":"pln_archived_before"}\n', 'utf-8');
+    assert.equal(commitMemoryChange('baseline managed files', workspace.dir), true);
+
+    const baselineHead = getMemoryHead(workspace.dir)!;
+
+    fs.writeFileSync(configPath, 'project_name: after\nproject_id: prj_after\n', 'utf-8');
+    fs.writeFileSync(statePath, 'version: 9\nwrite_version: 9\n', 'utf-8');
+    fs.writeFileSync(sessionPath, '{"session_id":"sess_rollback","phase":"after"}\n', 'utf-8');
+    fs.writeFileSync(legacyConstraintPath, 'id: cst_legacy\ntext: after\n', 'utf-8');
+    // Durable archives should not be part of rollback-managed paths.
+    fs.writeFileSync(durableArchivePath, '{"id":"pln_archived_after"}\n', 'utf-8');
+    assert.equal(commitMemoryChange('mutated managed files', workspace.dir), true);
+
+    const success = rollbackMemory(baselineHead, workspace.dir);
+    assert.equal(success, true);
+
+    assert.equal(fs.readFileSync(configPath, 'utf-8'), 'project_name: before\nproject_id: prj_before\n');
+    assert.equal(fs.readFileSync(statePath, 'utf-8'), 'version: 1\nwrite_version: 1\n');
+    assert.equal(fs.readFileSync(sessionPath, 'utf-8'), '{"session_id":"sess_rollback","phase":"before"}\n');
+    assert.equal(fs.readFileSync(legacyConstraintPath, 'utf-8'), 'id: cst_legacy\ntext: before\n');
+    // Preserved as durable artifact even after rollback.
+    assert.equal(fs.readFileSync(durableArchivePath, 'utf-8'), '{"id":"pln_archived_after"}\n');
+  });
+
   it('no-ops when no memory repo exists', () => {
     assert.equal(commitMemoryChange('test', workspace.dir), false);
     assert.equal(rollbackMemory('abc', workspace.dir), false);

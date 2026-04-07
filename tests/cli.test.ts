@@ -240,6 +240,27 @@ describe('brainclaw CLI', () => {
     });
   });
 
+  describe('memory-rollback', () => {
+    it('rejects autonomous agents and reserves the command to registered humans', () => {
+      const initRes = run(['init', '-y'], dir, {}, 40000);
+      assert.equal(initRes.exitCode, 0);
+
+      const registerRes = run(['register-agent', 'codex', '--kind', 'agent'], dir);
+      assert.equal(registerRes.exitCode, 0);
+
+      const head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: path.join(dir, '.brainclaw'),
+        encoding: 'utf-8',
+      });
+      assert.equal(head.status, 0);
+
+      const rollbackRes = run(['memory-rollback', head.stdout.trim(), '--actor', 'codex'], dir, {}, 40000);
+      assert.equal(rollbackRes.exitCode, 1);
+      const combinedOutput = `${rollbackRes.stdout}\n${rollbackRes.stderr}`;
+      assert.ok(combinedOutput.includes('reserved to registered human identities'));
+    });
+  });
+
   describe('decision', () => {
     it('adds a decision', () => {
       run(['init', '-y'], dir);

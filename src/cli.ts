@@ -98,6 +98,7 @@ import { runMigrate } from './commands/migrate.js';
 import { runCodev } from './commands/codev.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
+import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
 
 const program = new Command();
 
@@ -188,15 +189,35 @@ program
 // --- memory-rollback ---
 program
   .command('memory-rollback <ref>')
-  .description('Rollback entire memory to a previous git snapshot (use memory-log to find refs)')
-  .action((ref) => {
+  .description('Restore live project memory from a previous git snapshot without deleting audit or archive artifacts')
+  .option('--actor <name>', 'Registered human identity required to authorize the rollback')
+  .action((ref, options) => {
+    const cwd = process.cwd();
     if (!hasMemoryRepo()) {
       console.error('Error: no memory git repo. Run `brainclaw init --force` to enable.');
       process.exit(1);
     }
-    const success = rollbackMemory(ref);
+    let actor;
+    try {
+      actor = requireRegisteredAgentIdentity({
+        agentName: options.actor,
+        allowCurrent: true,
+        allowEnv: true,
+        cwd,
+      });
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+    if (actor.kind !== 'human') {
+      console.error(
+        `Error: memory-rollback is reserved to registered human identities. Resolved actor '${actor.agent_name}' is kind='${actor.kind}'.`,
+      );
+      process.exit(1);
+    }
+    const success = rollbackMemory(ref, cwd);
     if (success) {
-      console.log(`✔ Memory rolled back to ${ref}`);
+      console.log(`✔ Live project memory restored to ${ref} (audit, archives, backups preserved)`);
     } else {
       console.error(`Error: failed to rollback to '${ref}'. Check memory-log for valid refs.`);
       process.exit(1);
