@@ -469,4 +469,70 @@ describe('core/coordination', () => {
       ['rtn_host_a', 'rtn_host_b'],
     );
   });
+
+  it('enriches sequence items with step-level status and text when stepId is set', () => {
+    const copilot = workspace.currentAgent;
+
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [
+        {
+          id: 'pln_auth',
+          text: 'Own auth rollout',
+          created_at: iso(15),
+          updated_at: iso(5),
+          author: copilot.agent_name,
+          status: 'in_progress',
+          priority: 'high',
+          assignee: copilot.agent_name,
+          tags: ['auth'],
+          depends_on: [],
+          steps: [
+            {
+              id: 'stp_done',
+              text: 'Ship login route',
+              status: 'done',
+              created_at: iso(14),
+              updated_at: iso(4),
+            },
+            {
+              id: 'stp_todo',
+              text: 'Implement session refresh flow',
+              status: 'todo',
+              created_at: iso(13),
+              updated_at: iso(3),
+            },
+          ],
+        },
+      ],
+    }, workspace.dir);
+
+    createSequence({
+      name: 'step-aware-sequence',
+      status: 'active',
+      author: copilot.agent_name,
+      owner: copilot.agent_name,
+      items: [
+        { planId: 'pln_auth', stepId: 'stp_done', rank: 1, lane: 'lane-a' },
+        { planId: 'pln_auth', stepId: 'stp_todo', rank: 2, lane: 'lane-b' },
+      ],
+    }, workspace.dir);
+
+    const board = buildCoordinationSnapshot({ cwd: workspace.dir });
+    const items = board.active_sequence?.items ?? [];
+    assert.equal(items.length, 2);
+
+    assert.equal(items[0].stepId, 'stp_done');
+    assert.equal(items[0].plan_status, 'done');
+    assert.equal(items[0].plan_text, 'Ship login route');
+
+    assert.equal(items[1].stepId, 'stp_todo');
+    assert.equal(items[1].plan_status, 'in_progress');
+    assert.equal(items[1].plan_text, 'Implement session refresh flow');
+  });
 });
