@@ -444,8 +444,16 @@ function buildConsultantBrief(
     ? 'CLARIFICATION: Ask 3-5 questions ONLY, no suggestions'
     : 'CONSULTATION: Give concrete proposals';
 
-  const historyBlock = threadHistory.length > 0
-    ? `\n## Thread History\n${threadHistory.map(m => m.text).join('\n---\n')}`
+  // Limit thread history to avoid string explosion — only include last 5 messages, truncated
+  const MAX_HISTORY_MESSAGES = 5;
+  const MAX_HISTORY_CHARS = 8000;
+  const recentHistory = threadHistory.slice(-MAX_HISTORY_MESSAGES);
+  let historyText = recentHistory.map(m => (m.text ?? '').slice(0, 1500)).join('\n---\n');
+  if (historyText.length > MAX_HISTORY_CHARS) {
+    historyText = historyText.slice(0, MAX_HISTORY_CHARS) + '\n[...truncated]';
+  }
+  const historyBlock = recentHistory.length > 0
+    ? `\n## Thread History (last ${recentHistory.length})\n${historyText}`
     : '';
 
   return [
