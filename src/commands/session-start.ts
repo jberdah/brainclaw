@@ -9,13 +9,16 @@ import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurren
 import { buildContext, renderContextPromptTemplate } from '../core/context.js';
 import { writeContextMarker } from '../core/freshness.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
-import { nowISO, generateId } from '../core/ids.js';
+import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
-import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
+import { SessionSnapshotSchema, type SessionSnapshot, CandidateSchema, HandoffSchema, RuntimeNoteSchema } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
 import { checkMemoryPressure, type MemoryPressureResult } from '../core/gc-semantic.js';
+import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
+import { saveCandidate, generateCandidateIdWithLabel } from '../core/candidates.js';
+import { mutateState } from '../core/state.js';
 
 function sessionsDir(cwd?: string): string {
   return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
@@ -285,6 +288,64 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
       memoryPressure = pressure;
     }
   } catch { /* non-fatal */ }
+
+  // Materialize incoming federation signals from linked projects
+  try {
+    const federationSignals = pullSignalsFromLinkedProjects(options.cwd);
+    let materialized = 0;
+    for (const signal of federationSignals) {
+      try {
+        const origin = `remote:${signal.from.project_name}:${signal.from.agent_name}`;
+        if (signal.type === 'candidate') {
+          const parsed = CandidateSchema.safeParse(signal.payload);
+          if (parsed.success) {
+            const { id, short_label } = generateCandidateIdWithLabel(options.cwd);
+            saveCandidate({
+              ...parsed.data,
+              id,
+              short_label,
+              created_at: nowISO(),
+              source: origin,
+              star_count: 0,
+              starred_by: [],
+              usage_count: 0,
+              usage_events: [],
+              status: 'pending',
+            }, options.cwd);
+          }
+        } else if (signal.type === 'handoff') {
+          const parsed = HandoffSchema.safeParse(signal.payload);
+          if (parsed.success) {
+            const { id, short_label } = generateIdWithLabel('open_handoffs', options.cwd);
+            mutateState((state) => {
+              state.open_handoffs.push({
+                ...parsed.data,
+                id,
+                short_label,
+                created_at: nowISO(),
+                tags: [...(parsed.data.tags ?? []), origin],
+              });
+            }, options.cwd);
+          }
+        } else if (signal.type === 'runtime_note') {
+          const parsed = RuntimeNoteSchema.safeParse(signal.payload);
+          if (parsed.success) {
+            saveRuntimeNote({
+              ...parsed.data,
+              id: generateRuntimeNoteId(),
+              created_at: nowISO(),
+              tags: [...(parsed.data.tags ?? []), origin],
+            }, options.cwd);
+          }
+        }
+        markSignalProcessed(signal.from.project_path, signal.id);
+        materialized++;
+      } catch { /* skip this signal — do not block session start */ }
+    }
+    if (materialized > 0) {
+      console.log(`✔ Materialized ${materialized} federation signal(s) from linked projects`);
+    }
+  } catch { /* Non-fatal — federation pull failure should not block session start */ }
 
   return {
     ...snapshot,
