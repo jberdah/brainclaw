@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
+import { McpClient } from './mcp-client';
 
 export interface BoardProject {
   path: string;
@@ -125,11 +127,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _projectIndex = new Map<string, BoardProject>();
   private readonly _rootProjectPath?: string;
 
-  private readonly _watchers = new Map<string, cp.ChildProcess>();
+  private readonly _watchers = new Map<string, fs.FSWatcher>();
   private readonly _projectBoards = new Map<string, BoardData | null>();
   private readonly _projectErrors = new Map<string, string>();
   private readonly _loadPromises = new Map<string, Promise<BoardData | null>>();
   private readonly _loadingProjects = new Set<string>();
+  private readonly _mcpClients = new Map<string, McpClient>();
   private readonly _resolvedCmds = new Map<string, string | null>();
   private readonly _resolvingCmds = new Map<string, Promise<string | undefined>>();
   private readonly _disposables: vscode.Disposable[] = [];
@@ -163,24 +166,42 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   public exec(command: string, cwd?: string): void {
     const targetCwd = this._normalizePath(cwd ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._resolveCmd(targetCwd)
-      .then((bclaw) => {
-        if (!bclaw) {
-          vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
-          return;
-        }
+    void this._execViaMcp(command, targetCwd);
+  }
 
-        cp.exec(`${bclaw} ${command}`, { cwd: targetCwd }, (err) => {
-          if (err) {
-            vscode.window.showErrorMessage(`Brainclaw: ${err.message}`);
-          }
-          this.refresh();
-        });
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Brainclaw: ${message}`);
-      });
+  private async _execViaMcp(command: string, targetCwd: string): Promise<void> {
+    const client = await this._getMcpClient(targetCwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+
+    try {
+      // Map legacy CLI command strings to MCP tool calls
+      const [tool, args] = this._mapCommandToMcpTool(command);
+      await client.callTool(tool, args);
+      this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  private _mapCommandToMcpTool(command: string): [string, Record<string, unknown>] {
+    const parts = command.trim().split(/\s+/);
+    // "accept <id>"
+    if (parts[0] === 'accept' && parts[1]) {
+      return ['bclaw_accept', { id: parts[1] }];
+    }
+    // "reject <id>"
+    if (parts[0] === 'reject' && parts[1]) {
+      return ['bclaw_reject', { id: parts[1] }];
+    }
+    // "claim release <id>"
+    if (parts[0] === 'claim' && parts[1] === 'release' && parts[2]) {
+      return ['bclaw_release_claim', { id: parts[2] }];
+    }
+    throw new Error(`Unsupported command: ${command}`);
   }
 
   private _normalizePath(targetPath: string): string {
@@ -232,13 +253,30 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   dispose(): void {
     for (const watcher of this._watchers.values()) {
-      watcher.kill();
+      try { watcher.close(); } catch { /* ignore */ }
     }
     this._watchers.clear();
+    for (const client of this._mcpClients.values()) {
+      client.dispose();
+    }
+    this._mcpClients.clear();
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
     for (const disposable of this._disposables) {
       disposable.dispose();
     }
+  }
+
+  private async _getMcpClient(projectPath: string): Promise<McpClient | null> {
+    const normalizedPath = this._normalizePath(projectPath);
+    const existing = this._mcpClients.get(normalizedPath);
+    if (existing) return existing;
+
+    const bclaw = await this._resolveCmd(normalizedPath);
+    if (!bclaw) return null;
+
+    const client = new McpClient(normalizedPath, bclaw);
+    this._mcpClients.set(normalizedPath, client);
+    return client;
   }
 
   private async _resolveCmd(cwd: string): Promise<string | undefined> {
@@ -266,51 +304,43 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _startWatches(): void {
     for (const project of this._projects) {
-      void this._startWatch(project.path).catch(() => {
-        // Ignore watch startup failures for individual projects.
-      });
+      this._startWatch(project.path);
     }
   }
 
-  private async _startWatch(projectPath: string): Promise<void> {
+  private _startWatch(projectPath: string): void {
     const normalizedPath = this._normalizePath(projectPath);
     if (this._watchers.has(normalizedPath)) return;
 
-    const bclaw = await this._resolveCmd(normalizedPath);
-    if (!bclaw) return;
+    const brainclawDir = path.join(normalizedPath, '.brainclaw');
+    if (!fs.existsSync(brainclawDir)) return;
 
-    const watcher = cp.spawn(`${bclaw} watch`, [], { cwd: normalizedPath, shell: true });
-    watcher.stdout?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        try {
-          const event = JSON.parse(line);
-          if ([
-            'added',
-            'changed',
-            'removed',
-            'plan_added',
-            'constraint_added',
-            'claim_created',
-            'claim_released',
-            'handoff_added',
-            'decision_added',
-          ].includes(event.event)) {
-            this._debouncedRefresh();
-          }
-        } catch {
-          // ignore non-JSON watch output
+    try {
+      const watcher = fs.watch(brainclawDir, (_eventType, filename) => {
+        if (filename && (filename === 'events.jsonl' || String(filename).endsWith('events.jsonl'))) {
+          this._debouncedRefresh();
         }
-      }
-    });
-    watcher.stderr?.on('data', () => { /* drain stderr to prevent buffer buildup */ });
-    watcher.on('error', () => {
-      this._watchers.delete(normalizedPath);
-    });
-    watcher.on('exit', () => {
-      this._watchers.delete(normalizedPath);
-    });
-    this._watchers.set(normalizedPath, watcher);
+      });
+      watcher.on('error', () => {
+        this._watchers.delete(normalizedPath);
+      });
+      watcher.on('close', () => {
+        this._watchers.delete(normalizedPath);
+      });
+      this._watchers.set(normalizedPath, watcher);
+    } catch {
+      // Ignore watch startup failures for individual projects.
+    }
+  }
+
+  private async _runAgentBoard(projectPath: string): Promise<BoardData> {
+    const client = await this._getMcpClient(projectPath);
+    if (!client) {
+      throw new Error(`No brainclaw command found for ${projectPath}`);
+    }
+
+    const result = await client.callTool('bclaw_get_agent_board', {});
+    return result as unknown as BoardData;
   }
 
   private async _loadBoard(force = false): Promise<BoardData | null> {
@@ -373,32 +403,6 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     this._loadPromises.set(normalizedPath, load);
     return load;
-  }
-
-  private async _runAgentBoard(projectPath: string): Promise<BoardData> {
-    const bclaw = await this._resolveCmd(projectPath);
-    if (!bclaw) {
-      throw new Error(`No brainclaw command found for ${projectPath}`);
-    }
-
-    return new Promise<BoardData>((resolve, reject) => {
-      try {
-        cp.exec(`${bclaw} agent-board --all-agents --json`, { cwd: projectPath, maxBuffer: 8 * 1024 * 1024, timeout: 15_000 }, (err, stdout, stderr) => {
-          if (err) {
-            reject(new Error(stderr?.trim() || err.message));
-            return;
-          }
-
-          try {
-            resolve(JSON.parse(stdout) as BoardData);
-          } catch (parseError) {
-            reject(parseError);
-          }
-        });
-      } catch (execError) {
-        reject(execError);
-      }
-    });
   }
 
   private _getProject(projectPath?: string): BoardProject | undefined {
@@ -933,4 +937,3 @@ export async function resolveBrainclawCmd(cwd: string): Promise<string | undefin
 
   return undefined;
 }
-
