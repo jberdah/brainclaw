@@ -1614,7 +1614,8 @@ program
   .description('Multi-perspective ideation session using persona-based consultation')
   .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
   .option('--checkpoint', 'Pause after clarification for human input')
-  .option('--spawn', 'Spawn each consultant as a Claude CLI instance')
+  .option('--spawn', 'Spawn each consultant as an agent CLI instance')
+  .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
   .option('--json', 'Output as JSON')
   .action((topic, options) => {
     runCodev(topic, options);
