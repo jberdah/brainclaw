@@ -1615,6 +1615,7 @@ program
   .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
   .option('--checkpoint', 'Pause after clarification for human input')
   .option('--spawn', 'Spawn each consultant as an agent CLI instance')
+  .option('--fresh', 'Clear cached responses before starting a new run')
   .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
   .option('--rounds <N>', 'Number of discussion rounds in spawn mode (default 3, min 2)', '3')
   .option('--target-duration <seconds>', 'Target duration per round indicated to agents (default 120)', '120')
