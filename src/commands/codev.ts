@@ -345,31 +345,41 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
 
   const { binaryPath, name: agentName } = agent;
 
+  // Attach error handler to all spawned children to prevent unhandled 'error' events from crashing the parent
+  const attachErrorHandler = (child: ReturnType<typeof spawn>) => {
+    child.on('error', (err) => {
+      // Log but don't crash — the agent simply failed to start
+      console.warn(`  ⚠ Spawn error for ${agentName}/${personaName}: ${(err as Error).message}`);
+    });
+  };
+
   if (agentName === 'codex') {
-    // Codex: reads prompt from stdin when argument is '-'
-    const child = spawn(binaryPath, ['exec', '--full-auto', '-'], {
+    // Codex: use temp file via shell to avoid Windows .cmd ENOENT issues
+    const child = spawn('sh', ['-c', `cat "${briefFile}" | "${binaryPath}" exec --full-auto - ; rm -f "${briefFile}"`], {
       detached: true,
-      stdio: ['pipe', 'ignore', 'ignore'],
+      stdio: 'ignore',
       cwd,
     });
-    child.stdin?.write(fullBrief);
-    child.stdin?.end();
+    attachErrorHandler(child);
     child.unref();
   } else if (agentName === 'antigravity') {
     // Gemini CLI: use temp file via shell redirection
-    spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" ; rm -f "${briefFile}"`], {
+    const child = spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" ; rm -f "${briefFile}"`], {
       detached: true,
       stdio: 'ignore',
       cwd,
-    }).unref();
+    });
+    attachErrorHandler(child);
+    child.unref();
   } else {
     // Claude Code: use temp file via shell cat substitution
-    // Claude -p reads the prompt as a single argument — use file to avoid ENAMETOOLONG
-    spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${briefFile}"`], {
+    const child = spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${briefFile}"`], {
       detached: true,
       stdio: 'ignore',
       cwd,
-    }).unref();
+    });
+    attachErrorHandler(child);
+    child.unref();
   }
 }
 
