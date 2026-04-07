@@ -15,6 +15,9 @@
  */
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { memoryExists, readProjectVision } from '../core/io.js';
 import { sendMessage, getThread } from '../core/messaging.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
@@ -325,31 +328,41 @@ function buildResponseInstruction(threadId: string, personaName: string): string
   ].join('\n');
 }
 
+function writeBriefToTempFile(brief: string, personaName: string): string {
+  const tmpDir = path.join(os.tmpdir(), 'brainclaw-codev');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const filePath = path.join(tmpDir, `${personaName}-${Date.now()}.md`);
+  fs.writeFileSync(filePath, brief, 'utf-8');
+  return filePath;
+}
+
 function spawnConsultant(brief: string, threadId: string, personaName: string, cwd: string, agent: ResolvedAgent): void {
   const fullBrief = brief + buildResponseInstruction(threadId, personaName);
+  const briefFile = writeBriefToTempFile(fullBrief, personaName);
 
-  // Build args from the invoke template
-  const { binaryPath, template, name: agentName } = agent;
+  const { binaryPath, name: agentName } = agent;
 
   if (agentName === 'codex') {
-    // Codex: codex exec --full-auto "<prompt>"
-    spawn(binaryPath, ['exec', '--full-auto', fullBrief], {
+    // Codex: reads prompt from stdin when argument is '-'
+    const child = spawn(binaryPath, ['exec', '--full-auto', '-'], {
       detached: true,
-      stdio: 'ignore',
+      stdio: ['pipe', 'ignore', 'ignore'],
       cwd,
-      shell: true,
-    }).unref();
+    });
+    child.stdin?.write(fullBrief);
+    child.stdin?.end();
+    child.unref();
   } else if (agentName === 'antigravity') {
-    // Gemini CLI: gemini -p "<prompt>"
-    spawn(binaryPath, ['-p', fullBrief], {
+    // Gemini CLI: use temp file via shell redirection
+    spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" ; rm -f "${briefFile}"`], {
       detached: true,
       stdio: 'ignore',
       cwd,
     }).unref();
   } else {
-    // Claude Code and others: <binary> -p "<prompt>" --allowedTools "Read,Glob,Grep,Bash"
-    const args = ['-p', fullBrief, '--allowedTools', 'Read,Glob,Grep,Bash'];
-    spawn(binaryPath, args, {
+    // Claude Code: use temp file via shell cat substitution
+    // Claude -p reads the prompt as a single argument — use file to avoid ENAMETOOLONG
+    spawn('sh', ['-c', `"${binaryPath}" -p "$(cat "${briefFile}")" --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${briefFile}"`], {
       detached: true,
       stdio: 'ignore',
       cwd,
