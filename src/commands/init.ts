@@ -29,8 +29,10 @@ export interface InitOptions {
   storageDir?: string;
   topology?: TopologyMode;
   analyzeRepo?: boolean;
+  aiScan?: boolean;
   scan?: boolean;
   cwd?: string;
+  noAiScan?: boolean;
   skipAgentBootstrap?: boolean;
   skipSetupRequirement?: boolean;
 }
@@ -80,6 +82,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const topology = resolveTopology(options.topology);
   const ignoreStrategy: IgnoreStrategy = topology === 'embedded' ? 'none' : 'project-gitignore';
   const skipAgentBootstrap = options.skipAgentBootstrap === true || process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
+  const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
+  const skipAiSurfaceScan = testMode || options.noAiScan === true || options.aiScan === false;
 
   if (memoryExists(cwd) && !options.force) {
     console.error('Error: project memory already exists. Use --force to overwrite.');
@@ -217,17 +221,19 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }  if (detectedExport) {
     console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
   }
-  const visibleSurfaces = buildAiSurfaceInventory().filter((surface) => surface.status !== 'not_detected');
-  if (visibleSurfaces.length > 0) {
-    console.log('✔ Other AI work surfaces detected on this machine:');
-    for (const surface of visibleSurfaces) {
-      console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
-    }
-    const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
-    if (usageHints.length > 0) {
-      console.log('  Suggested uses:');
-      for (const line of usageHints) {
-        console.log(`    ${line}`);
+  if (!skipAiSurfaceScan) {
+    const visibleSurfaces = buildAiSurfaceInventory().filter((surface) => surface.status !== 'not_detected');
+    if (visibleSurfaces.length > 0) {
+      console.log('✔ Other AI work surfaces detected on this machine:');
+      for (const surface of visibleSurfaces) {
+        console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
+      }
+      const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
+      if (usageHints.length > 0) {
+        console.log('  Suggested uses:');
+        for (const line of usageHints) {
+          console.log(`    ${line}`);
+        }
       }
     }
   }
@@ -287,24 +293,26 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // Install post-merge hook for auto-release of claims after merge
   installPostMergeHookIfMissing(cwd);
 
-  const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
-  console.log('');
-  console.log('Onboarding preflight:');
-  for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
-    console.log(`  ${line}`);
-  }
-  if (onboardingPreflight.importPlan.suggestion_count > 0) {
+  if (!testMode) {
+    const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
     console.log('');
-    console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
-    console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
-  }
-  if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
-    console.log('');
-    console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
-    console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
-  } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
-    console.log('');
-    console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+    console.log('Onboarding preflight:');
+    for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
+      console.log(`  ${line}`);
+    }
+    if (onboardingPreflight.importPlan.suggestion_count > 0) {
+      console.log('');
+      console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
+      console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
+    }
+    if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
+      console.log('');
+      console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
+      console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
+    } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
+      console.log('');
+      console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+    }
   }
 
   console.log('');

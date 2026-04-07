@@ -152,6 +152,7 @@ program
   .option('--project-mode <mode>', 'Project mode: single-project, multi-project, auto')
   .option('--project-strategy <strategy>', 'Project strategy for multi-project mode: manual, folder')
   .option('--no-analyze-repo', 'Skip repository analysis when suggesting a project mode')
+  .option('--no-ai-scan', 'Skip AI surface scan during init')
   .option('--scan', 'Scan subdirectories for service boundaries and suggest init targets')
   .action(async (options) => {
     await runInit(options);
