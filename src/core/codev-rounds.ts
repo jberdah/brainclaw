@@ -37,19 +37,40 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function spawnAgent(binaryPath: string, agentName: string, prompt: string, personaName: string, cwd: string): void {
+function spawnAgent(
+  binaryPath: string,
+  agentName: string,
+  prompt: string,
+  personaName: string,
+  cwd: string,
+  outputFile: string,
+): void {
   const tmpDir = path.join(os.tmpdir(), 'brainclaw-codev');
   fs.mkdirSync(tmpDir, { recursive: true });
   const promptFile = path.join(tmpDir, `${personaName}-${Date.now()}.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
+  // Capture stdout → response file. The agent just responds normally;
+  // the facilitator writes its output to the expected response path.
+  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+  const outFd = fs.openSync(outputFile + '.partial', 'w');
+
   const child = spawn(
     'sh',
     ['-c', `"${binaryPath}" -p "$(cat "${promptFile}")" ; rm -f "${promptFile}"`],
-    { detached: true, stdio: 'ignore', cwd },
+    { detached: true, stdio: ['ignore', outFd, 'ignore'], cwd },
   );
   child.on('error', (err) => {
     console.warn(`  ⚠ Spawn error for ${agentName}/${personaName}: ${(err as Error).message}`);
+  });
+  child.on('exit', () => {
+    try { fs.closeSync(outFd); } catch { /* already closed */ }
+    // Rename .partial → .json to signal completion atomically
+    try {
+      const raw = fs.readFileSync(outputFile + '.partial', 'utf-8').trim();
+      const response = { persona: personaName, agent: agentName, text: raw, created_at: new Date().toISOString() };
+      fs.writeFileSync(outputFile, JSON.stringify(response, null, 2), 'utf-8');
+    } catch { /* best effort */ }
   });
   child.unref();
 }
@@ -82,7 +103,7 @@ export function executeRound(config: RoundConfig): IdeationRound {
       prompt = buildConvergencePrompt(persona, allPositions, targetDurationSeconds, respFile);
     }
 
-    spawnAgent(agent.binaryPath, agent.name, prompt, persona.name, cwd);
+    spawnAgent(agent.binaryPath, agent.name, prompt, persona.name, cwd, respFile);
     console.log(`  → [R${roundNumber}] ${persona.name} → ${agent.name}`);
   }
 
