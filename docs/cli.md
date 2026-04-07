@@ -794,6 +794,41 @@ brainclaw search "rollout" --since 2026-01-01 --json
 
 For capable agents, prefer the MCP plan and claim tools for live runtime interactions. The CLI remains the operator and scripting form of the same coordination model.
 
+### `brainclaw codev [topic]`
+
+Multi-perspective ideation session using persona-based group discussion.
+
+| Option | Description |
+|---|---|
+| `--personas <tier>` | Persona tier: `tier1` (default), `tier2`, or `list` |
+| `--checkpoint` | Pause after clarification for human input (v2 mode only) |
+| `--spawn` | Spawn agent CLI instances for autonomous group discussion (v3 mode) |
+| `--agents <list>` | Comma-separated agent names for spawn (e.g. `claude-code,codex,antigravity`). Default: auto-detect available agents |
+| `--rounds <N>` | Number of discussion rounds in v3 mode (default: 3, minimum: 2) |
+| `--target-duration <seconds>` | Target response duration indicated to agents (default: 120) |
+| `--json` | Output as JSON |
+
+**v3 mode** (`--spawn`): Spawns agents that discuss iteratively in rounds:
+- Round 0 (position): Each agent states their initial position
+- Rounds 1-N (reaction): Agents react to each other's positions
+- Final round (convergence): Identify agreements and remaining tensions
+
+Agents are distributed round-robin across available CLI agents. Each round produces an ideation artifact stored in `.brainclaw/coordination/ideation/`.
+
+**v2 mode** (without `--spawn`): Generates a coordinator prompt for manual facilitation.
+
+Examples:
+```bash
+# Auto-detect agents, 3 rounds
+brainclaw codev "API redesign" --spawn
+
+# Specific agents, 5 rounds, faster target
+brainclaw codev "Migration strategy" --spawn --agents claude-code,codex --rounds 5 --target-duration 90
+
+# List available personas
+brainclaw codev --personas list
+```
+
 ### `brainclaw plan create <text>`
 
 Create a shared work item.
