@@ -10,6 +10,7 @@ import { listRuntimeNotes } from './runtime.js';
 import { loadState, persistState } from './state.js';
 import { countActionable } from './messaging.js';
 import { listCandidates } from './candidates.js';
+import { pullSignalsFromLinkedProjects } from './federation-transport.js';
 
 export interface CoordinationOptions {
   agent?: string;
@@ -253,9 +254,7 @@ interface IncomingSignalSummary {
 
 function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | undefined {
   const signals = listIncomingCrossProjectSignals(cwd);
-  if (signals.length === 0) return undefined;
-
-  return signals.map((signal) => {
+  const incomingSignals: IncomingSignalSummary[] = signals.map((signal) => {
     const text = 'text' in signal.payload ? (signal.payload as { text: string }).text : '';
     return {
       id: signal.id,
@@ -266,6 +265,26 @@ function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | un
       preview: text.length > 120 ? text.slice(0, 117) + '...' : text,
     };
   });
+
+  try {
+    const fedSignals = pullSignalsFromLinkedProjects(cwd);
+    for (const sig of fedSignals) {
+      const payloadPreview = typeof sig.payload === 'string'
+        ? sig.payload.slice(0, 120)
+        : JSON.stringify(sig.payload).slice(0, 120);
+      incomingSignals.push({
+        id: sig.id,
+        entity_type: sig.type,
+        from_project: sig.from.project_name,
+        from_agent: sig.from.agent_name,
+        preview: payloadPreview,
+        created_at: sig.created_at,
+      });
+    }
+  } catch { /* non-fatal */ }
+
+  if (incomingSignals.length === 0) return undefined;
+  return incomingSignals;
 }
 
 function severityOrder(severity: string): number {
