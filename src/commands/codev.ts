@@ -34,6 +34,7 @@ export interface CodevOptions {
   checkpoint?: boolean;
   json?: boolean;
   spawn?: boolean;
+  fresh?: boolean;
   agents?: string;
   rounds?: number;
   targetDuration?: number;
@@ -42,6 +43,10 @@ export interface CodevOptions {
 
 function toSlug(topic: string): string {
   return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+}
+
+function sanitizeForPath(slug: string): string {
+  return slug.replace(/[<>:"/\\|?*]/g, '_');
 }
 
 const STOP_WORDS = new Set([
@@ -139,6 +144,15 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     const agentNames = spawnAgents.map(a => a.name).join(', ');
     console.log(`Resolved ${spawnAgents.length} spawn agent(s): ${agentNames}`);
 
+    if (options.fresh) {
+      const tmpDir = path.join(os.tmpdir(), 'brainclaw-codev', sanitizeForPath(threadId));
+      if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+      // Also delete ideation artifacts for this thread
+      const ideDir = path.join(cwd, '.brainclaw', 'coordination', 'ideation', sanitizeForPath(threadId));
+      if (fs.existsSync(ideDir)) fs.rmSync(ideDir, { recursive: true, force: true });
+      console.log('Fresh run: cleared cached responses and artifacts.');
+    }
+
     // ── v3: Round-based orchestration ────────────────────────
     const totalRounds = Math.max(2, options.rounds ?? 3);
     const targetDuration = options.targetDuration ?? 120;
@@ -162,6 +176,10 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
         cwd,
       });
     }
+
+    // Cleanup temp response files
+    const tmpDir = path.join(os.tmpdir(), 'brainclaw-codev', sanitizeForPath(threadId));
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
 
     // ── Print final summary ──────────────────────────────────
     const lastRound = loadIdeationRound(threadId, totalRounds - 1, cwd);
