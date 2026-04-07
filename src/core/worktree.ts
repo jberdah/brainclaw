@@ -163,6 +163,13 @@ export function createWorktree(
     throw new Error(`git worktree add failed: ${result.stderr.trim()}`);
   }
 
+  // After successful worktree creation, add to git safe.directory for cross-user agents (e.g. Codex)
+  try {
+    runGit(['config', '--global', '--add', 'safe.directory', gitPath(targetPath)], mainWorktreePath);
+  } catch {
+    // Non-fatal - safe.directory may already be set or not needed
+  }
+
   // Write brainclaw metadata sidecar inside the worktree
   const meta = {
     session_id: options.sessionId,
