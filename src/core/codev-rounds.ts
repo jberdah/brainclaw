@@ -55,11 +55,24 @@ function spawnAgent(
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   const outFd = fs.openSync(outputFile + '.partial', 'w');
 
-  const child = spawn(
-    'sh',
-    ['-c', `"${binaryPath}" -p "$(cat "${promptFile}")" ; rm -f "${promptFile}"`],
-    { detached: true, stdio: ['ignore', outFd, 'ignore'], cwd },
-  );
+  // Build agent-specific command
+  let shellCmd: string;
+  if (agentName === 'codex') {
+    // Codex: reads from stdin via '-', uses exec --full-auto
+    shellCmd = `cat "${promptFile}" | "${binaryPath}" exec --full-auto - ; rm -f "${promptFile}"`;
+  } else if (agentName === 'antigravity') {
+    // Gemini CLI: -p flag
+    shellCmd = `"${binaryPath}" -p "$(cat "${promptFile}")" ; rm -f "${promptFile}"`;
+  } else {
+    // Claude Code and others: -p flag with --allowedTools
+    shellCmd = `"${binaryPath}" -p "$(cat "${promptFile}")" --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${promptFile}"`;
+  }
+
+  const child = spawn('sh', ['-c', shellCmd], {
+    detached: true,
+    stdio: ['ignore', outFd, 'ignore'],
+    cwd,
+  });
   child.on('error', (err) => {
     console.warn(`  ⚠ Spawn error for ${agentName}/${personaName}: ${(err as Error).message}`);
   });
