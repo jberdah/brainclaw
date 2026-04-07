@@ -112,6 +112,10 @@ const SECTION = {
   CROSS_PROJECT: 'cross-project',
 } as const;
 
+const COMMAND = {
+  RETRY_PROJECT_BOARD: 'brainclaw.retryProjectBoard',
+} as const;
+
 export class BrainclawBoardProvider implements vscode.TreeDataProvider<BrainclawTreeItem> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<BrainclawTreeItem | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -128,6 +132,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _loadingProjects = new Set<string>();
   private readonly _resolvedCmds = new Map<string, string | null>();
   private readonly _resolvingCmds = new Map<string, Promise<string | undefined>>();
+  private readonly _disposables: vscode.Disposable[] = [];
 
   private _workspaceBoard: BoardData | null = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
@@ -139,6 +144,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       this._projectIndex.set(project.path, project);
     }
     this._rootProjectPath = this._projects.find((project) => project.path === this._workspaceRoot)?.path;
+
+    this._disposables.push(vscode.commands.registerCommand(COMMAND.RETRY_PROJECT_BOARD, (itemOrPath?: BrainclawTreeItem | string) => {
+      const projectPath = typeof itemOrPath === 'string' ? itemOrPath : itemOrPath?.projectPath;
+      if (!projectPath) return;
+      void this._loadBoardForProject(projectPath, true, true);
+    }));
 
     setTimeout(() => {
       this.refresh();
@@ -225,6 +236,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
     this._watchers.clear();
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    for (const disposable of this._disposables) {
+      disposable.dispose();
+    }
   }
 
   private async _resolveCmd(cwd: string): Promise<string | undefined> {
@@ -368,18 +382,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     return new Promise<BoardData>((resolve, reject) => {
-      cp.exec(`${bclaw} agent-board --all-agents --json`, { cwd: projectPath, maxBuffer: 8 * 1024 * 1024, timeout: 15_000 }, (err, stdout, stderr) => {
-        if (err) {
-          reject(new Error(stderr?.trim() || err.message));
-          return;
-        }
+      try {
+        cp.exec(`${bclaw} agent-board --all-agents --json`, { cwd: projectPath, maxBuffer: 8 * 1024 * 1024, timeout: 15_000 }, (err, stdout, stderr) => {
+          if (err) {
+            reject(new Error(stderr?.trim() || err.message));
+            return;
+          }
 
-        try {
-          resolve(JSON.parse(stdout) as BoardData);
-        } catch (parseError) {
-          reject(parseError);
-        }
-      });
+          try {
+            resolve(JSON.parse(stdout) as BoardData);
+          } catch (parseError) {
+            reject(parseError);
+          }
+        });
+      } catch (execError) {
+        reject(execError);
+      }
     });
   }
 
@@ -530,17 +548,52 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     if (!board) {
-      const project = this._getProject(normalizedPath);
       const error = this._projectErrors.get(normalizedPath);
+      if (error) {
+        const project = this._getProject(normalizedPath);
+        const truncated = this._truncate(error, 200);
+        const tooltip = `Board unavailable for ${project?.name ?? 'project'}\n${truncated}\n\nRight-click to Retry.`;
+        const unavailableNode = new BrainclawTreeItem(
+          'Board unavailable',
+          vscode.TreeItemCollapsibleState.None,
+          truncated,
+          new vscode.ThemeIcon('error'),
+          tooltip,
+          'projectError',
+          undefined,
+          normalizedPath,
+        );
+        unavailableNode.command = {
+          command: COMMAND.RETRY_PROJECT_BOARD,
+          title: 'Retry',
+          arguments: [normalizedPath],
+        };
+        return [unavailableNode];
+      }
+
       return [new BrainclawTreeItem(
-        error ? `Unable to load ${project?.name ?? 'project'} board` : 'Loading project board...',
+        'Loading project board...',
         vscode.TreeItemCollapsibleState.None,
-        error,
-        new vscode.ThemeIcon(error ? 'error' : 'sync~spin'),
+        undefined,
+        new vscode.ThemeIcon('sync~spin'),
       )];
     }
 
-    return this._buildBoardSections(board, normalizedPath, false);
+    const sections = this._buildBoardSections(board, normalizedPath, false);
+    if (sections.length === 0) {
+      return [new BrainclawTreeItem(
+        'No board sections available',
+        vscode.TreeItemCollapsibleState.None,
+        undefined,
+        new vscode.ThemeIcon('info'),
+      )];
+    }
+    return sections;
+  }
+
+  private _truncate(input: string, max = 200): string {
+    if (input.length <= max) return input;
+    return `${input.slice(0, max - 3)}...`;
   }
 
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {
