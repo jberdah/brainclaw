@@ -91,7 +91,7 @@ import { cleanOrphanFiles, memoryDir, memoryExists } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
-import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune } from './commands/worktree.js';
+import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean } from './commands/worktree.js';
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
@@ -1596,6 +1596,16 @@ worktreeCmd
   .action(() => {
     const globalOpts = program.opts();
     runWorktreePrune({ cwd: globalOpts.cwd });
+  });
+
+worktreeCmd
+  .command('clean')
+  .description('Remove worktrees whose branch is fully merged and orphan worktree directories')
+  .option('--force', 'Force removal even with uncommitted changes')
+  .option('--dry-run', 'Show what would be removed without actually removing')
+  .action((options) => {
+    const globalOpts = program.opts();
+    runWorktreeClean({ force: options.force, dryRun: options.dryRun, cwd: globalOpts.cwd });
   });
 
 // --- codev ---

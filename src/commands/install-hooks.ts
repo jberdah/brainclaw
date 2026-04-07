@@ -109,6 +109,7 @@ else
 fi
 
 $BCLAW_CMD release-claims --from-git-diff 2>/dev/null || true
+$BCLAW_CMD worktree clean 2>/dev/null || true
 `;
 }
 

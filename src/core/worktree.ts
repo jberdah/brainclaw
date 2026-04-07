@@ -278,3 +278,117 @@ export function removeWorktree(
 export function pruneWorktrees(mainWorktreePath: string): void {
   runGit(['worktree', 'prune'], mainWorktreePath);
 }
+
+export interface CleanResult {
+  removed: string[];
+  skipped: Array<{ path: string; reason: string }>;
+  pruned: boolean;
+}
+
+/**
+ * Removes worktrees whose branch has been fully merged into the current branch
+ * (typically master/main after a merge). Also removes brainclaw-managed
+ * worktree directories that no longer have a corresponding git worktree entry
+ * (orphan dirs left behind by force-deleted branches).
+ *
+ * Safe by default: skips worktrees with uncommitted changes unless `force` is set.
+ */
+export function cleanMergedWorktrees(
+  mainWorktreePath: string,
+  options: { force?: boolean; dryRun?: boolean } = {},
+): CleanResult {
+  const result: CleanResult = { removed: [], skipped: [], pruned: false };
+
+  // First prune stale git worktree admin entries
+  pruneWorktrees(mainWorktreePath);
+  result.pruned = true;
+
+  // Get branches already merged into HEAD
+  const mergedOutput = runGit(['branch', '--merged', 'HEAD'], mainWorktreePath);
+  const mergedBranches = new Set(
+    mergedOutput.ok
+      ? mergedOutput.stdout
+          .split('\n')
+          .map((b) => b.replace(/^[*+]?\s+/, '').trim())
+          .filter(Boolean)
+      : [],
+  );
+
+  const worktrees = listWorktrees(mainWorktreePath);
+
+  for (const wt of worktrees) {
+    if (wt.is_main) continue;
+
+    const isMerged = mergedBranches.has(wt.branch);
+    if (!isMerged) {
+      continue;
+    }
+
+    // Check for uncommitted changes
+    if (!options.force) {
+      const status = runGit(['status', '--porcelain'], wt.path);
+      if (status.ok && status.stdout.trim().length > 0) {
+        result.skipped.push({ path: wt.path, reason: 'uncommitted changes' });
+        continue;
+      }
+    }
+
+    if (options.dryRun) {
+      result.removed.push(wt.path);
+      continue;
+    }
+
+    try {
+      removeWorktree(mainWorktreePath, wt.path, { force: options.force });
+      result.removed.push(wt.path);
+    } catch {
+      result.skipped.push({ path: wt.path, reason: 'removal failed' });
+    }
+  }
+
+  // Clean orphan brainclaw worktree directories (no matching git worktree)
+  cleanOrphanWorktreeDirs(mainWorktreePath, worktrees, result, options.dryRun);
+
+  return result;
+}
+
+/**
+ * Removes brainclaw-managed worktree directories under ~/.brainclaw/worktrees/
+ * that no longer have a corresponding git worktree entry.
+ */
+function cleanOrphanWorktreeDirs(
+  mainWorktreePath: string,
+  activeWorktrees: WorktreeInfo[],
+  result: CleanResult,
+  dryRun?: boolean,
+): void {
+  const base = worktreesBaseDir(mainWorktreePath);
+  if (!fs.existsSync(base)) return;
+
+  const activePaths = new Set(activeWorktrees.map((wt) => path.resolve(wt.path)));
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dirPath = path.resolve(path.join(base, entry.name));
+    if (activePaths.has(dirPath)) continue;
+
+    // This directory is not referenced by any git worktree — it's orphaned
+    if (dryRun) {
+      result.removed.push(dirPath);
+    } else {
+      try {
+        fs.rmSync(dirPath, { recursive: true, force: true });
+        result.removed.push(dirPath);
+      } catch {
+        result.skipped.push({ path: dirPath, reason: 'orphan dir removal failed' });
+      }
+    }
+  }
+}
