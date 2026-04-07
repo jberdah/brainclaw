@@ -24,8 +24,12 @@ export const IdeationRoundSchema = z.object({
 
 export type IdeationRound = z.infer<typeof IdeationRoundSchema>;
 
+function sanitizeForPath(slug: string): string {
+  return slug.replace(/[<>:"/\\|?*]/g, '_');
+}
+
 export function ideationDir(threadSlug: string, cwd?: string): string {
-  return path.join(memoryDir(cwd), 'coordination', 'ideation', threadSlug);
+  return path.join(memoryDir(cwd), 'coordination', 'ideation', sanitizeForPath(threadSlug));
 }
 
 export function saveIdeationRound(threadSlug: string, round: IdeationRound, cwd?: string): void {

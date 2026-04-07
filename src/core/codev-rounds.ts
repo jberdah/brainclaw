@@ -25,8 +25,12 @@ export interface RoundConfig {
 
 // ── Helpers ───────────────────────────────────────────────────
 
+function sanitizeForPath(slug: string): string {
+  return slug.replace(/[<>:"/\\|?*]/g, '_');
+}
+
 function responseFilePath(threadSlug: string, roundNumber: number, personaName: string): string {
-  return path.join(os.tmpdir(), 'brainclaw-codev', threadSlug, `round_${roundNumber}`, `${personaName}.json`);
+  return path.join(os.tmpdir(), 'brainclaw-codev', sanitizeForPath(threadSlug), `round_${roundNumber}`, `${personaName}.json`);
 }
 
 function sleepSync(ms: number): void {

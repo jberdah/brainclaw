@@ -18,8 +18,12 @@ function syncSleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function sanitizeForPath(slug: string): string {
+  return slug.replace(/[<>:"/\\|?*]/g, '_');
+}
+
 export function responseDir(threadSlug: string, cwd?: string): string {
-  return path.join(memoryDir(cwd), 'coordination', 'ideation', threadSlug, 'responses');
+  return path.join(memoryDir(cwd), 'coordination', 'ideation', sanitizeForPath(threadSlug), 'responses');
 }
 
 export function responseFilePath(

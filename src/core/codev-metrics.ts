@@ -12,8 +12,12 @@ export interface CodevResponseMetric {
   duration_ms: number;
 }
 
+function sanitizeForPath(slug: string): string {
+  return slug.replace(/[<>:"/\\|?*]/g, '_');
+}
+
 export function metricsPath(threadSlug: string, cwd?: string): string {
-  return path.join(memoryDir(cwd), 'coordination', 'ideation', threadSlug, 'metrics.jsonl');
+  return path.join(memoryDir(cwd), 'coordination', 'ideation', sanitizeForPath(threadSlug), 'metrics.jsonl');
 }
 
 export function recordResponse(threadSlug: string, metric: CodevResponseMetric, cwd?: string): void {
