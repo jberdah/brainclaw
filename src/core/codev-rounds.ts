@@ -108,17 +108,45 @@ export function executeRound(config: RoundConfig): IdeationRound {
   }
 
   // b. Poll for responses — no hard timeout
+  // Check both .json (final) and .partial (stdout capture still in progress).
+  // A .partial is considered done when its size is >0 and stable across 2 polls.
   const pending = new Set(personas.map(p => p.name));
   const collected: Array<{ persona: string; agent: string; text: string; duration_ms: number }> = [];
+  const partialSizes = new Map<string, number>();
 
   console.log(`Polling for ${pending.size} response(s) (round ${roundNumber})...`);
   while (pending.size > 0) {
     sleepSync(10_000);
     for (const personaName of [...pending]) {
       const respFile = responseFilePath(threadSlug, roundNumber, personaName);
-      if (!fs.existsSync(respFile)) continue;
+
+      // Check final .json first (written by exit handler)
+      let raw: { persona: string; text: string } | undefined;
+      if (fs.existsSync(respFile)) {
+        try { raw = JSON.parse(fs.readFileSync(respFile, 'utf-8')); } catch { /* not ready */ }
+      }
+
+      // Fallback: check .partial stdout capture — stable size means agent finished
+      if (!raw) {
+        const partialFile = respFile + '.partial';
+        if (!fs.existsSync(partialFile)) continue;
+        try {
+          const stat = fs.statSync(partialFile);
+          if (stat.size === 0) continue;
+          const prevSize = partialSizes.get(personaName) ?? 0;
+          if (stat.size === prevSize && prevSize > 0) {
+            // Stable — agent is done writing, read it
+            const text = fs.readFileSync(partialFile, 'utf-8').trim();
+            if (text.length > 0) {
+              raw = { persona: personaName, text };
+            }
+          }
+          partialSizes.set(personaName, stat.size);
+          if (!raw) continue;
+        } catch { continue; }
+      }
+
       try {
-        const raw = JSON.parse(fs.readFileSync(respFile, 'utf-8')) as { persona: string; text: string };
         const respondedAt = new Date();
         const agentIdx = personas.findIndex(p => p.name === personaName);
         const agentName = agents[agentIdx % agents.length].name;
