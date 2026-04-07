@@ -139,7 +139,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   // ── Phase 2: Clarification briefs ─────────────────────────
   for (let i = 0; i < personas.length; i++) {
     const persona = personas[i];
-    const threadHistory = getThread(threadId, cwd);
+    const threadHistory = getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'clarification', threadHistory);
     sendMessage({
       from: agent,
@@ -169,7 +169,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }
 
   // ── Phase 3: Facilitation contract ────────────────────────
-  const clarificationMessages = getThread(threadId, cwd)
+  const clarificationMessages = getThread(threadId, cwd, { truncateText: 3000 })
     .filter(m => m.tags?.includes('phase:clarification'));
   const contractText = buildContract(topic, clarificationMessages, decisions, constraints, traps);
   sendMessage({
@@ -184,7 +184,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   // ── Phase 4: Consultation briefs ──────────────────────────
   for (let i = 0; i < personas.length; i++) {
     const persona = personas[i];
-    const threadHistory = getThread(threadId, cwd);
+    const threadHistory = getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'consultation', threadHistory);
     sendMessage({
       from: agent,
@@ -214,7 +214,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }
 
   // ── Phase 5: Synthesis ────────────────────────────────────
-  const consultationMessages = getThread(threadId, cwd)
+  const consultationMessages = getThread(threadId, cwd, { truncateText: 3000 })
     .filter(m => m.tags?.includes('phase:consultation'));
   const synthesisText = buildSynthesis(topic, consultationMessages);
   sendMessage({

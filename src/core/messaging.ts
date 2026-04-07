@@ -231,7 +231,7 @@ export function archiveMessage(messageId: string, agent: string, cwd: string): A
 
 // ── Get Thread ──────────────────────────────────────────────
 
-export function getThread(threadId: string, cwd: string): InboxMessage[] {
+export function getThread(threadId: string, cwd: string, options?: { truncateText?: number }): InboxMessage[] {
   // Search across all agent inboxes for messages in this thread
   const baseDir = inboxDir(cwd);
   if (!fs.existsSync(baseDir)) return [];
@@ -247,7 +247,18 @@ export function getThread(threadId: string, cwd: string): InboxMessage[] {
     allMessages.push(...messages.filter(m => m.thread_id === threadId));
   }
 
-  return allMessages.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const sorted = allMessages.sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  if (options?.truncateText) {
+    const limit = options.truncateText;
+    for (const msg of sorted) {
+      if (msg.text && msg.text.length > limit) {
+        msg.text = msg.text.slice(0, limit) + '\n[...truncated]';
+      }
+    }
+  }
+
+  return sorted;
 }
 
 /**
