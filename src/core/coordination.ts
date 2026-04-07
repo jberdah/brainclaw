@@ -120,17 +120,35 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
   };
 }
 
-function enrichSequenceWithPlanStatus(sequence: ReturnType<typeof getActiveSequence>, allPlans: { id: string; status: string; text: string; priority?: string; assignee?: string }[]): typeof sequence {
+function enrichSequenceWithPlanStatus(sequence: ReturnType<typeof getActiveSequence>, allPlans: {
+  id: string;
+  status: string;
+  text: string;
+  priority?: string;
+  assignee?: string;
+  steps?: { id: string; text: string; status: string }[];
+}[]): typeof sequence {
   if (!sequence) return sequence;
   const planMap = new Map(allPlans.map(p => [p.id, p]));
   return {
     ...sequence,
     items: sequence.items.map((item: any) => {
       const plan = planMap.get(item.planId);
+      let planStatus = plan?.status ?? 'unknown';
+      let planText = plan?.text?.slice(0, 80) ?? item.planId;
+
+      if (item.stepId && plan?.steps) {
+        const step = plan.steps.find((s) => s.id === item.stepId);
+        if (step) {
+          planStatus = step.status === 'done' ? 'done' : plan.status;
+          planText = step.text.slice(0, 80);
+        }
+      }
+
       return {
         ...item,
-        plan_status: plan?.status ?? 'unknown',
-        plan_text: plan?.text?.slice(0, 80) ?? item.planId,
+        plan_status: planStatus,
+        plan_text: planText,
         plan_priority: plan?.priority,
         plan_assignee: plan?.assignee,
       };

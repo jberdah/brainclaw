@@ -217,6 +217,7 @@ export type SequenceStatus = z.infer<typeof SequenceStatusSchema>;
 
 export const SequenceItemSchema = z.object({
   planId: z.string(),
+  stepId: z.string().optional(), // Reference a specific step within the plan
   rank: z.number().int().positive(),
   hard_after: z.array(z.string()).default([]),
   soft_after: z.array(z.string()).default([]),

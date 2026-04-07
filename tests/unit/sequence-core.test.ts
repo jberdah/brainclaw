@@ -75,4 +75,21 @@ describe('core/sequence', () => {
       ],
     }, workspace.dir), /Duplicate sequence rank/);
   });
+
+  it('persists optional stepId on sequence items', () => {
+    const created = createSequence({
+      name: 'step-aware-sequence',
+      author: 'codex',
+      status: 'active',
+      items: [
+        { planId: 'pln_auth', stepId: 'stp_1', rank: 1, lane: 'auth' },
+      ],
+    }, workspace.dir);
+
+    const loaded = listSequences(workspace.dir).find((sequence) => sequence.id === created.id);
+    assert.ok(loaded);
+    assert.equal(loaded.items.length, 1);
+    assert.equal(loaded.items[0].planId, 'pln_auth');
+    assert.equal(loaded.items[0].stepId, 'stp_1');
+  });
 });
