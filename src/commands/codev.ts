@@ -4,13 +4,17 @@
  * v2: Autonomous facilitation with auto-generated briefs.
  * Creates a thread, loads project context, generates rich exposition,
  * persona briefs with phase instructions, facilitation contract, and synthesis.
- * Optionally spawns Claude CLI instances with --spawn.
+ * Optionally spawns agent CLI instances with --spawn.
+ *
+ * Supports multiple agent engines via --agents (e.g. claude-code,codex,antigravity).
+ * Personas are distributed round-robin across available agents.
  *
  * Without --spawn: enhanced v1 — creates thread + prints coordinator prompt.
  *
  * @module
  */
 import { spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { memoryExists, readProjectVision } from '../core/io.js';
 import { sendMessage, getThread } from '../core/messaging.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
@@ -18,12 +22,14 @@ import { CODEV_PERSONAS, listPersonas } from '../core/codev-personas.js';
 import type { CodevPersona } from '../core/codev-personas.js';
 import { buildContext } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
+import { getDefaultInvokeTemplate, getSpawnableAgents, type DefaultInvokeTemplate } from '../core/agent-capability.js';
 
 export interface CodevOptions {
   personas?: string;
   checkpoint?: boolean;
   json?: boolean;
   spawn?: boolean;
+  agents?: string;
   cwd?: string;
 }
 
@@ -113,8 +119,23 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     tags: ['codev', 'phase:exposition'],
   }, cwd);
 
+  // ── Resolve spawn agents ──────────────────────────────────
+  let spawnAgents: ResolvedAgent[] = [];
+  if (options.spawn) {
+    spawnAgents = resolveSpawnAgents(options.agents);
+    if (spawnAgents.length === 0) {
+      console.error('Error: --spawn requested but no spawnable agents found in PATH.');
+      console.error('Available agents: ' + getSpawnableAgents().map(a => a.name).join(', '));
+      console.error('Install one or specify with --agents <name1,name2,...>');
+      process.exit(1);
+    }
+    const agentNames = spawnAgents.map(a => a.name).join(', ');
+    console.log(`Resolved ${spawnAgents.length} spawn agent(s): ${agentNames}`);
+  }
+
   // ── Phase 2: Clarification briefs ─────────────────────────
-  for (const persona of personas) {
+  for (let i = 0; i < personas.length; i++) {
+    const persona = personas[i];
     const threadHistory = getThread(threadId, cwd);
     const brief = buildConsultantBrief(persona, expositionText, 'clarification', threadHistory);
     sendMessage({
@@ -126,8 +147,10 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
       tags: ['codev', 'phase:clarification', `persona:${persona.name}`],
     }, cwd);
 
-    if (options.spawn) {
-      spawnConsultant(brief, threadId, persona.name, cwd);
+    if (options.spawn && spawnAgents.length > 0) {
+      const targetAgent = spawnAgents[i % spawnAgents.length];
+      console.log(`  → ${persona.name} (clarification) → ${targetAgent.name}`);
+      spawnConsultant(brief, threadId, persona.name, cwd, targetAgent);
     }
   }
 
@@ -156,7 +179,8 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }, cwd);
 
   // ── Phase 4: Consultation briefs ──────────────────────────
-  for (const persona of personas) {
+  for (let i = 0; i < personas.length; i++) {
+    const persona = personas[i];
     const threadHistory = getThread(threadId, cwd);
     const brief = buildConsultantBrief(persona, expositionText, 'consultation', threadHistory);
     sendMessage({
@@ -168,8 +192,10 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
       tags: ['codev', 'phase:consultation', `persona:${persona.name}`],
     }, cwd);
 
-    if (options.spawn) {
-      spawnConsultant(brief, threadId, persona.name, cwd);
+    if (options.spawn && spawnAgents.length > 0) {
+      const targetAgent = spawnAgents[i % spawnAgents.length];
+      console.log(`  → ${persona.name} (consultation) → ${targetAgent.name}`);
+      spawnConsultant(brief, threadId, persona.name, cwd, targetAgent);
     }
   }
 
@@ -214,7 +240,8 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   console.log(`Phases: exposition → clarification → contract → consultation → synthesis\n`);
 
   if (options.spawn) {
-    console.log(`Spawned ${personas.length * 2} Claude instances (clarification + consultation).`);
+    const agentNames = spawnAgents.map(a => a.name).join(', ');
+    console.log(`Spawned ${personas.length * 2} agent instances across [${agentNames}] (clarification + consultation).`);
     console.log('Agents will write responses to the thread. Monitor with:');
     console.log(`  brainclaw thread ${threadId}\n`);
   } else {
@@ -226,10 +253,63 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   }
 }
 
+// ── Agent resolution ─────────────────────────────────────────
+
+interface ResolvedAgent {
+  name: string;
+  binary: string;
+  binaryPath: string;
+  template: DefaultInvokeTemplate;
+}
+
+function resolveAgentBinaryPath(binary: string): string | undefined {
+  try {
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows ? 'where' : 'which';
+    const result = execFileSync(cmd, [binary], { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+    const firstLine = result.trim().split('\n')[0]?.trim();
+    return firstLine || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSpawnAgents(agentsOption?: string): ResolvedAgent[] {
+  if (agentsOption) {
+    const names = agentsOption.split(',').map(n => n.trim()).filter(Boolean);
+    const resolved: ResolvedAgent[] = [];
+    for (const name of names) {
+      const template = getDefaultInvokeTemplate(name);
+      if (!template) {
+        console.warn(`⚠ Agent '${name}' has no invoke template — skipping.`);
+        continue;
+      }
+      const binaryPath = resolveAgentBinaryPath(template.binary);
+      if (!binaryPath) {
+        console.warn(`⚠ Agent '${name}' binary '${template.binary}' not found in PATH — skipping.`);
+        continue;
+      }
+      resolved.push({ name, binary: template.binary, binaryPath, template });
+    }
+    return resolved;
+  }
+
+  // Default: auto-detect available spawnable agents
+  const all = getSpawnableAgents();
+  const resolved: ResolvedAgent[] = [];
+  for (const { name, template } of all) {
+    const binaryPath = resolveAgentBinaryPath(template.binary);
+    if (binaryPath) {
+      resolved.push({ name, binary: template.binary, binaryPath, template });
+    }
+  }
+  return resolved;
+}
+
 // ── Spawn helper ──────────────────────────────────────────────
 
-function spawnConsultant(brief: string, threadId: string, personaName: string, cwd: string): void {
-  const responseInstruction = [
+function buildResponseInstruction(threadId: string, personaName: string): string {
+  return [
     '',
     '## Response Protocol',
     'After formulating your response, you MUST post it back to the brainclaw thread.',
@@ -243,14 +323,38 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
     'Replace <YOUR RESPONSE HERE> with your actual response text.',
     'This is REQUIRED — your work is lost if you do not post it.',
   ].join('\n');
+}
 
-  const fullBrief = brief + responseInstruction;
+function spawnConsultant(brief: string, threadId: string, personaName: string, cwd: string, agent: ResolvedAgent): void {
+  const fullBrief = brief + buildResponseInstruction(threadId, personaName);
 
-  spawn('claude', ['-p', fullBrief, '--allowedTools', 'Read,Glob,Grep,Bash'], {
-    detached: true,
-    stdio: 'ignore',
-    cwd,
-  }).unref();
+  // Build args from the invoke template
+  const { binaryPath, template, name: agentName } = agent;
+
+  if (agentName === 'codex') {
+    // Codex: codex exec --full-auto "<prompt>"
+    spawn(binaryPath, ['exec', '--full-auto', fullBrief], {
+      detached: true,
+      stdio: 'ignore',
+      cwd,
+      shell: true,
+    }).unref();
+  } else if (agentName === 'antigravity') {
+    // Gemini CLI: gemini -p "<prompt>"
+    spawn(binaryPath, ['-p', fullBrief], {
+      detached: true,
+      stdio: 'ignore',
+      cwd,
+    }).unref();
+  } else {
+    // Claude Code and others: <binary> -p "<prompt>" --allowedTools "Read,Glob,Grep,Bash"
+    const args = ['-p', fullBrief, '--allowedTools', 'Read,Glob,Grep,Bash'];
+    spawn(binaryPath, args, {
+      detached: true,
+      stdio: 'ignore',
+      cwd,
+    }).unref();
+  }
 }
 
 // ── Polling helpers ──────────────────────────────────────────
