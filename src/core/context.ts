@@ -526,10 +526,11 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   });
   const memoryDensity = classifyMemoryDensity(selected.length);
   const bootstrapEnabled = options.bootstrap !== false;
+  const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   let bootstrapAvailable = hasReusableBootstrapProfile(target, contextCwd);
   let derivedSignals: DerivedContextSignal[] | undefined;
 
-  if (bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
+  if (!testMode && bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
     const bootstrap = runBootstrapProfile({
       target,
       refresh: options.refreshBootstrap,
