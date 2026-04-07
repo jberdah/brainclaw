@@ -16,6 +16,9 @@
 
 export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
 export type WorkflowModel = 'interactive' | 'task-based' | 'scheduled';
+export type RoleCapability = 'execute' | 'coordinate' | 'review' | 'consult';
+export type PromptDeliveryMethod = 'inline_arg' | 'temp_file' | 'stdin_pipe' | 'inbox_structured';
+export type ExecutionSurface = 'cli' | 'ide' | 'extension' | 'remote';
 
 export interface AgentCapabilityProfile {
   /** Agent identifier (matches ALL_KNOWN_AGENTS in setup.ts) */
@@ -42,6 +45,39 @@ export interface AgentCapabilityProfile {
   mcpConfigScope: 'project' | 'machine' | 'both' | 'none';
   /** Template tier: A (full), B (standard), C (limited) */
   templateTier: 'A' | 'B' | 'C';
+
+  // ── Multi-agent coordination fields ──────────────────────────────────────
+
+  /** Roles this agent can fulfill in a multi-agent workflow */
+  role_capabilities: RoleCapability[];
+  /** Runtime integration surfaces available */
+  runtime: {
+    /** Can be called directly as an MCP server from another agent */
+    mcp_direct: boolean;
+    /** Supports lifecycle hooks (pre-prompt injection, stop cleanup) */
+    hooks: boolean;
+    /** Can be spawned as a CLI subprocess */
+    spawnable_cli: boolean;
+    /** Can receive tasks via brainclaw inbox */
+    inbox: boolean;
+  };
+  /** How brainclaw delivers prompts to this agent */
+  prompt_delivery: {
+    methods: PromptDeliveryMethod[];
+    preferred: PromptDeliveryMethod;
+    /** Max characters for inline_arg delivery; longer prompts use preferred fallback */
+    max_inline_length?: number;
+  };
+  /** Execution environment context */
+  execution_env: {
+    surface: ExecutionSurface;
+    os?: string;
+    shell?: string;
+  };
+  /** CLI invoke template (uses {prompt} placeholder). Undefined = not CLI-spawnable */
+  invoke_template?: string;
+  /** Binary that must be in PATH for invoke_template */
+  invoke_binary?: string;
 }
 
 export type AgentName =
@@ -67,51 +103,103 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     name: 'claude-code', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
     instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
+    role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    prompt_delivery: { methods: ['temp_file', 'inline_arg', 'inbox_structured'], preferred: 'temp_file', max_inline_length: 4000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
+    invoke_binary: 'claude',
   },
   cursor: {
     name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.cursor/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'A',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
+    prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
+    execution_env: { surface: 'ide' },
   },
   windsurf: {
     name: 'windsurf', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
+    prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
+    execution_env: { surface: 'ide' },
   },
   cline: {
     name: 'cline', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
     instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'A',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'extension' },
+    invoke_template: 'cline "{prompt}"',
+    invoke_binary: 'cline',
   },
   roo: {
     name: 'roo', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
     instructionFile: '.roo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: false, inbox: true },
+    prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
+    execution_env: { surface: 'extension' },
   },
   continue: {
     name: 'continue', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: '.continue/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'both', templateTier: 'B',
+    role_capabilities: ['execute', 'consult'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: false, inbox: false },
+    prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
+    execution_env: { surface: 'extension' },
   },
   opencode: {
     name: 'opencode', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'opencode run "{prompt}"',
+    invoke_binary: 'opencode',
   },
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
+    role_capabilities: ['execute', 'review'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    prompt_delivery: { methods: ['stdin_pipe', 'temp_file'], preferred: 'stdin_pipe' },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'codex exec --full-auto "{prompt}"',
+    invoke_binary: 'codex',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: 'GEMINI.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
+    role_capabilities: ['execute', 'consult'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'gemini -p "{prompt}"',
+    invoke_binary: 'gemini',
   },
   'github-copilot': {
     name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'A',
+    role_capabilities: ['execute', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 4000 },
+    execution_env: { surface: 'extension' },
+    invoke_template: 'gh copilot -p "{prompt}"',
+    invoke_binary: 'gh',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---
@@ -119,30 +207,77 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     name: 'openclaw', category: 'autonomous-agent', workflowModel: 'task-based',
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
+    role_capabilities: ['execute', 'coordinate'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: true },
+    prompt_delivery: { methods: ['temp_file', 'inbox_structured'], preferred: 'temp_file' },
+    execution_env: { surface: 'cli' },
   },
   nanoclaw: {
     name: 'nanoclaw', category: 'autonomous-agent', workflowModel: 'task-based',
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/nanoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+    role_capabilities: ['execute'],
+    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
+    execution_env: { surface: 'cli' },
   },
   nemoclaw: {
     name: 'nemoclaw', category: 'autonomous-agent', workflowModel: 'task-based',
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/nemoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+    role_capabilities: ['execute'],
+    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
+    execution_env: { surface: 'cli' },
   },
   picoclaw: {
     name: 'picoclaw', category: 'autonomous-agent', workflowModel: 'scheduled',
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/picoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+    role_capabilities: ['execute'],
+    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 1000 },
+    execution_env: { surface: 'cli' },
   },
   zeroclaw: {
     name: 'zeroclaw', category: 'autonomous-agent', workflowModel: 'task-based',
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/zeroclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
+    role_capabilities: ['execute'],
+    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'stdin_pipe', max_inline_length: 1000 },
+    execution_env: { surface: 'cli' },
   },
 };
 
-// ── Default invoke templates for CLI-spawnable agents ──────
+/**
+ * Default capability profiles for all known brainclaw-supported agents.
+ * Use `registerCapabilityProfile` to add custom agent profiles at runtime.
+ */
+export const DEFAULT_CAPABILITY_PROFILES: Readonly<Record<AgentName, AgentCapabilityProfile>> = PROFILES;
+
+// ── Custom profile registry (for user-defined / custom agents) ─────────────
+
+const _customProfiles = new Map<string, AgentCapabilityProfile>();
+
+/**
+ * Register a custom agent capability profile at runtime.
+ * Custom profiles take precedence over DEFAULT_CAPABILITY_PROFILES on lookup.
+ */
+export function registerCapabilityProfile(profile: AgentCapabilityProfile): void {
+  _customProfiles.set(profile.name, profile);
+}
+
+/**
+ * Get the capability profile for an agent by name.
+ * Checks custom registry first, then DEFAULT_CAPABILITY_PROFILES.
+ * Returns undefined for completely unknown agents.
+ */
+export function getCapabilityProfile(name: string): AgentCapabilityProfile | undefined {
+  return _customProfiles.get(name) ?? PROFILES[name as AgentName];
+}
+
+// ── Default invoke templates for CLI-spawnable agents ──────────────────────
 
 export interface DefaultInvokeTemplate {
   command: string;
@@ -152,39 +287,59 @@ export interface DefaultInvokeTemplate {
   binary: string;
 }
 
-const DEFAULT_INVOKE_TEMPLATES: Partial<Record<AgentName, DefaultInvokeTemplate>> = {
-  codex:           { command: 'codex exec --full-auto "{prompt}"', channel: 'spawn', timeout: 600, binary: 'codex' },
-  'claude-code':   { command: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"', channel: 'spawn', timeout: 600, binary: 'claude' },
-  'github-copilot': { command: 'gh copilot -p "{prompt}"', channel: 'spawn', timeout: 600, binary: 'gh' },
-  cline:           { command: 'cline "{prompt}"', channel: 'spawn', timeout: 600, binary: 'cline' },
-  antigravity:     { command: 'gemini -p "{prompt}"', channel: 'spawn', timeout: 600, binary: 'gemini' },
-  opencode:        { command: 'opencode run "{prompt}"', channel: 'spawn', timeout: 600, binary: 'opencode' },
-  // IDE-only agents default to inbox — no invoke template
-};
-
 /**
- * Get the default invoke template for a known agent.
- * Returns undefined for IDE-only agents or unknown agents.
+ * Get the default invoke template for an agent.
+ * Reads invoke_template / invoke_binary from the capability profile.
+ * Returns undefined for IDE-only agents or unknown agents without a CLI template.
  */
 export function getDefaultInvokeTemplate(name: string): DefaultInvokeTemplate | undefined {
-  return DEFAULT_INVOKE_TEMPLATES[name as AgentName];
+  const profile = getCapabilityProfile(name);
+  if (profile?.invoke_template && profile?.invoke_binary) {
+    return {
+      command: profile.invoke_template,
+      channel: 'spawn',
+      timeout: 600,
+      binary: profile.invoke_binary,
+    };
+  }
+  return undefined;
 }
 
 /**
- * Get all agents that have a default invoke template (CLI-spawnable).
+ * Get all agents (known + custom) that have an invoke template (CLI-spawnable).
  */
 export function getSpawnableAgents(): Array<{ name: string; template: DefaultInvokeTemplate }> {
-  return Object.entries(DEFAULT_INVOKE_TEMPLATES)
-    .filter((entry): entry is [string, DefaultInvokeTemplate] => entry[1] !== undefined)
-    .map(([name, template]) => ({ name, template }));
+  const result: Array<{ name: string; template: DefaultInvokeTemplate }> = [];
+
+  const allProfiles: AgentCapabilityProfile[] = [
+    ...Object.values(PROFILES),
+    ..._customProfiles.values(),
+  ];
+
+  for (const profile of allProfiles) {
+    if (profile.runtime.spawnable_cli && profile.invoke_template && profile.invoke_binary) {
+      result.push({
+        name: profile.name,
+        template: {
+          command: profile.invoke_template,
+          channel: 'spawn',
+          timeout: 600,
+          binary: profile.invoke_binary,
+        },
+      });
+    }
+  }
+
+  return result;
 }
 
 /**
  * Get the capability profile for a known agent.
  * Returns undefined for unknown agent names.
+ * @deprecated Prefer getCapabilityProfile — supports custom agents too.
  */
 export function getAgentCapabilityProfile(name: string): AgentCapabilityProfile | undefined {
-  return PROFILES[name as AgentName];
+  return getCapabilityProfile(name);
 }
 
 /**
@@ -213,7 +368,7 @@ export function isKnownAgent(name: string): name is AgentName {
  * Useful for setup UI to explain what brainclaw will configure.
  */
 export function describeAgentSurfaces(name: string): string[] {
-  const profile = getAgentCapabilityProfile(name);
+  const profile = getCapabilityProfile(name);
   if (!profile) return [];
 
   const surfaces: string[] = [];
