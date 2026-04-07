@@ -26,6 +26,8 @@ import type { CodevPersona } from '../core/codev-personas.js';
 import { buildContext } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { getDefaultInvokeTemplate, getSpawnableAgents, type DefaultInvokeTemplate } from '../core/agent-capability.js';
+import { executeRound, type RoundConfig } from '../core/codev-rounds.js';
+import { loadIdeationRound } from '../core/ideation.js';
 
 export interface CodevOptions {
   personas?: string;
@@ -33,6 +35,8 @@ export interface CodevOptions {
   json?: boolean;
   spawn?: boolean;
   agents?: string;
+  rounds?: number;
+  targetDuration?: number;
   cwd?: string;
 }
 
@@ -134,6 +138,69 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     }
     const agentNames = spawnAgents.map(a => a.name).join(', ');
     console.log(`Resolved ${spawnAgents.length} spawn agent(s): ${agentNames}`);
+
+    // ── v3: Round-based orchestration ────────────────────────
+    const totalRounds = Math.max(2, options.rounds ?? 3);
+    const targetDuration = options.targetDuration ?? 120;
+
+    for (let r = 0; r < totalRounds; r++) {
+      let roundType: 'position' | 'reaction' | 'convergence';
+      if (r === 0) roundType = 'position';
+      else if (r === totalRounds - 1) roundType = 'convergence';
+      else roundType = 'reaction';
+
+      console.log(`\nRound ${r}/${totalRounds} (${roundType})...`);
+
+      executeRound({
+        threadSlug: threadId,
+        roundNumber: r,
+        roundType,
+        personas,
+        agents: spawnAgents.map(a => ({ name: a.name, binaryPath: a.binaryPath })),
+        exposition: expositionText,
+        targetDurationSeconds: targetDuration,
+        cwd,
+      });
+    }
+
+    // ── Print final summary ──────────────────────────────────
+    const lastRound = loadIdeationRound(threadId, totalRounds - 1, cwd);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        threadId,
+        opening: opening.id,
+        personas: personas.map(p => p.name),
+        rounds: totalRounds,
+        convergences: lastRound?.convergences ?? [],
+        tensions: lastRound?.tensions ?? [],
+        spawned: true,
+      }, null, 2));
+      return;
+    }
+
+    console.log(`\n--- CoDev v3 session complete: ${threadId} ---\n`);
+    console.log(`${totalRounds} rounds completed across ${spawnAgents.length} agent(s) [${agentNames}].`);
+
+    if (lastRound) {
+      if (lastRound.convergences.length > 0) {
+        console.log('\nConvergences:');
+        for (const c of lastRound.convergences) console.log(`  - ${c}`);
+      }
+      if (lastRound.tensions.length > 0) {
+        console.log('\nTensions:');
+        for (const t of lastRound.tensions) console.log(`  - ${t}`);
+      }
+      if (lastRound.positions.length > 0) {
+        console.log('\nFinal positions:');
+        for (const p of lastRound.positions) {
+          console.log(`  [${p.persona}] ${p.text.slice(0, 200)}`);
+        }
+      }
+    }
+
+    console.log(`\nMonitor thread: brainclaw thread ${threadId}`);
+    return;
   }
 
   // ── Phase 2: Clarification briefs ─────────────────────────

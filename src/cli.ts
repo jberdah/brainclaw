@@ -1616,9 +1616,15 @@ program
   .option('--checkpoint', 'Pause after clarification for human input')
   .option('--spawn', 'Spawn each consultant as an agent CLI instance')
   .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
+  .option('--rounds <N>', 'Number of discussion rounds in spawn mode (default 3, min 2)', '3')
+  .option('--target-duration <seconds>', 'Target duration per round indicated to agents (default 120)', '120')
   .option('--json', 'Output as JSON')
   .action((topic, options) => {
-    runCodev(topic, options);
+    runCodev(topic, {
+      ...options,
+      rounds: parseInt(options.rounds, 10),
+      targetDuration: parseInt(options.targetDuration, 10),
+    });
   });
 
 // --- run (agent profiles) ---
