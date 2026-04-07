@@ -139,7 +139,9 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   // ── Phase 2: Clarification briefs ─────────────────────────
   for (let i = 0; i < personas.length; i++) {
     const persona = personas[i];
-    const threadHistory = getThread(threadId, cwd, { truncateText: 2000 });
+    // For spawned agents, skip thread history to avoid exponential message growth.
+    // Each spawned agent gets the exposition + their persona brief — that's enough context.
+    const threadHistory = options.spawn ? [] : getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'clarification', threadHistory);
     sendMessage({
       from: agent,
@@ -184,7 +186,8 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   // ── Phase 4: Consultation briefs ──────────────────────────
   for (let i = 0; i < personas.length; i++) {
     const persona = personas[i];
-    const threadHistory = getThread(threadId, cwd, { truncateText: 2000 });
+    // For spawned agents, include only the contract (not full history) to avoid message explosion
+    const threadHistory = options.spawn ? [] : getThread(threadId, cwd, { truncateText: 2000 });
     const brief = buildConsultantBrief(persona, expositionText, 'consultation', threadHistory);
     sendMessage({
       from: agent,
