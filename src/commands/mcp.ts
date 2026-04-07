@@ -55,6 +55,7 @@ import { sendMessage, ackMessage, countPending, countActionable } from '../core/
 import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
+import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -964,6 +965,24 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
+    },
+  },
+  {
+    name: 'bclaw_work',
+    description: 'Facade entry point: start a session, load context, and optionally claim a scope in a single call. intent=execute creates a claim; intent=consult/resume/review skips it. Eliminates the need for separate bclaw_session_start + bclaw_get_context + bclaw_claim calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: { type: 'string', enum: ['execute', 'consult', 'resume', 'review'], description: 'Work intent. "execute" creates a claim on the scope.' },
+        scope: { type: 'string', description: 'Scope being worked on (required for execute intent to create a claim).' },
+        planId: { type: 'string', description: 'Optional linked plan item ID.' },
+        task: { type: 'string', description: 'Optional task description (used as claim description when creating a claim).' },
+        messageId: { type: 'string', description: 'Optional message/thread ID for traceability.' },
+        contextTarget: { type: 'string', description: 'Optional path passed to bclaw_get_context to filter memory.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['intent'],
     },
   },
 ] as const;
@@ -3449,6 +3468,105 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           to: handoff.to,
           schema_version: SCHEMA_VERSION,
         }),
+      };
+    }
+
+    if (name === 'bclaw_work') {
+      const startMs = Date.now();
+      const parseResult = WorkRequestSchema.safeParse(args);
+      if (!parseResult.success) {
+        return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
+      }
+      const workReq = parseResult.data;
+      const warnings: string[] = [];
+
+      // Step 1: implicit session start (handles auto-registration internally)
+      let sessionResult: ReturnType<typeof startSession>;
+      try {
+        sessionResult = startSession({
+          agent: typeof args.agent === 'string' ? args.agent : undefined,
+          agentId: typeof args.agentId === 'string' ? args.agentId : undefined,
+          context: workReq.contextTarget,
+          cwd,
+        });
+      } catch (sessionErr: unknown) {
+        return { response: createToolErrorResponse('session_error', sessionErr instanceof Error ? sessionErr.message : String(sessionErr)) };
+      }
+      if (sessionResult.auto_registered) {
+        warnings.push(`Agent '${sessionResult.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${sessionResult.agent}\` to set capabilities and trust level.`);
+      }
+
+      // Step 2: build context for requested scope
+      let contextResult: ReturnType<typeof buildContext> | undefined;
+      try {
+        contextResult = buildContext({
+          target: workReq.contextTarget ?? workReq.scope,
+          agent: sessionResult.agent,
+          cwd,
+        });
+      } catch { /* non-fatal — context failure should not block work */ }
+
+      // Step 3: claim if intent=execute and scope provided
+      let claimId: string | undefined;
+      let claimStatus: FacadeResponse['claim_status'] = 'none';
+      if (workReq.intent === 'execute' && workReq.scope) {
+        const existingClaims = listClaims(cwd).filter(
+          (c) => c.status === 'active' && c.agent === sessionResult.agent && c.scope === workReq.scope,
+        );
+        if (existingClaims.length > 0) {
+          claimId = existingClaims[0].id;
+          claimStatus = 'existing';
+        } else {
+          claimId = generateClaimId();
+          saveClaim({
+            id: claimId,
+            agent: sessionResult.agent,
+            agent_id: sessionResult.agent_id,
+            user: process.env.USER || process.env.USERNAME || undefined,
+            project_id: undefined,
+            host_id: undefined,
+            session_id: sessionResult.session_id,
+            scope: workReq.scope,
+            description: workReq.task ?? workReq.scope,
+            created_at: nowISO(),
+            status: 'active',
+            plan_id: workReq.planId,
+            model: currentModel,
+          }, cwd);
+          appendAuditEntry({ actor: sessionResult.agent, actor_id: sessionResult.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: workReq.scope, session_id: sessionResult.session_id }, cwd);
+          claimStatus = 'created';
+
+          // Policy check post-claim
+          const policyResult = checkPolicy({ scope: workReq.scope, agent: sessionResult.agent, agentId: sessionResult.agent_id, cwd });
+          for (const w of policyResult.warnings.filter((pw) => pw.kind !== 'no_claim')) {
+            const idLabel = w.id ? ` (${w.id})` : '';
+            warnings.push(`[${w.kind}]${idLabel} ${w.message}`);
+          }
+        }
+      }
+
+      const facadeResponse: FacadeResponse = {
+        status: 'ok',
+        intent: workReq.intent,
+        result: contextResult ?? null,
+        artifacts: [],
+        side_effects: claimId ? [{ action: claimStatus === 'created' ? 'create' : 'reuse', entity: 'claim', id: claimId }] : [],
+        claim_status: claimStatus,
+        session_id: sessionResult.session_id,
+        warnings,
+        duration_ms: Date.now() - startMs,
+      };
+
+      const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];
+      if (claimId) summaryParts.push(`claim=${claimId} (${claimStatus})`);
+      if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: summaryParts.join('\n') }],
+          structuredContent: facadeResponse as unknown as Record<string, unknown>,
+        }),
+        nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : sessionResult.session_id,
       };
     }
 
