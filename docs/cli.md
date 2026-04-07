@@ -1644,7 +1644,11 @@ Show recent memory change history from the internal git repo.
 
 ### `brainclaw memory-rollback <ref>`
 
-Rollback entire memory to a previous git snapshot. Use `memory-log` to find valid refs.
+Restore only the current project's live Brainclaw memory to a previous git snapshot. This command is reserved to registered human identities and preserves durable audit logs, archives, compaction outputs, and backups instead of performing a full destructive reset. Use `memory-log` to find valid refs.
+
+| Option | Description |
+|---|---|
+| `--actor <name>` | Explicit registered human identity to authorize the rollback |
 
 ### `brainclaw agent-inventory`
 

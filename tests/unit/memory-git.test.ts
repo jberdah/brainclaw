@@ -90,6 +90,96 @@ describe('memory-git', () => {
     assert.equal(rolledBack.recent_decisions.length, 0);
   });
 
+  it('rollback preserves durable audit, archive, backup, and compaction artifacts', () => {
+    initMemoryRepo(workspace.dir);
+    const initialHead = getMemoryHead(workspace.dir)!;
+
+    const state = emptyState();
+    state.recent_decisions.push({
+      id: 'dec_rollback',
+      text: 'Will be rolled back',
+      created_at: new Date().toISOString(),
+      author: 'testuser',
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_memgit_test',
+      tags: [],
+    } as any);
+    saveState(state, workspace.dir);
+
+    const auditPath = path.join(workspace.dir, '.brainclaw', 'audit.log');
+    fs.writeFileSync(auditPath, '{"action":"update"}\n', 'utf-8');
+
+    const archivePath = path.join(workspace.dir, '.brainclaw', 'coordination', 'plans', 'archive.jsonl');
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(archivePath, '{"id":"pln_archived"}\n', 'utf-8');
+
+    const backupPath = path.join(workspace.dir, '.brainclaw', 'gc-backups', 'compact-test.jsonl');
+    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+    fs.writeFileSync(backupPath, '{"id":"backup"}\n', 'utf-8');
+
+    const compactedPath = path.join(workspace.dir, '.brainclaw', 'memory', 'decisions', 'compacted.jsonl');
+    fs.mkdirSync(path.dirname(compactedPath), { recursive: true });
+    fs.writeFileSync(compactedPath, '{"id":"dec_old"}\n', 'utf-8');
+
+    assert.equal(commitMemoryChange('durable artifacts', workspace.dir), true);
+
+    const success = rollbackMemory(initialHead, workspace.dir);
+    assert.equal(success, true);
+
+    const rolledBack = loadState(workspace.dir);
+    assert.equal(rolledBack.recent_decisions.length, 0);
+    assert.equal(fs.readFileSync(auditPath, 'utf-8'), '{"action":"update"}\n');
+    assert.equal(fs.readFileSync(archivePath, 'utf-8'), '{"id":"pln_archived"}\n');
+    assert.equal(fs.readFileSync(backupPath, 'utf-8'), '{"id":"backup"}\n');
+    assert.equal(fs.readFileSync(compactedPath, 'utf-8'), '{"id":"dec_old"}\n');
+  });
+
+  it('rollback only affects the current project memory store', () => {
+    initMemoryRepo(workspace.dir);
+    const initialHead = getMemoryHead(workspace.dir)!;
+
+    const state = emptyState();
+    state.recent_decisions.push({
+      id: 'dec_local',
+      text: 'Current project decision',
+      created_at: new Date().toISOString(),
+      author: 'testuser',
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_memgit_test',
+      tags: [],
+    } as any);
+    saveState(state, workspace.dir);
+
+    const siblingDir = fs.mkdtempSync(path.join(path.dirname(workspace.dir), 'bclaw-memgit-sibling-'));
+    try {
+      fs.mkdirSync(path.join(siblingDir, '.brainclaw', 'memory', 'decisions'), { recursive: true });
+      const siblingDecisionPath = path.join(siblingDir, '.brainclaw', 'memory', 'decisions', 'dec_sibling.json');
+      fs.writeFileSync(
+        siblingDecisionPath,
+        JSON.stringify({
+          id: 'dec_sibling',
+          text: 'Sibling project decision',
+          created_at: new Date().toISOString(),
+          author: 'other-user',
+          tags: [],
+        }),
+        'utf-8',
+      );
+
+      const success = rollbackMemory(initialHead, workspace.dir);
+      assert.equal(success, true);
+
+      const rolledBack = loadState(workspace.dir);
+      assert.equal(rolledBack.recent_decisions.length, 0);
+      assert.equal(fs.existsSync(siblingDecisionPath), true);
+      const sibling = JSON.parse(fs.readFileSync(siblingDecisionPath, 'utf-8')) as { id: string; text: string };
+      assert.equal(sibling.id, 'dec_sibling');
+      assert.equal(sibling.text, 'Sibling project decision');
+    } finally {
+      fs.rmSync(siblingDir, { recursive: true, force: true });
+    }
+  });
+
   it('no-ops when no memory repo exists', () => {
     assert.equal(commitMemoryChange('test', workspace.dir), false);
     assert.equal(rollbackMemory('abc', workspace.dir), false);
