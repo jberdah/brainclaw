@@ -50,8 +50,12 @@ export function loadIdeationRound(
     return undefined;
   }
 
-  const raw = fs.readFileSync(filePath, 'utf8');
-  return IdeationRoundSchema.parse(JSON.parse(raw));
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return IdeationRoundSchema.parse(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
 }
 
 export function listIdeationRounds(threadSlug: string, cwd?: string): IdeationRound[] {
