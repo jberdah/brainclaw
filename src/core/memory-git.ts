@@ -5,6 +5,22 @@ import { memoryDir } from './io.js';
 import { logger } from './logger.js';
 
 const GIT_DIR_NAME = '.git';
+const ROLLBACK_ROOT_FILES = new Set([
+  'config.yaml',
+  'state.yaml',
+  'project.md',
+  'project.identity.json',
+  '.id-counter.json',
+]);
+const ROLLBACK_EXCLUDED_BASENAMES = new Set([
+  'archive.jsonl',
+  'compacted.jsonl',
+]);
+const ROLLBACK_ALLOWED_EXTENSIONS = new Set([
+  '.json',
+  '.yaml',
+  '.yml',
+]);
 const ROLLBACK_ROOTS = [
   'constraints/',
   'decisions/',
@@ -23,7 +39,9 @@ const ROLLBACK_ROOTS = [
   'coordination/sequences/',
   'coordination/claims/',
   'coordination/handoffs/',
+  'coordination/sessions/',
   'coordination/surface-tasks/',
+  'sessions/',
 ] as const;
 
 /**
@@ -117,6 +135,9 @@ export function getMemoryLog(limit: number = 20, cwd?: string): string[] {
  * Restore live files from the current project's Brainclaw store to a previous
  * commit without deleting durable logs, archives, or compaction outputs.
  *
+ * Behaviour note: this is intentionally selective and non-destructive.
+ * It replaces an older "full-store reset" rollback model.
+ *
  * This intentionally creates a new commit instead of performing a hard reset.
  * Returns true if successful.
  */
@@ -186,9 +207,16 @@ function normalizeRelativePath(filepath: string): string {
 function isRollbackManagedPath(relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath);
   if (!normalized) return false;
-  if (normalized === 'project.md') return true;
-  if (!normalized.endsWith('.json')) return false;
-  return ROLLBACK_ROOTS.some((prefix) => normalized.startsWith(prefix));
+  if (ROLLBACK_ROOT_FILES.has(normalized)) return true;
+
+  const rootMatched = ROLLBACK_ROOTS.some((prefix) => normalized.startsWith(prefix));
+  if (!rootMatched) return false;
+
+  const basename = path.posix.basename(normalized);
+  if (ROLLBACK_EXCLUDED_BASENAMES.has(basename)) return false;
+
+  const extension = path.posix.extname(basename).toLowerCase();
+  return ROLLBACK_ALLOWED_EXTENSIONS.has(extension);
 }
 
 function listRollbackManagedFilesAtRef(cwd: string, ref: string): string[] {
@@ -243,8 +271,8 @@ function removeEmptyParentDirs(startDir: string, stopDir: string): void {
 function restoreManagedPathFromRef(cwd: string, ref: string, relativePath: string): void {
   const absolutePath = path.join(cwd, relativePath);
   fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-  const content = git(cwd, ['show', `${ref}:${relativePath}`]);
-  fs.writeFileSync(absolutePath, content, 'utf-8');
+  const content = gitBuffer(cwd, ['show', `${ref}:${relativePath}`]);
+  fs.writeFileSync(absolutePath, content);
 }
 
 function stageManagedPaths(cwd: string, managedPaths: Set<string>): void {
@@ -254,4 +282,12 @@ function stageManagedPaths(cwd: string, managedPaths: Set<string>): void {
     const chunk = paths.slice(index, index + chunkSize);
     git(cwd, ['add', '-A', '--', ...chunk]);
   }
+}
+
+function gitBuffer(cwd: string, args: string[]): Buffer {
+  return execFileSync('git', args, {
+    cwd,
+    timeout: 10_000,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 }

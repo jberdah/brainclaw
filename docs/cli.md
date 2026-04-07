@@ -1650,6 +1650,12 @@ Restore only the current project's live Brainclaw memory to a previous git snaps
 |---|---|
 | `--actor <name>` | Explicit registered human identity to authorize the rollback |
 
+If no human identity is registered yet:
+
+```bash
+brainclaw register-agent <name> --kind human --set-current
+```
+
 ### `brainclaw agent-inventory`
 
 Detect all installed AI coding agents and their capabilities on this machine.
