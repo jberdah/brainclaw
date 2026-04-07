@@ -125,6 +125,21 @@ export function createWorktree(
   branchName: string,
   options: { sessionId?: string; agent?: string } = {},
 ): string {
+  const trySymlinkSharedPath = (entryName: string): void => {
+    const sourcePath = path.join(mainWorktreePath, entryName);
+    const linkPath = path.join(targetPath, entryName);
+
+    if (!fs.existsSync(sourcePath) || fs.existsSync(linkPath)) {
+      return;
+    }
+
+    try {
+      fs.symlinkSync(sourcePath, linkPath, 'junction');
+    } catch {
+      // Non-fatal - shared paths are an optimization for agent worktrees
+    }
+  };
+
   // Guard: bare repos have no working tree
   if (isBareRepo(mainWorktreePath)) {
     throw new Error('Cannot create a brainclaw worktree in a bare git repository.');
@@ -170,6 +185,16 @@ export function createWorktree(
     // Non-fatal - safe.directory may already be set or not needed
   }
 
+  trySymlinkSharedPath('node_modules');
+  trySymlinkSharedPath('dist');
+  trySymlinkSharedPath('.brainclaw');
+
+  const mainGitignorePath = path.join(mainWorktreePath, '.gitignore');
+  const targetGitignorePath = path.join(targetPath, '.gitignore');
+  if (fs.existsSync(mainGitignorePath)) {
+    fs.copyFileSync(mainGitignorePath, targetGitignorePath);
+  }
+
   // Write brainclaw metadata sidecar inside the worktree
   const meta = {
     session_id: options.sessionId,
@@ -177,6 +202,7 @@ export function createWorktree(
     user: process.env.USER || process.env.USERNAME || undefined,
     created_at: new Date().toISOString(),
     main_worktree_path: mainWorktreePath,
+    git_advice: 'git add ONLY specific files, NEVER git add -A.',
   };
   fs.writeFileSync(
     path.join(targetPath, '.brainclaw-worktree.json'),
