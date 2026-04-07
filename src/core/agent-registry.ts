@@ -6,7 +6,7 @@ import { isKnownAgent } from './agent-capability.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
-import { MEMORY_DIR, resolveEntityDir } from './io.js';
+import { MEMORY_DIR, memoryExists, resolveEntityDir } from './io.js';
 import { JsonStore } from './json-store.js';
 import {
   AgentIdentityDocumentSchema,
@@ -95,7 +95,7 @@ function agentStore(cwd?: string, preferredDirName?: string): JsonStore<AgentIde
   });
 }
 
-function normalizeAgentName(agentName: string): string {
+export function normalizeAgentName(agentName: string): string {
   return agentName.trim().toLowerCase();
 }
 
@@ -245,7 +245,7 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     schema_version: 2,
     version: 1,
     agent_id: generateAgentId(),
-    agent_name: input.agentName.trim(),
+    agent_name: normalizeAgentName(input.agentName),
     created_at: nowISO(),
     kind: input.kind ?? 'unknown',
     trust_level: input.trustLevel ?? 'contributor',
@@ -279,7 +279,7 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   if (detected) {
     // If the detected name matches an explicit env var that was already tried
     // and not found, don't auto-register — the caller expects a "not registered" error.
-    if (detected.name === envAgentName) {
+    if (normalizeAgentName(detected.name) === normalizeAgentName(envAgentName)) {
       return undefined;
     }
 
@@ -290,7 +290,7 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
     // This avoids the "not registered" error for agents detected for the first time.
     try {
       const autoRegistered = registerAgentIdentity({
-        agentName: detected.name,
+        agentName: normalizeAgentName(detected.name),
         kind: detected.kind,
         trustLevel: detected.trust_level,
         cwd,
@@ -388,9 +388,9 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
     const resolved = findAgentIdentityByName(agentName, cwd, preferredDirName);
     if (resolved) return resolved;
 
-    // Auto-register if the agent is a known brainclaw-supported agent
+    // Auto-register if the agent is a known brainclaw-supported agent or declared in agent_integrations
     const normalizedName = normalizeAgentName(agentName);
-    if (isKnownAgent(normalizedName)) {
+    if (isKnownAgent(normalizedName) || isAgentDeclaredInIntegrations(normalizedName, cwd)) {
       const autoRegistered = registerAgentIdentity({
         agentName: normalizedName,
         kind: 'agent',
@@ -402,8 +402,8 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
     }
 
     throw new AgentIdentityResolutionError(
-      `Agent '${agentName}' is not registered. Run \`brainclaw register-agent ${agentName}\`.`,
-      { agent_name: agentName },
+      `Agent '${normalizedName}' is not registered. Run \`brainclaw register-agent ${normalizedName}\`.`,
+      { agent_name: normalizedName },
     );
   }
 
@@ -420,9 +420,9 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
       const resolved = findAgentIdentityByName(envAgent, cwd, preferredDirName);
       if (resolved) return resolved;
 
-      // Auto-register env-declared agent if known
+      // Auto-register env-declared agent if known or declared in agent_integrations
       const normalizedEnv = normalizeAgentName(envAgent);
-      if (isKnownAgent(normalizedEnv)) {
+      if (isKnownAgent(normalizedEnv) || isAgentDeclaredInIntegrations(normalizedEnv, cwd)) {
         return registerAgentIdentity({
           agentName: normalizedEnv,
           kind: 'agent',
@@ -433,8 +433,8 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
       }
 
       throw new AgentIdentityResolutionError(
-        `Environment agent '${envAgent}' is not registered.`,
-        { agent_name: envAgent },
+        `Environment agent '${normalizedEnv}' is not registered.`,
+        { agent_name: normalizedEnv },
       );
     }
   }
@@ -442,6 +442,61 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
   throw new AgentIdentityResolutionError(
     'No registered agent identity resolved. Use --agent/--agent-id or configure a current agent with `brainclaw register-agent <name> --set-current`.',
   );
+}
+
+/**
+ * Resolve agent identity for session start, returning both the resolved identity and whether
+ * it was auto-registered (did not exist before this call).
+ *
+ * Unlike `requireRegisteredAgentIdentity`, this never throws for unknown agents — it will
+ * auto-register any resolvable name (from args or env) with contributor trust level.
+ * This implements the "separate known agent from current agent" principle: starting a session
+ * never requires prior registration.
+ *
+ * Throws only when no agent name can be derived at all.
+ */
+export function resolveOrAutoRegisterAgentIdentity(
+  options: RegisteredAgentIdentityOptions = {},
+): { identity: AgentIdentityDocument; auto_registered: boolean } {
+  const existingBefore = resolveRegisteredAgentIdentity(options);
+
+  try {
+    const identity = requireRegisteredAgentIdentity(options);
+    return { identity, auto_registered: !existingBefore };
+  } catch (err) {
+    if (!(err instanceof AgentIdentityResolutionError)) throw err;
+
+    // Last-resort: derive a name from explicit arg or env and auto-register.
+    // This allows session_start to succeed even for agents not yet registered.
+    const candidateName = options.agentName?.trim()
+      || (options.allowEnv !== false ? resolveEnvAgentName(options.env ?? process.env) : undefined);
+    if (!candidateName) throw err;
+
+    const normalizedName = normalizeAgentName(candidateName);
+    const registered = registerAgentIdentity({
+      agentName: normalizedName,
+      kind: 'agent',
+      trustLevel: 'contributor',
+      cwd: options.cwd,
+      preferredDirName: options.preferredDirName,
+    });
+    return { identity: registered, auto_registered: true };
+  }
+}
+
+/**
+ * Check whether an agent name is declared in the project's agent_integrations config.
+ */
+function isAgentDeclaredInIntegrations(normalizedName: string, cwd?: string): boolean {
+  if (!memoryExists(cwd)) return false;
+  try {
+    const cfg = loadConfig(cwd);
+    return (cfg.agent_integrations?.declarations ?? []).some(
+      (d) => normalizeAgentName(d.agent_name) === normalizedName,
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function resolveAgentScope(agentName?: string, cwd?: string, preferredDirName?: string): string | undefined {

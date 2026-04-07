@@ -51,18 +51,27 @@ export function loadMetrics(threadSlug: string, cwd?: string): CodevResponseMetr
   }
 }
 
-export function summarizeMetrics(threadSlug: string, cwd?: string): {
+export interface MetricsSummary {
   avg_ms: number;
   p95_ms: number;
   by_agent: Record<string, { avg_ms: number; count: number }>;
-} {
-  const metrics = loadMetrics(threadSlug, cwd);
-  if (!metrics.length) return { avg_ms: 0, p95_ms: 0, by_agent: {} };
-  const durations = metrics.map((m) => m.duration_ms).sort((a, b) => a - b);
+}
+
+export interface MetricsByRound {
+  round: number;
+  avg_ms: number;
+  p95_ms: number;
+  by_agent: Record<string, { avg_ms: number; count: number }>;
+  count: number;
+}
+
+function computeSummary(entries: CodevResponseMetric[]): MetricsSummary {
+  if (!entries.length) return { avg_ms: 0, p95_ms: 0, by_agent: {} };
+  const durations = entries.map((m) => m.duration_ms).sort((a, b) => a - b);
   const avg_ms = durations.reduce((s, d) => s + d, 0) / durations.length;
   const p95_ms = durations[Math.ceil(0.95 * durations.length) - 1];
   const sums: Record<string, { sum: number; count: number }> = {};
-  for (const m of metrics) {
+  for (const m of entries) {
     const entry = sums[m.agent_name] ?? { sum: 0, count: 0 };
     entry.sum += m.duration_ms;
     entry.count += 1;
@@ -71,4 +80,23 @@ export function summarizeMetrics(threadSlug: string, cwd?: string): {
   const by_agent: Record<string, { avg_ms: number; count: number }> = {};
   for (const [agent, v] of Object.entries(sums)) by_agent[agent] = { avg_ms: v.sum / v.count, count: v.count };
   return { avg_ms, p95_ms, by_agent };
+}
+
+export function summarizeMetrics(threadSlug: string, cwd?: string): MetricsSummary {
+  return computeSummary(loadMetrics(threadSlug, cwd));
+}
+
+export function summarizeMetricsByRound(threadSlug: string, cwd?: string): MetricsByRound[] {
+  const metrics = loadMetrics(threadSlug, cwd);
+  const byRound: Record<number, CodevResponseMetric[]> = {};
+  for (const m of metrics) {
+    (byRound[m.round] ??= []).push(m);
+  }
+  return Object.entries(byRound)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([round, entries]) => ({
+      round: Number(round),
+      ...computeSummary(entries),
+      count: entries.length,
+    }));
 }

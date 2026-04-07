@@ -2568,12 +2568,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return { response: crossProjectError };
       }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
+      // For identity_error on session start, let startSession handle auto-registration
+      // instead of returning an immediate error (implements "don't require pre-registration to start").
+      if (resolved.error && resolved.error.kind !== 'identity_error') {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const result = startSession({
-        agent: resolved.identity?.agent_name,
-        agentId: resolved.identity?.agent_id,
+        agent: resolved.identity?.agent_name ?? (typeof args.agent === 'string' ? args.agent : undefined),
+        agentId: resolved.identity?.agent_id ?? (typeof args.agentId === 'string' ? args.agentId : undefined),
         context: args.context as string | undefined,
         cwd,
       });
@@ -2601,6 +2603,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         }
       }
       const sessionStartMsgParts = ['✔ Session started'];
+      if (result.auto_registered) {
+        sessionStartMsgParts.push(`\n⚠️ Agent '${result.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${result.agent}\` to set capabilities and trust level.`);
+      }
       if (staleInstructionsWarn) sessionStartMsgParts.push(staleInstructionsWarn);
       if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
       if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);
@@ -2608,7 +2613,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         sessionStartMsgParts.push(`\n⚠️ Memory pressure detected: ${result.memory_pressure.done_plans} done plans, ${result.memory_pressure.closed_handoffs} closed handoffs (${result.memory_pressure.eligible_items} eligible for compaction). Consider running bclaw_compact to archive old items and create durable summaries.`);
       }
       // Inbox notification
-      const agentNameForInbox = resolved.identity?.agent_name;
+      const agentNameForInbox = resolved.identity?.agent_name ?? result.agent;
       if (agentNameForInbox) {
         const actionableCount = countActionable(agentNameForInbox, cwd);
         if (actionableCount > 0) {
@@ -2624,13 +2629,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agent: result.agent,
         context_target: result.context_target,
         inbox_pending: inboxPending,
+        ...(result.auto_registered ? { auto_registered: true } : {}),
         ...(result.memory_pressure ? { memory_pressure: result.memory_pressure } : {}),
       };
 
       if (args.includeContext) {
         const ctxResult = buildContext({
           target: args.context as string | undefined,
-          agent: resolved.identity?.agent_name,
+          agent: resolved.identity?.agent_name ?? result.agent,
           profile: args.contextProfile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing' | undefined,
           cwd,
         });
@@ -2642,7 +2648,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
 
       if (args.includeBoard) {
         const board = buildCoordinationSnapshot({
-          agent: resolved.identity?.agent_name,
+          agent: resolved.identity?.agent_name ?? result.agent,
           autoAcknowledge: true,
           cwd,
         });

@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process';
 import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from '../core/migration.js';
 import { buildOperationalIdentity, loadAllSessions, saveCurrentSession } from '../core/identity.js';
-import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity, resolveCurrentModel, resolveOrAutoRegisterAgentIdentity } from '../core/agent-registry.js';
 import { buildContext, renderContextPromptTemplate } from '../core/context.js';
 import { writeContextMarker } from '../core/freshness.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
@@ -67,6 +67,8 @@ export interface SessionStartResult extends SessionSnapshot {
   shared_checkout_warning?: SharedCheckoutWarning;
   stale_claims_released?: Array<{ id: string; agent: string; scope: string }>;
   memory_pressure?: MemoryPressureResult;
+  /** True when the agent identity was auto-registered during this session start. */
+  auto_registered?: boolean;
 }
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
@@ -138,7 +140,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
 
-  const registered = requireRegisteredAgentIdentity({
+  const { identity: registered, auto_registered: autoRegistered } = resolveOrAutoRegisterAgentIdentity({
     agentName: options.agent,
     agentId: options.agentId,
     cwd: options.cwd,
@@ -298,6 +300,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     ...(sharedCheckoutWarning ? { shared_checkout_warning: sharedCheckoutWarning } : {}),
     ...(staleClaimsReleased ? { stale_claims_released: staleClaimsReleased } : {}),
     ...(memoryPressure ? { memory_pressure: memoryPressure } : {}),
+    ...(autoRegistered ? { auto_registered: true } : {}),
   };
 }
 
