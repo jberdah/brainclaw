@@ -527,26 +527,30 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const memoryDensity = classifyMemoryDensity(selected.length);
   const bootstrapEnabled = options.bootstrap !== false;
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
-  let bootstrapAvailable = hasReusableBootstrapProfile(target, contextCwd);
+  let bootstrapAvailable = false;
   let derivedSignals: DerivedContextSignal[] | undefined;
 
-  if (!testMode && bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
-    const bootstrap = runBootstrapProfile({
-      target,
-      refresh: options.refreshBootstrap,
-      cwd: contextCwd,
-    });
-    bootstrapAvailable = bootstrap.profile.seed_count > 0;
-    if (memoryDensity === 'low') {
+  if (!testMode) {
+    bootstrapAvailable = hasReusableBootstrapProfile(target, contextCwd);
+
+    if (bootstrapEnabled && (options.refreshBootstrap || memoryDensity === 'low')) {
+      const bootstrap = runBootstrapProfile({
+        target,
+        refresh: options.refreshBootstrap,
+        cwd: contextCwd,
+      });
+      bootstrapAvailable = bootstrap.profile.seed_count > 0;
+      if (memoryDensity === 'low') {
+        const signals = selectDerivedSignals(target, 5, contextCwd);
+        if (signals.length > 0) {
+          derivedSignals = signals;
+        }
+      }
+    } else if (bootstrapEnabled && bootstrapAvailable && memoryDensity === 'low') {
       const signals = selectDerivedSignals(target, 5, contextCwd);
       if (signals.length > 0) {
         derivedSignals = signals;
       }
-    }
-  } else if (bootstrapEnabled && bootstrapAvailable && memoryDensity === 'low') {
-    const signals = selectDerivedSignals(target, 5, contextCwd);
-    if (signals.length > 0) {
-      derivedSignals = signals;
     }
   }
 
