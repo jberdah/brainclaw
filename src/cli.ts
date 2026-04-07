@@ -95,7 +95,7 @@ import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
-import { runCodev } from './commands/codev.js';
+import { runCodev, runCodevMetrics } from './commands/codev.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
@@ -1619,13 +1619,28 @@ program
   .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
   .option('--rounds <N>', 'Number of discussion rounds in spawn mode (default 3, min 2)', '3')
   .option('--target-duration <seconds>', 'Target duration per round indicated to agents (default 120)', '120')
+  .option('--quorum <N>', 'Advance to next round after N agent responses (default: all)')
+  .option('--model-map <map>', 'Per-persona model overrides, e.g. simplificateur:sonnet,stratege:opus')
+  .option('--metrics', 'Display response timing metrics at end of session')
   .option('--json', 'Output as JSON')
   .action((topic, options) => {
+    const globalOpts = program.opts();
     runCodev(topic, {
       ...options,
       rounds: parseInt(options.rounds, 10),
       targetDuration: parseInt(options.targetDuration, 10),
+      quorum: options.quorum != null ? parseInt(options.quorum, 10) : undefined,
+      cwd: globalOpts.cwd,
     });
+  });
+
+program
+  .command('codev-metrics <thread>')
+  .description('Show per-agent avg/p95 response metrics for a CoDev thread')
+  .option('--json', 'Output as JSON')
+  .action((thread, options) => {
+    const globalOpts = program.opts();
+    runCodevMetrics(thread, { ...options, cwd: globalOpts.cwd });
   });
 
 // --- run (agent profiles) ---

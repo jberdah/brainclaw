@@ -13,7 +13,7 @@
  *
  * @module
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,6 +28,8 @@ import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { getDefaultInvokeTemplate, getSpawnableAgents, type DefaultInvokeTemplate } from '../core/agent-capability.js';
 import { executeRound, type RoundConfig } from '../core/codev-rounds.js';
 import { loadIdeationRound } from '../core/ideation.js';
+import { summarizeMetrics, summarizeMetricsByRound } from '../core/codev-metrics.js';
+import { generatePlansFromConvergence, generateSummaryNote } from '../core/codev-plan-gen.js';
 
 export interface CodevOptions {
   personas?: string;
@@ -39,6 +41,11 @@ export interface CodevOptions {
   rounds?: number;
   targetDuration?: number;
   cwd?: string;
+  quorum?: number;
+  /** Display timing metrics for this session after completion. */
+  metrics?: boolean;
+  /** Per-persona model overrides, e.g. "simplificateur:sonnet,stratege:opus". */
+  modelMap?: string;
 }
 
 function toSlug(topic: string): string {
@@ -86,6 +93,15 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
   if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  // Parse --model-map into a lookup: persona → model
+  const modelOverrides: Record<string, string> = {};
+  if (options.modelMap) {
+    for (const entry of options.modelMap.split(',')) {
+      const [persona, model] = entry.split(':').map(s => s.trim());
+      if (persona && model) modelOverrides[persona] = model;
+    }
   }
 
   const agent = resolveCurrentAgentName(cwd) ?? 'coordinator';
@@ -156,6 +172,7 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     // ── v3: Round-based orchestration ────────────────────────
     const totalRounds = Math.max(2, options.rounds ?? 3);
     const targetDuration = options.targetDuration ?? 120;
+    const sessionStart = Date.now();
 
     for (let r = 0; r < totalRounds; r++) {
       let roundType: 'position' | 'reaction' | 'convergence';
@@ -174,6 +191,8 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
         exposition: expositionText,
         targetDurationSeconds: targetDuration,
         cwd,
+        quorum: options.quorum,
+        modelOverrides: Object.keys(modelOverrides).length > 0 ? modelOverrides : undefined,
       });
     }
 
@@ -198,7 +217,10 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     }
 
     console.log(`\n--- CoDev v3 session complete: ${threadId} ---\n`);
-    console.log(`${totalRounds} rounds completed across ${spawnAgents.length} agent(s) [${agentNames}].`);
+    const elapsedSec = Math.round((Date.now() - sessionStart) / 1000);
+    const elapsedMin = Math.floor(elapsedSec / 60);
+    const elapsedDisplay = elapsedMin > 0 ? `${elapsedMin}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
+    console.log(`${totalRounds} rounds completed across ${spawnAgents.length} agent(s) [${agentNames}] in ${elapsedDisplay}.`);
 
     if (lastRound) {
       if (lastRound.convergences.length > 0) {
@@ -218,6 +240,30 @@ export function runCodev(topic: string | undefined, options: CodevOptions = {}):
     }
 
     console.log(`\nMonitor thread: brainclaw thread ${threadId}`);
+
+    // ── Plan generation from convergences ───────────────────
+    if (lastRound?.convergences.length) {
+      console.log('\nGenerating plan items from convergences...');
+      try {
+        const planResult = generatePlansFromConvergence(threadId, cwd);
+        if (planResult.plans.length > 0) {
+          console.log(`  ✓ Created ${planResult.plans.length} plan(s):`);
+          for (const p of planResult.plans) console.log(`    [${p.id}] ${p.text.slice(0, 120)}`);
+          generateSummaryNote(threadId, planResult, cwd);
+        }
+        if (planResult.skipped.length > 0) {
+          console.log(`  ⚠ Skipped ${planResult.skipped.length} convergence(s) (plan creation failed).`);
+        }
+      } catch (err) {
+        console.warn(`  ⚠ Plan generation failed: ${(err as Error).message}`);
+      }
+    }
+
+    // ── Timing metrics ───────────────────────────────────────
+    if (options.metrics) {
+      printMetricsSummary(threadId, cwd);
+    }
+
     return;
   }
 
@@ -471,7 +517,11 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
 // ── Polling helpers ──────────────────────────────────────────
 
 function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  if (process.platform === 'win32') {
+    spawnSync('powershell', ['-NonInteractive', '-Command', `Start-Sleep -Milliseconds ${ms}`], { stdio: 'ignore' });
+  } else {
+    spawnSync('sleep', [`${ms / 1000}`], { stdio: 'ignore' });
+  }
 }
 
 function awaitThreadGrowth(
@@ -687,4 +737,61 @@ function buildCoordinatorPrompt(threadId: string, personas: CodevPersona[], topi
     '',
     '--- END COORDINATOR PROMPT ---',
   ].join('\n');
+}
+
+// ── codev metrics ─────────────────────────────────────────────
+
+function printMetricsSummary(threadSlug: string, cwd: string): void {
+  const summary = summarizeMetrics(threadSlug, cwd);
+  if (!Object.keys(summary.by_agent).length) return;
+  const byRound = summarizeMetricsByRound(threadSlug, cwd);
+  console.log('\n── Response Metrics ──────────────────────────────');
+  console.log(`  Overall avg: ${Math.round(summary.avg_ms / 1000)}s  p95: ${Math.round(summary.p95_ms / 1000)}s`);
+  if (byRound.length > 0) {
+    console.log('  Per round:');
+    for (const r of byRound) {
+      console.log(`    Round ${r.round}: avg=${Math.round(r.avg_ms / 1000)}s  p95=${Math.round(r.p95_ms / 1000)}s  responses=${r.count}`);
+    }
+  }
+  for (const [agent, stats] of Object.entries(summary.by_agent)) {
+    console.log(`  ${agent}: avg=${Math.round(stats.avg_ms / 1000)}s  count=${stats.count}`);
+  }
+  console.log('');
+}
+
+export function runCodevMetrics(threadSlug: string | undefined, options: { cwd?: string; json?: boolean } = {}): void {
+  if (!threadSlug) {
+    console.error('Error: <thread> is required. Usage: brainclaw codev-metrics <thread>');
+    process.exit(1);
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const summary = summarizeMetrics(threadSlug, cwd);
+  const byRound = summarizeMetricsByRound(threadSlug, cwd);
+
+  if (options.json) {
+    console.log(JSON.stringify({ summary, by_round: byRound }, null, 2));
+    return;
+  }
+
+  if (!Object.keys(summary.by_agent).length) {
+    console.log(`No metrics found for thread: ${threadSlug}`);
+    return;
+  }
+
+  console.log(`\nCoDev metrics for thread: ${threadSlug}\n`);
+  console.log(`  Overall avg: ${Math.round(summary.avg_ms / 1000)}s  p95: ${Math.round(summary.p95_ms / 1000)}s`);
+
+  if (byRound.length > 0) {
+    console.log('\n  Per round:');
+    for (const r of byRound) {
+      console.log(`    Round ${r.round}: avg=${Math.round(r.avg_ms / 1000)}s  p95=${Math.round(r.p95_ms / 1000)}s  responses=${r.count}`);
+    }
+  }
+
+  console.log('\n  Per agent:');
+  for (const [agent, stats] of Object.entries(summary.by_agent)) {
+    console.log(`    ${agent}: avg=${Math.round(stats.avg_ms / 1000)}s  count=${stats.count}`);
+  }
+  console.log('');
+}
 }

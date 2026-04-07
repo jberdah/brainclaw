@@ -7,7 +7,7 @@
 import { saveIdeationRound, loadIdeationRound, listIdeationRounds, type IdeationRound } from './ideation.js';
 import { recordResponse } from './codev-metrics.js';
 import { buildPositionPrompt, buildReactionPrompt, buildConvergencePrompt } from './codev-prompts.js';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -21,6 +21,10 @@ export interface RoundConfig {
   exposition: string;
   targetDurationSeconds: number;
   cwd: string;
+  /** Advance to next round after N responses (default: all personas). */
+  quorum?: number;
+  /** Per-persona model overrides, keyed by persona name (e.g. { simplificateur: 'claude-opus-4-5' }). */
+  modelOverrides?: Record<string, string>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -34,7 +38,11 @@ function responseFilePath(threadSlug: string, roundNumber: number, personaName: 
 }
 
 function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  if (process.platform === 'win32') {
+    spawnSync('powershell', ['-NonInteractive', '-Command', `Start-Sleep -Milliseconds ${ms}`], { stdio: 'ignore' });
+  } else {
+    spawnSync('sleep', [`${ms / 1000}`], { stdio: 'ignore' });
+  }
 }
 
 function spawnAgent(
@@ -44,6 +52,7 @@ function spawnAgent(
   personaName: string,
   cwd: string,
   outputFile: string,
+  modelOverride?: string,
 ): void {
   const tmpDir = path.join(os.tmpdir(), 'brainclaw-codev');
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -61,11 +70,13 @@ function spawnAgent(
     // Codex: reads from stdin via '-', uses exec --full-auto
     shellCmd = `cat "${promptFile}" | "${binaryPath}" exec --full-auto - ; rm -f "${promptFile}"`;
   } else if (agentName === 'antigravity') {
-    // Gemini CLI: -p flag
-    shellCmd = `"${binaryPath}" -p "$(cat "${promptFile}")" ; rm -f "${promptFile}"`;
+    // Gemini CLI: -p flag, optional -m for model
+    const modelFlag = modelOverride ? ` -m "${modelOverride}"` : '';
+    shellCmd = `"${binaryPath}"${modelFlag} -p "$(cat "${promptFile}")" ; rm -f "${promptFile}"`;
   } else {
-    // Claude Code and others: -p flag with --allowedTools
-    shellCmd = `"${binaryPath}" -p "$(cat "${promptFile}")" --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${promptFile}"`;
+    // Claude Code and others: -p flag with --allowedTools, optional --model
+    const modelFlag = modelOverride ? ` --model "${modelOverride}"` : '';
+    shellCmd = `"${binaryPath}" -p "$(cat "${promptFile}")"${modelFlag} --allowedTools "Read,Glob,Grep,Bash" ; rm -f "${promptFile}"`;
   }
 
   const child = spawn('sh', ['-c', shellCmd], {
@@ -91,7 +102,8 @@ function spawnAgent(
 // ── Main export ───────────────────────────────────────────────
 
 export function executeRound(config: RoundConfig): IdeationRound {
-  const { threadSlug, roundNumber, roundType, personas, agents, exposition, targetDurationSeconds, cwd } = config;
+  const { threadSlug, roundNumber, roundType, personas, agents, exposition, targetDurationSeconds, cwd, quorum, modelOverrides } = config;
+  const quorumTarget = quorum != null && quorum > 0 ? Math.min(quorum, personas.length) : personas.length;
   const dispatchedAt = new Date();
   const collected: IdeationRound['positions'] = [];
 
@@ -118,8 +130,8 @@ export function executeRound(config: RoundConfig): IdeationRound {
         prompt = buildConvergencePrompt(persona, allPositions, targetDurationSeconds, respFile);
       }
 
-      spawnAgent(agent.binaryPath, agent.name, prompt, persona.name, cwd, respFile);
-      console.log(`  → [R${roundNumber}] ${persona.name} → ${agent.name}`);
+      spawnAgent(agent.binaryPath, agent.name, prompt, persona.name, cwd, respFile, modelOverrides?.[persona.name]);
+      console.log(`  → [R${roundNumber}] ${persona.name} → ${agent.name}${modelOverrides?.[persona.name] ? ` (model: ${modelOverrides[persona.name]})` : ''}`);
     }
 
     // b. Poll for responses — no hard timeout
@@ -128,7 +140,11 @@ export function executeRound(config: RoundConfig): IdeationRound {
     const pending = new Set(personas.map(p => p.name));
     const partialSizes = new Map<string, number>();
 
-    console.log(`Polling for ${pending.size} response(s) (round ${roundNumber})...`);
+    if (quorumTarget < personas.length) {
+      console.log(`Polling for ${pending.size} response(s) (round ${roundNumber}, quorum=${quorumTarget})...`);
+    } else {
+      console.log(`Polling for ${pending.size} response(s) (round ${roundNumber})...`);
+    }
     while (pending.size > 0) {
       sleepSync(10_000);
       for (const personaName of [...pending]) {
@@ -179,6 +195,14 @@ export function executeRound(config: RoundConfig): IdeationRound {
           collected.push({ persona: personaName, agent: agentName, text: raw.text, duration_ms });
           pending.delete(personaName);
           console.log(`  ✓ ${personaName} responded (${Math.round(duration_ms / 1000)}s)`);
+
+          // Quorum: advance once enough responses have been collected
+          if (collected.length >= quorumTarget) {
+            if (pending.size > 0) {
+              console.log(`  Quorum reached (${collected.length}/${personas.length}) — advancing round.`);
+            }
+            pending.clear();
+          }
         } catch {
           // File may be partially written — retry on next poll
         }
