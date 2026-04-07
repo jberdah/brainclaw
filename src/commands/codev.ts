@@ -492,7 +492,8 @@ function buildContract(
     for (const msg of clarificationMessages) {
       const personaTag = msg.tags?.find(t => t.startsWith('persona:'));
       const personaName = personaTag?.replace('persona:', '') ?? 'unknown';
-      sections.push(`\n### ${personaName}\n${msg.text}`);
+      const truncatedText = (msg.text ?? '').slice(0, 3000);
+      sections.push(`\n### ${personaName}\n${truncatedText}`);
     }
   } else {
     sections.push('\n(No clarification questions received yet — consultants will ask during clarification phase)');
@@ -535,7 +536,8 @@ function buildSynthesis(
     for (const msg of consultationMessages) {
       const personaTag = msg.tags?.find(t => t.startsWith('persona:'));
       const personaName = personaTag?.replace('persona:', '') ?? 'unknown';
-      sections.push(`\n### ${personaName}\n${msg.text}`);
+      const truncatedText = (msg.text ?? '').slice(0, 3000);
+      sections.push(`\n### ${personaName}\n${truncatedText}`);
     }
   }
 
