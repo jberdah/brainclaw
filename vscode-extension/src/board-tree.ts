@@ -127,6 +127,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _loadPromises = new Map<string, Promise<BoardData | null>>();
   private readonly _loadingProjects = new Set<string>();
   private readonly _resolvedCmds = new Map<string, string | null>();
+  private readonly _resolvingCmds = new Map<string, Promise<string | undefined>>();
 
   private _workspaceBoard: BoardData | null = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
@@ -151,18 +152,24 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   public exec(command: string, cwd?: string): void {
     const targetCwd = this._normalizePath(cwd ?? this._rootProjectPath ?? this._workspaceRoot);
-    const bclaw = this._resolveCmd(targetCwd);
-    if (!bclaw) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
-      return;
-    }
+    void this._resolveCmd(targetCwd)
+      .then((bclaw) => {
+        if (!bclaw) {
+          vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+          return;
+        }
 
-    cp.exec(`${bclaw} ${command}`, { cwd: targetCwd }, (err) => {
-      if (err) {
-        vscode.window.showErrorMessage(`Brainclaw: ${err.message}`);
-      }
-      this.refresh();
-    });
+        cp.exec(`${bclaw} ${command}`, { cwd: targetCwd }, (err) => {
+          if (err) {
+            vscode.window.showErrorMessage(`Brainclaw: ${err.message}`);
+          }
+          this.refresh();
+        });
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+      });
   }
 
   private _normalizePath(targetPath: string): string {
@@ -220,29 +227,42 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
   }
 
-  private _resolveCmd(cwd: string): string | undefined {
+  private async _resolveCmd(cwd: string): Promise<string | undefined> {
     const normalizedPath = this._normalizePath(cwd);
     if (this._resolvedCmds.has(normalizedPath)) {
       const resolved = this._resolvedCmds.get(normalizedPath);
       return resolved ?? undefined;
     }
 
-    const resolved = resolveBrainclawCmd(normalizedPath) ?? null;
-    this._resolvedCmds.set(normalizedPath, resolved);
-    return resolved ?? undefined;
+    const pending = this._resolvingCmds.get(normalizedPath);
+    if (pending) return pending;
+
+    const resolvePromise = resolveBrainclawCmd(normalizedPath)
+      .then((resolved) => {
+        this._resolvedCmds.set(normalizedPath, resolved ?? null);
+        return resolved;
+      })
+      .finally(() => {
+        this._resolvingCmds.delete(normalizedPath);
+      });
+
+    this._resolvingCmds.set(normalizedPath, resolvePromise);
+    return resolvePromise;
   }
 
   private _startWatches(): void {
     for (const project of this._projects) {
-      this._startWatch(project.path);
+      void this._startWatch(project.path).catch(() => {
+        // Ignore watch startup failures for individual projects.
+      });
     }
   }
 
-  private _startWatch(projectPath: string): void {
+  private async _startWatch(projectPath: string): Promise<void> {
     const normalizedPath = this._normalizePath(projectPath);
     if (this._watchers.has(normalizedPath)) return;
 
-    const bclaw = this._resolveCmd(normalizedPath);
+    const bclaw = await this._resolveCmd(normalizedPath);
     if (!bclaw) return;
 
     const watcher = cp.spawn(`${bclaw} watch`, [], { cwd: normalizedPath, shell: true });
@@ -341,10 +361,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return load;
   }
 
-  private _runAgentBoard(projectPath: string): Promise<BoardData> {
-    const bclaw = this._resolveCmd(projectPath);
+  private async _runAgentBoard(projectPath: string): Promise<BoardData> {
+    const bclaw = await this._resolveCmd(projectPath);
     if (!bclaw) {
-      return Promise.reject(new Error(`No brainclaw command found for ${projectPath}`));
+      throw new Error(`No brainclaw command found for ${projectPath}`);
     }
 
     return new Promise<BoardData>((resolve, reject) => {
@@ -835,30 +855,27 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 }
 
-export function resolveBrainclawCmd(cwd: string): string | undefined {
-  const opts = { stdio: 'ignore' as const, timeout: 3000 };
+function canRunCommand(command: string, cwd: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    cp.exec(command, { cwd, timeout: 3000, windowsHide: true }, (err) => {
+      resolve(!err);
+    });
+  });
+}
 
+export async function resolveBrainclawCmd(cwd: string): Promise<string | undefined> {
   const local = path.join(cwd, 'node_modules', '.bin', 'brainclaw');
-  try {
-    cp.execSync(`"${local}" --version`, opts);
+  if (await canRunCommand(`"${local}" --version`, cwd)) {
     return `"${local}"`;
-  } catch {
-    // ignore
   }
 
   const distCli = path.join(cwd, 'dist', 'cli.js');
-  try {
-    cp.execSync(`node "${distCli}" --version`, opts);
+  if (await canRunCommand(`node "${distCli}" --version`, cwd)) {
     return `node "${distCli}"`;
-  } catch {
-    // ignore
   }
 
-  try {
-    cp.execSync('brainclaw --version', opts);
+  if (await canRunCommand('brainclaw --version', cwd)) {
     return 'brainclaw';
-  } catch {
-    // ignore
   }
 
   return undefined;
