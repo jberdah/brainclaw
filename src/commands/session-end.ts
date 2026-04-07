@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import path from 'node:path';
 import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContextDiff } from '../core/context-diff.js';
@@ -6,6 +7,10 @@ import { listClaims, releaseClaim } from '../core/claims.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { loadState } from '../core/state.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
+import { createFederationMessage } from '../core/federation-message.js';
+import { pushSignal } from '../core/federation-transport.js';
+import { loadConfig } from '../core/config.js';
+import { resolveCrossProjectLinks, type ResolvedCrossProjectLink } from '../core/cross-project.js';
 import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
 import { nowISO } from '../core/ids.js';
@@ -306,6 +311,21 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     compactionHint = suggestCompaction(state);
   } catch { /* non-fatal */ }
 
+  let pushedSignals = 0;
+  try {
+    pushedSignals = pushSessionFederationSignals({
+      sessionId,
+      actor,
+      sessionNotes,
+      cwd: options.cwd,
+    });
+  } catch {
+    // Non-fatal
+  }
+  if (pushedSignals > 0 && !options.json) {
+    console.log(`✔ Pushed ${pushedSignals} signal(s) to linked projects`);
+  }
+
   appendAuditEntry({
     action: 'session_end',
     actor: actor.agent,
@@ -338,6 +358,158 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
   }
 
   return result;
+}
+
+type FederationSignalEntityType = 'candidate' | 'handoff' | 'runtime_note';
+
+function pushSessionFederationSignals(input: {
+  sessionId: string;
+  actor: ReturnType<typeof buildOperationalIdentity>;
+  sessionNotes: ReturnType<typeof listRuntimeNotes>;
+  cwd?: string;
+}): number {
+  const cwd = input.cwd ?? process.cwd();
+  const config = loadConfig(cwd);
+  const links = resolveCrossProjectLinks(cwd);
+  const publisherLinks = links.filter((link) => link.role === 'publisher' && link.available);
+
+  if (!config.cross_project_links?.length || publisherLinks.length === 0) {
+    return 0;
+  }
+
+  const currentState = loadState(cwd);
+  const sessionHandoffs = currentState.open_handoffs.filter((handoff) => handoff.session_id === input.sessionId);
+  const sessionCandidates = [
+    ...listCandidates(undefined, cwd),
+    ...listArchivedCandidates('accepted', cwd),
+    ...listArchivedCandidates('rejected', cwd),
+  ].filter((candidate) => candidate.session_id === input.sessionId);
+  const sessionRuntimeNotes = input.sessionNotes.filter((note) => note.session_id === input.sessionId);
+
+  const fromProjectName = config.project_name ?? path.basename(cwd);
+  const seen = new Set<string>();
+  let pushed = 0;
+
+  const pushEntitySignal = (entityType: FederationSignalEntityType, entity: Record<string, unknown> & { id: string }): void => {
+    const target = extractCrossProjectTarget(entity);
+    if (!target) return;
+    const link = resolvePublisherLink(target, publisherLinks, entityType, cwd);
+    if (!link) return;
+
+    const dedupeKey = `${entityType}:${entity.id}:${link.absolutePath}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
+    const message = createFederationMessage({
+      version: 1,
+      from: {
+        project_id: input.actor.project_id ?? config.project_id,
+        project_name: fromProjectName,
+        project_path: cwd,
+        agent_name: input.actor.agent,
+        agent_id: input.actor.agent_id,
+        host_id: input.actor.host_id,
+      },
+      to: {
+        project_name: link.projectName,
+        project_path: link.absolutePath,
+      },
+      type: entityType,
+      payload: entity,
+      causal_parent: input.sessionId,
+    });
+
+    pushSignal(link.absolutePath, message);
+    pushed++;
+  };
+
+  for (const handoff of sessionHandoffs) {
+    pushEntitySignal('handoff', handoff as unknown as Record<string, unknown> & { id: string });
+  }
+  for (const candidate of sessionCandidates) {
+    pushEntitySignal('candidate', candidate as unknown as Record<string, unknown> & { id: string });
+  }
+  for (const note of sessionRuntimeNotes) {
+    pushEntitySignal('runtime_note', note as unknown as Record<string, unknown> & { id: string });
+  }
+
+  return pushed;
+}
+
+function resolvePublisherLink(
+  target: string,
+  publisherLinks: ResolvedCrossProjectLink[],
+  entityType: FederationSignalEntityType,
+  cwd: string,
+): ResolvedCrossProjectLink | undefined {
+  const normalized = target.trim().toLowerCase();
+  if (!normalized) return undefined;
+  const absoluteTarget = path.resolve(cwd, target).toLowerCase();
+
+  return publisherLinks.find((link) => {
+    if (link.channels?.length && !link.channels.includes(entityType)) {
+      return false;
+    }
+    const matchesByLabel = [link.projectName, link.name, link.path, link.absolutePath, path.basename(link.absolutePath)]
+      .filter((entry): entry is string => Boolean(entry))
+      .some((entry) => entry.toLowerCase() === normalized);
+    if (matchesByLabel) return true;
+    return path.resolve(link.absolutePath).toLowerCase() === absoluteTarget;
+  });
+}
+
+function extractCrossProjectTarget(entity: Record<string, unknown>): string | undefined {
+  const direct = extractTargetValue(entity.target_project)
+    ?? extractTargetValue(entity.targetProject)
+    ?? extractTargetValue(entity.cross_project)
+    ?? extractTargetValue(entity.crossProject);
+  if (direct) return direct;
+
+  const metadata = entity.metadata;
+  if (isRecord(metadata)) {
+    const metadataTarget = extractTargetValue(metadata.target_project)
+      ?? extractTargetValue(metadata.targetProject)
+      ?? extractTargetValue(metadata.cross_project)
+      ?? extractTargetValue(metadata.crossProject);
+    if (metadataTarget) return metadataTarget;
+  }
+
+  const tags = entity.tags;
+  if (Array.isArray(tags)) {
+    for (const rawTag of tags) {
+      if (typeof rawTag !== 'string') continue;
+      const parsed = parseTargetTag(rawTag);
+      if (parsed) return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function extractTargetValue(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  for (const key of ['path', 'project_path', 'name', 'project_name']) {
+    const nested = value[key];
+    if (typeof nested === 'string' && nested.trim().length > 0) {
+      return nested.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseTargetTag(tag: string): string | undefined {
+  const match = tag.match(/^(?:target_project|target-project|targetProject|cross_project|cross-project)\s*:\s*(.+)$/i);
+  if (!match) return undefined;
+  const target = match[1].trim();
+  return target.length > 0 ? target : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object';
 }
 
 const SESSION_MEMORY_WRITE_ACTIONS: AuditAction[] = ['create', 'update', 'delete', 'accept', 'reject', 'trust_change', 'promote_direct', 'rollback'];
