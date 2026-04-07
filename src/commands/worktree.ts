@@ -3,6 +3,7 @@ import {
   listWorktrees,
   removeWorktree,
   pruneWorktrees,
+  cleanMergedWorktrees,
   worktreesBaseDir,
   type WorktreeInfo,
 } from '../core/worktree.js';
@@ -93,6 +94,36 @@ export function runWorktreePrune(options: { cwd?: string; store?: StoreTarget })
   const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
   pruneWorktrees(cwd);
   console.log('✔ Worktree stale entries pruned.');
+}
+
+export interface WorktreeCleanOptions {
+  force?: boolean;
+  dryRun?: boolean;
+  cwd?: string;
+  store?: StoreTarget;
+}
+
+export function runWorktreeClean(options: WorktreeCleanOptions): void {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  const result = cleanMergedWorktrees(cwd, {
+    force: options.force,
+    dryRun: options.dryRun,
+  });
+
+  if (result.removed.length === 0 && result.skipped.length === 0) {
+    console.log('✔ No merged or orphan worktrees to clean.');
+    return;
+  }
+
+  const verb = options.dryRun ? 'Would remove' : 'Removed';
+  for (const p of result.removed) {
+    console.log(`${options.dryRun ? '  (dry-run)' : '  ✔'} ${verb}: ${p}`);
+  }
+  for (const s of result.skipped) {
+    console.log(`  ⚠ Skipped: ${s.path} (${s.reason})`);
+  }
+  console.log(`\n${verb} ${result.removed.length} worktree(s), skipped ${result.skipped.length}.`);
 }
 
 /** Returns WorktreeInfo[] for use by MCP tools. */
