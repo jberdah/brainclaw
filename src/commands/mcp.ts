@@ -1076,6 +1076,32 @@ function toolResponse(
   };
 }
 
+const LEGACY_MCP_TOOL_WARNINGS: Record<string, string> = {
+  bclaw_session_start: 'Deprecated: use bclaw_work(intent: execute) which handles session start automatically.',
+  bclaw_claim: 'Deprecated: use bclaw_work(intent: execute, scope: ...) which creates claims automatically.',
+  bclaw_get_context: 'Deprecated: use bclaw_work(intent: consult) which returns context directly.',
+  bclaw_check_policy: 'Deprecated: policy checks are now implicit in bclaw_work.',
+};
+
+function isLegacyMcpToolFacadeDisabled(name: string): boolean {
+  return process.env.BRAINCLAW_FACADE_ONLY === '1' && Object.hasOwn(LEGACY_MCP_TOOL_WARNINGS, name);
+}
+
+function createLegacyMcpToolDisabledResponse(): McpToolResponse {
+  return createToolErrorResponse('disabled', 'This tool is disabled. Use bclaw_work or bclaw_coordinate instead.');
+}
+
+function appendLegacyMcpToolWarning(response: McpToolResponse, name: string): McpToolResponse {
+  const warning = LEGACY_MCP_TOOL_WARNINGS[name];
+  if (!warning) {
+    return response;
+  }
+  return {
+    ...response,
+    content: [...response.content, { type: 'text', text: warning }],
+  };
+}
+
 export function createToolErrorResponse(kind: string, message: string, details?: unknown): McpToolResponse {
   return toolResponse({
     content: [{ type: 'text', text: `Error: ${message}` }],
@@ -1937,8 +1963,11 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (MCP_READ_TOOLS.some((tool) => tool.name === name)) {
+      if (isLegacyMcpToolFacadeDisabled(name)) {
+        return { response: createLegacyMcpToolDisabledResponse() };
+      }
       return {
-        response: toolResponse(handleMcpReadToolCall(name, args, { cwd })),
+        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd })), name),
       };
     }
 
@@ -2414,6 +2443,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_claim') {
+      if (isLegacyMcpToolFacadeDisabled(name)) {
+        return { response: createLegacyMcpToolDisabledResponse() };
+      }
       const crossProjectError = blockCrossProjectExecution('claim', args);
       if (crossProjectError) {
         return { response: crossProjectError };
@@ -2549,13 +2581,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${handoffNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
-        response: toolResponse({
+        response: appendLegacyMcpToolWarning(toolResponse({
           content: [{ type: 'text', text: claimText }],
           claim_id: claimId,
           session_id: identity.session_id,
           worktree_path: worktreePath,
           triggered_items: postClaimItems,
-        }),
+        }), name),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
       };
     }
@@ -2602,6 +2634,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_session_start') {
+      if (isLegacyMcpToolFacadeDisabled(name)) {
+        return { response: createLegacyMcpToolDisabledResponse() };
+      }
       const crossProjectError = blockCrossProjectExecution('session', args);
       if (crossProjectError) {
         return { response: crossProjectError };
@@ -2720,10 +2755,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       }
 
       return {
-        response: toolResponse({
+        response: appendLegacyMcpToolWarning(toolResponse({
           content: contentParts,
           ...structured,
-        }),
+        }), name),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.session_id,
       };
     }
