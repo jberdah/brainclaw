@@ -91,7 +91,7 @@ import { cleanOrphanFiles, memoryDir, memoryExists } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { runSwitch } from './commands/switch.js';
-import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean } from './commands/worktree.js';
+import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean, runWorktreeMerge } from './commands/worktree.js';
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
@@ -1607,6 +1607,16 @@ worktreeCmd
   .action((options) => {
     const globalOpts = program.opts();
     runWorktreeClean({ force: options.force, dryRun: options.dryRun, cwd: globalOpts.cwd });
+  });
+
+worktreeCmd
+  .command('merge <branch>')
+  .description('Merge a worktree branch with auto-restoration of parasitic deletions')
+  .option('-m, --message <message>', 'Merge commit message')
+  .option('--dry-run', 'Show what would be merged without committing')
+  .action((branch: string, options) => {
+    const globalOpts = program.opts();
+    runWorktreeMerge({ branch, message: options.message, dryRun: options.dryRun, cwd: globalOpts.cwd });
   });
 
 // --- codev ---

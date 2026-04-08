@@ -4,6 +4,7 @@ import {
   removeWorktree,
   pruneWorktrees,
   cleanMergedWorktrees,
+  mergeWorktreeBranch,
   worktreesBaseDir,
   type WorktreeInfo,
 } from '../core/worktree.js';
@@ -124,6 +125,36 @@ export function runWorktreeClean(options: WorktreeCleanOptions): void {
     console.log(`  ⚠ Skipped: ${s.path} (${s.reason})`);
   }
   console.log(`\n${verb} ${result.removed.length} worktree(s), skipped ${result.skipped.length}.`);
+}
+
+export interface WorktreeMergeOptions {
+  branch: string;
+  message?: string;
+  dryRun?: boolean;
+  cwd?: string;
+  store?: StoreTarget;
+}
+
+export function runWorktreeMerge(options: WorktreeMergeOptions): void {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+
+  const result = mergeWorktreeBranch(cwd, options.branch, {
+    message: options.message,
+    dryRun: options.dryRun,
+  });
+
+  if (!result.merged) {
+    if (options.dryRun) {
+      console.log(`(dry-run) Would merge ${options.branch}: ${result.filesChanged} files changed, ${result.filesRestored} parasitic deletions restored.`);
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  console.log(`✔ Merged ${options.branch} → ${result.commitHash}`);
+  console.log(`  ${result.filesChanged} files changed, ${result.filesRestored} parasitic deletion(s) auto-restored.`);
 }
 
 /** Returns WorktreeInfo[] for use by MCP tools. */

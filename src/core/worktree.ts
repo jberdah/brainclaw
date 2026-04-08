@@ -187,7 +187,10 @@ export function createWorktree(
 
   trySymlinkSharedPath('node_modules');
   trySymlinkSharedPath('dist');
-  trySymlinkSharedPath('.brainclaw');
+  // NOTE: .brainclaw/ is intentionally NOT symlinked.
+  // Symlinking .brainclaw/ causes hooks and session_start to trigger on the
+  // shared store, creating session conflicts and potentially blocking agents
+  // (especially Claude CLI which auto-detects .brainclaw/ presence).
 
   const mainGitignorePath = path.join(mainWorktreePath, '.gitignore');
   const targetGitignorePath = path.join(targetPath, '.gitignore');
@@ -424,4 +427,84 @@ function cleanOrphanWorktreeDirs(
       }
     }
   }
+}
+
+export interface MergeWorktreeResult {
+  merged: boolean;
+  filesChanged: number;
+  filesRestored: number;
+  commitHash?: string;
+  error?: string;
+}
+
+/**
+ * Merges a worktree branch into the current branch with automatic
+ * selective merge — detects and restores files that were deleted by
+ * worktree divergence (present on target, absent in worktree branch).
+ *
+ * This eliminates the manual --no-commit + checkout HEAD dance.
+ */
+export function mergeWorktreeBranch(
+  mainWorktreePath: string,
+  branchName: string,
+  options: { message?: string; dryRun?: boolean } = {},
+): MergeWorktreeResult {
+  // Step 1: Get list of files on current HEAD before merge
+  const headFiles = runGit(['ls-tree', '-r', '--name-only', 'HEAD'], mainWorktreePath);
+  const currentFiles = new Set(
+    headFiles.ok ? headFiles.stdout.trim().split('\n').filter(Boolean) : [],
+  );
+
+  // Step 2: Merge with --no-commit
+  const merge = runGit(['merge', branchName, '--no-ff', '--no-commit'], mainWorktreePath);
+  if (!merge.ok) {
+    // Check for conflicts
+    if (merge.stderr.includes('CONFLICT')) {
+      return { merged: false, filesChanged: 0, filesRestored: 0, error: 'Merge conflicts detected. Resolve manually.' };
+    }
+    return { merged: false, filesChanged: 0, filesRestored: 0, error: merge.stderr.trim() };
+  }
+
+  // Step 3: Detect parasitic deletions — files that exist on HEAD but are deleted by the merge
+  const staged = runGit(['diff', '--cached', '--name-status'], mainWorktreePath);
+  const deletions = staged.ok
+    ? staged.stdout.trim().split('\n')
+        .filter((line) => line.startsWith('D\t'))
+        .map((line) => line.slice(2))
+        .filter((file) => currentFiles.has(file))
+    : [];
+
+  // Step 4: Restore parasitic deletions
+  let filesRestored = 0;
+  for (const file of deletions) {
+    const restore = runGit(['checkout', 'HEAD', '--', file], mainWorktreePath);
+    if (restore.ok) filesRestored++;
+  }
+
+  // Step 5: Count real changes
+  const realDiff = runGit(['diff', '--cached', '--stat'], mainWorktreePath);
+  const filesChanged = realDiff.ok
+    ? (realDiff.stdout.match(/\d+ file/)?.[0]?.match(/\d+/)?.[0] ?? '0')
+    : '0';
+
+  if (options.dryRun) {
+    runGit(['merge', '--abort'], mainWorktreePath);
+    return { merged: false, filesChanged: parseInt(filesChanged, 10), filesRestored, error: 'dry-run' };
+  }
+
+  // Step 6: Commit
+  const msg = options.message ?? `Merge branch '${branchName}'`;
+  const commit = runGit(['commit', '--no-edit', '-m', msg], mainWorktreePath);
+  if (!commit.ok) {
+    return { merged: false, filesChanged: parseInt(filesChanged, 10), filesRestored, error: commit.stderr.trim() };
+  }
+
+  const hash = runGit(['rev-parse', '--short', 'HEAD'], mainWorktreePath);
+
+  return {
+    merged: true,
+    filesChanged: parseInt(filesChanged, 10),
+    filesRestored,
+    commitHash: hash.ok ? hash.stdout.trim() : undefined,
+  };
 }
