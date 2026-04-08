@@ -29,22 +29,27 @@ function makeInput(agentName: string, overrides: Partial<InstructionTemplateInpu
   };
 }
 
+function assertMinimalProtocol(content: string): void {
+  assert.ok(content.includes('## brainclaw — session protocol'));
+  assert.ok(content.includes('bclaw_work(intent)'));
+  assert.ok(content.includes('bclaw_coordinate(intent)'));
+  assert.ok(!content.includes('bclaw_session_start'));
+  assert.ok(!content.includes('bclaw_claim'));
+  assert.ok(!content.includes('bclaw_get_context'));
+}
+
 describe('instruction-templates', () => {
 
   describe('tier A (claude-code)', () => {
     it('renders a lightweight section', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.equal(result.tier, 'A');
-      assert.ok(result.content.includes('session protocol'));
-      assert.ok(result.content.includes('injected automatically via hooks'));
+      assertMinimalProtocol(result.content);
     });
 
-    it('includes estimation and version-check inline in protocol', () => {
+    it('uses the unified facades instead of legacy session tools', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
-      assert.ok(result.content.includes('Estimate duration'));
-      assert.ok(result.content.includes('bclaw_get_execution_context'));
-      assert.ok(!result.sectionsIncluded.includes('estimation'));
-      assert.ok(!result.sectionsIncluded.includes('version-check'));
+      assertMinimalProtocol(result.content);
     });
 
     it('does NOT include traps, plans, decisions, or constraints', () => {
@@ -101,11 +106,11 @@ describe('instruction-templates', () => {
   });
 
   describe('tier B (roo — MCP, no hooks)', () => {
-    it('renders a directive section with REQUIRED protocol', () => {
+    it('renders the shared minimal protocol', () => {
       const result = renderBrainclawSection(makeInput('roo'));
       assert.equal(result.tier, 'B');
-      assert.ok(result.content.includes('REQUIRED'));
-      assert.ok(result.content.includes('bclaw_session_start'));
+      assertMinimalProtocol(result.content);
+      assert.ok(!result.content.includes('REQUIRED'));
     });
 
     it('splits constraints into working-rules and architecture', () => {
@@ -164,7 +169,7 @@ describe('instruction-templates', () => {
     it('renders a tier B section with protocol', () => {
       const result = renderBrainclawSection(makeInput('openclaw'));
       assert.equal(result.tier, 'B');
-      assert.ok(result.content.includes('session protocol'));
+      assertMinimalProtocol(result.content);
     });
 
     it('stable output does NOT include traps, plans, or decisions', () => {

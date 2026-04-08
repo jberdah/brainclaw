@@ -93,7 +93,7 @@ function renderStableTierA(input: InstructionTemplateInput): InstructionTemplate
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  sections.push(renderProtocolTierA());
+  sections.push(renderSessionProtocol());
   included.push('protocol');
 
   const instructions = renderInstructions(input.resolvedInstructions);
@@ -114,7 +114,7 @@ function renderStableTierB(input: InstructionTemplateInput): InstructionTemplate
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  sections.push(renderProtocolTierB());
+  sections.push(renderSessionProtocol());
   included.push('protocol');
 
   const rules = renderWorkingRules(input.state);
@@ -163,7 +163,7 @@ function renderStableTierC(input: InstructionTemplateInput): InstructionTemplate
   const vision = renderVisionSection(input);
   if (vision) { sections.push(vision); included.push('vision'); }
 
-  sections.push(renderProtocolTierC(input.profile));
+  sections.push(renderSessionProtocol());
   included.push('protocol');
 
   const rules = renderWorkingRules(input.state);
@@ -229,64 +229,14 @@ function renderLiveHeader(_input: InstructionTemplateInput): string {
   ].join('\n');
 }
 
-function renderProtocolTierA(): string {
+function renderSessionProtocol(): string {
   return [
     '## brainclaw — session protocol',
     '',
-    'Brainclaw context is injected automatically via hooks at each prompt.',
-    '',
-    '1. Read the injected board state before acting',
-    '2. Call `bclaw_get_context(target)` for deeper memory on a specific scope',
-    '3. Call `bclaw_claim(scope)` before editing if other agents are active',
-    '4. Call `bclaw_session_end(auto_release: true)` when done',
-    '',
-    'Estimate duration in minutes when creating plans. Report actual effort when completing.',
-    'Call `bclaw_get_execution_context` at session start to check for brainclaw updates.',
+    '1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically.',
+    '2. Call `bclaw_coordinate(intent)` to assign, consult, or review other agents.',
+    '3. Do not assume project state without reading brainclaw context first.',
   ].join('\n');
-}
-
-function renderProtocolTierB(): string {
-  return [
-    '## brainclaw — session protocol (REQUIRED)',
-    '',
-    'You MUST follow this protocol before any work in this project.',
-    '',
-    '1. Call `bclaw_session_start` — identify yourself and see the active board',
-    '2. Call `bclaw_get_context(target: "<file or dir>")` — load relevant memory',
-    '3. Call `bclaw_get_execution_context` — check for brainclaw updates',
-    '4. Check that no other agent has claimed your target scope',
-    '5. Call `bclaw_claim(scope)` before editing',
-    '6. Call `bclaw_write_note(text)` to record observations',
-    '7. Call `bclaw_session_end(auto_release: true)` when done',
-    '',
-    'Estimate duration in minutes when creating plans. Report actual effort when completing.',
-  ].join('\n');
-}
-
-function renderProtocolTierC(profile: AgentCapabilityProfile): string {
-  const lines = [
-    '## brainclaw — project coordination',
-    '',
-  ];
-
-  if (profile.hasSkills) {
-    lines.push(
-      'Use the brainclaw-context skill to refresh project memory.',
-      'Trigger: "refresh project memory", "load brainclaw context", "inspect active plans"',
-      '',
-    );
-  }
-
-  lines.push(
-    'Before working:',
-    '- Review the constraints and active plans in the live companion file',
-    '- Check the known traps section for pitfalls in your scope',
-    '',
-    'The live companion file is refreshed automatically.',
-    'For the freshest state, use the brainclaw skill or ask the developer to run `brainclaw refresh`.',
-  );
-
-  return lines.join('\n');
 }
 
 // ─── Constraint sections (split by category) ────────────────────────────────
