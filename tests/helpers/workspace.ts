@@ -28,6 +28,12 @@ export interface TestWorkspace {
   useCwd: () => () => void;
 }
 
+export interface CleanupTestEnvOptions {
+  dir?: string;
+  fakeHome?: string;
+  envBackup?: Record<string, string | undefined>;
+}
+
 /**
  * All environment variable keys that influence agent detection.
  * Tests that check agent resolution must clear these to avoid
@@ -45,6 +51,23 @@ export const AGENT_ENV_KEYS = [
   'ANTIGRAVITY_SESSION_ID', 'ANTIGRAVITY_AGENT',
   'OPENCLAW_SESSION_ID', 'OPENCLAW_AGENT',
 ] as const;
+
+export function cleanupTestEnv(options: CleanupTestEnvOptions): void {
+  if (options.envBackup) {
+    for (const [key, value] of Object.entries(options.envBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  if (options.dir) {
+    fs.rmSync(options.dir, { recursive: true, force: true });
+  }
+
+  if (options.fakeHome) {
+    fs.rmSync(options.fakeHome, { recursive: true, force: true });
+  }
+}
 
 /**
  * Save and clear all agent detection env vars.
@@ -68,21 +91,7 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   delete process.env.HOMEPATH;
   return {
     fakeHome,
-    restore: () => {
-      for (const key of AGENT_ENV_KEYS) {
-        if (saved[key] === undefined) delete process.env[key];
-        else process.env[key] = saved[key];
-      }
-      if (saved.HOME === undefined) delete process.env.HOME;
-      else process.env.HOME = saved.HOME;
-      if (saved.USERPROFILE === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = saved.USERPROFILE;
-      if (saved.HOMEDRIVE === undefined) delete process.env.HOMEDRIVE;
-      else process.env.HOMEDRIVE = saved.HOMEDRIVE;
-      if (saved.HOMEPATH === undefined) delete process.env.HOMEPATH;
-      else process.env.HOMEPATH = saved.HOMEPATH;
-      fs.rmSync(fakeHome, { recursive: true, force: true });
-    },
+    restore: () => cleanupTestEnv({ fakeHome, envBackup: saved }),
   };
 }
 
@@ -118,9 +127,12 @@ export function createTestWorkspace(options: TestWorkspaceOptions = {}): TestWor
     fakeHome,
     currentAgent,
     cleanup: () => {
-      envIsolation?.restore();
-      fs.rmSync(dir, { recursive: true, force: true });
-      if (!envIsolation) fs.rmSync(fakeHome, { recursive: true, force: true });
+      if (envIsolation) {
+        envIsolation.restore();
+        cleanupTestEnv({ dir });
+        return;
+      }
+      cleanupTestEnv({ dir, fakeHome });
     },
     registerAgent: (agentName: string, kind: AgentKind = 'agent') => registerAgentIdentity({
       agentName,

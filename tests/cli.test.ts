@@ -6,11 +6,44 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { getInstalledBrainclawVersion } from '../src/core/brainclaw-version.js';
-import { AGENT_ENV_KEYS } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, cleanupTestEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
 const DEFAULT_STORAGE_DIR = '.brainclaw';
+const ENV_BACKUP_KEYS = [...new Set([
+  ...AGENT_ENV_KEYS,
+  'BRAINCLAW_SKIP_REPO_ANALYSIS',
+  'BRAINCLAW_SKIP_AGENT_BOOTSTRAP',
+  'BRAINCLAW_SKIP_SETUP_REQUIREMENT',
+  'BRAINCLAW_STORE_BOUNDARY',
+  'BRAINCLAW_SESSION_ID',
+  'BRAINCLAW_HOST_ID',
+  'BRAINCLAW_TEST_MODE',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'USERNAME',
+  'USER',
+  'CODEX_HOME',
+])];
+
+let fakeHomes: string[] = [];
+
+function backupEnv(keys: readonly string[]): Record<string, string | undefined> {
+  const envBackup: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    envBackup[key] = process.env[key];
+  }
+  return envBackup;
+}
+
+function createFakeHome(): string {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  fakeHomes.push(fakeHome);
+  return fakeHome;
+}
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tm-test-'));
@@ -23,7 +56,7 @@ function run(
   timeoutMs: number = 20000,
 ): { stdout: string; stderr: string; exitCode: number; fakeHome: string } {
   // Use a separate fake home so ensureUserStore() doesn't create .brainclaw/ in cwd
-  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const fakeHome = createFakeHome();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
@@ -102,13 +135,19 @@ function extractId(stdout: string): string {
 
 describe('brainclaw CLI', () => {
   let dir: string;
+  let envBackup: Record<string, string | undefined>;
 
   beforeEach(() => {
     dir = tmpDir();
+    fakeHomes = [];
+    envBackup = backupEnv(ENV_BACKUP_KEYS);
   });
 
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    for (const fakeHome of fakeHomes.splice(0)) {
+      cleanupTestEnv({ fakeHome });
+    }
+    cleanupTestEnv({ dir, envBackup });
   });
 
   describe('init', () => {
@@ -151,7 +190,7 @@ describe('brainclaw CLI', () => {
 
     it('records the detected agent in the project integration manifest', () => {
       // Create a minimal .cursor/ dir in the fake home so Cursor detection writes integration files
-      const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+      const fakeHome = createFakeHome();
       fs.mkdirSync(path.join(fakeHome, '.cursor'), { recursive: true });
       const res = run(['init', '-y'], dir, {
         BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
@@ -168,7 +207,6 @@ describe('brainclaw CLI', () => {
       assert.ok(declaration, 'expected a cursor agent declaration in config');
       assert.equal(declaration.declaration_source, 'detected');
       assert.ok(declaration.surfaces.some((surface: any) => surface.kind === 'rule'));
-      fs.rmSync(fakeHome, { recursive: true, force: true });
     });
 
     it('defaults project mode to auto in non-interactive init', () => {
