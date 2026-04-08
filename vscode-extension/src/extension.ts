@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { BoardProject, BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
+import { BrainclawFileDecorationProvider } from './file-decorations';
 
 class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   getTreeItem(el: vscode.TreeItem) { return el; }
@@ -144,9 +145,17 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push({ dispose: () => treeProvider.dispose() });
   }
 
+  // File Decoration Provider — shows lock icon on claimed scopes
+  const fileDecoProvider = cwd ? new BrainclawFileDecorationProvider(cwd) : undefined;
+  if (fileDecoProvider) {
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecoProvider));
+    context.subscriptions.push({ dispose: () => fileDecoProvider.dispose() });
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand('brainclaw.refreshBoard', () => {
       treeProvider?.refresh();
+      fileDecoProvider?.refresh();
     })
   );
 
