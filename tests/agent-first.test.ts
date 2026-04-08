@@ -5,17 +5,47 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
-import { AGENT_ENV_KEYS } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, cleanupTestEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
+const ENV_BACKUP_KEYS = [...new Set([
+  ...AGENT_ENV_KEYS,
+  'BRAINCLAW_SKIP_SETUP_REQUIREMENT',
+  'BRAINCLAW_STORE_BOUNDARY',
+  'BRAINCLAW_SESSION_ID',
+  'BRAINCLAW_HOST_ID',
+  'BRAINCLAW_TEST_MODE',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'USERNAME',
+  'USER',
+])];
+
+let fakeHomes: string[] = [];
+
+function backupEnv(keys: readonly string[]): Record<string, string | undefined> {
+  const envBackup: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    envBackup[key] = process.env[key];
+  }
+  return envBackup;
+}
+
+function createFakeHome(): string {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  fakeHomes.push(fakeHome);
+  return fakeHome;
+}
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tm-agent-first-'));
 }
 
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
-  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
+  const fakeHome = createFakeHome();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     USERNAME: 'testuser',
@@ -90,14 +120,20 @@ function registerPendingAuthor(dir: string, name: string = 'worker-bot'): string
 
 describe('Agent-first context and reflective ingestion', () => {
   let dir: string;
+  let envBackup: Record<string, string | undefined>;
 
   beforeEach(() => {
     dir = tmpDir();
+    fakeHomes = [];
+    envBackup = backupEnv(ENV_BACKUP_KEYS);
     run(['init', '-y'], dir);
   });
 
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    for (const fakeHome of fakeHomes.splice(0)) {
+      cleanupTestEnv({ fakeHome });
+    }
+    cleanupTestEnv({ dir, envBackup });
   });
 
   it('context outputs compact markdown relevant to target', () => {
