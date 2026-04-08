@@ -1619,6 +1619,104 @@ worktreeCmd
     runWorktreeMerge({ branch, message: options.message, dryRun: options.dryRun, cwd: globalOpts.cwd });
   });
 
+// --- federation cloud ---
+const federationCmd = program
+  .command('federation')
+  .description('Cloud federation — sync signals with app.brainclaw.dev');
+
+federationCmd
+  .command('push <message>')
+  .description('Push a test signal to the cloud')
+  .option('--type <type>', 'Signal type', 'runtime_note')
+  .option('--to-project <project>', 'Target project name')
+  .option('--to-agent <agent>', 'Target agent name')
+  .action(async (message: string, options) => {
+    const { pushSignalToCloud, isCloudConfigured } = await import('./core/federation-cloud.js');
+    const { createFederationMessage } = await import('./core/federation-message.js');
+    const { loadConfig } = await import('./core/config.js');
+    const { resolveCurrentAgentName } = await import('./core/agent-registry.js');
+
+    if (!isCloudConfigured()) {
+      console.error('Error: cloud not configured. Set BRAINCLAW_CLOUD_API_KEY env var.');
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const agent = resolveCurrentAgentName() ?? 'unknown';
+    const msg = createFederationMessage({
+      version: 1,
+      from: { project_name: config.project_name, project_path: process.cwd(), agent_name: agent },
+      to: { project_name: options.toProject ?? 'broadcast', project_path: '' },
+      type: options.type as 'signal' | 'handoff' | 'candidate' | 'runtime_note' | 'board_snapshot',
+      payload: { text: message },
+    });
+
+    const ok = await pushSignalToCloud(msg);
+    if (ok) {
+      console.log(`✔ Signal pushed to cloud: [${msg.id}] ${message}`);
+    } else {
+      console.error('Error: failed to push signal to cloud.');
+      process.exit(1);
+    }
+  });
+
+federationCmd
+  .command('pull')
+  .description('Pull signals from the cloud inbox')
+  .option('--agent <name>', 'Agent name to pull for')
+  .option('--since <date>', 'Only pull signals after this ISO date')
+  .option('--limit <n>', 'Max signals to pull', '20')
+  .action(async (options) => {
+    const { pullSignalsFromCloud, isCloudConfigured } = await import('./core/federation-cloud.js');
+    const { resolveCurrentAgentName } = await import('./core/agent-registry.js');
+
+    if (!isCloudConfigured()) {
+      console.error('Error: cloud not configured. Set BRAINCLAW_CLOUD_API_KEY env var.');
+      process.exit(1);
+    }
+
+    const agent = options.agent ?? resolveCurrentAgentName() ?? 'unknown';
+    const signals = await pullSignalsFromCloud(agent, {
+      since: options.since,
+      limit: parseInt(options.limit, 10),
+    });
+
+    if (signals.length === 0) {
+      console.log('No signals in cloud inbox.');
+      return;
+    }
+
+    console.log(`${signals.length} signal(s) from cloud:\n`);
+    for (const s of signals) {
+      const payload = typeof s.payload === 'object' && s.payload !== null ? (s.payload as Record<string, unknown>).text ?? JSON.stringify(s.payload) : String(s.payload);
+      console.log(`  [${s.id}] ${s.type} from ${s.from.project_name}/${s.from.agent_name}`);
+      console.log(`    ${String(payload).slice(0, 120)}`);
+      console.log(`    ${s.created_at}\n`);
+    }
+  });
+
+federationCmd
+  .command('status')
+  .description('Check cloud federation configuration')
+  .action(async () => {
+    const { isCloudConfigured } = await import('./core/federation-cloud.js');
+    const url = process.env.BRAINCLAW_CLOUD_URL ?? 'https://app.brainclaw.dev';
+
+    console.log(`Cloud URL: ${url}`);
+    console.log(`API Key: ${process.env.BRAINCLAW_CLOUD_API_KEY ? '***configured***' : 'NOT SET'}`);
+    console.log(`Configured: ${isCloudConfigured() ? 'yes' : 'no'}`);
+
+    if (isCloudConfigured()) {
+      try {
+        const res = await fetch(`${url}/api/v1/health`);
+        const data = await res.json() as Record<string, unknown>;
+        console.log(`Cloud status: ${data.status} (v${data.version})`);
+      } catch (e) {
+        console.error(`Cloud unreachable: ${(e as Error).message}`);
+      }
+    }
+  });
+
 // --- codev ---
 program
   .command('codev [topic]')
