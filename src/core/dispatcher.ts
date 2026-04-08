@@ -9,6 +9,7 @@
  * @module
  */
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
 import { listClaims } from './claims.js';
@@ -18,8 +19,8 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDefaultInvokeTemplate, type DefaultInvokeTemplate } from './agent-capability.js';
-import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim, type AgentInvoke } from './schema.js';
+import { getDefaultInvokeTemplate } from './agent-capability.js';
+import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -74,11 +75,26 @@ export interface DispatchedItem {
 
 export interface DispatchResult {
   messages_sent: DispatchedItem[];
+  commands: Array<{
+    agent: string;
+    lane?: string;
+    command: string;
+    shell: string;
+  }>;
   skipped: Array<{
     plan_id: string;
     reason: string;
   }>;
 }
+
+export interface BuildInvokeCommandOptions {
+  cwd: string;
+  worktreePath?: string;
+  mode?: 'worker' | 'reviewer' | 'consult';
+  shell?: 'bash' | 'powershell';
+}
+
+const MAX_INLINE_BRIEF_LENGTH = 4000;
 
 // ── Lane Analysis ───────────────────────────────────────────
 
@@ -315,7 +331,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   const analysis = analyzeSequence(cwd);
   if (!analysis) return null;
 
-  const result: DispatchResult = { messages_sent: [], skipped: [] };
+  const result: DispatchResult = { messages_sent: [], commands: [], skipped: [] };
 
   // Filter ready lanes
   let readyToAssign = analysis.ready;
@@ -373,6 +389,19 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         lane: readyItem.lane,
         channel: (options.spawn && invokeTemplate) ? 'spawn' : 'inbox',
       });
+      if (!options.spawn) {
+        try {
+          const commandInfo = buildInvokeCommand(targetAgent, brief, { cwd, mode: 'worker' });
+          result.commands.push({
+            agent: targetAgent,
+            lane: readyItem.lane,
+            command: commandInfo.command,
+            shell: commandInfo.shell,
+          });
+        } catch {
+          // Inbox-only or custom IDE agents may not have a spawnable invoke template.
+        }
+      }
       assigned++;
       const idx = agentPool.indexOf(targetAgent);
       if (idx >= 0) agentPool.splice(idx, 1);
@@ -408,9 +437,21 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     if (options.spawn) {
       const invokeTemplate = resolveInvokeTemplate(targetAgent, cwd);
       if (invokeTemplate) {
-        const spawnResult = spawnAgent(invokeTemplate, brief, cwd);
+        const spawnResult = spawnAgent(targetAgent, brief, { cwd, mode: 'worker' });
         channel = 'spawn';
         pid = spawnResult.pid;
+      }
+    } else {
+      try {
+        const commandInfo = buildInvokeCommand(targetAgent, brief, { cwd, mode: 'worker' });
+        result.commands.push({
+          agent: targetAgent,
+          lane: readyItem.lane,
+          command: commandInfo.command,
+          shell: commandInfo.shell,
+        });
+      } catch {
+        // Inbox-only or custom IDE agents may not have a spawnable invoke template.
       }
     }
 
@@ -460,33 +501,140 @@ function resolveInvokeTemplate(agentName: string, cwd: string): { command: strin
   return undefined;
 }
 
+function resolveInvokeTemplateCommand(agentName: string, cwd: string): { command: string; env?: Record<string, string> } | undefined {
+  const identity = findAgentIdentityByName(agentName, cwd);
+  if (identity?.invoke) {
+    return {
+      command: identity.invoke.command,
+      env: identity.invoke.env,
+    };
+  }
+
+  const defaultTemplate = getDefaultInvokeTemplate(agentName);
+  if (!defaultTemplate) return undefined;
+
+  return {
+    command: defaultTemplate.command,
+  };
+}
+
+function detectInvokeShell(shell?: 'bash' | 'powershell'): 'bash' | 'powershell' {
+  if (shell) return shell;
+  return process.platform === 'win32' ? 'powershell' : 'bash';
+}
+
+function quoteForBash(value: string): string {
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+function quoteForPowerShell(value: string): string {
+  const escaped = value
+    .replace(/`/g, '``')
+    .replace(/\$/g, '`$')
+    .replace(/"/g, '`"')
+    .replace(/\r/g, '`r')
+    .replace(/\n/g, '`n');
+  return `"${escaped}"`;
+}
+
+function quotePathForPowerShell(value: string): string {
+  return "'" + value.replace(/'/g, "''") + "'";
+}
+
+function replacePromptPlaceholder(command: string, replacement: string, rawPromptReplacement: boolean = false): string {
+  if (rawPromptReplacement) {
+    return command.split('{prompt}').join(replacement);
+  }
+
+  for (const token of ['"{prompt}"', '\'{prompt}\'', '{prompt}']) {
+    if (command.includes(token)) {
+      return command.split(token).join(replacement);
+    }
+  }
+
+  return command.split('{prompt}').join(replacement);
+}
+
+function writeInvokeBriefTempFile(agentName: string, brief: string, mode?: 'worker' | 'reviewer' | 'consult'): string {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brainclaw-dispatch-'));
+  const safeAgentName = agentName.replace(/[^a-z0-9_-]/gi, '-');
+  const filePath = path.join(tempDir, `${safeAgentName}-${mode ?? 'worker'}-brief.txt`);
+  fs.writeFileSync(filePath, brief, 'utf8');
+  return filePath;
+}
+
+export function buildInvokeCommand(
+  agentName: string,
+  brief: string,
+  options: BuildInvokeCommandOptions,
+): { command: string; shell: string; env?: Record<string, string> } {
+  const template = resolveInvokeTemplateCommand(agentName, options.cwd);
+  if (!template) {
+    throw new Error(`No invoke template found for agent: ${agentName}`);
+  }
+
+  const shell = detectInvokeShell(options.shell);
+  const hasDoubleQuotedPromptPlaceholder = template.command.includes('"{prompt}"');
+  let promptReplacement: string;
+  let rawPromptReplacement = false;
+
+  if (brief.length > MAX_INLINE_BRIEF_LENGTH) {
+    const briefPath = writeInvokeBriefTempFile(agentName, brief, options.mode);
+    const promptExpression = shell === 'bash'
+      ? `$(cat ${quoteForBash(briefPath)})`
+      : `$(Get-Content -Raw -LiteralPath ${quotePathForPowerShell(briefPath)})`;
+
+    if (hasDoubleQuotedPromptPlaceholder) {
+      promptReplacement = promptExpression;
+      rawPromptReplacement = true;
+    } else {
+      promptReplacement = `"${promptExpression}"`;
+    }
+  } else {
+    promptReplacement = shell === 'bash'
+      ? quoteForBash(brief)
+      : quoteForPowerShell(brief);
+  }
+
+  let command = replacePromptPlaceholder(template.command, promptReplacement, rawPromptReplacement)
+    .split('{cwd}')
+    .join(options.cwd);
+
+  if (options.worktreePath) {
+    command = shell === 'bash'
+      ? `cd ${quoteForBash(options.worktreePath)} && ${command}`
+      : `cd ${quoteForPowerShell(options.worktreePath)}; ${command}`;
+  }
+
+  return {
+    command,
+    shell,
+    env: template.env,
+  };
+}
+
 /**
  * Spawn a CLI agent as a detached background process.
  * The process is fire-and-forget — the coordinator doesn't wait for completion.
  * The spawned agent is expected to use brainclaw (claim, session, handoff) for coordination.
  */
 function spawnAgent(
-  template: { command: string; timeout: number; env?: Record<string, string> },
+  agentName: string,
   brief: string,
-  cwd: string,
+  options: BuildInvokeCommandOptions,
 ): { pid: number } {
-  // Replace {prompt} placeholder with the brief, escaping for shell
-  const escapedBrief = brief.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  const command = template.command.replace('{prompt}', escapedBrief);
-
-  // Replace {cwd} if present
-  const finalCommand = command.replace('{cwd}', cwd);
+  const invokeCommand = buildInvokeCommand(agentName, brief, options);
 
   // Spawn as detached process
-  const child = spawn(finalCommand, [], {
-    shell: true,
+  const child = spawn(invokeCommand.command, [], {
+    shell: invokeCommand.shell,
     detached: true,
     stdio: 'ignore',
-    cwd,
+    cwd: options.cwd,
     env: {
       ...process.env,
-      ...template.env,
-      BRAINCLAW_CWD: cwd,
+      ...invokeCommand.env,
+      BRAINCLAW_CWD: options.cwd,
     },
   });
 
@@ -796,7 +944,7 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
     if (options.spawn) {
       const invokeTemplate = resolveInvokeTemplate(reviewer, cwd);
       if (invokeTemplate) {
-        const spawnResult = spawnAgent(invokeTemplate, brief, cwd);
+        const spawnResult = spawnAgent(reviewer, brief, { cwd, mode: 'reviewer' });
         channel = 'spawn';
         pid = spawnResult.pid;
       }

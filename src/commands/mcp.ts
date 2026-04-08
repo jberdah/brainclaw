@@ -2920,6 +2920,16 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           }
         }
 
+        if (dispatchResult.commands.length > 0) {
+          lines.push('');
+          lines.push('  Commands:');
+          for (const cmd of dispatchResult.commands) {
+            const lane = cmd.lane ? ` (lane: ${cmd.lane})` : '';
+            lines.push(`    → ${cmd.agent}${lane} [${cmd.shell}]`);
+            lines.push(`      ${cmd.command}`);
+          }
+        }
+
         if (dispatchResult.skipped.length > 0) {
           lines.push('');
           lines.push('  Skipped:');
