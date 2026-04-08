@@ -51,11 +51,13 @@ import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPrevie
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
-import { sendMessage, ackMessage, countPending, countActionable } from '../core/messaging.js';
+import { sendMessage, ackMessage, countPending, countActionable, getThread } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
-import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
+import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
+import { getSpawnableAgents, getCapabilityProfile } from '../core/agent-capability.js';
+import { resolveDeliveryChannel, deliverPrompt } from '../core/delivery.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -983,6 +985,24 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['intent'],
+    },
+  },
+  {
+    name: 'bclaw_coordinate',
+    description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, and side_effects.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize'], description: 'Coordination intent. "assign" creates a claim per target agent and dispatches the brief. "consult" dispatches without creating claims. "review" creates a review candidate. "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
+        task: { type: 'string', description: 'Brief or task description delivered to target agents.' },
+        scope: { type: 'string', description: 'File or feature scope. Used as claim scope for assign/reroute; as thread id for summarize if threadId is absent.' },
+        targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
+        constraints: { type: 'object', description: 'Optional structured constraints passed alongside the brief (e.g. deadline, reviewCriteria).' },
+        threadId: { type: 'string', description: 'Thread ID for summarize intent.' },
+        agent: { type: 'string', description: 'Caller agent name.' },
+        agentId: { type: 'string', description: 'Caller registered agent id.' },
+      },
+      required: ['intent', 'task'],
     },
   },
 ] as const;
@@ -3567,6 +3587,154 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           structuredContent: facadeResponse as unknown as Record<string, unknown>,
         }),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : sessionResult.session_id,
+      };
+    }
+
+    if (name === 'bclaw_coordinate') {
+      const startMs = Date.now();
+      const parseResult = CoordinateRequestSchema.safeParse(args);
+      if (!parseResult.success) {
+        return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
+      }
+      const req = parseResult.data;
+      const warnings: string[] = [];
+      const artifacts: Array<{ type: string; id: string; path?: string }> = [];
+      const side_effects: Array<{ action: string; entity: string; id: string }> = [];
+
+      // Resolve target agents: explicit list or all spawnable
+      const resolvedAgents: string[] = (req.targetAgents && req.targetAgents.length > 0)
+        ? req.targetAgents
+        : getSpawnableAgents().map((a) => a.name);
+
+      let result: unknown = { selected_targets: resolvedAgents };
+
+      if (req.intent === 'assign') {
+        const delivery_plan: Array<{ agent: string; channel: string; claim_id: string }> = [];
+        for (const agentName of resolvedAgents) {
+          const profile = getCapabilityProfile(agentName);
+          if (!profile) {
+            warnings.push(`Unknown agent profile: ${agentName}`);
+            continue;
+          }
+          const channel = resolveDeliveryChannel(profile);
+          const claimId = generateClaimId();
+          saveClaim({
+            id: claimId,
+            agent: agentName,
+            scope: req.scope ?? req.task,
+            description: req.task,
+            created_at: nowISO(),
+            status: 'active',
+          }, cwd);
+          appendAuditEntry({ actor: agentName, action: 'claim', item_id: claimId, item_type: 'claim', scope: req.scope ?? req.task }, cwd);
+          artifacts.push({ type: 'claim', id: claimId });
+          side_effects.push({ action: 'create', entity: 'claim', id: claimId });
+          deliverPrompt(profile, req.task, { cwd });
+          delivery_plan.push({ agent: agentName, channel, claim_id: claimId });
+        }
+        result = { selected_targets: resolvedAgents, delivery_plan };
+
+      } else if (req.intent === 'consult') {
+        const contacted: string[] = [];
+        for (const agentName of resolvedAgents) {
+          const profile = getCapabilityProfile(agentName);
+          if (!profile) {
+            warnings.push(`Unknown agent profile: ${agentName}`);
+            continue;
+          }
+          deliverPrompt(profile, req.task, { cwd });
+          contacted.push(agentName);
+        }
+        result = { selected_targets: resolvedAgents, contacted };
+
+      } else if (req.intent === 'review') {
+        const candId = generateCandidateIdWithLabel(cwd);
+        saveCandidate({
+          id: candId.id,
+          short_label: candId.short_label,
+          type: 'handoff',
+          text: req.task,
+          created_at: nowISO(),
+          author: typeof args.agent === 'string' ? args.agent : 'bclaw_coordinate',
+          author_id: typeof args.agentId === 'string' ? args.agentId : undefined,
+          tags: ['review'],
+          status: 'pending',
+          star_count: 0,
+          starred_by: [],
+          usage_count: 0,
+          usage_events: [],
+          ...(req.scope ? { related_paths: [req.scope] } : {}),
+        }, cwd);
+        artifacts.push({ type: 'candidate', id: candId.id });
+        side_effects.push({ action: 'create', entity: 'candidate', id: candId.id });
+        result = { candidate_id: candId.id, selected_targets: resolvedAgents };
+
+      } else if (req.intent === 'reroute') {
+        const activeClaims = listClaims(cwd).filter(
+          (c) => c.status === 'active' && (req.scope ? c.scope === req.scope : true),
+        );
+        if (activeClaims.length === 0) {
+          return { response: createToolErrorResponse('not_found', `No active claim found for scope: ${req.scope ?? '(any)'}`) };
+        }
+        const oldClaim = activeClaims[0];
+        saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, cwd);
+        appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, cwd);
+        side_effects.push({ action: 'release', entity: 'claim', id: oldClaim.id });
+
+        const newAgentName = resolvedAgents.find((a) => a !== oldClaim.agent) ?? resolvedAgents[0];
+        let newClaimId: string | undefined;
+        if (newAgentName) {
+          const profile = getCapabilityProfile(newAgentName);
+          if (profile) {
+            newClaimId = generateClaimId();
+            saveClaim({
+              id: newClaimId,
+              agent: newAgentName,
+              scope: oldClaim.scope,
+              description: req.task,
+              created_at: nowISO(),
+              status: 'active',
+            }, cwd);
+            appendAuditEntry({ actor: newAgentName, action: 'claim', item_id: newClaimId, item_type: 'claim', scope: oldClaim.scope }, cwd);
+            artifacts.push({ type: 'claim', id: newClaimId });
+            side_effects.push({ action: 'create', entity: 'claim', id: newClaimId });
+            deliverPrompt(profile, req.task, { cwd });
+          } else {
+            warnings.push(`Unknown agent profile: ${newAgentName}`);
+          }
+        }
+        result = { released_claim: oldClaim.id, old_agent: oldClaim.agent, new_agent: newAgentName, new_claim_id: newClaimId, selected_targets: resolvedAgents };
+
+      } else if (req.intent === 'summarize') {
+        const threadId = req.threadId ?? req.scope;
+        if (!threadId) {
+          return { response: createToolErrorResponse('validation_error', 'summarize intent requires threadId or scope') };
+        }
+        const messages = getThread(threadId, cwd, { truncateText: 500 });
+        const summary = messages.length === 0
+          ? 'No messages found in thread.'
+          : messages.map((m, i) => `[${i + 1}] ${m.from} → ${m.to}: ${m.text}`).join('\n');
+        result = { thread_id: threadId, message_count: messages.length, summary };
+      }
+
+      const facadeResponse: FacadeResponse = {
+        status: 'ok',
+        intent: req.intent,
+        result,
+        artifacts,
+        side_effects,
+        warnings,
+        duration_ms: Date.now() - startMs,
+      };
+
+      const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
+      if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: summaryParts.join('\n') }],
+          structuredContent: facadeResponse as unknown as Record<string, unknown>,
+        }),
       };
     }
 
