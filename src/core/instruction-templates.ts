@@ -96,6 +96,9 @@ function renderStableTierA(input: InstructionTemplateInput): InstructionTemplate
   sections.push(renderSessionProtocol());
   included.push('protocol');
 
+  sections.push(renderAvailableTools());
+  included.push('available-tools');
+
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
 
@@ -277,6 +280,20 @@ function renderInstructions(instructions: string[]): string | undefined {
     '## brainclaw — active instructions',
     '',
     ...instructions.map((text: string) => `- ${text}`),
+  ].join('\n');
+}
+
+function renderAvailableTools(): string {
+  return [
+    '## brainclaw — available tools',
+    '',
+    'Beyond the two facades above, these tools are available via MCP:',
+    '',
+    '**Navigate:** `bclaw_switch`, `bclaw_get_discovery`, `bclaw_who`',
+    '**Plans:** `bclaw_create_plan`, `bclaw_list_plans`, `bclaw_update_plan`, `bclaw_add_step`, `bclaw_complete_step`',
+    '**Memory:** `bclaw_search`, `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_update_memory`',
+    '**Awareness:** `bclaw_get_agent_board`, `bclaw_read_inbox`, `bclaw_list_claims`',
+    '**Session:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
   ].join('\n');
 }
 

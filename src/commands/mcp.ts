@@ -449,6 +449,18 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_switch',
+    description: 'Switch active project in a multi-project workspace. Session-scoped by default: only this agent sees the switch, other agents are unaffected. Use list=true to see available projects.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project reference: name, path, or project_id.' },
+        list: { type: 'boolean', description: 'List available projects instead of switching.' },
+        clear: { type: 'boolean', description: 'Clear active project (return to workspace root).' },
+      },
+    },
+  },
+  {
     name: 'bclaw_check_policy',
     description: 'Pre-execution policy check. Verifies claims, constraints, traps and governance instructions for a given scope. Returns blocks (hard stops) and warnings (context to consider). Call before editing to ensure compliance.',
     inputSchema: {
@@ -578,18 +590,6 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['id'],
-    },
-  },
-  {
-    name: 'bclaw_switch',
-    description: 'Switch active project in a multi-project workspace. Session-scoped by default: only this agent sees the switch, other agents are unaffected. Use list=true to see available projects.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        project: { type: 'string', description: 'Project reference: name, path, or project_id.' },
-        list: { type: 'boolean', description: 'List available projects instead of switching.' },
-        clear: { type: 'boolean', description: 'Clear active project (return to workspace root).' },
-      },
     },
   },
   {

@@ -33,8 +33,6 @@ function assertMinimalProtocol(content: string): void {
   assert.ok(content.includes('## brainclaw — session protocol'));
   assert.ok(content.includes('bclaw_work(intent)'));
   assert.ok(content.includes('bclaw_coordinate(intent)'));
-  assert.ok(!content.includes('bclaw_session_start'));
-  assert.ok(!content.includes('bclaw_claim'));
   assert.ok(!content.includes('bclaw_get_context'));
 }
 
@@ -86,6 +84,23 @@ describe('instruction-templates', () => {
     it('does NOT say REQUIRED', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.ok(!result.content.includes('REQUIRED'));
+    });
+
+    it('includes available tools section with categorized tool names', () => {
+      const result = renderBrainclawSection(makeInput('claude-code'));
+      assert.ok(result.sectionsIncluded.includes('available-tools'), 'should include available-tools section');
+      assert.ok(result.content.includes('## brainclaw — available tools'));
+      // Verify tool categories and key tools are present
+      const toolNames = [
+        'bclaw_switch', 'bclaw_get_discovery', 'bclaw_who',
+        'bclaw_create_plan', 'bclaw_list_plans', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',
+        'bclaw_search', 'bclaw_write_note', 'bclaw_quick_capture', 'bclaw_update_memory',
+        'bclaw_get_agent_board', 'bclaw_read_inbox', 'bclaw_list_claims',
+        'bclaw_session_start', 'bclaw_session_end', 'bclaw_claim', 'bclaw_release_claim',
+      ];
+      for (const tool of toolNames) {
+        assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
+      }
     });
 
     it('renderLiveSection returns undefined for tier A', () => {

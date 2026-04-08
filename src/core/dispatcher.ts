@@ -296,10 +296,21 @@ export function generateBrief(
   // Instructions
   parts.push('## Protocol');
   parts.push('1. Read this brief and the plan description');
-  parts.push('2. Call bclaw_claim to claim the scope before editing');
-  parts.push('3. Work in the worktree created by the claim');
-  parts.push('4. Call bclaw_session_end with a narrative when done');
-  parts.push('5. Call bclaw_ack_message on this assignment');
+  parts.push('2. Call bclaw_session_start to register your session');
+  parts.push('3. Call bclaw_claim to claim the scope before editing');
+  parts.push('4. Work in the worktree created by the claim');
+  parts.push('5. Call bclaw_session_end with a narrative when done');
+  parts.push('6. Call bclaw_ack_message on this assignment');
+  parts.push('');
+
+  // Available tools
+  parts.push('## Available tools');
+  parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
+  parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
+  parts.push('- bclaw_get_context (project memory)');
+  parts.push('- bclaw_check_policy (pre-edit verification)');
+  parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
+  parts.push('- bclaw_ack_message (acknowledge assignment)');
   parts.push('');
 
   return parts.join('\n');
@@ -501,7 +512,7 @@ function resolveInvokeTemplate(agentName: string, cwd: string): { command: strin
   return undefined;
 }
 
-function resolveInvokeTemplateCommand(agentName: string, cwd: string): { command: string; env?: Record<string, string> } | undefined {
+function resolveInvokeTemplateCommand(agentName: string, cwd: string, mode?: 'worker' | 'reviewer' | 'consult'): { command: string; env?: Record<string, string> } | undefined {
   const identity = findAgentIdentityByName(agentName, cwd);
   if (identity?.invoke) {
     return {
@@ -510,7 +521,7 @@ function resolveInvokeTemplateCommand(agentName: string, cwd: string): { command
     };
   }
 
-  const defaultTemplate = getDefaultInvokeTemplate(agentName);
+  const defaultTemplate = getDefaultInvokeTemplate(agentName, mode);
   if (!defaultTemplate) return undefined;
 
   return {
@@ -568,7 +579,7 @@ export function buildInvokeCommand(
   brief: string,
   options: BuildInvokeCommandOptions,
 ): { command: string; shell: string; env?: Record<string, string> } {
-  const template = resolveInvokeTemplateCommand(agentName, options.cwd);
+  const template = resolveInvokeTemplateCommand(agentName, options.cwd, options.mode);
   if (!template) {
     throw new Error(`No invoke template found for agent: ${agentName}`);
   }
@@ -582,7 +593,7 @@ export function buildInvokeCommand(
     const briefPath = writeInvokeBriefTempFile(agentName, brief, options.mode);
     const promptExpression = shell === 'bash'
       ? `$(cat ${quoteForBash(briefPath)})`
-      : `$(Get-Content -Raw -LiteralPath ${quotePathForPowerShell(briefPath)})`;
+      : `(Get-Content -Raw -LiteralPath ${quotePathForPowerShell(briefPath)})`;
 
     if (hasDoubleQuotedPromptPlaceholder) {
       promptReplacement = promptExpression;
