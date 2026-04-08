@@ -78,6 +78,10 @@ export interface AgentCapabilityProfile {
   invoke_template?: string;
   /** Binary that must be in PATH for invoke_template */
   invoke_binary?: string;
+  /** CLI invoke template for review mode (read-only tools). Falls back to invoke_template */
+  invoke_review_template?: string;
+  /** CLI invoke template for consult mode (read-only, advisory). Falls back to invoke_review_template or invoke_template */
+  invoke_consult_template?: string;
 }
 
 export type AgentName =
@@ -109,6 +113,8 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'cli' },
     invoke_template: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
     invoke_binary: 'claude',
+    invoke_review_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
+    invoke_consult_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
   },
   cursor: {
     name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
@@ -138,6 +144,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'extension' },
     invoke_template: 'cline "{prompt}"',
     invoke_binary: 'cline',
+    invoke_review_template: 'cline "{prompt}"',
   },
   roo: {
     name: 'roo', category: 'code-agent', workflowModel: 'interactive',
@@ -167,6 +174,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'cli' },
     invoke_template: 'opencode run "{prompt}"',
     invoke_binary: 'opencode',
+    invoke_review_template: 'opencode run "{prompt}"',
   },
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
@@ -178,6 +186,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'cli' },
     invoke_template: 'codex exec --full-auto "{prompt}"',
     invoke_binary: 'codex',
+    invoke_review_template: 'codex exec --full-auto "{prompt}"',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
@@ -189,6 +198,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'cli' },
     invoke_template: 'gemini -p "{prompt}"',
     invoke_binary: 'gemini',
+    invoke_review_template: 'gemini -p "{prompt}"',
   },
   'github-copilot': {
     name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
@@ -200,6 +210,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'extension' },
     invoke_template: 'gh copilot -p "{prompt}"',
     invoke_binary: 'gh',
+    invoke_review_template: 'gh copilot -p "{prompt}"',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---
@@ -279,30 +290,50 @@ export function getCapabilityProfile(name: string): AgentCapabilityProfile | und
 
 // ── Default invoke templates for CLI-spawnable agents ──────────────────────
 
+export type InvokeMode = 'worker' | 'reviewer' | 'consult';
+
 export interface DefaultInvokeTemplate {
   command: string;
   channel: 'spawn' | 'inbox';
   timeout: number;
   /** Binary that must be in PATH for this template to work */
   binary: string;
+  /** Mode this template was resolved for */
+  mode: InvokeMode;
 }
 
 /**
  * Get the default invoke template for an agent.
  * Reads invoke_template / invoke_binary from the capability profile.
+ * Mode selects the appropriate template variant with fallback chain:
+ *   - 'worker' (default): invoke_template
+ *   - 'reviewer': invoke_review_template → invoke_template
+ *   - 'consult': invoke_consult_template → invoke_review_template → invoke_template
  * Returns undefined for IDE-only agents or unknown agents without a CLI template.
  */
-export function getDefaultInvokeTemplate(name: string): DefaultInvokeTemplate | undefined {
+export function getDefaultInvokeTemplate(name: string, mode: InvokeMode = 'worker'): DefaultInvokeTemplate | undefined {
   const profile = getCapabilityProfile(name);
-  if (profile?.invoke_template && profile?.invoke_binary) {
-    return {
-      command: profile.invoke_template,
-      channel: 'spawn',
-      timeout: 600,
-      binary: profile.invoke_binary,
-    };
+  if (!profile?.invoke_template || !profile?.invoke_binary) return undefined;
+
+  let command: string;
+  switch (mode) {
+    case 'consult':
+      command = profile.invoke_consult_template ?? profile.invoke_review_template ?? profile.invoke_template;
+      break;
+    case 'reviewer':
+      command = profile.invoke_review_template ?? profile.invoke_template;
+      break;
+    default:
+      command = profile.invoke_template;
   }
-  return undefined;
+
+  return {
+    command,
+    channel: 'spawn',
+    timeout: 600,
+    binary: profile.invoke_binary,
+    mode,
+  };
 }
 
 /**
@@ -325,6 +356,7 @@ export function getSpawnableAgents(): Array<{ name: string; template: DefaultInv
           channel: 'spawn',
           timeout: 600,
           binary: profile.invoke_binary,
+          mode: 'worker',
         },
       });
     }
