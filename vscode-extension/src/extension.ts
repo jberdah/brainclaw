@@ -178,6 +178,33 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // --- Explorer context menu commands ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainclaw.claimScope', async (uri: vscode.Uri) => {
+      if (!cwd || !uri) return;
+      const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
+      const description = await vscode.window.showInputBox({ prompt: 'Claim description', placeHolder: 'What are you working on?' });
+      if (!description) return;
+      treeProvider?.exec(`claim create "${scope}" --description "${description}"`);
+      fileDecoProvider?.refresh();
+    }),
+    vscode.commands.registerCommand('brainclaw.addTrap', async (uri: vscode.Uri) => {
+      if (!cwd || !uri) return;
+      const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
+      const text = await vscode.window.showInputBox({ prompt: 'Trap description', placeHolder: 'What can go wrong here?' });
+      if (!text) return;
+      treeProvider?.exec(`memory create trap "${text}" --path "${scope}" --severity medium`);
+    }),
+    vscode.commands.registerCommand('brainclaw.viewMemory', async (uri: vscode.Uri) => {
+      if (!cwd || !uri) return;
+      const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
+      treeProvider?.exec(`search "${scope}"`);
+      const output = vscode.window.createOutputChannel('Brainclaw Memory');
+      output.appendLine(`Searching memory for scope: ${scope}`);
+      output.show();
+    }),
+  );
+
   // Status bar item — unseen event count
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   statusBarItem.command = 'brainclaw.clearNotifications';

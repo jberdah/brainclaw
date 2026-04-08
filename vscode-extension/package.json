@@ -59,6 +59,18 @@
         "command": "brainclaw.releaseClaim",
         "title": "Release Claim",
         "icon": "$(unlock)"
+      },
+      {
+        "command": "brainclaw.claimScope",
+        "title": "Brainclaw: Claim this scope"
+      },
+      {
+        "command": "brainclaw.addTrap",
+        "title": "Brainclaw: Add trap here"
+      },
+      {
+        "command": "brainclaw.viewMemory",
+        "title": "Brainclaw: View memory for scope"
       }
     ],
     "menus": {
@@ -84,6 +96,23 @@
           "command": "brainclaw.releaseClaim",
           "when": "viewItem == claim",
           "group": "inline"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "brainclaw.claimScope",
+          "when": "brainclaw.active",
+          "group": "brainclaw@1"
+        },
+        {
+          "command": "brainclaw.addTrap",
+          "when": "brainclaw.active",
+          "group": "brainclaw@2"
+        },
+        {
+          "command": "brainclaw.viewMemory",
+          "when": "brainclaw.active",
+          "group": "brainclaw@3"
         }
       ]
     }
