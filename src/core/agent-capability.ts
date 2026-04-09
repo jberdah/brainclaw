@@ -586,6 +586,39 @@ export function buildInvokeCommand(
   };
 }
 
+// ── Brief mode resolution ─────────────────────────────────────────────────
+
+/**
+ * Controls how much content is included in a dispatch brief for an agent.
+ *
+ * - `full`      : Complete brief — Protocol section, available tools, handoffs, context.
+ *                 For CLI-spawnable agents that can call MCP (Claude Code, Cline, etc.).
+ * - `compact`   : Task description + file paths + steps + constraints only.
+ *                 No MCP protocol section — for sandboxed agents that cannot call MCP (Codex).
+ * - `task_card` : Ultra-short, human-readable task card.
+ *                 For IDE-only agents where a human will paste the task (Cursor, Windsurf, Roo).
+ */
+export type BriefMode = 'full' | 'compact' | 'task_card';
+
+/**
+ * Resolve the appropriate brief mode for an agent based on its capability profile.
+ *
+ * Resolution rules:
+ *   1. Agent is NOT spawnable_cli (IDE-only) → 'task_card'
+ *   2. Agent's prompt_delivery.preferred is 'stdin_pipe' (sandboxed) → 'compact'
+ *   3. Otherwise → 'full'
+ *
+ * Falls back to 'full' for unknown agents.
+ */
+export function resolveBriefMode(agentName: string): BriefMode {
+  const profile = getCapabilityProfile(agentName);
+  if (!profile) return 'full';
+
+  if (!profile.runtime.spawnable_cli) return 'task_card';
+  if (profile.prompt_delivery.preferred === 'stdin_pipe') return 'compact';
+  return 'full';
+}
+
 // ── getDefaultInvokeTemplate ───────────────────────────────────────────────
 
 /**
