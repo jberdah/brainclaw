@@ -96,7 +96,6 @@ export function runDispatch(options: DispatchCommandOptions): void {
     lanes: options.lanes?.split(',').map(l => l.trim()),
     maxAssignments: options.max,
     dryRun: options.dry,
-    spawn: options.spawn,
     dispatcherAgent,
   }, effectiveCwd);
 
@@ -124,8 +123,7 @@ export function runDispatch(options: DispatchCommandOptions): void {
     console.log(`\n  ${options.dry ? 'Would assign' : 'Assigned'}:`);
     for (const msg of dispatchResult.messages_sent) {
       const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-      const ch = msg.channel === 'spawn' ? ' [spawned' + (msg.pid ? ` pid:${msg.pid}` : '') + ']' : ' [inbox]';
-      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
+      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane} [inbox]`);
     }
   }
 
@@ -164,7 +162,6 @@ export function runDispatchReview(options: DispatchReviewCommandOptions): void {
   const result = dispatchReview({
     handoffId: options.handoff,
     reviewer: options.reviewer,
-    spawn: options.spawn,
     dryRun: options.dry,
     dispatcherAgent,
   }, effectiveCwd);
@@ -182,8 +179,7 @@ export function runDispatchReview(options: DispatchReviewCommandOptions): void {
 
   if (result.reviews_sent.length > 0) {
     for (const r of result.reviews_sent) {
-      const ch = r.channel === 'spawn' ? ' [spawned]' : ' [inbox]';
-      console.log(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''}${ch}`);
+      console.log(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''} [inbox]`);
     }
   } else {
     console.log('  No handoffs ready for review.');

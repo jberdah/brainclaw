@@ -537,7 +537,6 @@ const MCP_WRITE_TOOLS = [
         lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
         dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
-        spawn: { type: 'boolean', description: 'Directly spawn CLI agents as detached processes (not recommended — breaks in sandboxed environments). Default: false. When false, returns bash commands the coordinator should run instead.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -545,13 +544,12 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_dispatch_review',
-    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox or spawn. Requires trusted trust level.',
+    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox. Requires trusted trust level.',
     inputSchema: {
       type: 'object',
       properties: {
         handoffId: { type: 'string', description: 'Specific handoff ID to review. Default: auto-detect all reviewable handoffs.' },
         reviewer: { type: 'string', description: 'Specific reviewer agent. Default: any available agent that is not the author.' },
-        spawn: { type: 'boolean', description: 'Spawn the reviewer CLI agent. Default: false (inbox only).' },
         dryRun: { type: 'boolean', description: 'Preview without sending.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
@@ -2888,7 +2886,6 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           lanes: args.lanes as string[] | undefined,
           maxAssignments: args.maxAssignments as number | undefined,
           dryRun: args.dryRun as boolean | undefined,
-          spawn: args.spawn as boolean | undefined,
           dispatcherAgent: resolved.identity!.agent_name,
           dispatcherAgentId: resolved.identity!.agent_id,
           sessionId: connectionSessionId,
@@ -2915,8 +2912,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           lines.push(args.dryRun ? '  Would assign:' : '  Assigned:');
           for (const msg of dispatchResult.messages_sent) {
             const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-            const ch = msg.channel === 'spawn' ? ' [spawned' + (msg.pid ? ` pid:${msg.pid}` : '') + ']' : ' [inbox]';
-            lines.push(`    ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
+            lines.push(`    ${msg.agent}: ${msg.plan_id}${lane} [inbox]`);
           }
         }
 
@@ -2971,7 +2967,6 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const result = dispatchReview({
           handoffId: args.handoffId as string | undefined,
           reviewer: args.reviewer as string | undefined,
-          spawn: args.spawn as boolean | undefined,
           dryRun: args.dryRun as boolean | undefined,
           dispatcherAgent: resolved.identity!.agent_name,
           dispatcherAgentId: resolved.identity!.agent_id,
@@ -2987,8 +2982,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
 
         if (result.reviews_sent.length > 0) {
           for (const r of result.reviews_sent) {
-            const ch = r.channel === 'spawn' ? ' [spawned]' : ' [inbox]';
-            lines.push(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''}${ch}`);
+            lines.push(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''} [inbox]`);
           }
         } else {
           lines.push('  No handoffs ready for review.');
