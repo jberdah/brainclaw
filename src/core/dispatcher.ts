@@ -17,7 +17,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, type BriefMode } from './agent-capability.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -205,12 +205,37 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
 
 /**
  * Generate a dispatch brief for an agent about to work on a plan.
+ * The brief content adapts to the agent's capabilities via briefMode:
+ * - 'full': complete brief with Protocol + Available tools (MCP-capable agents)
+ * - 'compact': task + steps + constraints only (sandboxed agents like Codex)
+ * - 'task_card': ultra-short human-readable card (IDE-only agents)
  */
 export function generateBrief(
   plan: PlanItem,
   item: SequenceItem,
   cwd: string,
+  briefMode?: BriefMode,
 ): string {
+  const mode = briefMode ?? 'full';
+
+  // ── task_card: ultra-short for IDE agents ──────────────────
+  if (mode === 'task_card') {
+    const parts: string[] = [];
+    parts.push(`Task: ${plan.text}`);
+    parts.push(`Plan: ${plan.id}${plan.short_label ? ` (${plan.short_label})` : ''}`);
+    parts.push(`Priority: ${plan.priority}`);
+    if (item.lane) parts.push(`Lane: ${item.lane}`);
+    if (item.scope_hint) parts.push(`Scope: ${item.scope_hint}`);
+    if (plan.steps?.length) {
+      parts.push('');
+      for (const step of plan.steps) {
+        const check = step.status === 'done' ? '[x]' : '[ ]';
+        parts.push(`${check} ${step.text}`);
+      }
+    }
+    return parts.join('\n');
+  }
+
   const state = loadState(cwd);
 
   // Find relevant handoffs (previous work on this plan or related plans)
@@ -260,13 +285,14 @@ export function generateBrief(
     parts.push('');
   }
 
-  // Prior handoffs on this plan
+  // Prior handoffs on this plan (compact: shorter excerpts)
+  const handoffSliceLen = mode === 'compact' ? 200 : 500;
   if (planHandoffs.length > 0) {
     parts.push('## Prior work on this plan');
-    for (const h of planHandoffs.slice(0, 3)) {
+    for (const h of planHandoffs.slice(0, mode === 'compact' ? 1 : 3)) {
       parts.push(`### Handoff from ${h.from} (${h.status})`);
-      if (h.narrative) parts.push(h.narrative);
-      else parts.push(h.text.slice(0, 500));
+      if (h.narrative) parts.push(h.narrative.slice(0, handoffSliceLen));
+      else parts.push(h.text.slice(0, handoffSliceLen));
       parts.push('');
     }
   }
@@ -274,33 +300,35 @@ export function generateBrief(
   // Context from dependency handoffs
   if (depHandoffs.length > 0) {
     parts.push('## Context from completed dependencies');
-    for (const h of depHandoffs.slice(0, 3)) {
+    for (const h of depHandoffs.slice(0, mode === 'compact' ? 1 : 3)) {
       parts.push(`### ${h.from} on ${h.plan_id}`);
-      if (h.narrative) parts.push(h.narrative);
-      else parts.push(h.text.slice(0, 300));
+      if (h.narrative) parts.push(h.narrative.slice(0, handoffSliceLen));
+      else parts.push(h.text.slice(0, handoffSliceLen));
       parts.push('');
     }
   }
 
-  // Instructions
-  parts.push('## Protocol');
-  parts.push('1. Read this brief and the plan description');
-  parts.push('2. Call bclaw_session_start to register your session');
-  parts.push('3. Call bclaw_claim to claim the scope before editing');
-  parts.push('4. Work in the worktree created by the claim');
-  parts.push('5. Call bclaw_session_end with a narrative when done');
-  parts.push('6. Call bclaw_ack_message on this assignment');
-  parts.push('');
+  // Protocol and Available tools — only for 'full' mode
+  // Compact mode agents (Codex) run in sandboxes without MCP access
+  if (mode === 'full') {
+    parts.push('## Protocol');
+    parts.push('1. Read this brief and the plan description');
+    parts.push('2. Call bclaw_session_start to register your session');
+    parts.push('3. Call bclaw_claim to claim the scope before editing');
+    parts.push('4. Work in the worktree created by the claim');
+    parts.push('5. Call bclaw_session_end with a narrative when done');
+    parts.push('6. Call bclaw_ack_message on this assignment');
+    parts.push('');
 
-  // Available tools
-  parts.push('## Available tools');
-  parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
-  parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
-  parts.push('- bclaw_get_context (project memory)');
-  parts.push('- bclaw_check_policy (pre-edit verification)');
-  parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
-  parts.push('- bclaw_ack_message (acknowledge assignment)');
-  parts.push('');
+    parts.push('## Available tools');
+    parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
+    parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
+    parts.push('- bclaw_get_context (project memory)');
+    parts.push('- bclaw_check_policy (pre-edit verification)');
+    parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
+    parts.push('- bclaw_ack_message (acknowledge assignment)');
+    parts.push('');
+  }
 
   return parts.join('\n');
 }
@@ -376,7 +404,8 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     }
 
     // Generate brief
-    const brief = generateBrief(readyItem.plan, readyItem.item, cwd);
+    const briefMode = resolveBriefMode(targetAgent);
+    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode);
 
     // Build invoke command (if agent is CLI-spawnable)
     const invokeCmd = buildInvokeCommand(targetAgent, brief);
