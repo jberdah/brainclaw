@@ -29,6 +29,9 @@ import {
   ensureContinueMcpConfig,
   ensureOpenCodeMcpConfig,
   ensureAntigravityMcpConfig,
+  ensureCodexMcpConfig,
+  patchAllMcpConfigs,
+  resetMcpCommandCache,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 
@@ -815,6 +818,90 @@ describe('core/agent-files — auto-config writers', () => {
       assert.equal(results[0]?.relativePath, '.gemini/antigravity/mcp_config.json');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates Codex config.toml with forward-slash paths only', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      // Inject a Windows-style path via CODEX_HOME env override
+      const codexHome = path.join(homeDir, '.codex');
+      const result = ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+      assert.ok(result, 'result should be defined');
+      assert.equal(result?.created, true);
+      const filePath = path.join(codexHome, 'config.toml');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      // No unescaped backslashes should appear in any TOML value
+      assert.ok(!content.includes('\\'), 'config.toml must not contain backslash characters');
+      assert.ok(content.includes('[mcp_servers.brainclaw]'));
+      assert.ok(content.includes('BRAINCLAW_AGENT = "codex"'));
+      assert.ok(content.includes('startup_timeout_ms = 20000'));
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not create duplicate sections on repeated ensureCodexMcpConfig calls', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      // First call — creates the file
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+      // Second call — must not duplicate the section
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const filePath = path.join(codexHome, 'config.toml');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const occurrences = (content.match(/\[mcp_servers\.brainclaw\]/g) ?? []).length;
+      assert.equal(occurrences, 1, 'should have exactly one [mcp_servers.brainclaw] section');
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('replaces corrupted/duplicate Codex sections when force-resolved via patchAllMcpConfigs', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      // Simulate a corrupted file with duplicate sections and backslash paths
+      const corrupted = [
+        '[mcp_servers.brainclaw]',
+        'command = "C:/Program Files/nodejs/node.exe"',
+        'args = ["C:\\\\Users\\\\user\\\\brainclaw\\\\dist\\\\cli.js", "mcp"]',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_AGENT = "codex"',
+        '',
+        '[mcp_servers.brainclaw]',
+        'command = "C:/Program Files/nodejs/node.exe"',
+        'args = ["C:\\\\Users\\\\user\\\\brainclaw\\\\dist\\\\cli.js", "mcp"]',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_AGENT = "codex"',
+      ].join('\n') + '\n';
+
+      const filePath = path.join(codexHome, 'config.toml');
+      fs.writeFileSync(filePath, corrupted, 'utf-8');
+
+      // patchAllMcpConfigs sets _forceResolve = true internally, which triggers
+      // the section-replace logic in ensureCodexMcpConfig.
+      resetMcpCommandCache();
+      patchAllMcpConfigs(homeDir, { HOME: homeDir, CODEX_HOME: codexHome });
+
+      const fixed = fs.readFileSync(filePath, 'utf-8');
+      const occurrences = (fixed.match(/\[mcp_servers\.brainclaw\]/g) ?? []).length;
+      assert.equal(occurrences, 1, 'patching should leave exactly one [mcp_servers.brainclaw] section');
+      assert.ok(!fixed.includes('\\\\'), 'no double-backslash escape sequences should remain');
+    } finally {
+      resetMcpCommandCache();
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });

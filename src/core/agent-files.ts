@@ -1165,10 +1165,17 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
 
   const filePath = path.join(codexHome, 'config.toml');
   const mcpCmd = getBrainclawMcpCommand();
+
+  // Normalize all paths to forward slashes so TOML backslash escapes don't
+  // corrupt the file on Windows (e.g. \U would be an invalid unicode escape).
+  const normalizedCommand = mcpCmd.command.replace(/\\/g, '/');
+  const normalizedArgs = mcpCmd.args.map(a => a.replace(/\\/g, '/'));
+
   const brainclawBlock = [
     '\n[mcp_servers.brainclaw]',
-    `command = "${mcpCmd.command.replace(/\\/g, '/')}"`,
-    `args = [${mcpCmd.args.map(a => `"${a}"`).join(', ')}]`,
+    `command = "${normalizedCommand}"`,
+    `args = [${normalizedArgs.map(a => `"${a}"`).join(', ')}]`,
+    'startup_timeout_ms = 20000',
     '',
     '[mcp_servers.brainclaw.env]',
     'BRAINCLAW_AGENT = "codex"',
@@ -1186,11 +1193,10 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     if (!_forceResolve) {
       return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
     }
-    // Force-resolve: replace the existing brainclaw block with updated paths
-    const replaced = existing.replace(
-      /\[mcp_servers\.brainclaw\][^\[]*/s,
-      brainclawBlock.slice(1) + '\n\n',  // slice(1) to remove leading \n
-    );
+    // Force-resolve: replace the existing brainclaw block with updated paths.
+    // Use a line-based section splitter so that `[` characters inside TOML
+    // values (e.g. the args array) don't prematurely end the match.
+    const replaced = replaceTomlSection(existing, 'mcp_servers.brainclaw', brainclawBlock.slice(1) + '\n');
     if (replaced !== existing) {
       fs.writeFileSync(filePath, replaced, 'utf-8');
       return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: true, filePath };
@@ -1211,6 +1217,55 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     updated: fileExisted,
     filePath,
   };
+}
+
+/**
+ * Replace a TOML section (and all its sub-sections) with new content.
+ *
+ * Sections are identified by lines that start with `[` at column 0.  We split
+ * the file into chunks on those boundaries and replace any chunk whose header
+ * matches `sectionName` or starts with `sectionName.` (sub-sections).
+ * This avoids the pitfall of regex `[^\[]*` stopping at `[` characters that
+ * appear inside TOML values such as arrays.
+ */
+function replaceTomlSection(fileContent: string, sectionName: string, newBlock: string): string {
+  const lines = fileContent.split('\n');
+  const sectionHeaderRe = /^\[([^\]]+)\]/;
+
+  // Collect line-ranges for each top-level section start.
+  // We only replace the section matching `sectionName` exactly and
+  // sub-sections starting with `sectionName.` (e.g. mcp_servers.brainclaw.env).
+  const result: string[] = [];
+  let insideTarget = false;
+  let replacementEmitted = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = sectionHeaderRe.exec(line);
+
+    if (m) {
+      const header = m[1];
+      const isTarget = header === sectionName || header.startsWith(sectionName + '.');
+      if (isTarget) {
+        // Skip lines belonging to the target section
+        insideTarget = true;
+        if (!replacementEmitted) {
+          // Emit the replacement block once (before the first matching section)
+          result.push(newBlock);
+          replacementEmitted = true;
+        }
+        continue;
+      } else {
+        insideTarget = false;
+      }
+    }
+
+    if (!insideTarget) {
+      result.push(line);
+    }
+  }
+
+  return result.join('\n');
 }
 
 export function ensureContinueMcpConfig(cwd: string): AutoConfigWriteResult {
