@@ -100,16 +100,28 @@ export function generateMarkdown(state: State, cwd?: string): string {
   lines.push('');
 
   lines.push('## Open handoffs');
-  if (state.open_handoffs.length === 0) {
+  const MAX_HANDOFFS = 10;
+  const MAX_HANDOFF_TEXT = 500;
+  const activeHandoffs = state.open_handoffs
+    .filter((h) => h.status === 'open')
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, MAX_HANDOFFS);
+  const totalOpen = state.open_handoffs.filter((h) => h.status === 'open').length;
+  if (activeHandoffs.length === 0) {
     lines.push('- (none)');
   } else {
-    for (const h of state.open_handoffs) {
+    for (const h of activeHandoffs) {
       const tags = h.tags.length ? ` [${h.tags.join(', ')}]` : '';
       const paths = h.related_paths?.length ? ` → ${h.related_paths.join(', ')}` : '';
       const meta: string[] = [h.status];
       if (h.plan_id) meta.push(`plan: ${h.plan_id}`);
       if (h.project) meta.push(`project: ${h.project}`);
-      lines.push(`- **[${h.id}]** ${h.from} → ${h.to}: ${h.text} _(${meta.join(', ')})_${paths}${tags}`);
+      const text = h.text.length > MAX_HANDOFF_TEXT ? h.text.slice(0, MAX_HANDOFF_TEXT) + '...' : h.text;
+      lines.push(`- **[${h.id}]** ${h.from} → ${h.to}: ${text} _(${meta.join(', ')})_${paths}${tags}`);
+    }
+    const omitted = totalOpen - activeHandoffs.length;
+    if (omitted > 0) {
+      lines.push(`- _(${omitted} older handoffs omitted — use \`bclaw_read_handoff\` to inspect)_`);
     }
   }
   lines.push('');
