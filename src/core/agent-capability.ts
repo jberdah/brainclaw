@@ -218,9 +218,9 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: false },
     prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 4000 },
     execution_env: { surface: 'extension' },
-    invoke_template: 'gh copilot -p "{prompt}"',
-    invoke_binary: 'gh',
-    invoke_review_template: 'gh copilot -p "{prompt}"',
+    invoke_template: 'copilot -p "{prompt}" --allow-all',
+    invoke_binary: 'copilot',
+    invoke_review_template: 'copilot -p "{prompt}" --allow-all-tools --allow-all-paths',
   },
 
   kilocode: {
