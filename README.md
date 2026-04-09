@@ -19,20 +19,6 @@ brainclaw is also starting to model other local AI work surfaces on the same mac
 
 ---
 
-## Target Audiences
-
-brainclaw is built for three distinct audiences. Each has different needs, and every feature should be evaluated against its impact on these profiles.
-
-| Audience | Who | What they need from brainclaw |
-|---|---|---|
-| **End-users & solo devs** | Non-tech creators, solo developers, power-users orchestrating agents | Zero-config onboarding, persistent memory across sessions, seamless multi-agent handoffs |
-| **Teams & ops** | Team developers, project maintainers, CI/CD operators | Async coordination (claims, plans), agent-ready repo standards, headless governance |
-| **AI builders** | Agent integrators, enterprise AI governance | Standard MCP integration, audit trail, custom agent embedding |
-
-For design constraints that guide development decisions per audience, see [`docs/playbooks/`](docs/playbooks/).
-
----
-
 ## What it provides
 
 | | |
@@ -113,42 +99,55 @@ If you want the least surprising setup today, use Linux first. If you are on Win
 
 ---
 
-## Best Setup
+## Get Started
 
-If you want the cleanest Brainclaw onboarding, ask your agent to do it.
+Choose the path that matches how you are using brainclaw.
 
-Example:
+### Using an agent?
+
+Tell the agent directly:
 
 ```text
-Install Brainclaw in this repo, initialize it, configure the agent integration if needed,
-and then use Brainclaw for shared context, plans, claims, and handoffs while you work.
+Install brainclaw in this repo, initialize it, configure the agent integration if needed,
+and then use brainclaw for shared context, plans, claims, and handoffs while you work.
 ```
 
-That is the product's intended entry path.
-The human expresses the intent in plain language. The agent installs Brainclaw, bootstraps the repo, and then keeps using it through MCP and local agent files.
+The agent will run the underlying commands, bootstrap the workspace, and connect through MCP. If you need to run those commands yourself as a fallback:
 
-If the agent supports MCP well, this produces a better bootstrap than a human manually running setup commands first, because the agent can immediately:
+```bash
+npx brainclaw setup --yes
+npx brainclaw init
+```
 
-- set up the workspace in the right environment
-- write the local agent-facing files it will actually use
-- configure MCP where supported
-- start from shared context instead of ad hoc instructions
+See `docs/integrations/overview.md` and `docs/integrations/mcp.md` for the agent-facing runtime path.
+
+### Coordinating a team?
+
+brainclaw provides shared plans, file claims, and Git worktree support to keep multiple agents working without stepping on each other. The coordination model is: one agent works at a time in a given checkout, hands off cleanly, and the next agent resumes from shared context.
+
+Relevant docs: `docs/concepts/plans-and-claims.md`, `docs/quickstart.md`, `docs/server-operations.md`.
+
+### Building an agent integration?
+
+brainclaw exposes 57 MCP tools covering context, board views, plans, claims, agents, instructions, handoffs, and write operations. Each supported agent has a capability profile that determines what gets configured (MCP, hooks, auto-approve, skills, native files).
+
+Relevant docs: `docs/integrations/overview.md`, `docs/integrations/mcp.md`, `docs/cli.md`.
 
 ---
 
 ## Quick Example
 
 ```bash
-# behind the scenes, the agent will typically bootstrap Brainclaw in the repo
+# behind the scenes, the agent will typically bootstrap brainclaw in the repo
 npx brainclaw setup --yes
 npx brainclaw init
 ```
 
-After that, the agent should stay on Brainclaw's MCP path for live state:
+After that, the agent should stay on brainclaw's MCP path for live state:
 
 ```text
 bclaw_session_start      -> open session + return board/context
-bclaw_get_execution_context -> inspect local tooling + notice Brainclaw package updates
+bclaw_get_execution_context -> inspect local tooling + notice brainclaw package updates
 bclaw_get_context        -> fetch fresh prompt-ready context for a path
 bclaw_list_plans         -> inspect shared work
 bclaw_claim              -> claim scope before editing
@@ -165,88 +164,6 @@ brainclaw context --for src/auth/routes.ts --digest
 brainclaw status
 ```
 
-And if the current coding agent wants to hand off a non-code task to another local AI surface for later:
-
-```bash
-brainclaw surface-task create "Generate homepage hero visual" \
-  --target chatgpt \
-  --kind visual_asset \
-  --instructions "Create a lightweight product hero visual for the landing page." \
-  --output assets/hero-home.png
-
-brainclaw surface-task list
-```
-
----
-
-## Installation
-
-The intended path is agent-driven bootstrap inside the target repo, not a human doing a manual install flow first.
-
-In practice, that means:
-
-1. tell the agent to install and initialize Brainclaw in the repo
-2. let the agent bootstrap MCP and native agent files
-3. let the agent keep using Brainclaw for shared context and coordination while it works
-
-If you need the underlying commands, the agent will usually do something close to:
-
-```bash
-npx brainclaw setup --yes
-npx brainclaw init
-```
-
-That gives the agent a better bootstrap path because Brainclaw can immediately:
-
-- detect the workspace
-- write native agent files
-- configure MCP where supported
-- seed local project memory and coordination state
-
-If you want a machine-level CLI for operator workflows, debugging, or repeated local use, a global install is still available, but it is not the primary onboarding path:
-
-```bash
-npm install -g brainclaw
-```
-
-By default, Brainclaw's update checks for end-user installs follow the public npm `latest` channel. Projects that need a different track can override `brainclaw_update_source`, for example to use `prelaunch` or a local tarball channel.
-
-If you are working from source while developing Brainclaw itself:
-
-```bash
-npm install
-npm run build
-```
-
-Also available as `bclaw`:
-
-```bash
-bclaw init
-bclaw status
-```
-
----
-
-## Quickstart
-
-Start here conceptually:
-
-1. ask the agent to install and initialize Brainclaw in the repo
-2. let the agent use MCP for dynamic state
-3. use the CLI yourself only when you need operator-level inspection or fallback access
-
-Then choose the entry path that matches your surface:
-
-- agent-first runtime: start with `docs/integrations/overview.md` and `docs/integrations/mcp.md`
-- operator CLI: use `docs/quickstart.md` and `docs/cli.md`
-- brownfield onboarding: use `brainclaw bootstrap` and the onboarding guides in `docs/`
-
-If you are evaluating Brainclaw as a product, start with the agent-first runtime path, not the CLI reference.
-
-Detailed Markdown guides are bundled in the npm package under `docs/`.
-
-For release-visible surface changes, use `docs/release-maintenance.md` before publishing a local tarball or a new package version.
-
 ---
 
 ## Current Limitation
@@ -261,23 +178,6 @@ Recommended use today:
 2. if you need stronger isolation, use a dedicated worktree per session or agent
 3. use handoffs when switching from one agent to another
 4. use shared plans, claims, and context to preserve continuity
-
----
-
-## How it fits into agent workflows
-
-brainclaw sits *alongside* Copilot, Claude Code, Cursor, Codex, Windsurf, Cline, Roo, Continue, OpenCode, and Antigravity/Gemini CLI.
-
-Typical agent-first flow:
-
-1. a human asks the agent to install and initialize Brainclaw in the repo
-2. the agent bootstraps Brainclaw in the right environment for that workspace
-3. the agent connects through MCP for fresh context, board views, plans, claims, and runtime writes
-4. native agent files provide local guidance and workflow reminders in the surface the agent already uses
-5. humans use the CLI for inspection, scripting, release, and fallback operations
-6. shared plans, claims, handoffs, and runtime notes keep the next agent resumeable
-
-brainclaw exposes collaboration views through MCP-readable tools, including context, board views, and structured lists for plans, claims, agents, instructions, and candidates. Readable local files still matter, but MCP is the stronger path for dynamic state and write operations.
 
 ---
 
