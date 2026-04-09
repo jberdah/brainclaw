@@ -829,6 +829,34 @@ brainclaw codev "Migration strategy" --spawn --agents claude-code,codex --rounds
 brainclaw codev --personas list
 ```
 
+### `brainclaw codev-metrics <thread>`
+
+Show per-agent average and p95 response time metrics for a CoDev thread. Useful for diagnosing slow agents or comparing model performance across a multi-agent discussion.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw codev-metrics thr_abc123
+brainclaw codev-metrics thr_abc123 --json
+```
+
+### `brainclaw run [profile-name]`
+
+Run an agent profile, or list all available profiles if no name is given. Profiles are named invoke templates that describe how to launch a specific agent CLI for dispatch purposes.
+
+| Option | Description |
+|---|---|
+| `--dry` | Print the resolved command without executing |
+| `--agent <name>` | Override the invoke template with a known agent |
+
+```bash
+brainclaw run                    # list available profiles
+brainclaw run claude-code        # run the claude-code profile
+brainclaw run claude-code --dry  # preview the resolved command
+```
+
 ### `brainclaw plan create <text>`
 
 Create a shared work item.
@@ -953,6 +981,66 @@ brainclaw update-handoff hnd_001 --to alice
 
 ---
 
+## Dispatch
+
+The `dispatch` command group manages the local agent dispatcher: it analyzes the active sequence for lane readiness and assigns work to available agents.
+
+### `brainclaw dispatch analysis`
+
+Analyze the active sequence and show lane status: ready, active, blocked, and done lanes.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw dispatch analysis
+brainclaw dispatch analysis --json
+```
+
+### `brainclaw dispatch run`
+
+Run a dispatch cycle: assign ready lanes to available agents. Optionally preview assignments or spawn CLI agents autonomously.
+
+| Option | Description |
+|---|---|
+| `--agents <names>` | Comma-separated list of agents to dispatch to |
+| `--lanes <names>` | Comma-separated list of lanes to dispatch |
+| `--max <n>` | Maximum number of assignments |
+| `--dry` | Preview assignments without sending messages |
+| `--spawn` | Autonomously launch CLI agents with invoke templates |
+| `--agent <name>` | Dispatcher agent name |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw dispatch run
+brainclaw dispatch run --dry
+brainclaw dispatch run --spawn --agents claude-code,codex
+brainclaw dispatch run --lanes docs,tests --max 2 --json
+```
+
+### `brainclaw dispatch review`
+
+Dispatch code reviews for completed handoffs. Finds handoffs ready for review and sends review assignments to available agents.
+
+| Option | Description |
+|---|---|
+| `--handoff <id>` | Specific handoff ID to review |
+| `--reviewer <name>` | Specific reviewer agent |
+| `--spawn` | Launch the reviewer CLI agent |
+| `--dry` | Preview without sending |
+| `--agent <name>` | Dispatcher agent name |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw dispatch review
+brainclaw dispatch review --handoff hnd_001 --reviewer codex
+brainclaw dispatch review --dry
+brainclaw dispatch review --spawn --json
+```
+
+---
+
 ## Claims and Coordination
 
 ### `brainclaw claim create <description>`
@@ -1024,6 +1112,94 @@ Display a coordination snapshot showing agent activity and file ownership.
 brainclaw agent-board --agent copilot --project auth
 brainclaw agent-board --for src/auth/routes.ts --json
 brainclaw agent-board --suggest --capabilities
+```
+
+---
+
+## Inbox
+
+The `inbox` command group manages inter-agent messaging. Agents use inbox messages to assign work, request reviews, share information, and carry on structured conversations.
+
+### `brainclaw inbox list`
+
+List inbox messages. Defaults to pending messages only for the current agent.
+
+| Option | Description |
+|---|---|
+| `--agent <name>` | Agent name |
+| `--status <status>` | Filter by status: `pending`, `read`, `acknowledged`, `archived` |
+| `--type <type>` | Filter by type: `assign`, `review`, `rfc`, `info`, `reply` |
+| `--thread <id>` | Filter by thread ID |
+| `--all` | Show all messages, not just pending |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw inbox list
+brainclaw inbox list --all
+brainclaw inbox list --status acknowledged --agent copilot
+brainclaw inbox list --type assign --json
+```
+
+### `brainclaw inbox ack <id>`
+
+Acknowledge a message to confirm receipt.
+
+| Option | Description |
+|---|---|
+| `--agent <name>` | Agent name |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw inbox ack msg_abc123
+brainclaw inbox ack msg_abc123 --agent copilot
+```
+
+### `brainclaw inbox archive <id>`
+
+Archive a message to remove it from the active inbox.
+
+| Option | Description |
+|---|---|
+| `--agent <name>` | Agent name |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw inbox archive msg_abc123
+brainclaw inbox archive msg_abc123 --json
+```
+
+### `brainclaw inbox send <to> <text>`
+
+Send a message to another agent.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Message type: `assign`, `review`, `rfc`, `info`, `reply` (default: `info`) |
+| `--ref <id>` | Reference to a plan, sequence, or other entity |
+| `--scope <path>` | File scope |
+| `--thread <id>` | Thread ID for conversations |
+| `--ack` | Require acknowledgment from the recipient |
+| `--agent <name>` | Sender agent name |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw inbox send copilot "Please review the auth module changes"
+brainclaw inbox send codex "Ready for review" --type review --ref hnd_001
+brainclaw inbox send alice "Blocked on payments integration" --type rfc --ack
+brainclaw inbox send copilot "Reply on thread" --type reply --thread thr_001
+```
+
+### `brainclaw inbox thread <id>`
+
+Show all messages in a thread, in chronological order.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw inbox thread thr_001
+brainclaw inbox thread thr_001 --json
 ```
 
 ---
@@ -1380,6 +1556,51 @@ brainclaw push --remote origin --message "chore: push memory state" --json
 
 ---
 
+## Federation
+
+The `federation` command group manages cloud signal exchange with `app.brainclaw.dev`. Federation requires `BRAINCLAW_CLOUD_API_KEY` to be set. It is a planned premium tier for cross-machine and cross-organization coordination.
+
+### `brainclaw federation push <message>`
+
+Push a test signal to the cloud. The signal is sent from the current project and agent to a target project or broadcast address.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Signal type (default: `runtime_note`). Accepted values: `signal`, `handoff`, `candidate`, `runtime_note`, `board_snapshot` |
+| `--to-project <project>` | Target project name (default: `broadcast`) |
+| `--to-agent <agent>` | Target agent name |
+
+```bash
+brainclaw federation push "Auth rollout complete" --to-project lodestar
+brainclaw federation push "Blocked on payments" --type runtime_note --to-agent copilot
+```
+
+### `brainclaw federation pull`
+
+Pull signals from the cloud inbox for the current agent.
+
+| Option | Description |
+|---|---|
+| `--agent <name>` | Agent name to pull for (default: auto-detected) |
+| `--since <date>` | Only pull signals after this ISO date |
+| `--limit <n>` | Maximum number of signals to pull (default: 20) |
+
+```bash
+brainclaw federation pull
+brainclaw federation pull --since 2026-04-01
+brainclaw federation pull --agent copilot --limit 50
+```
+
+### `brainclaw federation status`
+
+Check cloud federation configuration: shows the configured cloud URL, whether the API key is set, and pings the cloud health endpoint if configured.
+
+```bash
+brainclaw federation status
+```
+
+---
+
 ## Monitoring and Maintenance
 
 ### `brainclaw watch`
@@ -1421,6 +1642,44 @@ Remove expired memory items.
 
 ```bash
 brainclaw prune --expired
+```
+
+### `brainclaw compact`
+
+LLM-driven semantic memory compaction. Archives old items that are superseded or low-signal and provides a summary template for review. Use `--assess` to see what would be compacted before committing.
+
+| Option | Description |
+|---|---|
+| `--assess` | Show pressure assessment and compaction template without archiving |
+| `--dry-run` | Preview eligible items without archiving |
+| `--max-items <n>` | Maximum items to compact (default: 20) |
+| `--min-age <days>` | Minimum age in days for eligibility (default: 7) |
+
+```bash
+brainclaw compact --assess
+brainclaw compact --dry-run
+brainclaw compact --max-items 10 --min-age 14
+```
+
+### `brainclaw refresh`
+
+Refresh live companion files with current state (plans, claims, traps, sequences). These files are gitignored and safe to run frequently. Use this after a bulk memory operation or when an agent's companion view may be stale.
+
+```bash
+brainclaw refresh
+```
+
+### `brainclaw patch-configs`
+
+Patch all MCP config files to use the current brainclaw binary path. Run this after reinstalling or moving the brainclaw binary to ensure all agent MCP integrations point to the correct executable.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw patch-configs
+brainclaw patch-configs --json
 ```
 
 ### `brainclaw rollback`
@@ -1655,6 +1914,8 @@ Subcommands:
 - `brainclaw worktree list` — list known worktrees for the current project
 - `brainclaw worktree remove <path>` — remove a linked worktree
 - `brainclaw worktree prune` — prune stale Git worktree administrative files
+- `brainclaw worktree clean` — remove merged worktrees and orphan directories
+- `brainclaw worktree merge <branch>` — merge a worktree branch with auto-restoration
 
 `create` options:
 
@@ -1668,6 +1929,27 @@ Subcommands:
 | Option | Description |
 |---|---|
 | `--force` | Force removal even with uncommitted changes |
+
+`clean` options:
+
+| Option | Description |
+|---|---|
+| `--force` | Force removal even with uncommitted changes |
+| `--dry-run` | Show what would be removed without actually removing |
+
+`merge` options:
+
+| Option | Description |
+|---|---|
+| `-m, --message <message>` | Merge commit message |
+| `--dry-run` | Show what would be merged without committing |
+
+```bash
+brainclaw worktree clean --dry-run
+brainclaw worktree clean --force
+brainclaw worktree merge feat/my-feature
+brainclaw worktree merge feat/my-feature --dry-run
+```
 
 ### `brainclaw memory-log`
 
