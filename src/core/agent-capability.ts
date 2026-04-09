@@ -98,6 +98,7 @@ export type AgentName =
   | 'codex'
   | 'antigravity'
   | 'github-copilot'
+  | 'kilocode'
   | 'openclaw'
   | 'nanoclaw'
   | 'nemoclaw'
@@ -220,6 +221,20 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_template: 'gh copilot -p "{prompt}"',
     invoke_binary: 'gh',
     invoke_review_template: 'gh copilot -p "{prompt}"',
+  },
+
+  kilocode: {
+    name: 'kilocode', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    instructionFile: '.kilo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
+    role_capabilities: ['execute', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'kilo run --auto "{prompt}"',
+    invoke_binary: 'kilo',
+    invoke_review_template: 'kilo run --auto "{prompt}"',
+    invoke_consult_template: 'kilo run --auto "{prompt}"',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---
