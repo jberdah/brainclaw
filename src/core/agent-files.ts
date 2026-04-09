@@ -1038,6 +1038,23 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   }
   permissions.allow = allow;
 
+  // Ensure worktree base directories are in additionalDirectories
+  // so dispatched sub-agents can Edit/Write files in their worktrees
+  const additionalDirs = Array.isArray(permissions.additionalDirectories)
+    ? [...permissions.additionalDirectories as string[]]
+    : [];
+  const worktreeDirs = [
+    path.join(cwd, '.claude', 'worktrees'),           // Claude Code Agent tool worktrees
+    path.join(os.homedir(), '.brainclaw', 'worktrees'), // brainclaw claim worktrees
+  ];
+  for (const dir of worktreeDirs) {
+    const normalized = dir.replace(/\\/g, '/');
+    if (!additionalDirs.some(d => (d as string).replace(/\\/g, '/') === normalized)) {
+      additionalDirs.push(dir);
+    }
+  }
+  permissions.additionalDirectories = additionalDirs;
+
   // Merge hooks — UserPromptSubmit opens a session on first prompt, diff on subsequent
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
   const mcpCmd = getBrainclawMcpCommand();
