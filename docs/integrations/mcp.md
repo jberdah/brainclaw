@@ -46,9 +46,11 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
 | `bclaw_bootstrap` | Derive brownfield bootstrap signals, return adaptive interview prompts, accept structured interview answers, and preview/apply a selective import proposal |
 | `bclaw_get_execution_context` | Inspect local execution context, installable update status, and agent tooling |
+| `bclaw_release_notes` | Agent-first release notes for the latest installable Brainclaw version: highlights, breaking risk, and action recommendation |
 | `bclaw_read_handoff` | Read active handoffs |
 | `bclaw_get_agent_board` | Coordination snapshot |
 | `bclaw_list_plans` | Structured plan listing with filters, pagination (`limit`/`offset`), `compact` mode, and `id` lookup |
+| `bclaw_list_sequences` | Coordination sequence listing with filters on status and id, supports `compact` mode |
 | `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
 | `bclaw_list_agents` | Registered agent inventory, optionally with bounded reputation |
 | `bclaw_list_instructions` | Raw or resolved instruction listing |
@@ -65,12 +67,17 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_get_capabilities` | List registered project capabilities |
 | `bclaw_list_tools` | List registered project tools |
 | `bclaw_search_tools` | Search tools by name or description |
+| `bclaw_read_inbox` | Read messages from an agent inbox; filter by status, type, or thread; supports `markAsRead` |
+| `bclaw_get_thread` | Get all messages in a thread across all agent inboxes |
+| `bclaw_dispatch_analysis` | Analyze the active sequence: show ready, active, blocked, and done lanes plus available agents |
+| `bclaw_check_security` | Supply chain security scores for npm/pypi packages via Socket.dev (pass/warn/block verdict) |
 
 **Write tools** (contributor trust or above):
 
 | Tool | Purpose |
 |---|---|
 | `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
+| `bclaw_quick_capture` | Capture free-form text and classify it into a decision, trap, or runtime note using keyword heuristics |
 | `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
 | `bclaw_accept` | Accept a pending candidate into canonical memory |
 | `bclaw_reject` | Reject a pending candidate |
@@ -82,6 +89,10 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
 | `bclaw_add_step` | Add a sub-step to a plan item |
 | `bclaw_complete_step` | Mark a plan sub-step as done |
+| `bclaw_create_sequence` | Create a coordination sequence shared by agents |
+| `bclaw_update_sequence` | Update a sequence's status, metadata, or items |
+| `bclaw_send_message` | Send a message to another agent's inbox (assign, review, rfc, info, reply) |
+| `bclaw_ack_message` | Acknowledge a message in your inbox after processing it |
 | `bclaw_switch` | Change the active project for subsequent tool calls |
 | `bclaw_setup` | Agent-driven onboarding wizard |
 | `bclaw_delete_memory` | Delete a memory item by ID |
@@ -89,6 +100,21 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_update_handoff` | Update a handoff status or add narrative |
 | `bclaw_add_capability` | Register a project capability |
 | `bclaw_add_tool` | Register a project tool |
+
+**Write tools** (trusted trust or above):
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_dispatch` | Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to available agents; supports `dryRun` and `spawn` |
+| `bclaw_dispatch_review` | Dispatch code reviews for completed handoffs: auto-detects reviewable handoffs, generates a structured review brief, and delivers it via inbox or spawn |
+| `bclaw_compact` | LLM-driven semantic memory compaction (two-phase): phase 1 returns pressure assessment and eligible items, phase 2 archives items and creates new durable memory entries |
+
+**Facade tools** (auto-registers identity, no pre-existing trust required):
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_work` | Facade entry point: start session + load context + optionally claim a scope in one call; `intent` controls behavior (`execute` creates a claim, `consult`/`resume`/`review` skip it) |
+| `bclaw_coordinate` | Multi-agent coordination facade: assign tasks (with claims), consult agents (no claim), create a review candidate, reroute a claim, or summarize a thread |
 
 ## When To Use MCP Versus Other Surfaces
 
