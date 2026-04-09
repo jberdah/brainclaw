@@ -51,7 +51,7 @@ import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPrevie
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
-import { sendMessage, ackMessage, countPending, countActionable, getThread } from '../core/messaging.js';
+import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
@@ -3659,6 +3659,31 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             continue;
           }
           const channel = resolveDeliveryChannel(profile);
+          const assignScope = req.scope ?? req.task;
+
+          // Guard: warn if there is already a non-archived assign message for this agent+scope
+          if (hasActiveAssignment(agentName, assignScope, cwd)) {
+            warnings.push(JSON.stringify({
+              warning: 'plan_already_assigned',
+              plan_id: assignScope,
+              existing_agent: agentName,
+            }));
+          }
+
+          // Guard: warn if there is already an active claim on the same scope
+          const conflictingClaims = listClaims(cwd).filter(
+            (c) => c.status === 'active' && c.scope === assignScope,
+          );
+          if (conflictingClaims.length > 0) {
+            const existing = conflictingClaims[0];
+            warnings.push(JSON.stringify({
+              warning: 'scope_already_claimed',
+              scope: assignScope,
+              existing_agent: existing.agent,
+              existing_claim_id: existing.id,
+            }));
+          }
+
           const claimId = generateClaimId();
           saveClaim({
             id: claimId,
