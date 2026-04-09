@@ -287,13 +287,20 @@ function renderAvailableTools(): string {
   return [
     '## brainclaw — available tools',
     '',
-    'Beyond the two facades above, these tools are available via MCP:',
+    'Beyond the two facades above, 57 tools are available via MCP (use tools/list for full catalog):',
     '',
-    '**Navigate:** `bclaw_switch`, `bclaw_get_discovery`, `bclaw_who`',
-    '**Plans:** `bclaw_create_plan`, `bclaw_list_plans`, `bclaw_update_plan`, `bclaw_add_step`, `bclaw_complete_step`',
-    '**Memory:** `bclaw_search`, `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_update_memory`',
-    '**Awareness:** `bclaw_get_agent_board`, `bclaw_read_inbox`, `bclaw_list_claims`',
+    '**Context:** `bclaw_get_context`, `bclaw_get_execution_context`, `bclaw_bootstrap`, `bclaw_release_notes`',
     '**Session:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
+    '**Memory:** `bclaw_search`, `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_update_memory`, `bclaw_delete_memory`, `bclaw_compact`',
+    '**Plans:** `bclaw_create_plan`, `bclaw_list_plans`, `bclaw_update_plan`, `bclaw_add_step`, `bclaw_complete_step`',
+    '**Sequences:** `bclaw_create_sequence`, `bclaw_list_sequences`, `bclaw_update_sequence`',
+    '**Dispatch:** `bclaw_dispatch`, `bclaw_dispatch_analysis`, `bclaw_dispatch_review`',
+    '**Messaging:** `bclaw_send_message`, `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_get_thread`',
+    '**Review:** `bclaw_create_candidate`, `bclaw_list_candidates`, `bclaw_accept`, `bclaw_reject`',
+    '**Awareness:** `bclaw_get_agent_board`, `bclaw_list_claims`, `bclaw_list_agents`, `bclaw_who`, `bclaw_conflict_check`',
+    '**Handoffs:** `bclaw_read_handoff`, `bclaw_update_handoff`',
+    '**Navigate:** `bclaw_switch`, `bclaw_get_discovery`',
+    '**Governance:** `bclaw_check_policy`, `bclaw_audit`, `bclaw_history`, `bclaw_doctor`, `bclaw_check_security`',
   ].join('\n');
 }
 

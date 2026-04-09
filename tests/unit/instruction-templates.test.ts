@@ -92,11 +92,23 @@ describe('instruction-templates', () => {
       assert.ok(result.content.includes('## brainclaw — available tools'));
       // Verify tool categories and key tools are present
       const toolNames = [
-        'bclaw_switch', 'bclaw_get_discovery', 'bclaw_who',
-        'bclaw_create_plan', 'bclaw_list_plans', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',
-        'bclaw_search', 'bclaw_write_note', 'bclaw_quick_capture', 'bclaw_update_memory',
-        'bclaw_get_agent_board', 'bclaw_read_inbox', 'bclaw_list_claims',
+        // Context
+        'bclaw_get_context', 'bclaw_get_execution_context', 'bclaw_bootstrap',
+        // Session
         'bclaw_session_start', 'bclaw_session_end', 'bclaw_claim', 'bclaw_release_claim',
+        // Memory
+        'bclaw_search', 'bclaw_write_note', 'bclaw_quick_capture', 'bclaw_update_memory', 'bclaw_compact',
+        // Plans & Sequences
+        'bclaw_create_plan', 'bclaw_list_plans', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',
+        'bclaw_create_sequence', 'bclaw_list_sequences', 'bclaw_update_sequence',
+        // Dispatch & Messaging
+        'bclaw_dispatch', 'bclaw_dispatch_analysis', 'bclaw_send_message', 'bclaw_read_inbox', 'bclaw_get_thread',
+        // Review
+        'bclaw_create_candidate', 'bclaw_accept', 'bclaw_reject',
+        // Awareness
+        'bclaw_get_agent_board', 'bclaw_list_claims', 'bclaw_who', 'bclaw_conflict_check',
+        // Navigate & Governance
+        'bclaw_switch', 'bclaw_get_discovery', 'bclaw_check_policy', 'bclaw_audit', 'bclaw_doctor',
       ];
       for (const tool of toolNames) {
         assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
