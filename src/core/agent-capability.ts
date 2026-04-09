@@ -681,6 +681,103 @@ export function isKnownAgent(name: string): name is AgentName {
 }
 
 /**
+ * Structured representation of a CLI invoke command.
+ * Provides all fields needed to spawn or display the command without executing it.
+ */
+export interface InvokeCommand {
+  /** The executable binary name */
+  executable: string;
+  /** Arguments to pass to the executable */
+  args: string[];
+  /** How the prompt is delivered to the process */
+  promptDelivery: 'inline_arg' | 'temp_file' | 'stdin_pipe';
+  /** Whether a shell is required to interpret the command */
+  shell: boolean;
+  /** Complete bash-compatible command string for display / dry-run */
+  bashCommand: string;
+  /** Optional environment variables to set for the process */
+  env?: Record<string, string>;
+}
+
+export interface BuildInvokeCommandOptions {
+  mode?: InvokeMode;
+  platform?: 'win32' | 'linux' | 'darwin';
+  tempFilePath?: string;
+}
+
+/**
+ * Build a structured InvokeCommand for an agent without executing anything.
+ * Returns undefined if the agent has no invoke template or is not CLI-spawnable.
+ *
+ * - stdin_pipe: `cat "<tempFile>" | <binary> <args>`
+ * - temp_file:  `<binary> <args using tempFile path>`
+ * - inline_arg: `<binary> <args with prompt inlined>`
+ */
+export function buildInvokeCommand(
+  name: string,
+  prompt: string,
+  options?: BuildInvokeCommandOptions,
+): InvokeCommand | undefined {
+  const profile = getCapabilityProfile(name);
+  if (!profile?.invoke_template || !profile?.invoke_binary) return undefined;
+
+  const mode = options?.mode ?? 'worker';
+  let templateStr: string;
+  switch (mode) {
+    case 'consult':
+      templateStr = profile.invoke_consult_template ?? profile.invoke_review_template ?? profile.invoke_template;
+      break;
+    case 'reviewer':
+      templateStr = profile.invoke_review_template ?? profile.invoke_template;
+      break;
+    default:
+      templateStr = profile.invoke_template;
+  }
+
+  const delivery = profile.prompt_delivery.preferred as 'inline_arg' | 'temp_file' | 'stdin_pipe';
+  const executable = profile.invoke_binary;
+  const tempFilePath = options?.tempFilePath ?? '';
+
+  let bashCommand: string;
+  let args: string[];
+  let shell = false;
+
+  if (delivery === 'stdin_pipe') {
+    // cat "<file>" | <binary> <args with - replacing {prompt}>
+    const cmdWithStdin = templateStr
+      .replace('"{prompt}"', '-')
+      .replace('{prompt}', '-');
+    bashCommand = `cat "${tempFilePath}" | ${cmdWithStdin}`;
+    args = ['-c', bashCommand];
+    shell = true;
+  } else if (delivery === 'temp_file') {
+    const maxLen = profile.prompt_delivery.max_inline_length ?? 4000;
+    const text = prompt.length > maxLen
+      ? `$(cat "${tempFilePath}")`
+      : prompt.replace(/"/g, '\\"');
+    bashCommand = templateStr.replace('{prompt}', text);
+    args = bashCommand.split(' ').slice(1);
+    shell = false;
+  } else {
+    // inline_arg
+    const maxLen = profile.prompt_delivery.max_inline_length ?? 4000;
+    const text = prompt.length > maxLen ? prompt.slice(0, maxLen) + '...' : prompt;
+    const inlined = text.replace(/"/g, '\\"');
+    bashCommand = templateStr.replace('{prompt}', inlined);
+    args = bashCommand.split(' ').slice(1);
+    shell = false;
+  }
+
+  return {
+    executable,
+    args,
+    promptDelivery: delivery,
+    shell,
+    bashCommand,
+  };
+}
+
+/**
  * Summarize which integration surfaces are available for a given agent.
  * Useful for setup UI to explain what brainclaw will configure.
  */
