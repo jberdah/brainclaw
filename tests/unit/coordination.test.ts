@@ -527,12 +527,16 @@ describe('core/coordination', () => {
     const items = board.active_sequence?.items ?? [];
     assert.equal(items.length, 2);
 
-    assert.equal(items[0].stepId, 'stp_done');
-    assert.equal(items[0].plan_status, 'done');
-    assert.equal(items[0].plan_text, 'Ship login route');
+    // Items are enriched at runtime with plan_status/plan_text via spread
+    const item0 = items[0] as Record<string, unknown>;
+    const item1 = items[1] as Record<string, unknown>;
 
-    assert.equal(items[1].stepId, 'stp_todo');
-    assert.equal(items[1].plan_status, 'in_progress');
-    assert.equal(items[1].plan_text, 'Implement session refresh flow');
+    assert.equal(item0.stepId, 'stp_done');
+    assert.equal(item0.plan_status, 'done');
+    assert.equal(item0.plan_text, 'Ship login route');
+
+    assert.equal(item1.stepId, 'stp_todo');
+    assert.equal(item1.plan_status, 'in_progress');
+    assert.equal(item1.plan_text, 'Implement session refresh flow');
   });
 });

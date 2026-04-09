@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runParallelTests } from '../../../scripts/run-tests.mjs';
+// @ts-expect-error — .mjs script without type declarations
+import { runParallelTests } from '../../scripts/run-tests.mjs';
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -21,7 +22,7 @@ describe('scripts/run-tests', () => {
 
     const results = await runParallelTests(tests, {
       concurrency: 3,
-      runFile: async (test) => {
+      runFile: async (test: { label: string; filepath: string; kind: string; timeoutMs: number }) => {
         launched.push(test.label);
         active++;
         maxActive = Math.max(maxActive, active);
@@ -40,6 +41,6 @@ describe('scripts/run-tests', () => {
     assert.deepEqual(launched.sort(), ['e2e-a.test.js', 'e2e-b.test.js']);
     assert.equal(maxActive, 2);
     assert.equal(results.length, 2);
-    assert.equal(results.every((result) => result.ok), true);
+    assert.equal(results.every((result: { ok: boolean }) => result.ok), true);
   });
 });
