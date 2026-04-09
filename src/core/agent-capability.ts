@@ -302,6 +302,291 @@ export interface DefaultInvokeTemplate {
   mode: InvokeMode;
 }
 
+// ── Structured invoke command ──────────────────────────────────────────────
+
+/**
+ * A fully-resolved, ready-to-run command object for spawning an agent.
+ * Returned by `buildInvokeCommand`.
+ */
+export interface InvokeCommand {
+  /** The executable to run */
+  executable: string;
+  /** Arguments array (prompt already interpolated) */
+  args: string[];
+  /** How the prompt is delivered */
+  promptDelivery: 'inline_arg' | 'temp_file' | 'stdin_pipe';
+  /** Whether to run in a shell */
+  shell: boolean;
+  /** The complete bash command as a string (ready to copy-paste or run_in_background) */
+  bashCommand: string;
+  /** Environment variables to set */
+  env?: Record<string, string>;
+}
+
+export interface BuildInvokeCommandOptions {
+  /** Which invoke mode to resolve (default: 'worker') */
+  mode?: InvokeMode;
+  /**
+   * Platform override for platform-aware quoting.
+   * Defaults to `process.platform`. Pass 'win32' to force Windows quoting.
+   */
+  platform?: NodeJS.Platform;
+  /**
+   * When promptDelivery is 'temp_file', this path is substituted instead
+   * of `{prompt}`. The caller is responsible for writing the file.
+   * Defaults to a deterministic placeholder `/tmp/bclaw_prompt_<hash>.md`.
+   */
+  tempFilePath?: string;
+}
+
+/**
+ * Escape a string for safe use as a double-quoted shell argument.
+ * Escapes characters that have special meaning inside double-quotes
+ * on the target platform.
+ */
+function escapeForDoubleQuote(s: string, isWin32: boolean): string {
+  if (isWin32) {
+    // On Windows cmd/PowerShell, escape internal double-quotes by doubling them.
+    return s.replace(/"/g, '""');
+  }
+  // On POSIX shells, escape backslash, dollar, backtick, and double-quote.
+  return s.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/"/g, '\\"');
+}
+
+/**
+ * Build a complete shell argument string for embedding inside double-quotes.
+ * Returns the string wrapped in double-quotes.
+ */
+function quoteArg(s: string, isWin32: boolean): string {
+  return `"${escapeForDoubleQuote(s, isWin32)}"`;
+}
+
+/**
+ * Generate a short, stable filename suffix from an arbitrary string.
+ * Uses a simple djb2-style hash — no crypto dependency needed.
+ */
+function shortHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) ^ s.charCodeAt(i);
+    h = h >>> 0; // keep unsigned 32-bit
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/**
+ * Parse a raw template string (e.g. `claude -p "{prompt}" --allowedTools "..."`)
+ * into [executable, ...rawArgs], keeping the `{prompt}` token as-is.
+ *
+ * This is a simple shell-word splitter that handles:
+ *   - unquoted tokens
+ *   - double-quoted tokens (with \" escapes)
+ *   - single-quoted tokens (no escape processing)
+ * It does NOT handle variable expansion, redirections, or compound commands.
+ */
+function parseTemplateString(template: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  const len = template.length;
+
+  while (i < len) {
+    // Skip whitespace between tokens
+    while (i < len && /\s/.test(template[i])) i++;
+    if (i >= len) break;
+
+    let token = '';
+    while (i < len && !/\s/.test(template[i])) {
+      const ch = template[i];
+
+      if (ch === '"') {
+        // Consume double-quoted segment
+        i++;
+        while (i < len && template[i] !== '"') {
+          if (template[i] === '\\' && i + 1 < len) {
+            i++; // skip backslash, keep next char literal
+          }
+          token += template[i];
+          i++;
+        }
+        if (i < len) i++; // consume closing "
+      } else if (ch === "'") {
+        // Consume single-quoted segment (no escaping)
+        i++;
+        while (i < len && template[i] !== "'") {
+          token += template[i];
+          i++;
+        }
+        if (i < len) i++; // consume closing '
+      } else {
+        token += ch;
+        i++;
+      }
+    }
+
+    if (token.length > 0) tokens.push(token);
+  }
+
+  return tokens;
+}
+
+/**
+ * Build a structured, ready-to-run invoke command for an agent.
+ *
+ * Resolution order:
+ *   1. Look up profile via `getCapabilityProfile`.
+ *   2. Return undefined if the agent has no CLI invoke template.
+ *   3. Apply mode fallback chain (same as `getDefaultInvokeTemplate`).
+ *   4. Determine prompt delivery method:
+ *      - If `prompt_delivery.preferred` is 'temp_file' OR prompt exceeds
+ *        `max_inline_length`, use 'temp_file'.
+ *      - If `prompt_delivery.preferred` is 'stdin_pipe', use 'stdin_pipe'.
+ *      - Otherwise use 'inline_arg'.
+ *   5. Parse the resolved template into [executable, ...args].
+ *   6. Interpolate `{prompt}` token in the args list.
+ *   7. Build a platform-aware `bashCommand` string.
+ *
+ * @param name    Agent name (matches AgentName or custom profile name).
+ * @param prompt  The actual prompt text to deliver to the agent.
+ * @param options Optional overrides for mode, platform, and temp file path.
+ * @returns Structured InvokeCommand, or undefined if the agent is not CLI-spawnable.
+ */
+export function buildInvokeCommand(
+  name: string,
+  prompt: string,
+  options: BuildInvokeCommandOptions = {},
+): InvokeCommand | undefined {
+  const profile = getCapabilityProfile(name);
+  if (!profile?.invoke_template || !profile?.invoke_binary) return undefined;
+  if (!profile.runtime.spawnable_cli) return undefined;
+
+  const mode: InvokeMode = options.mode ?? 'worker';
+  const isWin32 = (options.platform ?? process.platform) === 'win32';
+
+  // ── 1. Resolve the template string using the mode fallback chain ──────────
+  let templateStr: string;
+  switch (mode) {
+    case 'consult':
+      templateStr =
+        profile.invoke_consult_template ??
+        profile.invoke_review_template ??
+        profile.invoke_template;
+      break;
+    case 'reviewer':
+      templateStr = profile.invoke_review_template ?? profile.invoke_template;
+      break;
+    default:
+      templateStr = profile.invoke_template;
+  }
+
+  // ── 2. Determine prompt delivery method ──────────────────────────────────
+  const preferredDelivery = profile.prompt_delivery.preferred;
+  const maxInline = profile.prompt_delivery.max_inline_length;
+
+  let promptDelivery: 'inline_arg' | 'temp_file' | 'stdin_pipe';
+
+  if (preferredDelivery === 'stdin_pipe') {
+    promptDelivery = 'stdin_pipe';
+  } else if (
+    preferredDelivery === 'temp_file' ||
+    (maxInline !== undefined && prompt.length > maxInline)
+  ) {
+    promptDelivery = 'temp_file';
+  } else {
+    promptDelivery = 'inline_arg';
+  }
+
+  // ── 3. Resolve the prompt value to embed in the command ──────────────────
+  let embeddedPrompt: string;
+  let tempFilePath: string | undefined;
+
+  if (promptDelivery === 'temp_file') {
+    tempFilePath =
+      options.tempFilePath ??
+      (isWin32
+        ? `%TEMP%\\bclaw_prompt_${shortHash(prompt)}.md`
+        : `/tmp/bclaw_prompt_${shortHash(prompt)}.md`);
+    embeddedPrompt = tempFilePath;
+  } else if (promptDelivery === 'stdin_pipe') {
+    // stdin_pipe: the {prompt} placeholder in the template (if present) is
+    // replaced with an empty string; the actual prompt is piped via stdin.
+    embeddedPrompt = '';
+  } else {
+    embeddedPrompt = prompt;
+  }
+
+  // ── 4. Parse the template and interpolate {prompt} ───────────────────────
+  const rawTokens = parseTemplateString(templateStr);
+  if (rawTokens.length === 0) return undefined;
+
+  const executable = rawTokens[0];
+  const interpolatedTokens = rawTokens.slice(1).map((tok) =>
+    tok === '{prompt}' ? embeddedPrompt : tok,
+  );
+
+  // ── 5. Build the args array ───────────────────────────────────────────────
+  // The args are the interpolated values; they are passed to execFile/spawn
+  // without further shell quoting. The bashCommand is built separately.
+  const args = interpolatedTokens;
+
+  // ── 6. Build the platform-aware bashCommand string ───────────────────────
+  //
+  // Strategy:
+  //   - For 'inline_arg': embed the prompt inline, double-quoted.
+  //   - For 'temp_file' on POSIX: write prompt to temp file with `cat >`,
+  //     then run the command; the {prompt} slot holds the file path.
+  //   - For 'temp_file' on Windows: assume the caller has written the file;
+  //     just run the command with the path. No `cat` pipes.
+  //   - For 'stdin_pipe' on POSIX: use a heredoc to pipe prompt into the
+  //     command via stdin.
+  //   - For 'stdin_pipe' on Windows: omit stdin piping (use inbox fallback).
+
+  let bashCommand: string;
+
+  if (promptDelivery === 'temp_file') {
+    if (isWin32) {
+      // Caller writes the file; bashCommand is just the command invocation.
+      const cmdParts = [executable, ...interpolatedTokens.map((t) => quoteArg(t, isWin32))];
+      bashCommand = cmdParts.join(' ');
+    } else {
+      // POSIX: write prompt to temp file, then run command.
+      const escapedPromptForHeredoc = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+      const writeStep = `printf '%s' '${escapedPromptForHeredoc}' > ${tempFilePath}`;
+      const cmdParts = [executable, ...interpolatedTokens.map((t) => quoteArg(t, isWin32))];
+      bashCommand = `${writeStep} && ${cmdParts.join(' ')}`;
+    }
+  } else if (promptDelivery === 'stdin_pipe') {
+    if (isWin32) {
+      // Windows: no heredoc; just run the command without piping.
+      const cmdParts = [executable, ...interpolatedTokens.filter(Boolean).map((t) => quoteArg(t, isWin32))];
+      bashCommand = cmdParts.join(' ');
+    } else {
+      // POSIX: use heredoc to pipe prompt into stdin.
+      const escapedPromptForHeredoc = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+      const nonEmptyArgs = interpolatedTokens.filter(Boolean);
+      const cmdParts = [executable, ...nonEmptyArgs.map((t) => quoteArg(t, isWin32))];
+      bashCommand = `printf '%s' '${escapedPromptForHeredoc}' | ${cmdParts.join(' ')}`;
+    }
+  } else {
+    // inline_arg: embed prompt directly, double-quoted.
+    const cmdParts = rawTokens.map((tok, idx) => {
+      if (idx === 0) return tok; // executable — no quoting
+      return tok === '{prompt}' ? quoteArg(embeddedPrompt, isWin32) : tok;
+    });
+    bashCommand = cmdParts.join(' ');
+  }
+
+  return {
+    executable,
+    args,
+    promptDelivery,
+    shell: false,
+    bashCommand,
+    ...(tempFilePath !== undefined ? { env: { BCLAW_PROMPT_FILE: tempFilePath } } : {}),
+  };
+}
+
+// ── getDefaultInvokeTemplate ───────────────────────────────────────────────
+
 /**
  * Get the default invoke template for an agent.
  * Reads invoke_template / invoke_binary from the capability profile.
