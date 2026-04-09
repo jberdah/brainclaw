@@ -87,8 +87,8 @@ describe('brief-modes/resolveBriefMode', () => {
     assert.equal(resolveBriefMode('opencode'), 'full');
   });
 
-  it('roo → task_card (no spawnable_cli)', () => {
-    assert.equal(resolveBriefMode('roo'), 'task_card');
+  it('roo → full (now spawnable via CLI)', () => {
+    assert.equal(resolveBriefMode('roo'), 'full');
   });
 
   it('antigravity → full', () => {

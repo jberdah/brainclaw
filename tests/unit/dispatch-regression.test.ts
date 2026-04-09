@@ -359,11 +359,12 @@ describe('dispatch-regression/buildInvokeCommand', () => {
     assert.ok(result.bashCommand.includes('Read') || result.bashCommand.includes('Grep'), 'consult uses read-only tools');
   });
 
-  it('codex worker: produces codex exec --full-auto with stdin_pipe delivery', () => {
+  it('codex worker: produces codex exec --sandbox workspace-write with stdin_pipe delivery', () => {
     const result = buildInvokeCommand('codex', 'Implement the feature', { mode: 'worker' });
     assert.ok(result, 'should return InvokeCommand');
     assert.ok(result.bashCommand.includes('codex'), 'command includes codex');
-    assert.ok(result.bashCommand.includes('--full-auto'), 'uses --full-auto flag');
+    assert.ok(result.bashCommand.includes('--sandbox'), 'uses --sandbox flag');
+    assert.ok(result.bashCommand.includes('workspace-write'), 'uses workspace-write sandbox');
     assert.equal(result.promptDelivery, 'stdin_pipe', 'codex uses stdin_pipe delivery');
     assert.equal(result.executable, 'codex');
   });
