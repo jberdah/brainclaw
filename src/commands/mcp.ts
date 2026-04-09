@@ -529,7 +529,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
-    description: 'Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to available agents. Each agent gets at most one assignment. Use dryRun to preview without sending. Requires trusted or curator trust level.',
+    description: 'Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to target agents. Returns ready-to-run bash commands per agent — the coordinator should execute them (e.g. via run_in_background). Use dryRun to preview. Requires trusted or curator trust level.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -537,7 +537,7 @@ const MCP_WRITE_TOOLS = [
         lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
         dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
-        spawn: { type: 'boolean', description: 'Autonomously launch CLI agents with invoke templates (detached background processes). Default: false (inbox only).' },
+        spawn: { type: 'boolean', description: 'Directly spawn CLI agents as detached processes (not recommended — breaks in sandboxed environments). Default: false. When false, returns bash commands the coordinator should run instead.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -2902,9 +2902,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const lines: string[] = [];
 
         if (args.dryRun) {
-          lines.push('🔍 Dispatch dry run (no messages sent):');
+          lines.push('Dispatch dry run (no messages sent):');
         } else {
-          lines.push('✔ Dispatch cycle complete:');
+          lines.push('Dispatch cycle complete:');
         }
 
         lines.push(`  Sequence: ${analysis.sequence.name}`);
@@ -2916,17 +2916,20 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           for (const msg of dispatchResult.messages_sent) {
             const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
             const ch = msg.channel === 'spawn' ? ' [spawned' + (msg.pid ? ` pid:${msg.pid}` : '') + ']' : ' [inbox]';
-            lines.push(`    → ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
+            lines.push(`    ${msg.agent}: ${msg.plan_id}${lane}${ch}`);
           }
         }
 
+        // Surface bash commands prominently — this is what the coordinator should run
         if (dispatchResult.commands.length > 0) {
           lines.push('');
-          lines.push('  Commands:');
+          lines.push('Run these commands to launch the assigned agents:');
+          lines.push('');
           for (const cmd of dispatchResult.commands) {
-            const lane = cmd.lane ? ` (lane: ${cmd.lane})` : '';
-            lines.push(`    → ${cmd.agent}${lane} [${cmd.shell}]`);
-            lines.push(`      ${cmd.command}`);
+            const lane = cmd.lane ? ` [lane: ${cmd.lane}]` : '';
+            lines.push(`# ${cmd.agent}${lane}`);
+            lines.push(cmd.command);
+            lines.push('');
           }
         }
 
