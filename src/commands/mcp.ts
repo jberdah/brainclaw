@@ -56,8 +56,7 @@ import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
-import { getSpawnableAgents, getCapabilityProfile } from '../core/agent-capability.js';
-import { resolveDeliveryChannel, deliverPrompt } from '../core/delivery.js';
+import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand } from '../core/agent-capability.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -3642,6 +3641,92 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const warnings: string[] = [];
       const artifacts: Array<{ type: string; id: string; path?: string }> = [];
       const side_effects: Array<{ action: string; entity: string; id: string }> = [];
+      const senderAgent = typeof args.agent === 'string' && args.agent.trim()
+        ? args.agent.trim()
+        : 'bclaw_coordinate';
+      const senderAgentId = typeof args.agentId === 'string' && args.agentId.trim()
+        ? args.agentId.trim()
+        : undefined;
+      const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
+      type CoordinateDeliveryEntry = {
+        agent: string;
+        message_id: string;
+        channel: 'inbox';
+        message_type: 'assign' | 'rfc';
+        requires_ack: boolean;
+        ref?: string;
+        scope?: string;
+        thread_id?: string;
+        claim_id?: string;
+        released_claim_id?: string;
+        command?: string;
+        shell?: string;
+      };
+      const toMessageSummary = (deliveryPlan: CoordinateDeliveryEntry[]) => deliveryPlan.map((entry) => ({
+        agent: entry.agent,
+        message_id: entry.message_id,
+        channel: entry.channel,
+        ref: entry.ref,
+        ...(entry.thread_id ? { thread_id: entry.thread_id } : {}),
+      }));
+      const queueCoordinateMessage = (input: {
+        agent: string;
+        text: string;
+        messageType: 'assign' | 'rfc';
+        ref?: string;
+        scope?: string;
+        requiresAck?: boolean;
+        threadId?: string;
+        claimId?: string;
+        releasedClaimId?: string;
+        tags?: string[];
+        payload?: Record<string, unknown>;
+        commandMode?: 'worker' | 'consult';
+      }): CoordinateDeliveryEntry => {
+        const msgResult = sendMessage({
+          from: senderAgent,
+          to: input.agent,
+          type: input.messageType,
+          text: input.text,
+          ref: input.ref,
+          payload: input.payload,
+          scope: input.scope,
+          requires_ack: input.requiresAck,
+          thread_id: input.threadId,
+          tags: input.tags ?? [],
+          author_id: senderAgentId,
+          session_id: connectionSessionId,
+        }, cwd);
+        artifacts.push({ type: 'message', id: msgResult.id });
+        side_effects.push({ action: 'create', entity: 'message', id: msgResult.id });
+
+        const invoke = buildInvokeCommand(input.agent, input.text, {
+          mode: input.commandMode ?? 'worker',
+        });
+        const commandHint = invoke
+          ? {
+              agent: input.agent,
+              command: invoke.bashCommand,
+              shell: invoke.shell ? 'bash' : 'sh',
+            }
+          : undefined;
+        if (commandHint) commandHints.push(commandHint);
+
+        return {
+          agent: input.agent,
+          message_id: msgResult.id,
+          channel: 'inbox',
+          message_type: input.messageType,
+          requires_ack: input.requiresAck ?? false,
+          ref: input.ref,
+          scope: input.scope,
+          thread_id: input.threadId,
+          claim_id: input.claimId,
+          released_claim_id: input.releasedClaimId,
+          command: commandHint?.command,
+          shell: commandHint?.shell,
+        };
+      };
 
       // Resolve target agents: explicit list or all spawnable
       const resolvedAgents: string[] = (req.targetAgents && req.targetAgents.length > 0)
@@ -3651,14 +3736,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       let result: unknown = { selected_targets: resolvedAgents };
 
       if (req.intent === 'assign') {
-        const delivery_plan: Array<{ agent: string; channel: string; claim_id: string }> = [];
+        const delivery_plan: CoordinateDeliveryEntry[] = [];
         for (const agentName of resolvedAgents) {
           const profile = getCapabilityProfile(agentName);
           if (!profile) {
             warnings.push(`Unknown agent profile: ${agentName}`);
             continue;
           }
-          const channel = resolveDeliveryChannel(profile);
           const assignScope = req.scope ?? req.task;
 
           // Guard: warn if there is already a non-archived assign message for this agent+scope
@@ -3696,23 +3780,65 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           appendAuditEntry({ actor: agentName, action: 'claim', item_id: claimId, item_type: 'claim', scope: req.scope ?? req.task }, cwd);
           artifacts.push({ type: 'claim', id: claimId });
           side_effects.push({ action: 'create', entity: 'claim', id: claimId });
-          deliverPrompt(profile, req.task, { cwd });
-          delivery_plan.push({ agent: agentName, channel, claim_id: claimId });
+          delivery_plan.push(queueCoordinateMessage({
+            agent: agentName,
+            text: req.task,
+            messageType: 'assign',
+            ref: assignScope,
+            scope: assignScope,
+            requiresAck: true,
+            claimId,
+            tags: ['coordinate', 'assign'],
+            payload: {
+              intent: req.intent,
+              scope: assignScope,
+              claim_id: claimId,
+              constraints: req.constraints,
+            },
+            commandMode: 'worker',
+          }));
         }
-        result = { selected_targets: resolvedAgents, delivery_plan };
+        result = {
+          selected_targets: resolvedAgents,
+          delivery_plan,
+          messages_sent: toMessageSummary(delivery_plan),
+          commands: commandHints,
+        };
 
       } else if (req.intent === 'consult') {
+        const consultThreadId = req.threadId ?? `thread_${crypto.randomBytes(4).toString('hex')}`;
         const contacted: string[] = [];
+        const delivery_plan: CoordinateDeliveryEntry[] = [];
         for (const agentName of resolvedAgents) {
           const profile = getCapabilityProfile(agentName);
           if (!profile) {
             warnings.push(`Unknown agent profile: ${agentName}`);
             continue;
           }
-          deliverPrompt(profile, req.task, { cwd });
+          delivery_plan.push(queueCoordinateMessage({
+            agent: agentName,
+            text: req.task,
+            messageType: 'rfc',
+            scope: req.scope,
+            threadId: consultThreadId,
+            tags: ['coordinate', 'consult'],
+            payload: {
+              intent: req.intent,
+              scope: req.scope,
+              constraints: req.constraints,
+            },
+            commandMode: 'consult',
+          }));
           contacted.push(agentName);
         }
-        result = { selected_targets: resolvedAgents, contacted };
+        result = {
+          selected_targets: resolvedAgents,
+          contacted,
+          thread_id: consultThreadId,
+          delivery_plan,
+          messages_sent: toMessageSummary(delivery_plan),
+          commands: commandHints,
+        };
 
       } else if (req.intent === 'review') {
         const candId = generateCandidateIdWithLabel(cwd);
@@ -3722,8 +3848,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           type: 'handoff',
           text: req.task,
           created_at: nowISO(),
-          author: typeof args.agent === 'string' ? args.agent : 'bclaw_coordinate',
-          author_id: typeof args.agentId === 'string' ? args.agentId : undefined,
+          author: senderAgent,
+          author_id: senderAgentId,
           tags: ['review'],
           status: 'pending',
           star_count: 0,
@@ -3765,12 +3891,53 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             appendAuditEntry({ actor: newAgentName, action: 'claim', item_id: newClaimId, item_type: 'claim', scope: oldClaim.scope }, cwd);
             artifacts.push({ type: 'claim', id: newClaimId });
             side_effects.push({ action: 'create', entity: 'claim', id: newClaimId });
-            deliverPrompt(profile, req.task, { cwd });
+            const delivery_plan: CoordinateDeliveryEntry[] = [];
+            delivery_plan.push(queueCoordinateMessage({
+              agent: newAgentName,
+              text: req.task,
+              messageType: 'assign',
+              ref: oldClaim.scope,
+              scope: oldClaim.scope,
+              requiresAck: true,
+              claimId: newClaimId,
+              releasedClaimId: oldClaim.id,
+              tags: ['coordinate', 'assign', 'reroute'],
+              payload: {
+                intent: req.intent,
+                scope: oldClaim.scope,
+                claim_id: newClaimId,
+                released_claim_id: oldClaim.id,
+                previous_agent: oldClaim.agent,
+                constraints: req.constraints,
+              },
+              commandMode: 'worker',
+            }));
+            result = {
+              released_claim: oldClaim.id,
+              old_agent: oldClaim.agent,
+              new_agent: newAgentName,
+              new_claim_id: newClaimId,
+              selected_targets: resolvedAgents,
+              delivery_plan,
+              messages_sent: toMessageSummary(delivery_plan),
+              commands: commandHints,
+            };
           } else {
             warnings.push(`Unknown agent profile: ${newAgentName}`);
           }
         }
-        result = { released_claim: oldClaim.id, old_agent: oldClaim.agent, new_agent: newAgentName, new_claim_id: newClaimId, selected_targets: resolvedAgents };
+        if (!('released_claim' in (result as Record<string, unknown>))) {
+          result = {
+            released_claim: oldClaim.id,
+            old_agent: oldClaim.agent,
+            new_agent: newAgentName,
+            new_claim_id: newClaimId,
+            selected_targets: resolvedAgents,
+            delivery_plan: [],
+            messages_sent: [],
+            commands: commandHints,
+          };
+        }
 
       } else if (req.intent === 'summarize') {
         const threadId = req.threadId ?? req.scope;
