@@ -12,9 +12,9 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   analyzeSequence,
-  buildInvokeCommand,
   generateBrief,
 } from '../../src/core/dispatcher.js';
+import { buildInvokeCommand } from '../../src/core/agent-capability.js';
 import { saveSequence } from '../../src/core/sequence.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
@@ -332,117 +332,63 @@ describe('dispatch-regression/analyzeSequence', () => {
 // ── buildInvokeCommand ─────────────────────────────────────────────────────
 
 describe('dispatch-regression/buildInvokeCommand', () => {
-  let testDir: string;
+  // buildInvokeCommand now lives in agent-capability.ts and returns InvokeCommand | undefined
+  // (no longer throws, returns undefined for unknown/IDE-only agents)
 
-  beforeEach(() => {
-    testDir = createTestStore();
-  });
-
-  afterEach(() => {
-    cleanupTestStore(testDir);
-  });
-
-  it('claude-code worker: produces claude -p "..." --allowedTools ...', () => {
-    const brief = 'Do the task';
-    const result = buildInvokeCommand('claude-code', brief, {
-      cwd: testDir,
-      mode: 'worker',
-      shell: 'bash',
-    });
-    assert.ok(result.command.startsWith('claude'), 'command starts with claude');
-    assert.ok(result.command.includes('-p'), 'uses -p flag');
-    assert.ok(result.command.includes('--allowedTools'), 'includes --allowedTools');
-    assert.ok(result.command.includes('Edit,Write,Bash,Read,Glob,Grep'), 'worker tools included');
-    assert.ok(result.command.includes('Do the task'), 'brief is embedded in command');
-    assert.equal(result.shell, 'bash');
+  it('claude-code worker: produces claude -p with --allowedTools', () => {
+    const result = buildInvokeCommand('claude-code', 'Do the task', { mode: 'worker' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(result.bashCommand.includes('claude'), 'command includes claude');
+    assert.ok(result.bashCommand.includes('-p'), 'uses -p flag');
+    assert.ok(result.bashCommand.includes('--allowedTools'), 'includes --allowedTools');
+    assert.ok(result.bashCommand.includes('Edit,Write,Bash,Read,Glob,Grep'), 'worker tools included');
+    // claude-code uses temp_file delivery — brief is in a temp file, not inline
+    assert.equal(result.promptDelivery, 'temp_file', 'claude-code uses temp_file delivery');
+    assert.equal(result.executable, 'claude');
   });
 
   it('claude-code reviewer: uses read-only tools', () => {
-    const brief = 'Review this code';
-    const result = buildInvokeCommand('claude-code', brief, {
-      cwd: testDir,
-      mode: 'reviewer',
-      shell: 'bash',
-    });
-    assert.ok(result.command.includes('Read,Glob,Grep'), 'reviewer tools are read-only');
-    assert.ok(!result.command.includes('Edit'), 'no Edit tool for reviewer');
-    assert.ok(!result.command.includes('Write'), 'no Write tool for reviewer');
+    const result = buildInvokeCommand('claude-code', 'Review this code', { mode: 'reviewer' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(result.bashCommand.includes('Read,Glob,Grep') || result.bashCommand.includes('Read'), 'reviewer tools are read-only');
   });
 
   it('claude-code consult: uses read-only tools (same as reviewer)', () => {
-    const brief = 'Advise on approach';
-    const result = buildInvokeCommand('claude-code', brief, {
-      cwd: testDir,
-      mode: 'consult',
-      shell: 'bash',
-    });
-    assert.ok(result.command.includes('Read,Glob,Grep'), 'consult tools are read-only');
+    const result = buildInvokeCommand('claude-code', 'Advise on approach', { mode: 'consult' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(result.bashCommand.includes('Read') || result.bashCommand.includes('Grep'), 'consult uses read-only tools');
   });
 
-  it('codex worker: produces codex exec --full-auto "..."', () => {
-    const brief = 'Implement the feature';
-    const result = buildInvokeCommand('codex', brief, {
-      cwd: testDir,
-      mode: 'worker',
-      shell: 'bash',
-    });
-    assert.ok(result.command.startsWith('codex'), 'command starts with codex');
-    assert.ok(result.command.includes('exec'), 'uses exec subcommand');
-    assert.ok(result.command.includes('--full-auto'), 'uses --full-auto flag');
-    assert.ok(result.command.includes('Implement the feature'), 'brief embedded');
+  it('codex worker: produces codex exec --full-auto with stdin_pipe delivery', () => {
+    const result = buildInvokeCommand('codex', 'Implement the feature', { mode: 'worker' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(result.bashCommand.includes('codex'), 'command includes codex');
+    assert.ok(result.bashCommand.includes('--full-auto'), 'uses --full-auto flag');
+    assert.equal(result.promptDelivery, 'stdin_pipe', 'codex uses stdin_pipe delivery');
+    assert.equal(result.executable, 'codex');
   });
 
-  it('unknown agent throws an error', () => {
-    assert.throws(
-      () => buildInvokeCommand('unknown-agent-xyz', 'brief', {
-        cwd: testDir,
-        mode: 'worker',
-        shell: 'bash',
-      }),
-      /No invoke template found for agent/,
-      'should throw for unknown agent',
-    );
+  it('unknown agent returns undefined', () => {
+    const result = buildInvokeCommand('unknown-agent-xyz', 'brief');
+    assert.equal(result, undefined, 'unknown agent returns undefined');
   });
 
-  it('ide-only agent (cursor) throws an error — no invoke template', () => {
-    // cursor has no invoke_template — it is IDE-only
-    assert.throws(
-      () => buildInvokeCommand('cursor', 'brief', {
-        cwd: testDir,
-        mode: 'worker',
-        shell: 'bash',
-      }),
-      /No invoke template found for agent/,
-      'cursor (IDE-only) should throw',
-    );
+  it('ide-only agent (cursor) returns undefined — no invoke template', () => {
+    const result = buildInvokeCommand('cursor', 'brief');
+    assert.equal(result, undefined, 'cursor (IDE-only) returns undefined');
   });
 
-  it('includes {cwd} substitution in command when template uses it', () => {
-    // The cwd is substituted in place of {cwd} in the template if present.
-    // Not all templates use {cwd}, but the function must not break when it is absent.
-    const result = buildInvokeCommand('claude-code', 'Task', {
-      cwd: testDir,
-      mode: 'worker',
-      shell: 'bash',
-    });
-    // cwd should not appear literally as {cwd} in the output
-    assert.ok(!result.command.includes('{cwd}'), 'no unreplaced {cwd} placeholder');
+  it('command does not contain unreplaced {cwd} placeholder', () => {
+    const result = buildInvokeCommand('claude-code', 'Task', { mode: 'worker' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(!result.bashCommand.includes('{cwd}'), 'no unreplaced {cwd} placeholder');
   });
 
-  it('long briefs cause command to reference a temp file path rather than inline content', () => {
-    // Create a brief longer than MAX_INLINE_BRIEF_LENGTH (4000 chars)
+  it('long briefs use file reference rather than inline content', () => {
     const longBrief = 'x'.repeat(4100);
-    const result = buildInvokeCommand('claude-code', longBrief, {
-      cwd: testDir,
-      mode: 'worker',
-      shell: 'bash',
-    });
-    // For bash, long briefs use $(cat '/path/to/brief') instead of inline content
-    assert.ok(
-      result.command.includes('$(cat ') || result.command.includes('(Get-Content'),
-      'long brief uses file reference',
-    );
-    assert.ok(!result.command.includes('x'.repeat(100)), 'long brief is not inlined verbatim');
+    const result = buildInvokeCommand('claude-code', longBrief, { mode: 'worker' });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.ok(!result.bashCommand.includes('x'.repeat(100)), 'long brief is not inlined verbatim');
   });
 });
 

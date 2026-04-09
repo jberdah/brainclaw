@@ -14,6 +14,9 @@
  * because brainclaw generates hooks that gracefully degrade.
  */
 
+import os from 'node:os';
+import path from 'node:path';
+
 export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
 export type WorkflowModel = 'interactive' | 'task-based' | 'scheduled';
 export type RoleCapability = 'execute' | 'coordinate' | 'review' | 'consult';
@@ -502,9 +505,7 @@ export function buildInvokeCommand(
   if (promptDelivery === 'temp_file') {
     tempFilePath =
       options.tempFilePath ??
-      (isWin32
-        ? `%TEMP%\\bclaw_prompt_${shortHash(prompt)}.md`
-        : `/tmp/bclaw_prompt_${shortHash(prompt)}.md`);
+      path.join(os.tmpdir(), `bclaw_prompt_${shortHash(prompt)}.md`);
     embeddedPrompt = tempFilePath;
   } else if (promptDelivery === 'stdin_pipe') {
     // stdin_pipe: the {prompt} placeholder in the template (if present) is
