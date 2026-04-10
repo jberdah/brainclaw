@@ -97,6 +97,7 @@ export function runDispatch(options: DispatchCommandOptions): void {
     maxAssignments: options.max,
     dryRun: options.dry,
     dispatcherAgent,
+    autoExecute: options.spawn,
   }, effectiveCwd);
 
   if (!result) {
@@ -123,7 +124,8 @@ export function runDispatch(options: DispatchCommandOptions): void {
     console.log(`\n  ${options.dry ? 'Would assign' : 'Assigned'}:`);
     for (const msg of dispatchResult.messages_sent) {
       const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane} [inbox]`);
+      const exec = msg.execution_status ? ` [${msg.execution_status}]` : ' [inbox]';
+      console.log(`    → ${msg.agent}: ${msg.plan_id}${lane}${exec}`);
     }
   }
 

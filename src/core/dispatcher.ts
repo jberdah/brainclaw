@@ -18,6 +18,7 @@ import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, type BriefMode } from './agent-capability.js';
+import { attemptExecution } from './execution.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -66,8 +67,12 @@ export interface DispatchedItem {
   message_id: string;
   lane?: string;
   /** How the assignment was delivered */
-  channel: 'inbox';
+  channel: 'inbox' | 'spawned_cli';
   claim_id?: string;
+  /** E2E execution status */
+  execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
+  /** PID of spawned agent process (when execution_status is delivered_and_started) */
+  pid?: number;
 }
 
 export interface DispatchResult {
@@ -374,6 +379,8 @@ export interface DispatchOptions {
   dispatcherAgent: string;
   dispatcherAgentId?: string;
   sessionId?: string;
+  /** Attempt to spawn agents after delivery (default: true). When false, always return command_ready_manual. */
+  autoExecute?: boolean;
 }
 
 /**
@@ -520,6 +527,26 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     assigned++;
     const idx = agentPool.indexOf(targetAgent);
     if (idx >= 0) agentPool.splice(idx, 1);
+  }
+
+  // E2E execution phase: attempt to spawn assigned agents
+  const autoExecute = options.autoExecute !== false; // default true
+  for (const entry of result.delivery_plan) {
+    const invokeCmd = buildInvokeCommand(entry.agent, '', { mode: 'worker' });
+    const execResult = attemptExecution(invokeCmd, {
+      agent: entry.agent,
+      autoExecute,
+      claimId: entry.claim_id,
+      dispatcherAgent: options.dispatcherAgent,
+      dispatcherAgentId: options.dispatcherAgentId,
+      cwd,
+    });
+    entry.execution_status = execResult.execution_status;
+    if (execResult.pid) entry.pid = execResult.pid;
+    if (execResult.execution_status === 'delivered_and_started') {
+      entry.channel = 'spawned_cli';
+    }
+    if (execResult.error) result.warnings.push(execResult.error);
   }
 
   return { analysis, result };

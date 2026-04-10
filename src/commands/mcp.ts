@@ -57,6 +57,7 @@ import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode } from '../core/agent-capability.js';
+import { attemptExecution } from '../core/execution.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -536,6 +537,7 @@ const MCP_WRITE_TOOLS = [
         lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
         dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
+        autoExecute: { type: 'boolean', description: 'Attempt to spawn agents after delivery (default: true). When false, returns command_ready_manual.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -996,6 +998,7 @@ const MCP_WRITE_TOOLS = [
         targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
         constraints: { type: 'object', description: 'Optional structured constraints passed alongside the brief (e.g. deadline, reviewCriteria).' },
         threadId: { type: 'string', description: 'Thread ID for summarize intent.' },
+        autoExecute: { type: 'boolean', description: 'Attempt to spawn target agents after delivery (default: true). When false, returns command_ready_manual with bash commands for the supervisor to run.' },
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
       },
@@ -2888,6 +2891,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           dispatcherAgent: resolved.identity!.agent_name,
           dispatcherAgentId: resolved.identity!.agent_id,
           sessionId: connectionSessionId,
+          autoExecute: args.autoExecute as boolean | undefined,
         }, cwd);
 
         if (!result) {
@@ -3695,7 +3699,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       type CoordinateDeliveryEntry = {
         agent: string;
         message_id: string;
-        channel: 'inbox';
+        channel: 'inbox' | 'spawned_cli';
         message_type: 'assign' | 'rfc';
         requires_ack: boolean;
         ref?: string;
@@ -3705,6 +3709,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         released_claim_id?: string;
         command?: string;
         shell?: string;
+        execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
+        pid?: number;
       };
       const toMessageSummary = (deliveryPlan: CoordinateDeliveryEntry[]) => deliveryPlan.map((entry) => ({
         agent: entry.agent,
@@ -3850,11 +3856,39 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             commandMode: 'worker',
           }));
         }
+
+        // E2E execution phase: attempt to spawn assigned agents
+        const autoExecute = req.autoExecute !== false; // default true
+        let overallExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
+        for (const entry of delivery_plan) {
+          if (entry.message_type !== 'assign') continue;
+          const invoke = buildInvokeCommand(entry.agent, entry.command ?? '', { mode: 'worker' });
+          const execResult = attemptExecution(invoke, {
+            agent: entry.agent,
+            autoExecute,
+            worktreePath: (entry as unknown as Record<string, unknown>).worktree_path as string | undefined,
+            claimId: entry.claim_id,
+            dispatcherAgent: senderAgent,
+            dispatcherAgentId: senderAgentId,
+            cwd,
+          });
+          entry.execution_status = execResult.execution_status;
+          if (execResult.pid) entry.pid = execResult.pid;
+          if (execResult.execution_status === 'delivered_and_started') {
+            entry.channel = 'spawned_cli';
+            overallExecStatus = 'delivered_and_started';
+          } else if (execResult.execution_status === 'command_ready_manual' && overallExecStatus !== 'delivered_and_started') {
+            overallExecStatus = 'command_ready_manual';
+          }
+          if (execResult.error) warnings.push(execResult.error);
+        }
+
         result = {
           selected_targets: resolvedAgents,
           delivery_plan,
           messages_sent: toMessageSummary(delivery_plan),
           commands: commandHints,
+          execution_status: overallExecStatus,
         };
 
       } else if (req.intent === 'consult') {
@@ -3972,6 +4006,32 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               },
               commandMode: 'worker',
             }));
+            // E2E execution phase for reroute
+            const rerouteAutoExecute = req.autoExecute !== false;
+            let rerouteExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
+            for (const entry of delivery_plan) {
+              if (entry.message_type !== 'assign') continue;
+              const invoke = buildInvokeCommand(entry.agent, entry.command ?? '', { mode: 'worker' });
+              const execResult = attemptExecution(invoke, {
+                agent: entry.agent,
+                autoExecute: rerouteAutoExecute,
+                worktreePath: rerouteClaimResult.worktreePath,
+                claimId: newClaimId,
+                dispatcherAgent: senderAgent,
+                dispatcherAgentId: senderAgentId,
+                cwd,
+              });
+              entry.execution_status = execResult.execution_status;
+              if (execResult.pid) entry.pid = execResult.pid;
+              if (execResult.execution_status === 'delivered_and_started') {
+                entry.channel = 'spawned_cli';
+                rerouteExecStatus = 'delivered_and_started';
+              } else if (execResult.execution_status === 'command_ready_manual' && rerouteExecStatus !== 'delivered_and_started') {
+                rerouteExecStatus = 'command_ready_manual';
+              }
+              if (execResult.error) warnings.push(execResult.error);
+            }
+
             result = {
               released_claim: oldClaim.id,
               old_agent: oldClaim.agent,
@@ -3981,6 +4041,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               delivery_plan,
               messages_sent: toMessageSummary(delivery_plan),
               commands: commandHints,
+              execution_status: rerouteExecStatus,
             };
           } else {
             warnings.push(`Unknown agent profile: ${newAgentName}`);
@@ -4011,6 +4072,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         result = { thread_id: threadId, message_count: messages.length, summary };
       }
 
+      // Extract execution_status from result if present (assign/reroute set it)
+      const resultExecStatus = (result && typeof result === 'object' && 'execution_status' in result)
+        ? (result as Record<string, unknown>).execution_status as FacadeResponse['execution_status']
+        : undefined;
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: req.intent,
@@ -4019,9 +4084,11 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         side_effects,
         warnings,
         duration_ms: Date.now() - startMs,
+        ...(resultExecStatus ? { execution_status: resultExecStatus } : {}),
       };
 
       const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
+      if (resultExecStatus) summaryParts.push(`execution: ${resultExecStatus}`);
       if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 
       return {

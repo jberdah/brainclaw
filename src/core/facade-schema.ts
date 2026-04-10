@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const ExecutionStatusSchema = z.enum(['delivered_and_started', 'command_ready_manual', 'inbox_only']);
+export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
+
 export const WorkIntentSchema = z.enum(['execute', 'consult', 'resume', 'review']);
 export const CoordinateIntentSchema = z.enum(['assign', 'consult', 'review', 'reroute', 'summarize']);
 
@@ -19,6 +22,7 @@ export const CoordinateRequestSchema = z.object({
   targetAgents: z.array(z.string()).optional(),
   constraints: z.record(z.string(), z.unknown()).optional(),
   threadId: z.string().optional(),
+  autoExecute: z.boolean().optional(),
 });
 
 export const FacadeArtifactSchema = z.object({
@@ -44,6 +48,7 @@ export const FacadeResponseSchema = z.object({
   claim_status: z.enum(['created', 'existing', 'none']).optional(),
   session_id: z.string().optional(),
   warnings: z.array(z.string()),
+  execution_status: ExecutionStatusSchema.optional(),
 });
 
 export type WorkIntent = z.infer<typeof WorkIntentSchema>;
