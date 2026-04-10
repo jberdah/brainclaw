@@ -10,11 +10,12 @@
  */
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
-import { listClaims } from './claims.js';
+import { listClaims, saveClaim, generateClaimId } from './claims.js';
 import { listAgentIdentities } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
+import { appendAuditEntry } from './audit.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, type BriefMode } from './agent-capability.js';
@@ -215,6 +216,7 @@ export function generateBrief(
   item: SequenceItem,
   cwd: string,
   briefMode?: BriefMode,
+  options?: { claimId?: string },
 ): string {
   const mode = briefMode ?? 'full';
 
@@ -312,17 +314,28 @@ export function generateBrief(
   // Compact mode agents (Codex) run in sandboxes without MCP access
   if (mode === 'full') {
     parts.push('## Protocol');
-    parts.push('1. Read this brief and the plan description');
-    parts.push('2. Call bclaw_session_start to register your session');
-    parts.push('3. Call bclaw_claim to claim the scope before editing');
-    parts.push('4. Work in the worktree created by the claim');
-    parts.push('5. Call bclaw_session_end with a narrative when done');
-    parts.push('6. Call bclaw_ack_message on this assignment');
+    if (options?.claimId) {
+      parts.push(`Your scope has been pre-claimed by the coordinator (claim: ${options.claimId}).`);
+      parts.push('1. Read this brief and the plan description');
+      parts.push('2. Call bclaw_session_start to register your session');
+      parts.push('3. Work on the assigned scope (claim already active)');
+      parts.push('4. Call bclaw_session_end with a narrative when done');
+      parts.push('5. Call bclaw_ack_message on this assignment');
+    } else {
+      parts.push('1. Read this brief and the plan description');
+      parts.push('2. Call bclaw_session_start to register your session');
+      parts.push('3. Call bclaw_claim to claim the scope before editing');
+      parts.push('4. Work in the worktree created by the claim');
+      parts.push('5. Call bclaw_session_end with a narrative when done');
+      parts.push('6. Call bclaw_ack_message on this assignment');
+    }
     parts.push('');
 
     parts.push('## Available tools');
     parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
-    parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
+    if (!options?.claimId) {
+      parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
+    }
     parts.push('- bclaw_get_context (project memory)');
     parts.push('- bclaw_check_policy (pre-edit verification)');
     parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
@@ -403,9 +416,31 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       continue;
     }
 
-    // Generate brief
+    // Coordinator-owned claim: create before sending the brief
+    const claimScope = readyItem.item.scope_hint ?? readyItem.plan.id;
+    const claimId = options.dryRun ? '(dry-run)' : generateClaimId();
+    if (!options.dryRun) {
+      saveClaim({
+        id: claimId,
+        agent: targetAgent,
+        scope: claimScope,
+        description: readyItem.plan.text,
+        plan_id: readyItem.plan.id,
+        created_at: new Date().toISOString(),
+        status: 'active',
+      }, cwd);
+      appendAuditEntry({
+        actor: options.dispatcherAgent,
+        action: 'claim',
+        item_id: claimId,
+        item_type: 'claim',
+        scope: claimScope,
+      }, cwd);
+    }
+
+    // Generate brief with pre-created claim_id
     const briefMode = resolveBriefMode(targetAgent);
-    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode);
+    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId });
 
     // Build invoke command (if agent is CLI-spawnable)
     const invokeCmd = buildInvokeCommand(targetAgent, brief);
@@ -446,6 +481,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         lane: readyItem.lane,
         rank: readyItem.item.rank,
         priority: readyItem.plan.priority,
+        claim_id: claimId,
       },
       scope: readyItem.item.scope_hint,
       requires_ack: true,
