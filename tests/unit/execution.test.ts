@@ -36,31 +36,28 @@ describe('canSpawnAgent', () => {
     }
   });
 
-  it('respects BRAINCLAW_CAN_SPAWN env override', () => {
-    const prev = process.env.BRAINCLAW_CAN_SPAWN;
+  it('returns true by default for spawnable agents (even in non-TTY)', () => {
+    const prev = process.env.BRAINCLAW_NO_SPAWN;
     try {
-      process.env.BRAINCLAW_CAN_SPAWN = '1';
+      delete process.env.BRAINCLAW_NO_SPAWN;
       const result = canSpawnAgent('claude-code');
       assert.equal(result.canSpawn, true);
-      assert.ok(result.reason.includes('override'));
+      assert.ok(result.reason.includes('spawnable'));
     } finally {
-      if (prev === undefined) delete process.env.BRAINCLAW_CAN_SPAWN;
-      else process.env.BRAINCLAW_CAN_SPAWN = prev;
+      if (prev !== undefined) process.env.BRAINCLAW_NO_SPAWN = prev;
     }
   });
 
-  it('returns false in non-TTY context (MCP stdio sandbox)', () => {
-    const prev = process.env.BRAINCLAW_CAN_SPAWN;
+  it('respects BRAINCLAW_NO_SPAWN opt-out', () => {
+    const prev = process.env.BRAINCLAW_NO_SPAWN;
     try {
-      delete process.env.BRAINCLAW_CAN_SPAWN;
-      // In test runner, stdin is typically not a TTY
-      if (!process.stdin.isTTY) {
-        const result = canSpawnAgent('claude-code');
-        assert.equal(result.canSpawn, false);
-        assert.ok(result.reason.includes('stdio'));
-      }
+      process.env.BRAINCLAW_NO_SPAWN = '1';
+      const result = canSpawnAgent('claude-code');
+      assert.equal(result.canSpawn, false);
+      assert.ok(result.reason.includes('NO_SPAWN'));
     } finally {
-      if (prev !== undefined) process.env.BRAINCLAW_CAN_SPAWN = prev;
+      if (prev === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+      else process.env.BRAINCLAW_NO_SPAWN = prev;
     }
   });
 });
@@ -91,24 +88,23 @@ describe('attemptExecution', () => {
     assert.ok(result.command, 'should include the command string');
   });
 
-  it('returns command_ready_manual in non-TTY context (test runner)', () => {
-    const prev = process.env.BRAINCLAW_CAN_SPAWN;
+  it('returns command_ready_manual when BRAINCLAW_NO_SPAWN is set', () => {
+    const prev = process.env.BRAINCLAW_NO_SPAWN;
     try {
-      delete process.env.BRAINCLAW_CAN_SPAWN;
+      process.env.BRAINCLAW_NO_SPAWN = '1';
       const invoke = buildInvokeCommand('codex', 'test prompt');
       assert.ok(invoke, 'codex should produce an invoke command');
-      if (!process.stdin.isTTY) {
-        const result = attemptExecution(invoke, {
-          agent: 'codex',
-          autoExecute: true,
-          dispatcherAgent: 'test',
-          cwd: process.cwd(),
-        });
-        assert.equal(result.execution_status, 'command_ready_manual');
-        assert.ok(result.command, 'should include command for manual run');
-      }
+      const result = attemptExecution(invoke, {
+        agent: 'codex',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        cwd: process.cwd(),
+      });
+      assert.equal(result.execution_status, 'command_ready_manual');
+      assert.ok(result.command, 'should include command for manual run');
     } finally {
-      if (prev !== undefined) process.env.BRAINCLAW_CAN_SPAWN = prev;
+      if (prev === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+      else process.env.BRAINCLAW_NO_SPAWN = prev;
     }
   });
 

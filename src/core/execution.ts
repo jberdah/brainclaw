@@ -56,17 +56,16 @@ export function canSpawnAgent(agentName: string): SpawnCapability {
     return { canSpawn: false, reason: `agent ${agentName} has no invoke template` };
   }
 
-  // Sandbox detection: MCP server processes have stdin piped (not TTY)
-  // Allow override via env var for agents that know they can spawn
-  if (process.env.BRAINCLAW_CAN_SPAWN === '1') {
-    return { canSpawn: true, reason: 'BRAINCLAW_CAN_SPAWN override' };
+  // Explicit opt-out via env var (e.g. true sandbox environments)
+  if (process.env.BRAINCLAW_NO_SPAWN === '1') {
+    return { canSpawn: false, reason: 'BRAINCLAW_NO_SPAWN is set' };
   }
 
-  if (!process.stdin.isTTY) {
-    return { canSpawn: false, reason: 'running in MCP stdio context (stdin is not TTY)' };
-  }
-
-  return { canSpawn: true, reason: 'TTY context, agent is spawnable' };
+  // Default: allow spawn. MCP stdio servers CAN spawn detached processes —
+  // the old TTY check was overly conservative. If a true sandbox blocks
+  // the spawn (e.g. Codex --full-auto), attemptExecution() catches the
+  // error and falls back to command_ready_manual gracefully.
+  return { canSpawn: true, reason: 'agent has spawnable profile' };
 }
 
 // ── Process spawning ────────────────────────────────────────
