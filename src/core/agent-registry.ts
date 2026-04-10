@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isKnownAgent } from './agent-capability.js';
+import { isKnownAgent, getCapabilityProfile } from './agent-capability.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
@@ -481,6 +481,46 @@ export function resolveOrAutoRegisterAgentIdentity(
       preferredDirName: options.preferredDirName,
     });
     return { identity: registered, auto_registered: true };
+  }
+}
+
+/**
+ * Ensure that a target agent is registered in the current project before dispatch.
+ *
+ * If the agent is already registered, returns the existing identity.
+ * If not registered but has a known capability profile with spawnable_cli=true,
+ * auto-registers it as a contributor agent with source='dispatch-auto-register'.
+ *
+ * Returns the identity, or undefined if the agent is unknown/not spawnable.
+ */
+export function ensureAgentRegisteredForDispatch(
+  agentName: string,
+  cwd?: string,
+): AgentIdentityDocument | undefined {
+  const normalized = normalizeAgentName(agentName);
+
+  // Already registered? Return as-is.
+  const existing = findAgentIdentityByName(normalized, cwd);
+  if (existing) return existing;
+
+  // Check capability profile — only auto-register agents we know about
+  const profile = getCapabilityProfile(normalized);
+  if (!profile || !profile.runtime.spawnable_cli) return undefined;
+
+  // Auto-register with contributor trust
+  try {
+    const registered = registerAgentIdentity({
+      agentName: normalized,
+      kind: 'agent',
+      trustLevel: 'contributor',
+      capabilities: profile.role_capabilities ?? [],
+      cwd,
+    });
+    logger.debug(`Auto-registered agent for dispatch: ${normalized} (${registered.agent_id})`);
+    return registered;
+  } catch {
+    // Non-fatal: store may be read-only
+    return undefined;
   }
 }
 

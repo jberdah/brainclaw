@@ -28,6 +28,7 @@ import {
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
   resolveCurrentModel,
+  ensureAgentRegisteredForDispatch,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateId } from '../core/ids.js';
@@ -3828,6 +3829,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             warnings.push(`Unknown agent profile: ${agentName}`);
             continue;
           }
+          // Ensure target agent is registered before creating claims/messages
+          ensureAgentRegisteredForDispatch(agentName, cwd);
           const assignScope = req.scope ?? req.task;
 
           // Guard: warn if there is already a non-archived assign message for this agent+scope
@@ -3982,6 +3985,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         if (newAgentName) {
           const profile = getCapabilityProfile(newAgentName);
           if (profile) {
+            ensureAgentRegisteredForDispatch(newAgentName, cwd);
             const rerouteClaimResult = createCoordinatorClaim({
               agent: newAgentName,
               scope: oldClaim.scope,

@@ -11,7 +11,7 @@
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
 import { listClaims, createCoordinatorClaim } from './claims.js';
-import { listAgentIdentities } from './agent-registry.js';
+import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
@@ -437,6 +437,9 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       });
       continue;
     }
+
+    // Ensure target agent is registered before creating claims/messages
+    ensureAgentRegisteredForDispatch(targetAgent, cwd);
 
     // Coordinator-owned claim: create before sending the brief (with worktree isolation)
     const claimScope = readyItem.item.scope_hint ?? readyItem.plan.id;
