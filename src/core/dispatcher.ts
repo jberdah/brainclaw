@@ -17,7 +17,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, type BriefMode } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution } from './execution.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 
@@ -406,6 +406,8 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
 
   const max = options.maxAssignments ?? readyToAssign.length;
   let assigned = 0;
+  // Track invoke commands + worktree paths for E2E execution phase
+  const preparedEntries: Array<{ deliveryEntry: DispatchedItem; invokeCmd: InvokeCommand | undefined; worktreePath?: string }> = [];
 
   for (const readyItem of readyToAssign) {
     if (assigned >= max) break;
@@ -523,30 +525,34 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     };
     result.delivery_plan.push(deliveryEntry);
     result.messages_sent.push(deliveryEntry);
+    preparedEntries.push({ deliveryEntry, invokeCmd, worktreePath });
 
     assigned++;
     const idx = agentPool.indexOf(targetAgent);
     if (idx >= 0) agentPool.splice(idx, 1);
   }
 
-  // E2E execution phase: attempt to spawn assigned agents
-  const autoExecute = options.autoExecute !== false; // default true
-  for (const entry of result.delivery_plan) {
-    const invokeCmd = buildInvokeCommand(entry.agent, '', { mode: 'worker' });
-    const execResult = attemptExecution(invokeCmd, {
-      agent: entry.agent,
-      autoExecute,
-      claimId: entry.claim_id,
-      dispatcherAgent: options.dispatcherAgent,
-      dispatcherAgentId: options.dispatcherAgentId,
-      cwd,
-    });
-    entry.execution_status = execResult.execution_status;
-    if (execResult.pid) entry.pid = execResult.pid;
-    if (execResult.execution_status === 'delivered_and_started') {
-      entry.channel = 'spawned_cli';
+  // E2E execution phase: attempt to spawn assigned agents (skip in dry run)
+  if (!options.dryRun) {
+    const autoExecute = options.autoExecute !== false; // default true
+    for (const prepared of preparedEntries) {
+      const entry = prepared.deliveryEntry;
+      const execResult = attemptExecution(prepared.invokeCmd, {
+        agent: entry.agent,
+        autoExecute,
+        worktreePath: prepared.worktreePath,
+        claimId: entry.claim_id,
+        dispatcherAgent: options.dispatcherAgent,
+        dispatcherAgentId: options.dispatcherAgentId,
+        cwd,
+      });
+      entry.execution_status = execResult.execution_status;
+      if (execResult.pid) entry.pid = execResult.pid;
+      if (execResult.execution_status === 'delivered_and_started') {
+        entry.channel = 'spawned_cli';
+      }
+      if (execResult.error) result.warnings.push(execResult.error);
     }
-    if (execResult.error) result.warnings.push(execResult.error);
   }
 
   return { analysis, result };

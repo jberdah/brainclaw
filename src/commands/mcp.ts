@@ -3652,6 +3652,38 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         ? args.agentId.trim()
         : undefined;
       const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
+      type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string };
+      const preparedInvokes: PreparedInvoke[] = [];
+
+      /** Run E2E execution phase on prepared delivery entries. Returns overall execution status. */
+      const runCoordinateExecution = (
+        prepared: PreparedInvoke[],
+        opts: { autoExecute: boolean; senderAgent: string; senderAgentId?: string; cwd: string; warnings: string[] },
+      ): 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' => {
+        let overall: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
+        for (const { entry, invoke, worktreePath } of prepared) {
+          const execResult = attemptExecution(invoke, {
+            agent: entry.agent,
+            autoExecute: opts.autoExecute,
+            worktreePath,
+            claimId: entry.claim_id,
+            dispatcherAgent: opts.senderAgent,
+            dispatcherAgentId: opts.senderAgentId,
+            cwd: opts.cwd,
+          });
+          entry.execution_status = execResult.execution_status;
+          if (execResult.pid) entry.pid = execResult.pid;
+          if (execResult.execution_status === 'delivered_and_started') {
+            entry.channel = 'spawned_cli';
+            overall = 'delivered_and_started';
+          } else if (execResult.execution_status === 'command_ready_manual' && overall !== 'delivered_and_started') {
+            overall = 'command_ready_manual';
+          }
+          if (execResult.error) opts.warnings.push(execResult.error);
+        }
+        return overall;
+      };
+
       /** Build a coordinate brief: enriches raw task with protocol section when a claim is pre-created. */
       const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string }): string => {
         const briefMode = resolveBriefMode(agentName);
@@ -3732,7 +3764,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         tags?: string[];
         payload?: Record<string, unknown>;
         commandMode?: 'worker' | 'consult';
-      }): CoordinateDeliveryEntry => {
+      }): { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand> } => {
         const msgResult = sendMessage({
           from: senderAgent,
           to: input.agent,
@@ -3763,18 +3795,21 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         if (commandHint) commandHints.push(commandHint);
 
         return {
-          agent: input.agent,
-          message_id: msgResult.id,
-          channel: 'inbox',
-          message_type: input.messageType,
-          requires_ack: input.requiresAck ?? false,
-          ref: input.ref,
-          scope: input.scope,
-          thread_id: input.threadId,
-          claim_id: input.claimId,
-          released_claim_id: input.releasedClaimId,
-          command: commandHint?.command,
-          shell: commandHint?.shell,
+          entry: {
+            agent: input.agent,
+            message_id: msgResult.id,
+            channel: 'inbox',
+            message_type: input.messageType,
+            requires_ack: input.requiresAck ?? false,
+            ref: input.ref,
+            scope: input.scope,
+            thread_id: input.threadId,
+            claim_id: input.claimId,
+            released_claim_id: input.releasedClaimId,
+            command: commandHint?.command,
+            shell: commandHint?.shell,
+          },
+          invoke,
         };
       };
 
@@ -3837,7 +3872,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             id: claimId,
           });
           const assignBrief = buildCoordinateBrief(agentName, req.task, { claimId, scope: assignScope, worktreePath: claimResult.worktreePath });
-          delivery_plan.push(queueCoordinateMessage({
+          const queued = queueCoordinateMessage({
             agent: agentName,
             text: assignBrief,
             messageType: 'assign',
@@ -3854,34 +3889,16 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               constraints: req.constraints,
             },
             commandMode: 'worker',
-          }));
+          });
+          delivery_plan.push(queued.entry);
+          preparedInvokes.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: claimResult.worktreePath });
         }
 
         // E2E execution phase: attempt to spawn assigned agents
-        const autoExecute = req.autoExecute !== false; // default true
-        let overallExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
-        for (const entry of delivery_plan) {
-          if (entry.message_type !== 'assign') continue;
-          const invoke = buildInvokeCommand(entry.agent, entry.command ?? '', { mode: 'worker' });
-          const execResult = attemptExecution(invoke, {
-            agent: entry.agent,
-            autoExecute,
-            worktreePath: (entry as unknown as Record<string, unknown>).worktree_path as string | undefined,
-            claimId: entry.claim_id,
-            dispatcherAgent: senderAgent,
-            dispatcherAgentId: senderAgentId,
-            cwd,
-          });
-          entry.execution_status = execResult.execution_status;
-          if (execResult.pid) entry.pid = execResult.pid;
-          if (execResult.execution_status === 'delivered_and_started') {
-            entry.channel = 'spawned_cli';
-            overallExecStatus = 'delivered_and_started';
-          } else if (execResult.execution_status === 'command_ready_manual' && overallExecStatus !== 'delivered_and_started') {
-            overallExecStatus = 'command_ready_manual';
-          }
-          if (execResult.error) warnings.push(execResult.error);
-        }
+        const overallExecStatus = runCoordinateExecution(preparedInvokes, {
+          autoExecute: req.autoExecute !== false,
+          senderAgent, senderAgentId, cwd, warnings,
+        });
 
         result = {
           selected_targets: resolvedAgents,
@@ -3914,7 +3931,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               constraints: req.constraints,
             },
             commandMode: 'consult',
-          }));
+          }).entry);
           contacted.push(agentName);
         }
         result = {
@@ -3985,7 +4002,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             });
             const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, { claimId: newClaimId, scope: oldClaim.scope, worktreePath: rerouteClaimResult.worktreePath });
             const delivery_plan: CoordinateDeliveryEntry[] = [];
-            delivery_plan.push(queueCoordinateMessage({
+            const reroutePrepared: PreparedInvoke[] = [];
+            const queued = queueCoordinateMessage({
               agent: newAgentName,
               text: rerouteBrief,
               messageType: 'assign',
@@ -4005,32 +4023,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
                 constraints: req.constraints,
               },
               commandMode: 'worker',
-            }));
-            // E2E execution phase for reroute
-            const rerouteAutoExecute = req.autoExecute !== false;
-            let rerouteExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
-            for (const entry of delivery_plan) {
-              if (entry.message_type !== 'assign') continue;
-              const invoke = buildInvokeCommand(entry.agent, entry.command ?? '', { mode: 'worker' });
-              const execResult = attemptExecution(invoke, {
-                agent: entry.agent,
-                autoExecute: rerouteAutoExecute,
-                worktreePath: rerouteClaimResult.worktreePath,
-                claimId: newClaimId,
-                dispatcherAgent: senderAgent,
-                dispatcherAgentId: senderAgentId,
-                cwd,
-              });
-              entry.execution_status = execResult.execution_status;
-              if (execResult.pid) entry.pid = execResult.pid;
-              if (execResult.execution_status === 'delivered_and_started') {
-                entry.channel = 'spawned_cli';
-                rerouteExecStatus = 'delivered_and_started';
-              } else if (execResult.execution_status === 'command_ready_manual' && rerouteExecStatus !== 'delivered_and_started') {
-                rerouteExecStatus = 'command_ready_manual';
-              }
-              if (execResult.error) warnings.push(execResult.error);
-            }
+            });
+            delivery_plan.push(queued.entry);
+            reroutePrepared.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: rerouteClaimResult.worktreePath });
+
+            const rerouteExecStatus = runCoordinateExecution(reroutePrepared, {
+              autoExecute: req.autoExecute !== false,
+              senderAgent, senderAgentId, cwd, warnings,
+            });
 
             result = {
               released_claim: oldClaim.id,
