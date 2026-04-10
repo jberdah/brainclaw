@@ -10,12 +10,11 @@
  */
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
-import { listClaims, saveClaim, generateClaimId } from './claims.js';
+import { listClaims, createCoordinatorClaim } from './claims.js';
 import { listAgentIdentities } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
-import { appendAuditEntry } from './audit.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, type BriefMode } from './agent-capability.js';
@@ -416,26 +415,20 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       continue;
     }
 
-    // Coordinator-owned claim: create before sending the brief
+    // Coordinator-owned claim: create before sending the brief (with worktree isolation)
     const claimScope = readyItem.item.scope_hint ?? readyItem.plan.id;
-    const claimId = options.dryRun ? '(dry-run)' : generateClaimId();
+    let claimId = '(dry-run)';
     if (!options.dryRun) {
-      saveClaim({
-        id: claimId,
+      const claimResult = createCoordinatorClaim({
         agent: targetAgent,
         scope: claimScope,
         description: readyItem.plan.text,
-        plan_id: readyItem.plan.id,
-        created_at: new Date().toISOString(),
-        status: 'active',
-      }, cwd);
-      appendAuditEntry({
-        actor: options.dispatcherAgent,
-        action: 'claim',
-        item_id: claimId,
-        item_type: 'claim',
-        scope: claimScope,
-      }, cwd);
+        planId: readyItem.plan.id,
+        dispatcherAgent: options.dispatcherAgent,
+        sessionId: options.sessionId,
+        cwd,
+      });
+      claimId = claimResult.claimId;
     }
 
     // Generate brief with pre-created claim_id

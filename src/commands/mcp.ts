@@ -11,7 +11,7 @@ import { loadConfig } from '../core/config.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -3768,16 +3768,18 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             }));
           }
 
-          const claimId = generateClaimId();
-          saveClaim({
-            id: claimId,
+          const claimResult = createCoordinatorClaim({
             agent: agentName,
-            scope: req.scope ?? req.task,
+            scope: assignScope,
             description: req.task,
-            created_at: nowISO(),
-            status: 'active',
-          }, cwd);
-          appendAuditEntry({ actor: agentName, action: 'claim', item_id: claimId, item_type: 'claim', scope: req.scope ?? req.task }, cwd);
+            dispatcherAgent: senderAgent,
+            sessionId: connectionSessionId,
+            cwd,
+          });
+          const claimId = claimResult.claimId;
+          if (claimResult.worktreeWarning) {
+            warnings.push(claimResult.worktreeWarning);
+          }
           artifacts.push({ type: 'claim', id: claimId });
           side_effects.push({ action: 'create', entity: 'claim', id: claimId });
           delivery_plan.push(queueCoordinateMessage({
@@ -3879,16 +3881,18 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         if (newAgentName) {
           const profile = getCapabilityProfile(newAgentName);
           if (profile) {
-            newClaimId = generateClaimId();
-            saveClaim({
-              id: newClaimId,
+            const rerouteClaimResult = createCoordinatorClaim({
               agent: newAgentName,
               scope: oldClaim.scope,
               description: req.task,
-              created_at: nowISO(),
-              status: 'active',
-            }, cwd);
-            appendAuditEntry({ actor: newAgentName, action: 'claim', item_id: newClaimId, item_type: 'claim', scope: oldClaim.scope }, cwd);
+              dispatcherAgent: senderAgent,
+              sessionId: connectionSessionId,
+              cwd,
+            });
+            newClaimId = rerouteClaimResult.claimId;
+            if (rerouteClaimResult.worktreeWarning) {
+              warnings.push(rerouteClaimResult.worktreeWarning);
+            }
             artifacts.push({ type: 'claim', id: newClaimId });
             side_effects.push({ action: 'create', entity: 'claim', id: newClaimId });
             const delivery_plan: CoordinateDeliveryEntry[] = [];

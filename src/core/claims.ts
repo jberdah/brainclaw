@@ -7,6 +7,8 @@ import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { loadConfig } from './config.js';
+import { createWorktree } from './worktree.js';
+import { appendAuditEntry } from './audit.js';
 
 function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
@@ -129,4 +131,66 @@ export function releaseStaleClaimsFromOtherAgents(currentAgent?: string, cwd?: s
   }
 
   return { released, warned };
+}
+
+// ── Coordinator-owned claim ─────────────────────────────────
+
+export interface CoordinatorClaimOptions {
+  agent: string;
+  scope: string;
+  description: string;
+  planId?: string;
+  dispatcherAgent: string;
+  sessionId?: string;
+  cwd: string;
+}
+
+export interface CoordinatorClaimResult {
+  claimId: string;
+  worktreePath?: string;
+  worktreeWarning?: string;
+}
+
+/**
+ * Create a coordinator-owned claim with worktree isolation.
+ * Encapsulates: generateClaimId + createWorktree + saveClaim + audit.
+ * Used by both bclaw_dispatch and bclaw_coordinate assign/reroute.
+ */
+export function createCoordinatorClaim(options: CoordinatorClaimOptions): CoordinatorClaimResult {
+  const claimId = generateClaimId();
+  let worktreePath: string | undefined;
+  let worktreeWarning: string | undefined;
+
+  // Create isolated worktree (matching bclaw_claim MCP handler behavior)
+  const branchSlug = options.scope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+  const worktreeBranch = `feat/${branchSlug}`;
+  try {
+    worktreePath = createWorktree(options.cwd, worktreeBranch, {
+      sessionId: options.sessionId,
+      agent: options.agent,
+    });
+  } catch (err) {
+    worktreeWarning = `Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  saveClaim({
+    id: claimId,
+    agent: options.agent,
+    scope: options.scope,
+    description: options.description,
+    plan_id: options.planId,
+    created_at: nowISO(),
+    status: 'active',
+    worktree_path: worktreePath,
+  }, options.cwd);
+
+  appendAuditEntry({
+    actor: options.dispatcherAgent,
+    action: 'claim',
+    item_id: claimId,
+    item_type: 'claim',
+    scope: options.scope,
+  }, options.cwd);
+
+  return { claimId, worktreePath, worktreeWarning };
 }
