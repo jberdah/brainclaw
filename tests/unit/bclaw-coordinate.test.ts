@@ -205,6 +205,9 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(assignMsg.from, 'claude-code');
       assert.equal(assignMsg.to, 'codex');
       assert.ok(assignMsg.text.includes('Refactor delivery module'));
+      // Brief should contain claim reference and assignment header
+      assert.ok(assignMsg.text.includes('pre-claimed by coordinator'), 'Brief should mention pre-claimed scope');
+      assert.ok(assignMsg.text.includes('# Assignment:'), 'Brief should have assignment header');
     });
 
     it('returns delivery_plan with channel=inbox and command hints', async () => {
