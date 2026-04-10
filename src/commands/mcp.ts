@@ -3817,7 +3817,11 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             warnings.push(claimResult.worktreeWarning);
           }
           artifacts.push({ type: 'claim', id: claimId });
-          side_effects.push({ action: 'create', entity: 'claim', id: claimId });
+          side_effects.push({
+            action: claimResult.reusedExisting ? 'reuse' : 'create',
+            entity: 'claim',
+            id: claimId,
+          });
           const assignBrief = buildCoordinateBrief(agentName, req.task, { claimId, scope: assignScope });
           delivery_plan.push(queueCoordinateMessage({
             agent: agentName,
@@ -3931,7 +3935,11 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               warnings.push(rerouteClaimResult.worktreeWarning);
             }
             artifacts.push({ type: 'claim', id: newClaimId });
-            side_effects.push({ action: 'create', entity: 'claim', id: newClaimId });
+            side_effects.push({
+              action: rerouteClaimResult.reusedExisting ? 'reuse' : 'create',
+              entity: 'claim',
+              id: newClaimId,
+            });
             const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, { claimId: newClaimId, scope: oldClaim.scope });
             const delivery_plan: CoordinateDeliveryEntry[] = [];
             delivery_plan.push(queueCoordinateMessage({

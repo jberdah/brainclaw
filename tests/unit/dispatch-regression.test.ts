@@ -12,13 +12,15 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   analyzeSequence,
+  dispatch,
   generateBrief,
 } from '../../src/core/dispatcher.js';
 import { buildInvokeCommand } from '../../src/core/agent-capability.js';
 import { saveSequence } from '../../src/core/sequence.js';
-import { saveClaim } from '../../src/core/claims.js';
+import { listClaims, saveClaim } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { persistState } from '../../src/core/state.js';
+import { readInbox } from '../../src/core/messaging.js';
 import type { PlanItem, Sequence, Claim } from '../../src/core/schema.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -326,6 +328,61 @@ describe('dispatch-regression/analyzeSequence', () => {
     assert.ok(result.sequence, 'sequence metadata is present');
     assert.equal(result.sequence.name, 'regression-sequence');
     assert.equal(result.sequence.status, 'active');
+  });
+});
+
+describe('dispatch-regression/dispatch', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestStore();
+    setupAgents(testDir);
+  });
+
+  afterEach(() => {
+    cleanupTestStore(testDir);
+  });
+
+  it('reuses an existing active claim for the same agent and scope', () => {
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [
+        makePlan({ id: 'pln_dispatch_reuse', text: 'Dispatch with reused claim', assignee: 'codex', status: 'todo' }),
+      ],
+    }, testDir);
+
+    saveSequence(makeSequence([
+      { planId: 'pln_dispatch_reuse', rank: 1, hard_after: [], soft_after: [], scope_hint: 'src/core/reused-claim.ts' },
+    ]), testDir);
+
+    saveClaim({
+      schema_version: 2,
+      id: 'clm_existing_dispatch',
+      agent: 'codex',
+      scope: 'src/core/reused-claim.ts',
+      description: 'Existing dispatcher claim',
+      created_at: '2026-04-01T00:00:00Z',
+      status: 'active',
+    }, testDir);
+
+    const dispatchResult = dispatch({
+      dispatcherAgent: 'claude-code',
+      agents: ['codex'],
+    }, testDir);
+
+    assert.ok(dispatchResult, 'dispatch should return a result');
+    assert.equal(dispatchResult.result.delivery_plan.length, 1, 'dispatch should return one delivery_plan entry');
+    assert.equal(dispatchResult.result.delivery_plan[0]?.claim_id, 'clm_existing_dispatch');
+    const activeClaims = listClaims(testDir).filter(c => c.status === 'active');
+    assert.equal(activeClaims.length, 1, 'dispatch should not create a duplicate active claim');
+    assert.equal(activeClaims[0]?.id, 'clm_existing_dispatch');
+
+    const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
+    const assignMsg = inbox.messages.find(m => m.type === 'assign');
+    assert.ok(assignMsg, 'dispatch should still send an assignment message');
+    assert.equal(assignMsg?.payload?.claim_id, 'clm_existing_dispatch');
   });
 });
 

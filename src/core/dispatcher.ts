@@ -67,9 +67,11 @@ export interface DispatchedItem {
   lane?: string;
   /** How the assignment was delivered */
   channel: 'inbox';
+  claim_id?: string;
 }
 
 export interface DispatchResult {
+  delivery_plan: DispatchedItem[];
   messages_sent: DispatchedItem[];
   commands: Array<{
     agent: string;
@@ -369,7 +371,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   const analysis = analyzeSequence(cwd);
   if (!analysis) return null;
 
-  const result: DispatchResult = { messages_sent: [], commands: [], skipped: [] };
+  const result: DispatchResult = { delivery_plan: [], messages_sent: [], commands: [], skipped: [] };
 
   // Filter ready lanes
   let readyToAssign = analysis.ready;
@@ -447,13 +449,16 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     }
 
     if (options.dryRun) {
-      result.messages_sent.push({
+      const deliveryEntry: DispatchedItem = {
         agent: targetAgent,
         plan_id: readyItem.plan.id,
         message_id: '(dry-run)',
         lane: readyItem.lane,
         channel: 'inbox',
-      });
+        claim_id: claimId,
+      };
+      result.delivery_plan.push(deliveryEntry);
+      result.messages_sent.push(deliveryEntry);
       assigned++;
       const idx = agentPool.indexOf(targetAgent);
       if (idx >= 0) agentPool.splice(idx, 1);
@@ -483,13 +488,16 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       session_id: options.sessionId,
     }, cwd);
 
-    result.messages_sent.push({
+    const deliveryEntry: DispatchedItem = {
       agent: targetAgent,
       plan_id: readyItem.plan.id,
       message_id: msgResult.id,
       lane: readyItem.lane,
       channel: 'inbox',
-    });
+      claim_id: claimId,
+    };
+    result.delivery_plan.push(deliveryEntry);
+    result.messages_sent.push(deliveryEntry);
 
     assigned++;
     const idx = agentPool.indexOf(targetAgent);

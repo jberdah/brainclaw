@@ -237,6 +237,7 @@ describe('bclaw_coordinate — side effects', () => {
         targetAgents: ['codex'],
         agent: 'claude-code',
       });
+      const firstClaim = listClaims(workspace.dir).filter(c => c.status === 'active')[0];
 
       const response = await coordinate(workspace, {
         intent: 'assign',
@@ -252,6 +253,17 @@ describe('bclaw_coordinate — side effects', () => {
         warningText.includes('already_assigned') || warningText.includes('already_claimed'),
         `Expected warning about duplicate, got: ${warningText}`,
       );
+
+      const activeClaims = listClaims(workspace.dir).filter(c => c.status === 'active');
+      assert.equal(activeClaims.length, 1, 'Should reuse the existing claim instead of creating a second one');
+      assert.equal(activeClaims[0].id, firstClaim.id, 'Should keep the original claim id');
+
+      const deliveryPlan = response.result.delivery_plan as Array<Record<string, unknown>>;
+      assert.equal(deliveryPlan[0]?.claim_id, firstClaim.id, 'delivery_plan should point at the reused claim');
+
+      const claimEffects = response.side_effects.filter(e => e.entity === 'claim');
+      assert.equal(claimEffects.length, 1, 'Expected one claim side effect entry');
+      assert.equal(claimEffects[0]?.action, 'reuse', 'Duplicate assign should report claim reuse');
     });
   });
 

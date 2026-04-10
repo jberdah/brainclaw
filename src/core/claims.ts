@@ -149,6 +149,7 @@ export interface CoordinatorClaimResult {
   claimId: string;
   worktreePath?: string;
   worktreeWarning?: string;
+  reusedExisting?: boolean;
 }
 
 /**
@@ -157,6 +158,17 @@ export interface CoordinatorClaimResult {
  * Used by both bclaw_dispatch and bclaw_coordinate assign/reroute.
  */
 export function createCoordinatorClaim(options: CoordinatorClaimOptions): CoordinatorClaimResult {
+  const existingClaim = listClaims(options.cwd).find(
+    (claim) => claim.status === 'active' && claim.agent === options.agent && claim.scope === options.scope,
+  );
+  if (existingClaim) {
+    return {
+      claimId: existingClaim.id,
+      worktreePath: existingClaim.worktree_path,
+      reusedExisting: true,
+    };
+  }
+
   const claimId = generateClaimId();
   let worktreePath: string | undefined;
   let worktreeWarning: string | undefined;
@@ -192,5 +204,5 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
     scope: options.scope,
   }, options.cwd);
 
-  return { claimId, worktreePath, worktreeWarning };
+  return { claimId, worktreePath, worktreeWarning, reusedExisting: false };
 }
