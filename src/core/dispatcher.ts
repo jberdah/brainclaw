@@ -83,6 +83,7 @@ export interface DispatchResult {
     plan_id: string;
     reason: string;
   }>;
+  warnings: string[];
 }
 
 const MAX_INLINE_BRIEF_LENGTH = 4000;
@@ -217,7 +218,7 @@ export function generateBrief(
   item: SequenceItem,
   cwd: string,
   briefMode?: BriefMode,
-  options?: { claimId?: string },
+  options?: { claimId?: string; worktreePath?: string },
 ): string {
   const mode = briefMode ?? 'full';
 
@@ -317,11 +318,22 @@ export function generateBrief(
     parts.push('## Protocol');
     if (options?.claimId) {
       parts.push(`Your scope has been pre-claimed by the coordinator (claim: ${options.claimId}).`);
-      parts.push('1. Read this brief and the plan description');
-      parts.push('2. Call bclaw_session_start to register your session');
-      parts.push('3. Work on the assigned scope (claim already active)');
-      parts.push('4. Call bclaw_session_end with a narrative when done');
-      parts.push('5. Call bclaw_ack_message on this assignment');
+      if (options.worktreePath) {
+        parts.push(`Worktree: ${options.worktreePath}`);
+        parts.push('');
+        parts.push('1. Read this brief and the plan description');
+        parts.push(`2. cd into the worktree: ${options.worktreePath}`);
+        parts.push('3. Call bclaw_session_start to register your session');
+        parts.push('4. Work on the assigned scope (claim already active)');
+        parts.push('5. Call bclaw_session_end with a narrative when done');
+        parts.push('6. Call bclaw_ack_message on this assignment');
+      } else {
+        parts.push('1. Read this brief and the plan description');
+        parts.push('2. Call bclaw_session_start to register your session');
+        parts.push('3. Work on the assigned scope (claim already active)');
+        parts.push('4. Call bclaw_session_end with a narrative when done');
+        parts.push('5. Call bclaw_ack_message on this assignment');
+      }
     } else {
       parts.push('1. Read this brief and the plan description');
       parts.push('2. Call bclaw_session_start to register your session');
@@ -371,7 +383,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   const analysis = analyzeSequence(cwd);
   if (!analysis) return null;
 
-  const result: DispatchResult = { delivery_plan: [], messages_sent: [], commands: [], skipped: [] };
+  const result: DispatchResult = { delivery_plan: [], messages_sent: [], commands: [], skipped: [], warnings: [] };
 
   // Filter ready lanes
   let readyToAssign = analysis.ready;
@@ -420,6 +432,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     // Coordinator-owned claim: create before sending the brief (with worktree isolation)
     const claimScope = readyItem.item.scope_hint ?? readyItem.plan.id;
     let claimId = '(dry-run)';
+    let worktreePath: string | undefined;
     if (!options.dryRun) {
       const claimResult = createCoordinatorClaim({
         agent: targetAgent,
@@ -431,11 +444,15 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         cwd,
       });
       claimId = claimResult.claimId;
+      worktreePath = claimResult.worktreePath;
+      if (claimResult.worktreeWarning) {
+        result.warnings.push(`${targetAgent}/${claimScope}: ${claimResult.worktreeWarning}`);
+      }
     }
 
-    // Generate brief with pre-created claim_id
+    // Generate brief with pre-created claim_id and worktree path
     const briefMode = resolveBriefMode(targetAgent);
-    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId });
+    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath });
 
     // Build invoke command (if agent is CLI-spawnable)
     const invokeCmd = buildInvokeCommand(targetAgent, brief);
@@ -480,6 +497,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         rank: readyItem.item.rank,
         priority: readyItem.plan.priority,
         claim_id: claimId,
+        worktree_path: worktreePath,
       },
       scope: readyItem.item.scope_hint,
       requires_ack: true,

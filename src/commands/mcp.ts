@@ -3649,17 +3649,25 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         : undefined;
       const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
       /** Build a coordinate brief: enriches raw task with protocol section when a claim is pre-created. */
-      const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string }): string => {
+      const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string }): string => {
         const briefMode = resolveBriefMode(agentName);
         const parts: string[] = [];
         parts.push(`# Assignment: ${task}`);
         parts.push('');
         if (options?.scope) parts.push(`Scope: ${options.scope}`);
         if (options?.claimId) parts.push(`Claim: ${options.claimId} (pre-claimed by coordinator)`);
+        if (options?.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
         parts.push('');
         if (briefMode === 'full') {
           parts.push('## Protocol');
-          if (options?.claimId) {
+          if (options?.claimId && options.worktreePath) {
+            parts.push('1. Read this brief');
+            parts.push(`2. cd into the worktree: ${options.worktreePath}`);
+            parts.push('3. Call bclaw_session_start to register your session');
+            parts.push('4. Work on the assigned scope (claim already active)');
+            parts.push('5. Call bclaw_session_end with a narrative when done');
+            parts.push('6. Call bclaw_ack_message on this assignment');
+          } else if (options?.claimId) {
             parts.push('1. Read this brief');
             parts.push('2. Call bclaw_session_start to register your session');
             parts.push('3. Work on the assigned scope (claim already active)');
@@ -3822,7 +3830,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             entity: 'claim',
             id: claimId,
           });
-          const assignBrief = buildCoordinateBrief(agentName, req.task, { claimId, scope: assignScope });
+          const assignBrief = buildCoordinateBrief(agentName, req.task, { claimId, scope: assignScope, worktreePath: claimResult.worktreePath });
           delivery_plan.push(queueCoordinateMessage({
             agent: agentName,
             text: assignBrief,
@@ -3836,6 +3844,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               intent: req.intent,
               scope: assignScope,
               claim_id: claimId,
+              worktree_path: claimResult.worktreePath,
               constraints: req.constraints,
             },
             commandMode: 'worker',
@@ -3940,7 +3949,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               entity: 'claim',
               id: newClaimId,
             });
-            const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, { claimId: newClaimId, scope: oldClaim.scope });
+            const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, { claimId: newClaimId, scope: oldClaim.scope, worktreePath: rerouteClaimResult.worktreePath });
             const delivery_plan: CoordinateDeliveryEntry[] = [];
             delivery_plan.push(queueCoordinateMessage({
               agent: newAgentName,
@@ -3956,6 +3965,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
                 intent: req.intent,
                 scope: oldClaim.scope,
                 claim_id: newClaimId,
+                worktree_path: rerouteClaimResult.worktreePath,
                 released_claim_id: oldClaim.id,
                 previous_agent: oldClaim.agent,
                 constraints: req.constraints,
