@@ -17,6 +17,7 @@ import { mutate } from './mutation-pipeline.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
 import { InboxMessageSchema, type InboxMessage, type MessageType, type MessageStatus } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
+import { resolveAgentAlias } from './agent-capability.js';
 
 // ── Paths ───────────────────────────────────────────────────
 
@@ -25,8 +26,9 @@ function inboxDir(cwd: string): string {
 }
 
 function agentInboxDir(agent: string, cwd: string): string {
-  // Normalise agent name for filesystem (lowercase, replace spaces)
-  const safe = agent.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  // Resolve aliases (e.g. 'copilot' → 'github-copilot') then normalise for filesystem
+  const canonical = resolveAgentAlias(agent.toLowerCase());
+  const safe = canonical.replace(/[^a-z0-9_-]/g, '_');
   return path.join(inboxDir(cwd), safe);
 }
 
@@ -84,12 +86,13 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
   return mutate({ cwd }, () => {
     const { id, short_label } = generateIdWithLabel('inbox_messages', cwd);
     const timestamp = nowISO();
+    const resolvedTo = resolveAgentAlias(input.to);
 
     const message: InboxMessage = {
       id,
       short_label,
       from: input.from,
-      to: input.to,
+      to: resolvedTo,
       type: input.type,
       text: input.text,
       ref: input.ref,
@@ -111,9 +114,9 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
 
     const dir = ensureAgentInboxDir(input.to, cwd);
     saveVersionedJsonFile('message' as VersionedDocumentType, path.join(dir, `${id}.json`), message);
-    commitMemoryChange(`message ${id} sent to ${input.to}`, cwd);
+    commitMemoryChange(`message ${id} sent to ${resolvedTo}`, cwd);
 
-    return { id, shortLabel: short_label, to: input.to, type: input.type };
+    return { id, shortLabel: short_label, to: resolvedTo, type: input.type };
   });
 }
 

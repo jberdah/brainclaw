@@ -105,6 +105,18 @@ export type AgentName =
   | 'picoclaw'
   | 'zeroclaw';
 
+/** Agent name aliases — maps common short names to canonical profile names. */
+const AGENT_ALIASES: Record<string, AgentName> = {
+  'copilot': 'github-copilot',
+  'gh-copilot': 'github-copilot',
+  'gemini': 'antigravity',
+};
+
+/** Resolve an alias to its canonical agent name, or return the input unchanged. */
+export function resolveAgentAlias(name: string): string {
+  return AGENT_ALIASES[name] ?? name;
+}
+
 const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   // --- Code agents (interactive, IDE-driven) ---
   'claude-code': {
@@ -309,7 +321,8 @@ export function registerCapabilityProfile(profile: AgentCapabilityProfile): void
  * Returns undefined for completely unknown agents.
  */
 export function getCapabilityProfile(name: string): AgentCapabilityProfile | undefined {
-  return _customProfiles.get(name) ?? PROFILES[name as AgentName];
+  const resolved = resolveAgentAlias(name);
+  return _customProfiles.get(resolved) ?? PROFILES[resolved as AgentName];
 }
 
 // ── Default invoke templates for CLI-spawnable agents ──────────────────────
@@ -732,7 +745,8 @@ export function getAgentsByTier(tier: 'A' | 'B' | 'C'): AgentCapabilityProfile[]
  * Check if an agent name is a known brainclaw-supported agent.
  */
 export function isKnownAgent(name: string): name is AgentName {
-  return name in PROFILES;
+  const resolved = resolveAgentAlias(name);
+  return resolved in PROFILES;
 }
 
 /**
