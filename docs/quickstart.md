@@ -112,15 +112,16 @@ Or let your agent drive it:
 Call bclaw_bootstrap to detect project signals, then review what was found.
 ```
 
-## One agent at a time
+## Parallel work and multi-instance
 
-brainclaw serializes all store mutations, so writes are safe. But running multiple agents in parallel on the same checkout can cause Git conflicts.
+brainclaw supports multiple instances of the same agent type running in parallel (e.g., 3 codex instances on 3 different tasks). Each instance gets its own worktree and claim.
+
+The dispatcher handles this automatically via `bclaw_dispatch` — it scores agents by capacity (`max_concurrent_tasks` in agent profiles), creates separate claims per scope, and routes inbox messages by `claim_id` so each instance only sees its own assignment.
 
 **Recommended workflow:**
-1. One agent works at a time per checkout
-2. Use `bclaw_session_end` with a narrative when done
-3. Next agent calls `bclaw_session_start` and picks up from shared context
-4. For parallel work, use Git worktrees: `brainclaw worktree create feat/my-branch`
+1. For sequential work: one agent at a time, hand off with `bclaw_session_end`
+2. For parallel work: use `bclaw_dispatch` or `bclaw_coordinate(assign)` — the dispatcher creates worktrees and claims automatically
+3. Scope lock is strict: only one claim per scope at a time, regardless of agent type
 
 ## Next reads
 

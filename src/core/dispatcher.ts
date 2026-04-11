@@ -1,28 +1,41 @@
 /**
- * Local dispatcher — coordinator/worker model for multi-agent coordination.
+ * Local dispatcher — claim-routed multi-instance coordination.
  *
- * ## Dispatch mode (decision 2026-04-11)
+ * ## Architecture (dec_39d59cab, Codex-reviewed)
  *
- * `bclaw_dispatch(spawn=true)` is the **official dispatch mode**. The dispatcher:
- * 1. Analyzes the active sequence and identifies ready lanes
- * 2. Creates coordinator-owned claims with worktree isolation
- * 3. Generates adaptive briefs per agent capability (full/compact/task_card)
- * 4. Sends assignment messages to agent inboxes
- * 5. Attempts E2E spawn via `attemptExecution()` (detached CLI subprocess)
+ * - **Agent type** = capability profile (what codex CAN do)
+ * - **Claim** = routing key (exists before spawn, locks a scope)
+ * - **Session** = observability metadata (adopted post-spawn)
  *
- * **Fallback**: When spawn fails (sandbox constraints, missing binary, etc.),
- * the dispatcher gracefully returns `command_ready_manual` with a copy-pasteable
- * bash command. The Sprint 5 bash pattern (`cd repo && codex exec ...`) remains
- * valid as a manual fallback — it is NOT the primary mode.
+ * ## Dispatch pipeline
  *
- * Agent spawn support: Codex (stdin_pipe), Claude CLI (temp_file), Cline (inline_arg).
- * Copilot CLI is inbox/review-only (no shell execution permissions).
+ * 1. `analyzeSequence()` — categorize lanes, compute `agent_capacity` per agent
+ * 2. `scoreAgents()` — 4-factor weighted scoring with capacity-aware utilization
+ * 3. Claim-based capacity guard — agents stay in pool until claims >= max_concurrent_tasks
+ * 4. `createCoordinatorClaim()` — scope lock is global (any active claim blocks)
+ * 5. `sendMessage()` — inbox message with top-level `claim_id` for routing
+ * 6. `attachAssignmentMessageToClaim()` — links claim → message for tracing
+ * 7. `attemptExecution()` — spawn with `BRAINCLAW_CLAIM_ID` in env
+ * 8. Instance calls `session_start` → adopts claim → filters inbox by `claim_id`
+ *
+ * ## Multi-instance support
+ *
+ * An agent type can run N parallel instances (max_concurrent_tasks in profile).
+ * Each instance gets its own worktree, claim, and inbox messages. The dispatcher
+ * scores by utilization (claims / max_tasks) and naturally load-balances across
+ * agents and instances within a single dispatch cycle.
+ *
+ * ## Limits
+ *
+ * - Instruction files, hooks, MCP config remain per agent type (not per instance)
+ * - Live companion refresh is global (last writer wins, deterministic)
+ * - Copilot CLI is inbox/review-only (spawnable_cli=false)
  *
  * @module
  */
 import { getActiveSequence } from './sequence.js';
 import { loadState } from './state.js';
-import { listClaims, createCoordinatorClaim } from './claims.js';
+import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim } from './claims.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -702,6 +715,11 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       author_id: options.dispatcherAgentId,
       session_id: options.sessionId,
     }, cwd);
+
+    // Attach message ID to the claim for tracing (claim→message→instance)
+    if (claimId !== '(dry-run)') {
+      try { attachAssignmentMessageToClaim(claimId, msgResult.id, cwd); } catch { /* best-effort */ }
+    }
 
     const deliveryEntry: DispatchedItem = {
       agent: targetAgent,

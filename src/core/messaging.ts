@@ -130,6 +130,8 @@ export interface ReadInboxInput {
   status?: MessageStatus;
   type?: MessageType;
   thread_id?: string;
+  /** Filter by claim_id (top-level or payload.claim_id). For multi-instance dispatch routing. */
+  claimId?: string;
   limit?: number;
   offset?: number;
   markAsRead?: boolean;
@@ -142,6 +144,21 @@ export interface ReadInboxResult {
   messages: InboxMessage[];
 }
 
+/** Apply all inbox filters (status, type, thread_id, claim_id) to a message list. */
+function applyInboxFilters(messages: InboxMessage[], input: ReadInboxInput): InboxMessage[] {
+  let filtered = messages;
+  if (input.status) filtered = filtered.filter(m => m.status === input.status);
+  if (input.type) filtered = filtered.filter(m => m.type === input.type);
+  if (input.thread_id) filtered = filtered.filter(m => m.thread_id === input.thread_id);
+  if (input.claimId) {
+    filtered = filtered.filter(m =>
+      m.claim_id === input.claimId ||
+      (m.payload as Record<string, unknown> | undefined)?.claim_id === input.claimId,
+    );
+  }
+  return filtered;
+}
+
 export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   const dir = agentInboxDir(input.agent, cwd);
 
@@ -150,10 +167,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   if (input.markAsRead) {
     return mutate({ cwd }, () => {
       // Fresh read inside lock
-      let messages = loadMessagesFromDir(dir);
-      if (input.status) messages = messages.filter(m => m.status === input.status);
-      if (input.type) messages = messages.filter(m => m.type === input.type);
-      if (input.thread_id) messages = messages.filter(m => m.thread_id === input.thread_id);
+      let messages = applyInboxFilters(loadMessagesFromDir(dir), input);
 
       const total = messages.length;
       const offset = input.offset ?? 0;
@@ -175,10 +189,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   }
 
   // Read-only path: no lock needed
-  let messages = loadMessagesFromDir(dir);
-  if (input.status) messages = messages.filter(m => m.status === input.status);
-  if (input.type) messages = messages.filter(m => m.type === input.type);
-  if (input.thread_id) messages = messages.filter(m => m.thread_id === input.thread_id);
+  let messages = applyInboxFilters(loadMessagesFromDir(dir), input);
 
   const total = messages.length;
   const offset = input.offset ?? 0;

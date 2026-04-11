@@ -161,13 +161,17 @@ export interface CoordinatorClaimResult {
  * Used by both bclaw_dispatch and bclaw_coordinate assign/reroute.
  */
 export function createCoordinatorClaim(options: CoordinatorClaimOptions): CoordinatorClaimResult {
-  const existingClaim = listClaims(options.cwd).find(
-    (claim) => claim.status === 'active' && claim.agent === options.agent && claim.scope === options.scope,
+  // Scope lock is GLOBAL: any active claim on the same scope blocks, regardless of agent.
+  // This prevents two instances from working on the same files simultaneously.
+  const existingScopeClaim = listClaims(options.cwd).find(
+    (claim) => claim.status === 'active' && claim.scope === options.scope,
   );
-  if (existingClaim) {
+  if (existingScopeClaim) {
+    // If the same agent already has this scope, reuse it (backward compat).
+    // If a DIFFERENT agent has it, still reuse — the scope is locked.
     return {
-      claimId: existingClaim.id,
-      worktreePath: existingClaim.worktree_path,
+      claimId: existingScopeClaim.id,
+      worktreePath: existingScopeClaim.worktree_path,
       reusedExisting: true,
     };
   }
@@ -208,4 +212,39 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   }, options.cwd);
 
   return { claimId, worktreePath, worktreeWarning, reusedExisting: false };
+}
+
+// ── Claim lifecycle helpers for multi-instance dispatch ────
+
+/**
+ * Attach the assignment message ID to a claim (for tracing claim→message→instance).
+ * Called by the dispatcher after sending the inbox message.
+ */
+export function attachAssignmentMessageToClaim(claimId: string, messageId: string, cwd?: string): void {
+  const claim = loadClaim(claimId, cwd);
+  claim.assignment_message_id = messageId;
+  saveClaim(claim, cwd);
+}
+
+/**
+ * Adopt a claim from a spawned instance's session.
+ * Sets session_id + adopted_at on the claim. Refuses if the claim is already
+ * adopted by a different live session (prevents race conditions).
+ */
+export function adoptClaimSession(
+  claimId: string,
+  sessionId: string,
+  cwd?: string,
+): { adopted: boolean; reason: string } {
+  const claim = loadClaim(claimId, cwd);
+  if (claim.status !== 'active') {
+    return { adopted: false, reason: `Claim ${claimId} is not active (status: ${claim.status})` };
+  }
+  if (claim.session_id && claim.session_id !== sessionId) {
+    return { adopted: false, reason: `Claim ${claimId} already adopted by session ${claim.session_id}` };
+  }
+  claim.session_id = sessionId;
+  claim.adopted_at = nowISO();
+  saveClaim(claim, cwd);
+  return { adopted: true, reason: 'ok' };
 }

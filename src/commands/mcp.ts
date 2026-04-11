@@ -11,7 +11,7 @@ import { loadConfig } from '../core/config.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -2677,10 +2677,24 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           } catch { /* file doesn't exist, skip */ }
         }
       }
+      // Claim adoption: if BRAINCLAW_CLAIM_ID is set (spawned by dispatcher),
+      // adopt the claim by writing session_id into it. This links claim→session.
+      let adoptedClaimId: string | undefined;
+      const envClaimId = process.env.BRAINCLAW_CLAIM_ID;
+      if (envClaimId && result.session_id) {
+        try {
+          const adoptResult = adoptClaimSession(envClaimId, result.session_id, cwd);
+          if (adoptResult.adopted) {
+            adoptedClaimId = envClaimId;
+          }
+        } catch { /* best-effort — claim may not exist or be already adopted */ }
+      }
+
       const sessionStartMsgParts = ['✔ Session started'];
       if (result.auto_registered) {
         sessionStartMsgParts.push(`\n⚠️ Agent '${result.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${result.agent}\` to set capabilities and trust level.`);
       }
+      if (adoptedClaimId) sessionStartMsgParts.push(`\n🔗 Adopted claim ${adoptedClaimId} — use bclaw_read_inbox with claimId to see your assignment.`);
       if (staleInstructionsWarn) sessionStartMsgParts.push(staleInstructionsWarn);
       if (sessionUpdateNotice) sessionStartMsgParts.push(sessionUpdateNotice);
       if (postSessionStartText) sessionStartMsgParts.push(postSessionStartText);

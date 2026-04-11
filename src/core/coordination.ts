@@ -8,6 +8,8 @@ import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '.
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';
 import { loadState, persistState } from './state.js';
+import { getCapabilityProfile } from './agent-capability.js';
+import { loadAllSessions } from './identity.js';
 import { countActionable } from './messaging.js';
 import { listCandidates } from './candidates.js';
 import { pullSignalsFromLinkedProjects } from './federation-transport.js';
@@ -163,6 +165,12 @@ interface OtherAgentSummary {
   scopes: string[];
   last_active?: string;
   has_open_session: boolean;
+  /** Number of active sessions for this agent type (multi-instance) */
+  instance_count: number;
+  /** Max concurrent tasks from capability profile */
+  max_tasks: number;
+  /** Remaining dispatch slots */
+  slots_remaining: number;
 }
 
 function buildOtherAgentsSummary(
@@ -171,24 +179,48 @@ function buildOtherAgentsSummary(
   currentAgent?: string,
   cwd?: string,
 ): OtherAgentSummary[] | undefined {
+  // Count active sessions per agent for instance_count
+  const sessions = loadAllSessions(cwd);
+  const now = Date.now();
+  const TTL_MS = 4 * 3_600_000; // 4h default — matches identity.ts
+  const sessionCounts = new Map<string, number>();
+  for (const s of sessions) {
+    const lastSeen = new Date(s.last_seen_at).getTime();
+    if (!isNaN(lastSeen) && now - lastSeen < TTL_MS) {
+      sessionCounts.set(s.agent, (sessionCounts.get(s.agent) ?? 0) + 1);
+    }
+  }
+
   // Start from ALL registered agents — they always appear
   const agentMap = new Map<string, OtherAgentSummary>();
   for (const identity of listAgentIdentities(cwd)) {
     if (identity.agent_name === currentAgent) continue;
+    const profile = getCapabilityProfile(identity.agent_name);
+    const maxTasks = profile?.max_concurrent_tasks ?? 1;
     agentMap.set(identity.agent_name, {
       name: identity.agent_name,
       trust_level: identity.trust_level ?? 'contributor',
       claim_count: 0,
       scopes: [],
       has_open_session: false,
+      instance_count: sessionCounts.get(identity.agent_name) ?? 0,
+      max_tasks: maxTasks,
+      slots_remaining: maxTasks, // will be reduced when claims are counted
     });
   }
 
   // Enrich with active claims
   for (const claim of claims) {
     if (claim.agent === currentAgent) continue;
-    const existing = agentMap.get(claim.agent) ?? { name: claim.agent, trust_level: 'contributor', claim_count: 0, scopes: [], has_open_session: false };
+    const profile = getCapabilityProfile(claim.agent);
+    const maxTasks = profile?.max_concurrent_tasks ?? 1;
+    const existing = agentMap.get(claim.agent) ?? {
+      name: claim.agent, trust_level: 'contributor', claim_count: 0, scopes: [],
+      has_open_session: false, instance_count: sessionCounts.get(claim.agent) ?? 0,
+      max_tasks: maxTasks, slots_remaining: maxTasks,
+    };
     existing.claim_count++;
+    existing.slots_remaining = Math.max(0, existing.max_tasks - existing.claim_count);
     existing.scopes.push(claim.scope);
     if (!existing.last_active || claim.created_at > existing.last_active) {
       existing.last_active = claim.created_at;

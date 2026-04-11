@@ -22,10 +22,10 @@ import {
 import { buildInvokeCommand, resolveBriefMode } from '../../src/core/agent-capability.js';
 import { canSpawnAgent } from '../../src/core/execution.js';
 import { saveSequence } from '../../src/core/sequence.js';
-import { listClaims, saveClaim } from '../../src/core/claims.js';
+import { listClaims, saveClaim, loadClaim, adoptClaimSession } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { persistState } from '../../src/core/state.js';
-import { readInbox } from '../../src/core/messaging.js';
+import { readInbox, sendMessage } from '../../src/core/messaging.js';
 import { saveCurrentSession } from '../../src/core/identity.js';
 import type { PlanItem, Sequence, Claim } from '../../src/core/schema.js';
 
@@ -594,5 +594,137 @@ describe('dispatch-e2e/review-findings', () => {
     assert.ok(brief.includes('clm_copilot_pre'), 'task_card includes claim ID');
     assert.ok(brief.includes('/tmp/wt-copilot'), 'task_card includes worktree path');
     assert.ok(brief.includes('pre-claimed'), 'task_card mentions pre-claim');
+  });
+});
+
+// ── P4.2 Multi-Instance E2E Tests ─────────────────────────────────────────
+
+describe('dispatch-e2e/multi-instance', () => {
+  let testDir: string;
+  let previousNoSpawn: string | undefined;
+
+  beforeEach(() => {
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_NO_SPAWN = '1';
+    testDir = createTestStore();
+    setupAllAgents(testDir);
+  });
+
+  afterEach(() => {
+    cleanupTestStore(testDir);
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
+  });
+
+  it('dispatches 2 plans to same agent type with distinct claims', () => {
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [
+        makePlan({ id: 'pln_m1', text: 'Multi-instance task 1', assignee: 'codex' }),
+        makePlan({ id: 'pln_m2', text: 'Multi-instance task 2', assignee: 'codex' }),
+      ],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_m1', rank: 1, hard_after: [], soft_after: [], scope_hint: 'src/a/' },
+      { planId: 'pln_m2', rank: 2, hard_after: [], soft_after: [], scope_hint: 'src/b/' },
+    ]), testDir);
+
+    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], maxAssignments: 2 }, testDir)!;
+    assert.ok(result, 'dispatch returns result');
+    assert.equal(result.result.messages_sent.length, 2, 'both plans dispatched to codex');
+    assert.equal(result.result.messages_sent[0]!.agent, 'codex');
+    assert.equal(result.result.messages_sent[1]!.agent, 'codex');
+    // Each should have a distinct claim_id
+    const claimIds = result.result.messages_sent.map(m => m.claim_id);
+    assert.notEqual(claimIds[0], claimIds[1], 'distinct claim IDs');
+  });
+
+  it('readInbox with claimId filters to only matching messages', () => {
+    // Send two messages to codex with different claim_ids
+    sendMessage({
+      from: 'coordinator', to: 'codex', type: 'assign', text: 'Task A',
+      ref: 'pln_a', claim_id: 'clm_aaa', tags: [],
+    }, testDir);
+    sendMessage({
+      from: 'coordinator', to: 'codex', type: 'assign', text: 'Task B',
+      ref: 'pln_b', claim_id: 'clm_bbb', tags: [],
+    }, testDir);
+
+    // Without claimId filter: sees both
+    const all = readInbox({ agent: 'codex', markAsRead: false }, testDir);
+    assert.equal(all.messages.length, 2, 'all messages visible without filter');
+
+    // With claimId filter: sees only matching
+    const filtered = readInbox({ agent: 'codex', claimId: 'clm_aaa', markAsRead: false }, testDir);
+    assert.equal(filtered.messages.length, 1, 'only clm_aaa message visible');
+    assert.equal(filtered.messages[0]!.claim_id, 'clm_aaa');
+  });
+
+  it('scope lock is global — blocks any agent, not just same agent', () => {
+    // Create a claim for codex on src/shared.ts
+    saveClaim({
+      schema_version: 2, id: 'clm_scope_lock', agent: 'codex',
+      scope: 'src/shared.ts', description: 'Working', created_at: '2026-04-01T00:00:00Z', status: 'active',
+    }, testDir);
+
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_scope', text: 'Work on shared.ts', assignee: 'claude-code' })],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_scope', rank: 1, hard_after: [], soft_after: [], scope_hint: 'src/shared.ts' },
+    ]), testDir);
+
+    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir)!;
+    // The claim should be reused (scope is already locked by codex)
+    assert.equal(result.result.messages_sent[0]!.claim_id, 'clm_scope_lock', 'reuses existing scope claim');
+  });
+
+  it('adoptClaimSession links session to claim', () => {
+    saveClaim({
+      schema_version: 2, id: 'clm_adopt', agent: 'codex',
+      scope: 'src/adopt.ts', description: 'For adoption', created_at: '2026-04-01T00:00:00Z', status: 'active',
+    }, testDir);
+
+    const result = adoptClaimSession('clm_adopt', 'ses_worker_1', testDir);
+    assert.equal(result.adopted, true, 'adoption succeeds');
+
+    // Verify claim now has session_id
+    const claim = loadClaim('clm_adopt', testDir);
+    assert.equal(claim.session_id, 'ses_worker_1');
+    assert.ok(claim.adopted_at, 'adopted_at is set');
+  });
+
+  it('adoptClaimSession refuses if already adopted by different session', () => {
+    saveClaim({
+      schema_version: 2, id: 'clm_taken', agent: 'codex',
+      scope: 'src/taken.ts', description: 'Already adopted', created_at: '2026-04-01T00:00:00Z',
+      status: 'active', session_id: 'ses_first',
+    }, testDir);
+
+    const result = adoptClaimSession('clm_taken', 'ses_second', testDir);
+    assert.equal(result.adopted, false, 'second adoption refused');
+    assert.ok(result.reason.includes('already adopted'), 'reason explains why');
+  });
+
+  it('backward compat: dispatch without multi-instance still works', () => {
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_compat', text: 'Simple task' })],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_compat', rank: 1, hard_after: [], soft_after: [] },
+    ]), testDir);
+
+    const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+    assert.ok(result, 'dispatch works');
+    assert.equal(result.result.messages_sent.length, 1, 'one message sent');
+    assert.ok(result.result.messages_sent[0]!.claim_id, 'has claim_id');
   });
 });
