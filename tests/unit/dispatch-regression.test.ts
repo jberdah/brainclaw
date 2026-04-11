@@ -447,11 +447,14 @@ describe('dispatch-regression/buildInvokeCommand', () => {
     assert.ok(!result.bashCommand.includes('{cwd}'), 'no unreplaced {cwd} placeholder');
   });
 
-  it('long briefs use file reference rather than inline content', () => {
+  it('long briefs use temp_file delivery rather than inline_arg', () => {
     const longBrief = 'x'.repeat(4100);
     const result = buildInvokeCommand('claude-code', longBrief, { mode: 'worker' });
     assert.ok(result, 'should return InvokeCommand');
-    assert.ok(!result.bashCommand.includes('x'.repeat(100)), 'long brief is not inlined verbatim');
+    assert.equal(result.promptDelivery, 'temp_file', 'long brief triggers temp_file delivery');
+    // On POSIX the prompt is written via printf inside bashCommand; on Windows
+    // the caller writes the file. Either way, promptDelivery must be temp_file.
+    assert.ok(result.bashCommand.includes('bclaw_prompt_'), 'command references a temp file path');
   });
 });
 
