@@ -77,6 +77,14 @@ export interface AgentCapabilityProfile {
     os?: string;
     shell?: string;
   };
+  /**
+   * Max concurrent task instances this agent can run in a single project.
+   * - 1 (default): single instance (IDE agents, Copilot)
+   * - N > 1: agent supports N parallel instances with separate worktrees (CLI agents)
+   * Structurelle capacity — the dispatcher computes dynamic availability at runtime
+   * as: slots_remaining = max_concurrent_tasks - active_claims_in_project.
+   */
+  max_concurrent_tasks: number;
   /** CLI invoke template (uses {prompt} placeholder). Undefined = not CLI-spawnable */
   invoke_template?: string;
   /** Binary that must be in PATH for invoke_template */
@@ -125,6 +133,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
     role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 3,
     prompt_delivery: { methods: ['temp_file', 'inline_arg', 'inbox_structured'], preferred: 'temp_file', max_inline_length: 4000 },
     execution_env: { surface: 'cli' },
     invoke_template: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
@@ -139,6 +148,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
     prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
+    max_concurrent_tasks: 1,
     execution_env: { surface: 'ide' },
   },
   windsurf: {
@@ -147,6 +157,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
     execution_env: { surface: 'ide' },
   },
@@ -156,6 +167,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 3,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
     invoke_template: 'cline -y "{prompt}"',
@@ -168,6 +180,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: '.roo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
     invoke_template: 'roo -y "{prompt}"',
@@ -180,6 +193,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: '.continue/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'both', templateTier: 'B',
     role_capabilities: ['execute', 'consult'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
     invoke_template: 'cn --auto "{prompt}"',
@@ -192,6 +206,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
     invoke_template: 'opencode "{prompt}"',
@@ -204,6 +219,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 5,
     prompt_delivery: { methods: ['stdin_pipe', 'temp_file'], preferred: 'stdin_pipe' },
     execution_env: { surface: 'cli' },
     invoke_template: 'codex exec --sandbox workspace-write "{prompt}"',
@@ -216,6 +232,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'GEMINI.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
     role_capabilities: ['execute', 'consult'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
     invoke_template: 'gemini -p "{prompt}"',
@@ -230,6 +247,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     // Spawning copilot -p for write tasks fails silently. Keep as inbox + review target.
     role_capabilities: ['review', 'consult'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: true },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inbox_structured', max_inline_length: 4000 },
     execution_env: { surface: 'extension' },
     // Retained for manual invocation / future shell support — not used by auto-spawn.
@@ -244,6 +262,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: '.kilo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review', 'consult'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
     invoke_template: 'kilo run --auto "{prompt}"',
@@ -259,6 +278,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
     role_capabilities: ['execute', 'coordinate'],
     runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['temp_file', 'inbox_structured'], preferred: 'temp_file' },
     execution_env: { surface: 'cli' },
   },
@@ -268,6 +288,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'skills/nanoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
     runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
     execution_env: { surface: 'cli' },
   },
@@ -277,6 +298,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'skills/nemoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
     runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
     execution_env: { surface: 'cli' },
   },
@@ -286,6 +308,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'skills/picoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
     runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 1000 },
     execution_env: { surface: 'cli' },
   },
@@ -295,6 +318,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     instructionFile: 'skills/zeroclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
     runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'stdin_pipe', max_inline_length: 1000 },
     execution_env: { surface: 'cli' },
   },

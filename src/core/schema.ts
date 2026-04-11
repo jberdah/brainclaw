@@ -359,6 +359,9 @@ export const InboxMessageSchema = z.object({
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),
+  /** Top-level claim_id for dispatch routing. Instances filter their inbox by this field.
+   *  Also present in payload.claim_id for backward compat — this top-level field is authoritative. */
+  claim_id: z.string().optional(),
   tags: TagsWithDefaultSchema,
 });
 export type InboxMessage = z.infer<typeof InboxMessageSchema>;
@@ -554,6 +557,10 @@ export const ClaimSchema = z.object({
   worktree_path: z.string().optional(),
   /** Handoff mode: "self-commit" = worker commits+merges, "integrator" = another agent reviews+merges. */
   handoff_mode: ClaimHandoffModeSchema.optional(),
+  /** ISO timestamp when a spawned instance adopted this claim via session_start. */
+  adopted_at: z.string().optional(),
+  /** Message ID of the dispatch assignment that created this claim. For tracing claim→message→instance. */
+  assignment_message_id: z.string().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 

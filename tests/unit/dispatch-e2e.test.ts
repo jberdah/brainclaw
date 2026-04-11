@@ -337,7 +337,7 @@ describe('dispatch-e2e/checkActiveInstance', () => {
     cleanupTestStore(testDir);
   });
 
-  it('detects active session for an agent', () => {
+  it('detects active session and reports capacity', () => {
     // Create a recent session for claude-code
     saveCurrentSession({
       host_id: 'test-host',
@@ -349,9 +349,10 @@ describe('dispatch-e2e/checkActiveInstance', () => {
     }, testDir);
 
     const check = checkActiveInstance('claude-code', testDir);
-    assert.equal(check.active, true, 'should detect active session');
-    assert.ok(check.reason.includes('active session'), 'reason explains why');
-    assert.equal(check.sessionId, 'ses_active');
+    assert.equal(check.activeCount, 1, 'detects 1 active session');
+    assert.ok(check.activeSessions.includes('ses_active'), 'reports session ID');
+    assert.equal(check.maxAllowed, 3, 'claude-code max=3');
+    assert.equal(check.canSpawnMore, true, '1/3 = still has capacity');
   });
 
   it('ignores stale sessions (older than config TTL, default 4h)', () => {
@@ -482,16 +483,18 @@ describe('dispatch-e2e/review-findings', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('finding-1 (haute): active agent is skipped BEFORE claim/inbox creation', () => {
-    // Create an active session for codex
-    saveCurrentSession({
-      host_id: 'test-host',
-      session_id: 'ses_busy_codex',
-      started_at: new Date().toISOString(),
-      agent: 'codex',
-      agent_id: 'agt_codex',
-      last_seen_at: new Date().toISOString(),
-    }, testDir);
+  it('finding-1 (haute): agent at capacity is skipped BEFORE claim/inbox creation', () => {
+    // Saturate codex (max_concurrent_tasks=5) with 5 sessions
+    for (let i = 1; i <= 5; i++) {
+      saveCurrentSession({
+        host_id: 'test-host',
+        session_id: `ses_busy_codex_${i}`,
+        started_at: new Date().toISOString(),
+        agent: 'codex',
+        agent_id: 'agt_codex',
+        last_seen_at: new Date().toISOString(),
+      }, testDir);
+    }
 
     persistState({
       version: 1, write_version: 1,
@@ -508,7 +511,7 @@ describe('dispatch-e2e/review-findings', () => {
     // Agent should be skipped — no claim, no inbox message created
     assert.equal(result.result.messages_sent.length, 0, 'no messages sent to busy agent');
     assert.equal(result.result.skipped.length, 1, 'agent skipped');
-    assert.ok(result.result.skipped[0]!.reason.includes('rejected by guards'), 'reason mentions guard rejection');
+    assert.ok(result.result.skipped[0]!.reason.includes('rejected by guards') || result.result.skipped[0]!.reason.includes('No available agent'), 'reason mentions guard rejection or no available agent');
 
     // Verify no new claims were created for the busy agent
     const claims = listClaims(testDir).filter(c => c.status === 'active' && c.agent === 'codex');
@@ -519,16 +522,18 @@ describe('dispatch-e2e/review-findings', () => {
     assert.equal(inbox.messages.length, 0, 'no inbox message for busy agent');
   });
 
-  it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st is active', () => {
-    // codex has an active session, but cline is available
-    saveCurrentSession({
-      host_id: 'test-host',
-      session_id: 'ses_codex_busy2',
-      started_at: new Date().toISOString(),
-      agent: 'codex',
-      agent_id: 'agt_codex',
-      last_seen_at: new Date().toISOString(),
-    }, testDir);
+  it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st at capacity', () => {
+    // Saturate codex (max_concurrent_tasks=5) with 5 active sessions
+    for (let i = 1; i <= 5; i++) {
+      saveCurrentSession({
+        host_id: 'test-host',
+        session_id: `ses_codex_sat${i}`,
+        started_at: new Date().toISOString(),
+        agent: 'codex',
+        agent_id: 'agt_codex',
+        last_seen_at: new Date().toISOString(),
+      }, testDir);
+    }
 
     persistState({
       version: 1, write_version: 1,
@@ -546,12 +551,12 @@ describe('dispatch-e2e/review-findings', () => {
     assert.equal(result.result.messages_sent.length, 1, 'one message sent');
     assert.equal(result.result.messages_sent[0]!.agent, 'cline', 'fell back to cline');
     assert.equal(result.result.skipped.length, 0, 'plan was not skipped');
-    assert.ok(result.result.warnings.some(w => w.includes('codex')), 'warning about codex being active');
+    assert.ok(result.result.warnings.some(w => w.includes('codex') && w.includes('capacity')), 'warning about codex at capacity');
   });
 
   it('finding-2 (moyenne): checkActiveInstance uses config TTL, not hardcoded 5min', () => {
     // Create a session that's 10 minutes old — would be "stale" with 5min hardcode
-    // but still "active" with default 4h TTL
+    // but still counted as active with default 4h TTL
     const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     saveCurrentSession({
       host_id: 'test-host',
@@ -562,9 +567,12 @@ describe('dispatch-e2e/review-findings', () => {
       last_seen_at: tenMinAgo,
     }, testDir);
 
-    // With the config-based TTL (default 4h), 10 min old is still active
+    // With the config-based TTL (default 4h), 10 min old is still counted in activeCount
     const check = checkActiveInstance('claude-code', testDir);
-    assert.equal(check.active, true, '10-min-old session is still active with 4h TTL');
+    assert.equal(check.activeCount, 1, '10-min-old session is counted as active with 4h TTL');
+    assert.ok(check.activeSessions.includes('ses_10min'), 'session ID is in activeSessions');
+    // claude-code has max_concurrent_tasks=3, so 1 session still has capacity
+    assert.equal(check.canSpawnMore, true, 'still has capacity (1/3)');
   });
 
   it('finding-3 (moyenne): task_card brief includes claim_id and worktree_path', () => {

@@ -58,6 +58,9 @@ export interface AuditEntry {
   session_id?: string;
   /** Host ID where this entry was created. */
   host_id?: string;
+  /** Session ID of the agent instance that performed the action (for multi-instance tracing).
+   *  Distinct from session_id which is the MCP caller's session — actor_session is the spawned instance. */
+  actor_session?: string;
 }
 
 function auditLogPath(cwd?: string): string {

@@ -193,7 +193,7 @@ describe('core/dispatcher', () => {
       assert.equal(result.ready.length, 0);
     });
 
-    it('marks busy agents as unavailable', () => {
+    it('agents with claims still available if they have remaining capacity', () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'in_progress' }),
         makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
@@ -221,8 +221,14 @@ describe('core/dispatcher', () => {
       ]), testDir);
 
       const result = analyzeSequence(testDir)!;
-      assert.ok(!result.available_agents.includes('claude-code'));
-      assert.ok(result.available_agents.includes('codex'));
+      // claude-code has max_concurrent_tasks=3, 1 claim → 2 slots remaining → still available
+      assert.ok(result.available_agents.includes('claude-code'), 'claude-code still available (1/3 slots used)');
+      assert.ok(result.available_agents.includes('codex'), 'codex available (0 claims)');
+      // Check agent_capacity
+      const claudeCapacity = result.agent_capacity.find(a => a.agent === 'claude-code')!;
+      assert.equal(claudeCapacity.active_claims, 1);
+      assert.equal(claudeCapacity.max_tasks, 3);
+      assert.equal(claudeCapacity.slots_remaining, 2);
     });
 
     it('handles parallel lanes correctly', () => {
@@ -383,11 +389,21 @@ describe('core/dispatcher', () => {
       assert.equal(agentDirs.length, 0);
     });
 
-    it('skips when no agents available', () => {
+    it('skips when all agents at full capacity', () => {
+      // claude-code has max_concurrent_tasks=3, codex has 5
+      // Create enough plans+claims to saturate both
       const plans = [
-        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
-        makePlan({ id: 'pln_b', text: 'Task B', status: 'in_progress' }),
-        makePlan({ id: 'pln_c', text: 'Task C', status: 'in_progress' }),
+        makePlan({ id: 'pln_target', text: 'Target task', status: 'todo' }),
+        // 3 plans to saturate claude-code
+        makePlan({ id: 'pln_cc1', text: 'CC1', status: 'in_progress' }),
+        makePlan({ id: 'pln_cc2', text: 'CC2', status: 'in_progress' }),
+        makePlan({ id: 'pln_cc3', text: 'CC3', status: 'in_progress' }),
+        // 5 plans to saturate codex
+        makePlan({ id: 'pln_cx1', text: 'CX1', status: 'in_progress' }),
+        makePlan({ id: 'pln_cx2', text: 'CX2', status: 'in_progress' }),
+        makePlan({ id: 'pln_cx3', text: 'CX3', status: 'in_progress' }),
+        makePlan({ id: 'pln_cx4', text: 'CX4', status: 'in_progress' }),
+        makePlan({ id: 'pln_cx5', text: 'CX5', status: 'in_progress' }),
       ];
       persistState({
         version: 1, write_version: 1,
@@ -395,18 +411,31 @@ describe('core/dispatcher', () => {
         open_handoffs: [], plan_items: plans,
       }, testDir);
 
-      // Both agents are busy
-      saveClaim({ schema_version: 2, id: 'clm_1', agent: 'claude-code', scope: 'src/a.ts', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_b', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_2', agent: 'codex', scope: 'src/b.ts', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_c', status: 'active' }, testDir);
+      // Saturate claude-code (3 claims = max)
+      saveClaim({ schema_version: 2, id: 'clm_cc1', agent: 'claude-code', scope: 'a', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc1', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cc2', agent: 'claude-code', scope: 'b', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc2', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cc3', agent: 'claude-code', scope: 'c', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc3', status: 'active' }, testDir);
+      // Saturate codex (5 claims = max)
+      saveClaim({ schema_version: 2, id: 'clm_cx1', agent: 'codex', scope: 'd', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx1', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cx2', agent: 'codex', scope: 'e', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx2', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cx3', agent: 'codex', scope: 'f', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx3', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cx4', agent: 'codex', scope: 'g', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx4', status: 'active' }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_cx5', agent: 'codex', scope: 'h', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx5', status: 'active' }, testDir);
 
       saveSequence(makeSequence([
-        { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
-        { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [] },
-        { planId: 'pln_c', rank: 3, hard_after: [], soft_after: [] },
+        { planId: 'pln_target', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_cc1', rank: 2, hard_after: [], soft_after: [] },
+        { planId: 'pln_cc2', rank: 3, hard_after: [], soft_after: [] },
+        { planId: 'pln_cc3', rank: 4, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx1', rank: 5, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx2', rank: 6, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx3', rank: 7, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx4', rank: 8, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx5', rank: 9, hard_after: [], soft_after: [] },
       ]), testDir);
 
       const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
-      assert.equal(result.result.messages_sent.length, 0);
+      assert.equal(result.result.messages_sent.length, 0, 'no messages — all agents at capacity');
       assert.equal(result.result.skipped.length, 1);
       assert.ok(result.result.skipped[0]!.reason.includes('No available agent'));
     });

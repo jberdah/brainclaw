@@ -63,14 +63,27 @@ export interface ActiveLane {
   agent: string;
 }
 
+/** Per-agent capacity summary for multi-instance dispatch. */
+export interface AgentCapacityEntry {
+  agent: string;
+  /** Number of active claims this agent has in the current sequence */
+  active_claims: number;
+  /** Max concurrent tasks from agent capability profile */
+  max_tasks: number;
+  /** Remaining slots: max_tasks - active_claims */
+  slots_remaining: number;
+}
+
 export interface DispatchAnalysis {
   sequence: Sequence;
   ready: ReadyLane[];
   active: ActiveLane[];
   blocked: BlockedLane[];
   done: SequenceItem[];
-  /** Agents registered and not currently working on a lane */
+  /** Agents with remaining capacity for dispatch (slots_remaining > 0) */
   available_agents: string[];
+  /** Full capacity breakdown per registered agent */
+  agent_capacity: AgentCapacityEntry[];
 }
 
 export interface DispatchedItem {
@@ -139,11 +152,11 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     if (c.plan_id) claimedPlanIds.set(c.plan_id, c);
   }
 
-  // Agents currently working (have active claims in this sequence)
-  const busyAgents = new Set<string>();
+  // Count active claims per agent in this sequence (for capacity-aware dispatch)
+  const agentClaimCounts = new Map<string, number>();
   for (const c of claims) {
     if (c.plan_id && sequence.items.some(i => i.planId === c.plan_id)) {
-      busyAgents.add(c.agent);
+      agentClaimCounts.set(c.agent, (agentClaimCounts.get(c.agent) ?? 0) + 1);
     }
   }
 
@@ -212,13 +225,24 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     });
   }
 
-  // Available agents: registered non-human agents not currently busy
+  // Build capacity summary per agent (multi-instance aware)
   const allAgentNames = agents
     .filter(a => a.kind !== 'human')
     .map(a => a.agent_name);
-  const available_agents = allAgentNames.filter(a => !busyAgents.has(a));
 
-  return { sequence, ready, active, blocked, done, available_agents };
+  const agent_capacity: AgentCapacityEntry[] = allAgentNames.map(agent => {
+    const active_claims = agentClaimCounts.get(agent) ?? 0;
+    const profile = getCapabilityProfile(agent);
+    const max_tasks = profile?.max_concurrent_tasks ?? 1;
+    return { agent, active_claims, max_tasks, slots_remaining: Math.max(0, max_tasks - active_claims) };
+  });
+
+  // Available agents: those with remaining capacity (slots_remaining > 0)
+  const available_agents = agent_capacity
+    .filter(a => a.slots_remaining > 0)
+    .map(a => a.agent);
+
+  return { sequence, ready, active, blocked, done, available_agents, agent_capacity };
 }
 
 // ── Brief Generation ────────────────────────────────────────
@@ -487,14 +511,14 @@ export function scoreAgents(
     const canSpawn = profile?.runtime.spawnable_cli ?? false;
     const capability = canExecute ? (canSpawn ? 1.0 : 0.5) : 0.1;
 
-    // Factor 3: Availability — is the agent in the pool (not busy)?
-    // All agents in agentPool are available by definition, but we can
-    // give a small bonus to agents without any claims at all.
+    // Factor 3: Availability — graduated by utilization (claims / max_concurrent_tasks)
     const agentClaims = claimCounts.get(agent) ?? 0;
-    const availability = agentClaims === 0 ? 1.0 : 0.5;
+    const maxTasks = profile?.max_concurrent_tasks ?? 1;
+    const utilization = Math.min(1.0, agentClaims / maxTasks);
+    const availability = 1.0 - (utilization * 0.5); // range [0.5, 1.0]
 
-    // Factor 4: Load balance — fewer claims = higher score
-    const load_balance = 1.0 - (agentClaims / maxClaims);
+    // Factor 4: Load balance — normalized by agent's capacity, not raw claim count
+    const load_balance = 1.0 - utilization;
 
     const score =
       preference * W_PREFERENCE +
@@ -571,11 +595,11 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         continue; // try next agent
       }
 
-      // Check-before-spawn guard: skip agent if it already has an active instance
+      // Capacity guard: skip agent if at max concurrent tasks
       if (!options.dryRun) {
         const instanceCheck = checkActiveInstance(candidate.agent, cwd);
-        if (instanceCheck.active) {
-          result.warnings.push(`${candidate.agent}: skipped — ${instanceCheck.reason}`);
+        if (!instanceCheck.canSpawnMore) {
+          result.warnings.push(`${candidate.agent}: at capacity — ${instanceCheck.reason}`);
           continue; // try next agent
         }
       }

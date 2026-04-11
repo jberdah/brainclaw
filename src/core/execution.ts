@@ -54,40 +54,54 @@ function parseDurationMs(value: string): number {
 // ── Check Before Spawn Guard ──────────────────────────────
 
 /**
- * Check if an agent already has an active instance (session or claim).
- * Prevents spawning duplicate instances of the same agent.
+ * Check agent capacity for spawning — capacity-aware, multi-instance safe.
  *
- * Returns `{ active: true, reason }` if the agent should NOT be spawned.
+ * Counts active sessions (non-stale) for the agent type and compares to
+ * max_concurrent_tasks from the capability profile. Returns canSpawnMore=true
+ * if there are remaining slots.
  */
 export interface ActiveInstanceCheck {
+  /** @deprecated Use canSpawnMore instead */
   active: boolean;
+  canSpawnMore: boolean;
+  activeCount: number;
+  maxAllowed: number;
   reason: string;
-  sessionId?: string;
+  activeSessions: string[];
 }
 
 export function checkActiveInstance(agentName: string, cwd: string): ActiveInstanceCheck {
-  // Check for active sessions — uses implicit_session_ttl from config (default 4h)
-  // to align with the rest of the project's session lifecycle.
   const sessions = loadAllSessions(cwd);
   let ttlStr = '4h';
   try { ttlStr = loadConfig(cwd).implicit_session_ttl ?? '4h'; } catch { /* use default */ }
   const SESSION_STALE_MS = parseDurationMs(ttlStr);
   const now = Date.now();
 
+  const activeSessions: string[] = [];
   for (const session of sessions) {
     if (session.agent !== agentName) continue;
     const lastSeen = new Date(session.last_seen_at).getTime();
-    if (isNaN(lastSeen)) continue; // ignore invalid timestamps
+    if (isNaN(lastSeen)) continue;
     if (now - lastSeen < SESSION_STALE_MS) {
-      return {
-        active: true,
-        reason: `Agent ${agentName} has an active session (${session.session_id}, last seen ${session.last_seen_at})`,
-        sessionId: session.session_id,
-      };
+      activeSessions.push(session.session_id);
     }
   }
 
-  return { active: false, reason: 'no active instance detected' };
+  const profile = getCapabilityProfile(agentName);
+  const maxAllowed = profile?.max_concurrent_tasks ?? 1;
+  const activeCount = activeSessions.length;
+  const canSpawnMore = activeCount < maxAllowed;
+
+  return {
+    active: !canSpawnMore, // backward compat: active=true means "cannot spawn more"
+    canSpawnMore,
+    activeCount,
+    maxAllowed,
+    reason: canSpawnMore
+      ? `Agent ${agentName} has capacity (${activeCount}/${maxAllowed} slots used)`
+      : `Agent ${agentName} at capacity (${activeCount}/${maxAllowed} slots used)`,
+    activeSessions,
+  };
 }
 
 // ── Spawn detection ─────────────────────────────────────────
@@ -229,10 +243,10 @@ export function attemptExecution(
     };
   }
 
-  // Check-before-spawn guard: skip if agent already has an active instance
+  // Capacity guard: skip if agent is at max concurrent tasks
   if (options.cwd) {
     const instanceCheck = checkActiveInstance(options.agent, options.cwd);
-    if (instanceCheck.active) {
+    if (!instanceCheck.canSpawnMore) {
       appendAuditEntry({
         actor: options.dispatcherAgent,
         actor_id: options.dispatcherAgentId,
@@ -240,7 +254,7 @@ export function attemptExecution(
         item_id: options.claimId,
         item_type: 'claim',
         scope: options.agent,
-        after: { reason: instanceCheck.reason, session_id: instanceCheck.sessionId, skipped: true },
+        after: { reason: instanceCheck.reason, active_sessions: instanceCheck.activeSessions, skipped: true },
       }, options.cwd);
 
       return {
