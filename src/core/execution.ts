@@ -111,6 +111,7 @@ export function executeDispatchedCommand(
     stdio,
     cwd: options.worktreePath,
     env,
+    windowsHide: true,
   });
 
   // For stdin_pipe delivery, write the prompt to stdin then close
