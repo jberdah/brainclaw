@@ -131,6 +131,19 @@ export interface DispatchResult {
 
 const MAX_INLINE_BRIEF_LENGTH = 4000;
 
+/**
+ * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID.
+ * POSIX: `BRAINCLAW_CLAIM_ID=clm_xxx `
+ * Windows (cmd): `set BRAINCLAW_CLAIM_ID=clm_xxx && `
+ */
+function buildEnvPrefix(claimId: string): string {
+  if (!claimId || claimId === '(dry-run)') return '';
+  if (process.platform === 'win32') {
+    return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
+  }
+  return `BRAINCLAW_CLAIM_ID=${claimId} `;
+}
+
 // ── Lane Analysis ───────────────────────────────────────────
 
 /**
@@ -674,10 +687,12 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     // Build invoke command (if agent is CLI-spawnable)
     const invokeCmd = buildInvokeCommand(targetAgent, brief);
     if (invokeCmd) {
+      // Include BRAINCLAW_CLAIM_ID in the displayed command so copy-paste works
+      const cmdPrefix = buildEnvPrefix(claimId);
       result.commands.push({
         agent: targetAgent,
         lane: readyItem.lane,
-        command: invokeCmd.bashCommand,
+        command: `${cmdPrefix}${invokeCmd.bashCommand}`,
         shell: invokeCmd.shell ? 'bash' : 'sh',
       });
     }

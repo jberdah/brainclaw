@@ -40,6 +40,19 @@ export interface ExecutionResult {
 
 // ── Helpers ────────────────────────────────────────────────
 
+/**
+ * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID in manual commands.
+ * POSIX: `BRAINCLAW_CLAIM_ID=clm_xxx `
+ * Windows (cmd): `set BRAINCLAW_CLAIM_ID=clm_xxx && `
+ */
+function buildManualEnvPrefix(claimId?: string): string {
+  if (!claimId) return '';
+  if (process.platform === 'win32') {
+    return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
+  }
+  return `BRAINCLAW_CLAIM_ID=${claimId} `;
+}
+
 /** Parse a duration string like '4h', '30m', '1d' to milliseconds. */
 function parseDurationMs(value: string): number {
   const match = /^(\d+)([mhd])$/i.exec(value.trim());
@@ -237,7 +250,7 @@ export function attemptExecution(
   // Opt-out or can't spawn: return command for manual execution
   // Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes correctly
   if (!options.autoExecute || !spawnCheck.canSpawn) {
-    const envPrefix = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
+    const envPrefix = buildManualEnvPrefix(options.claimId);
     return {
       execution_status: 'command_ready_manual',
       command: `${envPrefix}${invoke.bashCommand}`,
@@ -259,7 +272,7 @@ export function attemptExecution(
         after: { reason: instanceCheck.reason, active_sessions: instanceCheck.activeSessions, skipped: true },
       }, options.cwd);
 
-      const envPrefix2 = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
+      const envPrefix2 = buildManualEnvPrefix(options.claimId);
       return {
         execution_status: 'command_ready_manual',
         command: `${envPrefix2}${invoke.bashCommand}`,
@@ -309,7 +322,7 @@ export function attemptExecution(
     }, options.cwd);
 
     // Graceful fallback — include BRAINCLAW_CLAIM_ID for manual routing
-    const envPrefix3 = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
+    const envPrefix3 = buildManualEnvPrefix(options.claimId);
     return {
       execution_status: 'command_ready_manual',
       command: `${envPrefix3}${invoke.bashCommand}`,

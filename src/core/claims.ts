@@ -10,6 +10,18 @@ import { loadConfig } from './config.js';
 import { createWorktree } from './worktree.js';
 import { appendAuditEntry } from './audit.js';
 import { refreshLiveCompanions } from '../commands/export.js';
+import { loadSessionById } from './identity.js';
+
+/** Parse duration string like '4h', '30m' to ms. */
+function parseTtl(value: string): number {
+  const match = /^(\d+)([mhd])$/i.exec(value.trim());
+  if (!match) return 4 * 3_600_000;
+  const amount = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  if (unit === 'm') return amount * 60_000;
+  if (unit === 'h') return amount * 3_600_000;
+  return amount * 86_400_000;
+}
 
 function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
@@ -254,7 +266,21 @@ export function adoptClaimSession(
     return { adopted: false, reason: `Claim ${claimId} is not active (status: ${claim.status})` };
   }
   if (claim.session_id && claim.session_id !== sessionId) {
-    return { adopted: false, reason: `Claim ${claimId} already adopted by session ${claim.session_id}` };
+    // Check if the existing session is still alive — allow re-adoption if dead/stale
+    let isAlive = false;
+    try {
+      const existingSession = loadSessionById(claim.session_id, cwd);
+      if (existingSession) {
+        let ttlMs = 4 * 3_600_000; // default 4h
+        try { ttlMs = parseTtl(loadConfig(cwd).implicit_session_ttl ?? '4h'); } catch { /* use default */ }
+        const lastSeen = new Date(existingSession.last_seen_at).getTime();
+        isAlive = !isNaN(lastSeen) && (Date.now() - lastSeen) < ttlMs;
+      }
+    } catch { /* session file error — treat as dead */ }
+    if (isAlive) {
+      return { adopted: false, reason: `Claim ${claimId} already adopted by live session ${claim.session_id}` };
+    }
+    // Existing session is dead/stale — allow re-adoption
   }
   claim.session_id = sessionId;
   claim.adopted_at = nowISO();

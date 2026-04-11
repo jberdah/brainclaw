@@ -701,16 +701,34 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.ok(claim.adopted_at, 'adopted_at is set');
   });
 
-  it('adoptClaimSession refuses if already adopted by different session', () => {
+  it('adoptClaimSession refuses if already adopted by a live session', () => {
     saveClaim({
       schema_version: 2, id: 'clm_taken', agent: 'codex',
       scope: 'src/taken.ts', description: 'Already adopted', created_at: '2026-04-01T00:00:00Z',
       status: 'active', session_id: 'ses_first',
     }, testDir);
+    // The existing session must be alive for adoption to be refused
+    saveCurrentSession({
+      host_id: 'test-host', session_id: 'ses_first',
+      started_at: new Date().toISOString(), agent: 'codex', agent_id: 'agt_codex',
+      last_seen_at: new Date().toISOString(),
+    }, testDir);
 
     const result = adoptClaimSession('clm_taken', 'ses_second', testDir);
     assert.equal(result.adopted, false, 'second adoption refused');
-    assert.ok(result.reason.includes('already adopted'), 'reason explains why');
+    assert.ok(result.reason.includes('live session'), 'reason explains why');
+  });
+
+  it('adoptClaimSession allows re-adoption if previous session is missing', () => {
+    saveClaim({
+      schema_version: 2, id: 'clm_orphan', agent: 'codex',
+      scope: 'src/orphan.ts', description: 'Orphaned', created_at: '2026-04-01T00:00:00Z',
+      status: 'active', session_id: 'ses_gone',
+    }, testDir);
+    // No session file for ses_gone — treat as dead
+
+    const result = adoptClaimSession('clm_orphan', 'ses_new', testDir);
+    assert.equal(result.adopted, true, 're-adoption allowed when session file is missing');
   });
 
   it('backward compat: dispatch without multi-instance still works', () => {
@@ -822,5 +840,72 @@ describe('dispatch-e2e/multi-instance', () => {
     const check = checkActiveInstance('codex', testDir);
     assert.equal(check.activeCount, 0, '5h-old session not counted with 4h TTL');
     assert.equal(check.canSpawnMore, true, 'codex has full capacity');
+  });
+
+  it('codex-review-r2: commands[] includes BRAINCLAW_CLAIM_ID prefix', () => {
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_cmd', text: 'Command task', assignee: 'codex' })],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_cmd', rank: 1, hard_after: [], soft_after: [] },
+    ]), testDir);
+
+    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir)!;
+    assert.ok(result.result.commands.length > 0, 'has commands');
+    const cmd = result.result.commands[0]!.command;
+    assert.ok(cmd.includes('BRAINCLAW_CLAIM_ID='), 'command includes claim_id env var');
+    const claimId = result.result.messages_sent[0]!.claim_id;
+    assert.ok(cmd.includes(claimId!), 'command includes the actual claim_id value');
+  });
+
+  it('codex-review-r2: adoptClaimSession allows re-adoption when existing session is stale', () => {
+    // Create a claim adopted by a stale session (> 4h old)
+    const staleTime = new Date(Date.now() - 5 * 3_600_000).toISOString();
+    saveClaim({
+      schema_version: 2, id: 'clm_stale_adopt', agent: 'codex',
+      scope: 'src/stale.ts', description: 'Stale adoption',
+      created_at: '2026-04-01T00:00:00Z', status: 'active',
+      session_id: 'ses_dead',
+    }, testDir);
+    // Create the stale session file so loadSessionById finds it
+    saveCurrentSession({
+      host_id: 'test-host',
+      session_id: 'ses_dead',
+      started_at: staleTime,
+      agent: 'codex',
+      agent_id: 'agt_codex',
+      last_seen_at: staleTime,
+    }, testDir);
+
+    // New session should be able to re-adopt since ses_dead is stale
+    const result = adoptClaimSession('clm_stale_adopt', 'ses_new_instance', testDir);
+    assert.equal(result.adopted, true, 're-adoption succeeds when existing session is stale');
+
+    const claim = loadClaim('clm_stale_adopt', testDir);
+    assert.equal(claim.session_id, 'ses_new_instance', 'claim now adopted by new session');
+  });
+
+  it('codex-review-r2: adoptClaimSession still refuses when existing session is alive', () => {
+    saveClaim({
+      schema_version: 2, id: 'clm_live_adopt', agent: 'codex',
+      scope: 'src/live.ts', description: 'Live adoption',
+      created_at: '2026-04-01T00:00:00Z', status: 'active',
+      session_id: 'ses_alive',
+    }, testDir);
+    saveCurrentSession({
+      host_id: 'test-host',
+      session_id: 'ses_alive',
+      started_at: new Date().toISOString(),
+      agent: 'codex',
+      agent_id: 'agt_codex',
+      last_seen_at: new Date().toISOString(), // just now = alive
+    }, testDir);
+
+    const result = adoptClaimSession('clm_live_adopt', 'ses_intruder', testDir);
+    assert.equal(result.adopted, false, 'refuses when existing session is alive');
+    assert.ok(result.reason.includes('live session'), 'reason mentions live session');
   });
 });
