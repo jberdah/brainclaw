@@ -358,6 +358,10 @@ export interface InvokeCommand {
   bashCommand: string;
   /** Environment variables to set */
   env?: Record<string, string>;
+  /** Original prompt text — needed by executeDispatchedCommand to write temp files or pipe stdin */
+  promptText?: string;
+  /** Temp file path for temp_file delivery — executeDispatchedCommand writes promptText here before spawning */
+  tempFilePath?: string;
 }
 
 export interface BuildInvokeCommandOptions {
@@ -617,6 +621,8 @@ export function buildInvokeCommand(
     shell: false,
     bashCommand,
     ...(tempFilePath !== undefined ? { env: { BCLAW_PROMPT_FILE: tempFilePath } } : {}),
+    promptText: prompt,
+    ...(tempFilePath !== undefined ? { tempFilePath } : {}),
   };
 }
 

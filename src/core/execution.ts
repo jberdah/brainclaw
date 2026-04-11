@@ -8,6 +8,8 @@
  * @module
  */
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { appendAuditEntry } from './audit.js';
 import { nowISO } from './ids.js';
@@ -89,26 +91,32 @@ export function executeDispatchedCommand(
     ...(options.claimId ? { BRAINCLAW_CLAIM_ID: options.claimId } : {}),
   };
 
-  // Build spawn args based on delivery method
-  let child;
-  if (invoke.shell) {
-    // Shell mode: run bashCommand via shell
-    const shellCmd = isWin32 ? 'cmd' : 'bash';
-    const shellArgs = isWin32 ? ['/c', invoke.bashCommand] : ['-c', invoke.bashCommand];
-    child = spawn(shellCmd, shellArgs, {
-      detached: true,
-      stdio: 'ignore',
-      cwd: options.worktreePath,
-      env,
-    });
-  } else {
-    // Direct mode: run executable with args
-    child = spawn(invoke.executable, invoke.args, {
-      detached: true,
-      stdio: 'ignore',
-      cwd: options.worktreePath,
-      env,
-    });
+  // Pre-write prompt to temp file when using temp_file delivery.
+  // buildInvokeCommand generates the path but does NOT write the file —
+  // the bashCommand embeds a printf for manual copy-paste, but spawn()
+  // in direct mode bypasses the shell, so we must write it ourselves.
+  if (invoke.promptDelivery === 'temp_file' && invoke.tempFilePath && invoke.promptText) {
+    const dir = path.dirname(invoke.tempFilePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(invoke.tempFilePath, invoke.promptText, 'utf-8');
+  }
+
+  // Decide stdio mode: stdin_pipe needs a writable stdin
+  const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
+  const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
+
+  // Always use direct mode (shell: false) — the args are pre-interpolated
+  const child = spawn(invoke.executable, invoke.args, {
+    detached: true,
+    stdio,
+    cwd: options.worktreePath,
+    env,
+  });
+
+  // For stdin_pipe delivery, write the prompt to stdin then close
+  if (needsStdin && child.stdin) {
+    child.stdin.write(invoke.promptText!);
+    child.stdin.end();
   }
 
   // Detach from parent process
