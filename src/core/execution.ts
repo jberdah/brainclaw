@@ -13,6 +13,8 @@ import path from 'node:path';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { appendAuditEntry } from './audit.js';
 import { nowISO } from './ids.js';
+import { loadAllSessions } from './identity.js';
+import { loadConfig } from './config.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -34,6 +36,58 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
+}
+
+// ── Helpers ────────────────────────────────────────────────
+
+/** Parse a duration string like '4h', '30m', '1d' to milliseconds. */
+function parseDurationMs(value: string): number {
+  const match = /^(\d+)([mhd])$/i.exec(value.trim());
+  if (!match) return 4 * 3_600_000; // default 4h
+  const amount = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  if (unit === 'm') return amount * 60_000;
+  if (unit === 'h') return amount * 3_600_000;
+  return amount * 86_400_000;
+}
+
+// ── Check Before Spawn Guard ──────────────────────────────
+
+/**
+ * Check if an agent already has an active instance (session or claim).
+ * Prevents spawning duplicate instances of the same agent.
+ *
+ * Returns `{ active: true, reason }` if the agent should NOT be spawned.
+ */
+export interface ActiveInstanceCheck {
+  active: boolean;
+  reason: string;
+  sessionId?: string;
+}
+
+export function checkActiveInstance(agentName: string, cwd: string): ActiveInstanceCheck {
+  // Check for active sessions — uses implicit_session_ttl from config (default 4h)
+  // to align with the rest of the project's session lifecycle.
+  const sessions = loadAllSessions(cwd);
+  let ttlStr = '4h';
+  try { ttlStr = loadConfig(cwd).implicit_session_ttl ?? '4h'; } catch { /* use default */ }
+  const SESSION_STALE_MS = parseDurationMs(ttlStr);
+  const now = Date.now();
+
+  for (const session of sessions) {
+    if (session.agent !== agentName) continue;
+    const lastSeen = new Date(session.last_seen_at).getTime();
+    if (isNaN(lastSeen)) continue; // ignore invalid timestamps
+    if (now - lastSeen < SESSION_STALE_MS) {
+      return {
+        active: true,
+        reason: `Agent ${agentName} has an active session (${session.session_id}, last seen ${session.last_seen_at})`,
+        sessionId: session.session_id,
+      };
+    }
+  }
+
+  return { active: false, reason: 'no active instance detected' };
 }
 
 // ── Spawn detection ─────────────────────────────────────────
@@ -173,6 +227,29 @@ export function attemptExecution(
       command: invoke.bashCommand,
       shell: invoke.shell ? 'bash' : invoke.executable,
     };
+  }
+
+  // Check-before-spawn guard: skip if agent already has an active instance
+  if (options.cwd) {
+    const instanceCheck = checkActiveInstance(options.agent, options.cwd);
+    if (instanceCheck.active) {
+      appendAuditEntry({
+        actor: options.dispatcherAgent,
+        actor_id: options.dispatcherAgentId,
+        action: 'spawn_failed',
+        item_id: options.claimId,
+        item_type: 'claim',
+        scope: options.agent,
+        after: { reason: instanceCheck.reason, session_id: instanceCheck.sessionId, skipped: true },
+      }, options.cwd);
+
+      return {
+        execution_status: 'command_ready_manual',
+        command: invoke.bashCommand,
+        shell: invoke.shell ? 'bash' : invoke.executable,
+        error: `Spawn skipped: ${instanceCheck.reason}. Use the command manually.`,
+      };
+    }
   }
 
   // Attempt spawn

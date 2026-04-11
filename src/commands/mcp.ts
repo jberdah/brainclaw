@@ -53,7 +53,7 @@ import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
-import { analyzeSequence, dispatch, dispatchReview } from '../core/dispatcher.js';
+import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
@@ -3685,49 +3685,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return overall;
       };
 
-      /** Build a coordinate brief: enriches raw task with protocol section when a claim is pre-created. */
+      /** Build a coordinate brief: delegates to shared generateDispatchBrief(). */
       const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string }): string => {
-        const briefMode = resolveBriefMode(agentName);
-        const parts: string[] = [];
-        parts.push(`# Assignment: ${task}`);
-        parts.push('');
-        if (options?.scope) parts.push(`Scope: ${options.scope}`);
-        if (options?.claimId) parts.push(`Claim: ${options.claimId} (pre-claimed by coordinator)`);
-        if (options?.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
-        parts.push('');
-        if (briefMode === 'full') {
-          parts.push('## Protocol');
-          if (options?.claimId && options.worktreePath) {
-            parts.push('1. Read this brief');
-            parts.push(`2. cd into the worktree: ${options.worktreePath}`);
-            parts.push('3. Call bclaw_session_start to register your session');
-            parts.push('4. Work on the assigned scope (claim already active)');
-            parts.push('5. Call bclaw_session_end with a narrative when done');
-            parts.push('6. Call bclaw_ack_message on this assignment');
-          } else if (options?.claimId) {
-            parts.push('1. Read this brief');
-            parts.push('2. Call bclaw_session_start to register your session');
-            parts.push('3. Work on the assigned scope (claim already active)');
-            parts.push('4. Call bclaw_session_end with a narrative when done');
-            parts.push('5. Call bclaw_ack_message on this assignment');
-          } else {
-            parts.push('1. Read this brief');
-            parts.push('2. Call bclaw_session_start to register your session');
-            parts.push('3. Call bclaw_claim to claim the scope before editing');
-            parts.push('4. Call bclaw_session_end with a narrative when done');
-            parts.push('5. Call bclaw_ack_message on this assignment');
-          }
-          parts.push('');
-          parts.push('## Available tools');
-          parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
-          if (!options?.claimId) parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
-          parts.push('- bclaw_get_context (project memory)');
-          parts.push('- bclaw_check_policy (pre-edit verification)');
-          parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
-          parts.push('- bclaw_ack_message (acknowledge assignment)');
-          parts.push('');
-        }
-        return parts.join('\n');
+        return generateDispatchBrief({
+          task,
+          agent: agentName,
+          claimId: options?.claimId,
+          scope: options?.scope,
+          worktreePath: options?.worktreePath,
+        });
       };
       type CoordinateDeliveryEntry = {
         agent: string;

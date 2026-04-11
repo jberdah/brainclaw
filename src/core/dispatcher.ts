@@ -1,10 +1,22 @@
 /**
  * Local dispatcher — coordinator/worker model for multi-agent coordination.
  *
- * The dispatcher reads the active sequence, identifies ready lanes, generates
- * briefs, sends assignment messages to agent inboxes, and returns ready-to-run
- * bash commands. The coordinator (or human) is responsible for executing the
- * commands — the dispatcher never spawns processes itself.
+ * ## Dispatch mode (decision 2026-04-11)
+ *
+ * `bclaw_dispatch(spawn=true)` is the **official dispatch mode**. The dispatcher:
+ * 1. Analyzes the active sequence and identifies ready lanes
+ * 2. Creates coordinator-owned claims with worktree isolation
+ * 3. Generates adaptive briefs per agent capability (full/compact/task_card)
+ * 4. Sends assignment messages to agent inboxes
+ * 5. Attempts E2E spawn via `attemptExecution()` (detached CLI subprocess)
+ *
+ * **Fallback**: When spawn fails (sandbox constraints, missing binary, etc.),
+ * the dispatcher gracefully returns `command_ready_manual` with a copy-pasteable
+ * bash command. The Sprint 5 bash pattern (`cd repo && codex exec ...`) remains
+ * valid as a manual fallback — it is NOT the primary mode.
+ *
+ * Agent spawn support: Codex (stdin_pipe), Claude CLI (temp_file), Cline (inline_arg).
+ * Copilot CLI is inbox/review-only (no shell execution permissions).
  *
  * @module
  */
@@ -17,8 +29,8 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, type BriefMode, type InvokeCommand } from './agent-capability.js';
-import { attemptExecution } from './execution.js';
+import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { attemptExecution, checkActiveInstance } from './execution.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -212,6 +224,59 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
 // ── Brief Generation ────────────────────────────────────────
 
 /**
+ * Protocol + Available tools section, shared between generateBrief (plan-based)
+ * and generateDispatchBrief (task-based / coordinate).
+ *
+ * Only emitted for 'full' briefMode — compact/task_card agents run in sandboxes
+ * without MCP access, so the protocol section would be noise.
+ */
+export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string }): string {
+  const parts: string[] = [];
+
+  parts.push('## Protocol');
+  if (options?.claimId) {
+    parts.push(`Your scope has been pre-claimed by the coordinator (claim: ${options.claimId}).`);
+    if (options.worktreePath) {
+      parts.push(`Worktree: ${options.worktreePath}`);
+      parts.push('');
+      parts.push('1. Read this brief and the plan description');
+      parts.push(`2. cd into the worktree: ${options.worktreePath}`);
+      parts.push('3. Call bclaw_session_start to register your session');
+      parts.push('4. Work on the assigned scope (claim already active)');
+      parts.push('5. Call bclaw_session_end with a narrative when done');
+      parts.push('6. Call bclaw_ack_message on this assignment');
+    } else {
+      parts.push('1. Read this brief and the plan description');
+      parts.push('2. Call bclaw_session_start to register your session');
+      parts.push('3. Work on the assigned scope (claim already active)');
+      parts.push('4. Call bclaw_session_end with a narrative when done');
+      parts.push('5. Call bclaw_ack_message on this assignment');
+    }
+  } else {
+    parts.push('1. Read this brief and the plan description');
+    parts.push('2. Call bclaw_session_start to register your session');
+    parts.push('3. Call bclaw_claim to claim the scope before editing');
+    parts.push('4. Work in the worktree created by the claim');
+    parts.push('5. Call bclaw_session_end with a narrative when done');
+    parts.push('6. Call bclaw_ack_message on this assignment');
+  }
+  parts.push('');
+
+  parts.push('## Available tools');
+  parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
+  if (!options?.claimId) {
+    parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
+  }
+  parts.push('- bclaw_get_context (project memory)');
+  parts.push('- bclaw_check_policy (pre-edit verification)');
+  parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
+  parts.push('- bclaw_ack_message (acknowledge assignment)');
+  parts.push('');
+
+  return parts.join('\n');
+}
+
+/**
  * Generate a dispatch brief for an agent about to work on a plan.
  * The brief content adapts to the agent's capabilities via briefMode:
  * - 'full': complete brief with Protocol + Available tools (MCP-capable agents)
@@ -228,6 +293,8 @@ export function generateBrief(
   const mode = briefMode ?? 'full';
 
   // ── task_card: ultra-short for IDE agents ──────────────────
+  // Includes claim_id and worktree_path so inbox-only agents (e.g. Copilot)
+  // can see the pre-created artifacts even without the full protocol section.
   if (mode === 'task_card') {
     const parts: string[] = [];
     parts.push(`Task: ${plan.text}`);
@@ -235,6 +302,8 @@ export function generateBrief(
     parts.push(`Priority: ${plan.priority}`);
     if (item.lane) parts.push(`Lane: ${item.lane}`);
     if (item.scope_hint) parts.push(`Scope: ${item.scope_hint}`);
+    if (options?.claimId) parts.push(`Claim: ${options.claimId} (pre-claimed by coordinator)`);
+    if (options?.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
     if (plan.steps?.length) {
       parts.push('');
       for (const step of plan.steps) {
@@ -320,51 +389,127 @@ export function generateBrief(
   // Protocol and Available tools — only for 'full' mode
   // Compact mode agents (Codex) run in sandboxes without MCP access
   if (mode === 'full') {
-    parts.push('## Protocol');
-    if (options?.claimId) {
-      parts.push(`Your scope has been pre-claimed by the coordinator (claim: ${options.claimId}).`);
-      if (options.worktreePath) {
-        parts.push(`Worktree: ${options.worktreePath}`);
-        parts.push('');
-        parts.push('1. Read this brief and the plan description');
-        parts.push(`2. cd into the worktree: ${options.worktreePath}`);
-        parts.push('3. Call bclaw_session_start to register your session');
-        parts.push('4. Work on the assigned scope (claim already active)');
-        parts.push('5. Call bclaw_session_end with a narrative when done');
-        parts.push('6. Call bclaw_ack_message on this assignment');
-      } else {
-        parts.push('1. Read this brief and the plan description');
-        parts.push('2. Call bclaw_session_start to register your session');
-        parts.push('3. Work on the assigned scope (claim already active)');
-        parts.push('4. Call bclaw_session_end with a narrative when done');
-        parts.push('5. Call bclaw_ack_message on this assignment');
-      }
-    } else {
-      parts.push('1. Read this brief and the plan description');
-      parts.push('2. Call bclaw_session_start to register your session');
-      parts.push('3. Call bclaw_claim to claim the scope before editing');
-      parts.push('4. Work in the worktree created by the claim');
-      parts.push('5. Call bclaw_session_end with a narrative when done');
-      parts.push('6. Call bclaw_ack_message on this assignment');
-    }
-    parts.push('');
-
-    parts.push('## Available tools');
-    parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
-    if (!options?.claimId) {
-      parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
-    }
-    parts.push('- bclaw_get_context (project memory)');
-    parts.push('- bclaw_check_policy (pre-edit verification)');
-    parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
-    parts.push('- bclaw_ack_message (acknowledge assignment)');
-    parts.push('');
+    parts.push(buildProtocolSection(options));
   }
 
   return parts.join('\n');
 }
 
-// ── Dispatch ────────────────────────────────────────────────
+/**
+ * Generate a dispatch brief from a raw task description (no plan/sequence required).
+ * Used by bclaw_coordinate and other callers that don't have a full PlanItem.
+ *
+ * This is the canonical brief generator for task-based dispatch — it produces
+ * the same protocol section as generateBrief() but accepts a plain task string.
+ */
+export interface DispatchBriefOptions {
+  /** The task description */
+  task: string;
+  /** Target agent name (determines brief mode) */
+  agent: string;
+  /** Pre-created claim ID */
+  claimId?: string;
+  /** Scope string */
+  scope?: string;
+  /** Pre-created worktree path */
+  worktreePath?: string;
+}
+
+export function generateDispatchBrief(options: DispatchBriefOptions): string {
+  const briefMode = resolveBriefMode(options.agent);
+  const parts: string[] = [];
+
+  parts.push(`# Assignment: ${options.task}`);
+  parts.push('');
+  if (options.scope) parts.push(`Scope: ${options.scope}`);
+  if (options.claimId) parts.push(`Claim: ${options.claimId} (pre-claimed by coordinator)`);
+  if (options.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
+  parts.push('');
+
+  if (briefMode === 'full') {
+    parts.push(buildProtocolSection({
+      claimId: options.claimId,
+      worktreePath: options.worktreePath,
+    }));
+  }
+
+  return parts.join('\n');
+}
+
+// ── Agent Scoring ──────────────────────────────────────────
+
+/**
+ * 4-factor weighted scoring for agent selection (ported from cloud dispatcher).
+ *
+ * Factors:
+ *   1. **Preference** (weight 40): Is the agent the plan's explicit assignee?
+ *   2. **Capability** (weight 30): Does the agent's role_capabilities include 'execute'?
+ *   3. **Availability** (weight 20): Is the agent in the available pool (no active claims)?
+ *   4. **Load balance** (weight 10): Fewer active claims = higher score.
+ *
+ * Returns agents sorted by score (highest first). Agents not in the pool are excluded.
+ */
+export interface AgentScore {
+  agent: string;
+  score: number;
+  factors: {
+    preference: number;
+    capability: number;
+    availability: number;
+    load_balance: number;
+  };
+}
+
+export function scoreAgents(
+  agentPool: string[],
+  plan: PlanItem,
+  activeClaims: Claim[],
+): AgentScore[] {
+  const W_PREFERENCE = 40;
+  const W_CAPABILITY = 30;
+  const W_AVAILABILITY = 20;
+  const W_LOAD_BALANCE = 10;
+
+  // Count active claims per agent for load balancing
+  const claimCounts = new Map<string, number>();
+  for (const claim of activeClaims) {
+    claimCounts.set(claim.agent, (claimCounts.get(claim.agent) ?? 0) + 1);
+  }
+  const maxClaims = Math.max(1, ...claimCounts.values());
+
+  return agentPool.map(agent => {
+    // Factor 1: Preference — is this the plan's assignee?
+    const preference = (plan.assignee === agent) ? 1.0 : 0.0;
+
+    // Factor 2: Capability — can this agent execute tasks?
+    const profile = getCapabilityProfile(agent);
+    const canExecute = profile?.role_capabilities.includes('execute') ?? false;
+    const canSpawn = profile?.runtime.spawnable_cli ?? false;
+    const capability = canExecute ? (canSpawn ? 1.0 : 0.5) : 0.1;
+
+    // Factor 3: Availability — is the agent in the pool (not busy)?
+    // All agents in agentPool are available by definition, but we can
+    // give a small bonus to agents without any claims at all.
+    const agentClaims = claimCounts.get(agent) ?? 0;
+    const availability = agentClaims === 0 ? 1.0 : 0.5;
+
+    // Factor 4: Load balance — fewer claims = higher score
+    const load_balance = 1.0 - (agentClaims / maxClaims);
+
+    const score =
+      preference * W_PREFERENCE +
+      capability * W_CAPABILITY +
+      availability * W_AVAILABILITY +
+      load_balance * W_LOAD_BALANCE;
+
+    return { agent, score, factors: { preference, capability, availability, load_balance } };
+  }).sort((a, b) => b.score - a.score);
+}
+
+// Re-export checkActiveInstance for consumers who import from dispatcher
+export { checkActiveInstance, type ActiveInstanceCheck } from './execution.js';
+
+// ── Dispatch ──────────────────────────────────────────────
 
 export interface DispatchOptions {
   /** Only dispatch to specific agents */
@@ -404,6 +549,9 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     ? options.agents
     : [...analysis.available_agents];
 
+  // Collect all active claims for scoring
+  const allActiveClaims = listClaims(cwd).filter(c => c.status === 'active');
+
   const max = options.maxAssignments ?? readyToAssign.length;
   let assigned = 0;
   // Track invoke commands + worktree paths for E2E execution phase
@@ -412,13 +560,11 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   for (const readyItem of readyToAssign) {
     if (assigned >= max) break;
 
-    // Pick agent: prefer plan assignee, then first available
+    // Pick agent using 4-factor scoring (replaces simple FIFO)
     let targetAgent: string | undefined;
-
-    if (readyItem.plan.assignee && agentPool.includes(readyItem.plan.assignee)) {
-      targetAgent = readyItem.plan.assignee;
-    } else if (agentPool.length > 0) {
-      targetAgent = agentPool[0];
+    const scored = scoreAgents(agentPool, readyItem.plan, allActiveClaims);
+    if (scored.length > 0) {
+      targetAgent = scored[0]!.agent;
     }
 
     if (!targetAgent) {
@@ -436,6 +582,20 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         reason: `Already assigned to ${targetAgent} (existing message not archived)`,
       });
       continue;
+    }
+
+    // Check-before-spawn guard: skip agent if it already has an active instance.
+    // This runs BEFORE claim/inbox creation to avoid allocating work to busy agents.
+    if (!options.dryRun) {
+      const instanceCheck = checkActiveInstance(targetAgent, cwd);
+      if (instanceCheck.active) {
+        result.skipped.push({
+          plan_id: readyItem.plan.id,
+          reason: `Agent ${targetAgent} already active (${instanceCheck.reason})`,
+        });
+        result.warnings.push(`${targetAgent}: skipped — ${instanceCheck.reason}`);
+        continue;
+      }
     }
 
     // Ensure target agent is registered before creating claims/messages
