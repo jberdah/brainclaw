@@ -1,53 +1,100 @@
 # Quickstart
 
-## The fastest way to start
+Get brainclaw running in your project in under 5 minutes.
 
-Ask your coding agent:
-
-> "Install brainclaw and initialize it in this project."
-
-The agent will run `brainclaw setup` and `brainclaw init`, detect your environment, write the right config files, and activate MCP. After reloading, brainclaw tools become available.
-
-If you prefer doing it manually:
+## Step 1: Install
 
 ```bash
 npm install -g brainclaw
+```
+
+Requires Node.js 18+. Verify with `brainclaw --version`.
+
+## Step 2: Initialize your project
+
+```bash
+cd your-project
 brainclaw init
 ```
 
-`init` creates the user store if needed (no separate `setup` step required), initializes the project, detects your agent, and writes all integration files.
+**What happens:**
+- Creates `.brainclaw/` directory (project memory store)
+- Detects your coding agent (Claude Code, Codex, Cursor, Copilot, Cline, etc.)
+- Writes MCP configuration for the detected agent
+- Writes instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/brainclaw.md`, etc.)
+- Installs session hooks (if supported by your agent)
+- Adds `.brainclaw/` to `.gitignore`
 
-## What happens after init
+If you have multiple repos, use `brainclaw setup --yes` instead — it scans your project directories and initializes everything at once.
 
-Once initialized, your agent can:
+## Step 3: Restart your agent
 
-1. **See project context** — constraints, decisions, traps, plans, handoffs
-2. **Coordinate with other agents** — claim files before editing, check who's working where
-3. **Build shared memory** — record observations, create plans, track work
-4. **Resume across sessions** — the next agent (or the same one tomorrow) picks up where you left off
+Your coding agent needs to reload to pick up the new MCP configuration.
 
-## For agents with MCP (most agents)
+| Agent | How to reload |
+|-------|---------------|
+| **Claude Code** | Restart the CLI session or VS Code window |
+| **Cursor** | Cmd/Ctrl+Shift+P → "Reload Window" |
+| **Codex** | Start a new `codex` session |
+| **Cline** | Reload VS Code window |
+| **Windsurf** | Reload the editor |
+| **Copilot** | Reload VS Code window (uses instruction file, not MCP) |
 
-This is the primary path. The agent calls brainclaw tools directly.
+## Step 4: Verify it works
+
+After reloading, tell your agent:
 
 ```text
-bclaw_session_start   → identify yourself, see the board
-bclaw_get_context     → load relevant memory for your target scope
-bclaw_claim           → signal what you're about to edit
-bclaw_write_note      → record observations during work
-bclaw_session_end     → clean up claims and update plans
+Call bclaw_work with intent "check brainclaw is working"
 ```
 
-Instruction files like `CLAUDE.md` or `.cursor/rules/brainclaw.md` provide the protocol and constraints. The live state (plans, claims, traps) comes through MCP.
+The agent should respond with session info, project context, and available tools. If it does, brainclaw is connected.
 
-## For agents without MCP (Copilot)
+From the CLI, you can also verify:
 
-The instruction file (`.github/copilot-instructions.md`) contains everything: constraints, active plans, traps, and decisions. Use the brainclaw-context skill to refresh.
+```bash
+brainclaw status          # active sessions, claims, plans
+brainclaw agent-board     # what each agent sees
+brainclaw context         # current project memory
+```
 
-Regenerate the instruction file when project memory changes:
+## Step 5: Start using brainclaw
+
+### For agents with MCP (most agents)
+
+This is the primary path. Your agent calls brainclaw tools directly during work:
+
+| Tool | What it does |
+|------|-------------|
+| `bclaw_work(intent)` | Start a session, load context, claim scope — all in one call |
+| `bclaw_coordinate(intent, agents)` | Assign work to other agents, consult, or request review |
+| `bclaw_get_context(path)` | Get project memory relevant to a specific file or scope |
+| `bclaw_claim(scope)` | Claim a file/directory before editing (prevents conflicts) |
+| `bclaw_write_note(text)` | Record an observation, decision, or trap during work |
+| `bclaw_session_end(narrative)` | Close session, release claims, hand off cleanly |
+
+The facades `bclaw_work` and `bclaw_coordinate` are the recommended entry points — they handle session setup, context loading, and claim management automatically.
+
+### For agents without MCP (Copilot)
+
+GitHub Copilot uses instruction files instead of MCP. The file `.github/copilot-instructions.md` contains project constraints, active plans, traps, and decisions.
+
+Regenerate when project memory changes:
 
 ```bash
 brainclaw export --detect --write
+```
+
+### Human operators (CLI)
+
+The CLI is for inspection, scripting, and fallback:
+
+```bash
+brainclaw plan create "Implement auth module" --priority high
+brainclaw plan list
+brainclaw claim list
+brainclaw context --for src/auth/routes.ts
+brainclaw export --detect --write    # regenerate all instruction files
 ```
 
 ## Onboarding an existing project
@@ -55,35 +102,30 @@ brainclaw export --detect --write
 If the repo already has code, brainclaw can extract context from it:
 
 ```bash
-brainclaw bootstrap --json        # see what brainclaw detected
-brainclaw bootstrap --apply       # import into memory
+brainclaw bootstrap --json     # preview: CI patterns, ADRs, Docker, branches, tags
+brainclaw bootstrap --apply    # import detected signals into memory
 ```
 
-Or let your agent drive the conversation — it can call `bclaw_bootstrap`, review the detected signals, ask you about gaps, and structure the results into brainclaw memory.
+Or let your agent drive it:
 
-## Desktop AI surfaces
-
-brainclaw can also track work for desktop AI tools on your machine (ChatGPT Desktop, Claude Desktop, Gemini CLI) as a project-scoped task queue:
-
-```bash
-brainclaw surface-task create "Generate hero visual" --target chatgpt --kind visual_asset
-brainclaw surface-task list
+```text
+Call bclaw_bootstrap to detect project signals, then review what was found.
 ```
 
-This keeps non-code work visible to the project without overloading the active coding agent.
+## One agent at a time
 
-## Important: one agent at a time
+brainclaw serializes all store mutations, so writes are safe. But running multiple agents in parallel on the same checkout can cause Git conflicts.
 
-brainclaw serializes all store mutations (file lock + MCP single-writer queue), so writes are safe. But running multiple agents in parallel on the same checkout can still cause Git conflicts and confusing state transitions.
-
-Use brainclaw for sequential collaboration by default: one agent works, finishes, and the next one picks up from shared context. If you need stronger isolation, use a dedicated Git worktree per session with `brainclaw worktree` or let MCP claims create one automatically where supported. Use `bclaw_session_end` to hand off cleanly.
+**Recommended workflow:**
+1. One agent works at a time per checkout
+2. Use `bclaw_session_end` with a narrative when done
+3. Next agent calls `bclaw_session_start` and picks up from shared context
+4. For parallel work, use Git worktrees: `brainclaw worktree create feat/my-branch`
 
 ## Next reads
 
 - [integrations/overview.md](integrations/overview.md) — how brainclaw adapts to each agent
-- [integrations/mcp.md](integrations/mcp.md) — the dynamic runtime path
-- [release-maintenance.md](release-maintenance.md) — release checklist when the shipped surface changes
-- [server-operations.md](server-operations.md) — operator and remote-server workflow guidance
+- [integrations/mcp.md](integrations/mcp.md) — the MCP runtime path in detail
 - [concepts/memory.md](concepts/memory.md) — what project memory includes
 - [concepts/plans-and-claims.md](concepts/plans-and-claims.md) — coordination layer
 - [cli.md](cli.md) — full CLI reference

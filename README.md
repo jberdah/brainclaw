@@ -101,68 +101,71 @@ If you want the least surprising setup today, use Linux first. If you are on Win
 
 ## Get Started
 
-Choose the path that matches how you are using brainclaw.
+### 1. Install
 
-### Using an agent?
+```bash
+npm install -g brainclaw
+```
 
-Tell the agent directly:
+### 2. Initialize a project
+
+```bash
+cd your-project
+brainclaw init
+```
+
+This creates `.brainclaw/` in your repo, detects your coding agent, writes MCP config and instruction files, and sets up session hooks. It takes about 10 seconds.
+
+### 3. Restart your agent
+
+Restart your coding agent (or reload MCP servers) so it picks up the new configuration. After that, brainclaw tools are available.
+
+### 4. Start working
+
+The agent can now use brainclaw. The simplest way:
+
+```
+# Tell your agent:
+"Use bclaw_work to start a session, then work on [your task]."
+```
+
+Or with the granular tools:
 
 ```text
-Install brainclaw in this repo, initialize it, configure the agent integration if needed,
-and then use brainclaw for shared context, plans, claims, and handoffs while you work.
+bclaw_session_start   → open session, see the board
+bclaw_get_context     → load project memory for your scope
+bclaw_claim           → claim files before editing
+bclaw_write_note      → record observations during work
+bclaw_session_end     → close session, hand off cleanly
 ```
 
-The agent will run the underlying commands, bootstrap the workspace, and connect through MCP. If you need to run those commands yourself as a fallback:
+### 5. Verify it works
 
 ```bash
-npx brainclaw setup --yes
-npx brainclaw init
+brainclaw status          # see active sessions, claims, plans
+brainclaw agent-board     # see what each agent is doing
 ```
 
-See `docs/integrations/overview.md` and `docs/integrations/mcp.md` for the agent-facing runtime path.
+### Multi-agent setup
 
-### Coordinating a team?
-
-brainclaw provides shared plans, file claims, and Git worktree support to keep multiple agents working without stepping on each other. The coordination model is: one agent works at a time in a given checkout, hands off cleanly, and the next agent resumes from shared context.
-
-Relevant docs: `docs/concepts/plans-and-claims.md`, `docs/quickstart.md`, `docs/server-operations.md`.
-
-### Building an agent integration?
-
-brainclaw exposes 57 MCP tools covering context, board views, plans, claims, agents, instructions, handoffs, and write operations. Each supported agent has a capability profile that determines what gets configured (MCP, hooks, auto-approve, skills, native files).
-
-Relevant docs: `docs/integrations/overview.md`, `docs/integrations/mcp.md`, `docs/cli.md`.
-
----
-
-## Quick Example
+To configure brainclaw for all your repos and agents at once:
 
 ```bash
-# behind the scenes, the agent will typically bootstrap brainclaw in the repo
-npx brainclaw setup --yes
-npx brainclaw init
+brainclaw setup --yes
 ```
 
-After that, the agent should stay on brainclaw's MCP path for live state:
+This scans your projects, detects installed agents (Claude Code, Codex, Cursor, Copilot, Cline, etc.), and writes MCP configs for each.
 
-```text
-bclaw_session_start      -> open session + return board/context
-bclaw_get_execution_context -> inspect local tooling + notice brainclaw package updates
-bclaw_get_context        -> fetch fresh prompt-ready context for a path
-bclaw_list_plans         -> inspect shared work
-bclaw_claim              -> claim scope before editing
-bclaw_write_note         -> record runtime observations
-bclaw_session_end        -> close session and hand work off cleanly
-```
+### Existing projects
 
-Humans can still use the CLI directly for inspection, scripting, and fallback workflows:
+For repos that already have code, brainclaw can extract context automatically:
 
 ```bash
-brainclaw plan create "Coordinate auth rollout" --priority high
-brainclaw claim create "Take auth rollout" --scope src/auth/
-brainclaw context --for src/auth/routes.ts --digest
-brainclaw status
+brainclaw bootstrap --json     # preview what brainclaw detected
+brainclaw bootstrap --apply    # import into memory
 ```
+
+See `docs/quickstart.md` for the full walkthrough, `docs/integrations/overview.md` for agent-specific details.
 
 ---
 
