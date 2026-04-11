@@ -152,12 +152,11 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
     if (c.plan_id) claimedPlanIds.set(c.plan_id, c);
   }
 
-  // Count active claims per agent in this sequence (for capacity-aware dispatch)
+  // Count ALL active claims per agent in the project (not just sequence-scoped).
+  // An agent working on a claim outside the current sequence still has reduced capacity.
   const agentClaimCounts = new Map<string, number>();
   for (const c of claims) {
-    if (c.plan_id && sequence.items.some(i => i.planId === c.plan_id)) {
-      agentClaimCounts.set(c.agent, (agentClaimCounts.get(c.agent) ?? 0) + 1);
-    }
+    agentClaimCounts.set(c.agent, (agentClaimCounts.get(c.agent) ?? 0) + 1);
   }
 
   const ready: ReadyLane[] = [];
@@ -488,6 +487,7 @@ export function scoreAgents(
   agentPool: string[],
   plan: PlanItem,
   activeClaims: Claim[],
+  cycleAssignments?: Map<string, number>,
 ): AgentScore[] {
   const W_PREFERENCE = 40;
   const W_CAPABILITY = 30;
@@ -512,7 +512,8 @@ export function scoreAgents(
     const capability = canExecute ? (canSpawn ? 1.0 : 0.5) : 0.1;
 
     // Factor 3: Availability — graduated by utilization (claims / max_concurrent_tasks)
-    const agentClaims = claimCounts.get(agent) ?? 0;
+    // Include in-cycle assignments so load-balance works within a single dispatch call
+    const agentClaims = (claimCounts.get(agent) ?? 0) + (cycleAssignments?.get(agent) ?? 0);
     const maxTasks = profile?.max_concurrent_tasks ?? 1;
     const utilization = Math.min(1.0, agentClaims / maxTasks);
     const availability = 1.0 - (utilization * 0.5); // range [0.5, 1.0]
@@ -578,6 +579,8 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
 
   const max = options.maxAssignments ?? readyToAssign.length;
   let assigned = 0;
+  // Track assignments per agent in this dispatch cycle (for multi-slot capacity)
+  const cycleAssignments = new Map<string, number>();
   // Track invoke commands + worktree paths for E2E execution phase
   const preparedEntries: Array<{ deliveryEntry: DispatchedItem; invokeCmd: InvokeCommand | undefined; worktreePath?: string }> = [];
 
@@ -586,7 +589,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
 
     // Pick agent using 4-factor scoring — iterate through ranked agents
     // to find the first one that passes all guards (idempotency + active instance).
-    const scored = scoreAgents(agentPool, readyItem.plan, allActiveClaims);
+    const scored = scoreAgents(agentPool, readyItem.plan, allActiveClaims, cycleAssignments);
     let targetAgent: string | undefined;
 
     for (const candidate of scored) {
@@ -693,6 +696,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       },
       scope: readyItem.item.scope_hint,
       requires_ack: true,
+      claim_id: claimId,
       tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
       author_id: options.dispatcherAgentId,
       session_id: options.sessionId,
@@ -711,8 +715,16 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     preparedEntries.push({ deliveryEntry, invokeCmd, worktreePath });
 
     assigned++;
-    const idx = agentPool.indexOf(targetAgent);
-    if (idx >= 0) agentPool.splice(idx, 1);
+    // Track assignments this cycle for multi-slot capacity
+    cycleAssignments.set(targetAgent, (cycleAssignments.get(targetAgent) ?? 0) + 1);
+    // Remove agent from pool only when at capacity (existing claims + this cycle's assignments)
+    const existingClaims = allActiveClaims.filter(c => c.agent === targetAgent).length;
+    const cycleCount = cycleAssignments.get(targetAgent) ?? 0;
+    const maxTasks = getCapabilityProfile(targetAgent)?.max_concurrent_tasks ?? 1;
+    if (existingClaims + cycleCount >= maxTasks) {
+      const idx = agentPool.indexOf(targetAgent);
+      if (idx >= 0) agentPool.splice(idx, 1);
+    }
   }
 
   // E2E execution phase: attempt to spawn assigned agents (skip in dry run)

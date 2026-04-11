@@ -73,6 +73,8 @@ export interface SendMessageInput {
   project_id?: string;
   host_id?: string;
   session_id?: string;
+  /** Top-level claim_id for dispatch routing. Authoritative over payload.claim_id. */
+  claim_id?: string;
 }
 
 export interface SendMessageResult {
@@ -109,6 +111,7 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
       project_id: input.project_id,
       host_id: input.host_id,
       session_id: input.session_id,
+      claim_id: input.claim_id,
       tags: input.tags ?? [],
     };
 

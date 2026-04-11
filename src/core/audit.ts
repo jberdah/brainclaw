@@ -84,6 +84,7 @@ export function appendAuditEntry(entry: Partial<AuditEntry> & { action: AuditAct
         scope: entry.scope,
         session_id: entry.session_id,
         host_id: entry.host_id,
+        actor_session: entry.actor_session,
       };
       const line = JSON.stringify(Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)));
       fs.appendFileSync(auditLogPath(cwd), line + '\n', 'utf-8');
