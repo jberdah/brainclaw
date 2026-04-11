@@ -693,7 +693,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         agent: targetAgent,
         lane: readyItem.lane,
         command: `${cmdPrefix}${invokeCmd.bashCommand}`,
-        shell: invokeCmd.shell ? 'bash' : 'sh',
+        shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh'),
       });
     }
 

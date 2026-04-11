@@ -3756,6 +3756,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           scope: input.scope,
           requires_ack: input.requiresAck,
           thread_id: input.threadId,
+          claim_id: input.claimId,
           tags: input.tags ?? [],
           author_id: senderAgentId,
           session_id: connectionSessionId,
@@ -3766,11 +3767,16 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const invoke = buildInvokeCommand(input.agent, input.text, {
           mode: input.commandMode ?? 'worker',
         });
+        // Build env prefix for claim routing (cross-platform)
+        const claimEnvPrefix = input.claimId
+          ? (process.platform === 'win32' ? `set BRAINCLAW_CLAIM_ID=${input.claimId} && ` : `BRAINCLAW_CLAIM_ID=${input.claimId} `)
+          : '';
+        const resolvedShell = process.platform === 'win32' ? 'cmd' : (invoke?.shell ? 'bash' : 'sh');
         const commandHint = invoke
           ? {
               agent: input.agent,
-              command: invoke.bashCommand,
-              shell: invoke.shell ? 'bash' : 'sh',
+              command: `${claimEnvPrefix}${invoke.bashCommand}`,
+              shell: resolvedShell,
             }
           : undefined;
         if (commandHint) commandHints.push(commandHint);
