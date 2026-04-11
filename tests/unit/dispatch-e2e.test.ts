@@ -484,15 +484,16 @@ describe('dispatch-e2e/review-findings', () => {
   });
 
   it('finding-1 (haute): agent at capacity is skipped BEFORE claim/inbox creation', () => {
-    // Saturate codex (max_concurrent_tasks=5) with 5 sessions
+    // Saturate codex (max_concurrent_tasks=5) with 5 active claims
     for (let i = 1; i <= 5; i++) {
-      saveCurrentSession({
-        host_id: 'test-host',
-        session_id: `ses_busy_codex_${i}`,
-        started_at: new Date().toISOString(),
+      saveClaim({
+        schema_version: 2,
+        id: `clm_sat_${i}`,
         agent: 'codex',
-        agent_id: 'agt_codex',
-        last_seen_at: new Date().toISOString(),
+        scope: `src/sat${i}.ts`,
+        description: `Saturating claim ${i}`,
+        created_at: '2026-04-01T00:00:00Z',
+        status: 'active',
       }, testDir);
     }
 
@@ -513,9 +514,9 @@ describe('dispatch-e2e/review-findings', () => {
     assert.equal(result.result.skipped.length, 1, 'agent skipped');
     assert.ok(result.result.skipped[0]!.reason.includes('rejected by guards') || result.result.skipped[0]!.reason.includes('No available agent'), 'reason mentions guard rejection or no available agent');
 
-    // Verify no new claims were created for the busy agent
+    // Verify no NEW claims were created (should still be exactly 5 from setup)
     const claims = listClaims(testDir).filter(c => c.status === 'active' && c.agent === 'codex');
-    assert.equal(claims.length, 0, 'no claim created for busy agent');
+    assert.equal(claims.length, 5, 'no new claim created — still at 5 from saturation');
 
     // Verify no inbox message was sent
     const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
@@ -523,15 +524,16 @@ describe('dispatch-e2e/review-findings', () => {
   });
 
   it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st at capacity', () => {
-    // Saturate codex (max_concurrent_tasks=5) with 5 active sessions
+    // Saturate codex (max_concurrent_tasks=5) with 5 active claims
     for (let i = 1; i <= 5; i++) {
-      saveCurrentSession({
-        host_id: 'test-host',
-        session_id: `ses_codex_sat${i}`,
-        started_at: new Date().toISOString(),
+      saveClaim({
+        schema_version: 2,
+        id: `clm_codex_sat${i}`,
         agent: 'codex',
-        agent_id: 'agt_codex',
-        last_seen_at: new Date().toISOString(),
+        scope: `src/codex_sat${i}.ts`,
+        description: `Saturating claim ${i}`,
+        created_at: '2026-04-01T00:00:00Z',
+        status: 'active',
       }, testDir);
     }
 

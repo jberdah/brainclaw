@@ -598,13 +598,14 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         continue; // try next agent
       }
 
-      // Capacity guard: skip agent if at max concurrent tasks
-      if (!options.dryRun) {
-        const instanceCheck = checkActiveInstance(candidate.agent, cwd);
-        if (!instanceCheck.canSpawnMore) {
-          result.warnings.push(`${candidate.agent}: at capacity — ${instanceCheck.reason}`);
-          continue; // try next agent
-        }
+      // Claim-based capacity guard: check claims (existing + this cycle) against max_concurrent_tasks.
+      // This is the authoritative capacity check — covers both options.agents and analysis.available_agents paths.
+      const existingClaims = allActiveClaims.filter(c => c.agent === candidate.agent).length;
+      const inCycleCount = cycleAssignments.get(candidate.agent) ?? 0;
+      const maxTasks = getCapabilityProfile(candidate.agent)?.max_concurrent_tasks ?? 1;
+      if (existingClaims + inCycleCount >= maxTasks) {
+        result.warnings.push(`${candidate.agent}: at capacity (${existingClaims + inCycleCount}/${maxTasks} claims)`);
+        continue; // try next agent
       }
 
       targetAgent = candidate.agent;
