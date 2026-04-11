@@ -158,6 +158,17 @@ function enrichSequenceWithPlanStatus(sequence: ReturnType<typeof getActiveSeque
   };
 }
 
+/** Parse a duration string like '4h', '30m', '1d' to milliseconds. */
+function parseBoardTtl(value: string): number {
+  const match = /^(\d+)([mhd])$/i.exec(value.trim());
+  if (!match) return 4 * 3_600_000;
+  const amount = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  if (unit === 'm') return amount * 60_000;
+  if (unit === 'h') return amount * 3_600_000;
+  return amount * 86_400_000;
+}
+
 interface OtherAgentSummary {
   name: string;
   trust_level: string;
@@ -179,10 +190,12 @@ function buildOtherAgentsSummary(
   currentAgent?: string,
   cwd?: string,
 ): OtherAgentSummary[] | undefined {
-  // Count active sessions per agent for instance_count
+  // Count active sessions per agent for instance_count — use config TTL
   const sessions = loadAllSessions(cwd);
   const now = Date.now();
-  const TTL_MS = 4 * 3_600_000; // 4h default — matches identity.ts
+  let ttlStr = '4h';
+  try { ttlStr = loadConfig(cwd).implicit_session_ttl ?? '4h'; } catch { /* use default */ }
+  const TTL_MS = parseBoardTtl(ttlStr);
   const sessionCounts = new Map<string, number>();
   for (const s of sessions) {
     const lastSeen = new Date(s.last_seen_at).getTime();

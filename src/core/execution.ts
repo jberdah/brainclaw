@@ -235,10 +235,12 @@ export function attemptExecution(
   const spawnCheck = canSpawnAgent(options.agent);
 
   // Opt-out or can't spawn: return command for manual execution
+  // Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes correctly
   if (!options.autoExecute || !spawnCheck.canSpawn) {
+    const envPrefix = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
     return {
       execution_status: 'command_ready_manual',
-      command: invoke.bashCommand,
+      command: `${envPrefix}${invoke.bashCommand}`,
       shell: invoke.shell ? 'bash' : invoke.executable,
     };
   }
@@ -257,9 +259,10 @@ export function attemptExecution(
         after: { reason: instanceCheck.reason, active_sessions: instanceCheck.activeSessions, skipped: true },
       }, options.cwd);
 
+      const envPrefix2 = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
       return {
         execution_status: 'command_ready_manual',
-        command: invoke.bashCommand,
+        command: `${envPrefix2}${invoke.bashCommand}`,
         shell: invoke.shell ? 'bash' : invoke.executable,
         error: `Spawn skipped: ${instanceCheck.reason}. Use the command manually.`,
       };
@@ -305,10 +308,11 @@ export function attemptExecution(
       after: { error: errorMsg, command: invoke.bashCommand },
     }, options.cwd);
 
-    // Graceful fallback
+    // Graceful fallback — include BRAINCLAW_CLAIM_ID for manual routing
+    const envPrefix3 = options.claimId ? `BRAINCLAW_CLAIM_ID=${options.claimId} ` : '';
     return {
       execution_status: 'command_ready_manual',
-      command: invoke.bashCommand,
+      command: `${envPrefix3}${invoke.bashCommand}`,
       shell: invoke.shell ? 'bash' : invoke.executable,
       error: `Spawn failed (${errorMsg}), falling back to manual execution`,
     };

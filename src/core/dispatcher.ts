@@ -652,6 +652,14 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         sessionId: options.sessionId,
         cwd,
       });
+      // Scope conflict: a different agent holds this scope — skip this plan
+      if (claimResult.scopeConflict) {
+        result.skipped.push({
+          plan_id: readyItem.plan.id,
+          reason: `Scope '${claimScope}' is locked by ${claimResult.conflictAgent} (claim ${claimResult.claimId})`,
+        });
+        continue;
+      }
       claimId = claimResult.claimId;
       worktreePath = claimResult.worktreePath;
       if (claimResult.worktreeWarning) {
@@ -686,8 +694,15 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       result.delivery_plan.push(deliveryEntry);
       result.messages_sent.push(deliveryEntry);
       assigned++;
-      const idx = agentPool.indexOf(targetAgent);
-      if (idx >= 0) agentPool.splice(idx, 1);
+      // Multi-slot: track dry-run assignments and remove only at capacity
+      cycleAssignments.set(targetAgent, (cycleAssignments.get(targetAgent) ?? 0) + 1);
+      const dryExisting = allActiveClaims.filter(c => c.agent === targetAgent).length;
+      const dryCycle = cycleAssignments.get(targetAgent) ?? 0;
+      const dryMax = getCapabilityProfile(targetAgent)?.max_concurrent_tasks ?? 1;
+      if (dryExisting + dryCycle >= dryMax) {
+        const idx = agentPool.indexOf(targetAgent);
+        if (idx >= 0) agentPool.splice(idx, 1);
+      }
       continue;
     }
 

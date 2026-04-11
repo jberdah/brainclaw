@@ -662,7 +662,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(filtered.messages[0]!.claim_id, 'clm_aaa');
   });
 
-  it('scope lock is global — blocks any agent, not just same agent', () => {
+  it('scope lock is global — blocks dispatch to different agent on same scope', () => {
     // Create a claim for codex on src/shared.ts
     saveClaim({
       schema_version: 2, id: 'clm_scope_lock', agent: 'codex',
@@ -680,8 +680,10 @@ describe('dispatch-e2e/multi-instance', () => {
     ]), testDir);
 
     const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir)!;
-    // The claim should be reused (scope is already locked by codex)
-    assert.equal(result.result.messages_sent[0]!.claim_id, 'clm_scope_lock', 'reuses existing scope claim');
+    // Scope is locked by codex — claude-code dispatch should be skipped
+    assert.equal(result.result.messages_sent.length, 0, 'no messages — scope locked by codex');
+    assert.equal(result.result.skipped.length, 1, 'plan skipped');
+    assert.ok(result.result.skipped[0]!.reason.includes('locked by codex'), 'reason explains scope conflict');
   });
 
   it('adoptClaimSession links session to claim', () => {

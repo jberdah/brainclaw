@@ -153,6 +153,10 @@ export interface CoordinatorClaimResult {
   worktreePath?: string;
   worktreeWarning?: string;
   reusedExisting?: boolean;
+  /** True if the scope is locked by a DIFFERENT agent — dispatcher should skip this plan. */
+  scopeConflict?: boolean;
+  /** Agent that holds the conflicting scope claim. */
+  conflictAgent?: string;
 }
 
 /**
@@ -162,17 +166,26 @@ export interface CoordinatorClaimResult {
  */
 export function createCoordinatorClaim(options: CoordinatorClaimOptions): CoordinatorClaimResult {
   // Scope lock is GLOBAL: any active claim on the same scope blocks, regardless of agent.
-  // This prevents two instances from working on the same files simultaneously.
   const existingScopeClaim = listClaims(options.cwd).find(
     (claim) => claim.status === 'active' && claim.scope === options.scope,
   );
   if (existingScopeClaim) {
-    // If the same agent already has this scope, reuse it (backward compat).
-    // If a DIFFERENT agent has it, still reuse — the scope is locked.
+    if (existingScopeClaim.agent === options.agent) {
+      // Same agent already has this scope — reuse the claim (backward compat, same-agent multi-call).
+      return {
+        claimId: existingScopeClaim.id,
+        worktreePath: existingScopeClaim.worktree_path,
+        reusedExisting: true,
+      };
+    }
+    // DIFFERENT agent has an active claim on this scope — scope is locked.
+    // Return the existing claim info + a conflict flag so the dispatcher can skip.
     return {
       claimId: existingScopeClaim.id,
       worktreePath: existingScopeClaim.worktree_path,
       reusedExisting: true,
+      scopeConflict: true,
+      conflictAgent: existingScopeClaim.agent,
     };
   }
 
