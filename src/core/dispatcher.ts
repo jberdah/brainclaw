@@ -560,42 +560,38 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   for (const readyItem of readyToAssign) {
     if (assigned >= max) break;
 
-    // Pick agent using 4-factor scoring (replaces simple FIFO)
-    let targetAgent: string | undefined;
+    // Pick agent using 4-factor scoring — iterate through ranked agents
+    // to find the first one that passes all guards (idempotency + active instance).
     const scored = scoreAgents(agentPool, readyItem.plan, allActiveClaims);
-    if (scored.length > 0) {
-      targetAgent = scored[0]!.agent;
+    let targetAgent: string | undefined;
+
+    for (const candidate of scored) {
+      // Idempotency: skip if there's already a non-archived assign for this plan+agent
+      if (!options.dryRun && hasActiveAssignment(candidate.agent, readyItem.plan.id, cwd)) {
+        continue; // try next agent
+      }
+
+      // Check-before-spawn guard: skip agent if it already has an active instance
+      if (!options.dryRun) {
+        const instanceCheck = checkActiveInstance(candidate.agent, cwd);
+        if (instanceCheck.active) {
+          result.warnings.push(`${candidate.agent}: skipped — ${instanceCheck.reason}`);
+          continue; // try next agent
+        }
+      }
+
+      targetAgent = candidate.agent;
+      break;
     }
 
     if (!targetAgent) {
       result.skipped.push({
         plan_id: readyItem.plan.id,
-        reason: 'No available agent',
+        reason: scored.length === 0
+          ? 'No available agent'
+          : `All ${scored.length} candidate(s) rejected by guards (active session or existing assignment)`,
       });
       continue;
-    }
-
-    // Idempotency: skip if there's already a non-archived assign for this plan+agent
-    if (!options.dryRun && hasActiveAssignment(targetAgent, readyItem.plan.id, cwd)) {
-      result.skipped.push({
-        plan_id: readyItem.plan.id,
-        reason: `Already assigned to ${targetAgent} (existing message not archived)`,
-      });
-      continue;
-    }
-
-    // Check-before-spawn guard: skip agent if it already has an active instance.
-    // This runs BEFORE claim/inbox creation to avoid allocating work to busy agents.
-    if (!options.dryRun) {
-      const instanceCheck = checkActiveInstance(targetAgent, cwd);
-      if (instanceCheck.active) {
-        result.skipped.push({
-          plan_id: readyItem.plan.id,
-          reason: `Agent ${targetAgent} already active (${instanceCheck.reason})`,
-        });
-        result.warnings.push(`${targetAgent}: skipped — ${instanceCheck.reason}`);
-        continue;
-      }
     }
 
     // Ensure target agent is registered before creating claims/messages

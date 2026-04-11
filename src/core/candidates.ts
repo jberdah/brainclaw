@@ -6,6 +6,7 @@ import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
+import { refreshLiveCompanions } from '../commands/export.js';
 
 function inboxDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('inbox', cwd ?? process.cwd(), mode);
@@ -45,6 +46,8 @@ export function saveCandidate(candidate: Candidate, cwd?: string): void {
   mutate({ cwd }, () => {
     ensureInboxDirs(cwd);
     candidateStore('pending', cwd).save(CandidateSchema.parse(candidate));
+    // Auto-refresh live companions after candidate changes (non-fatal)
+    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });
 }
 
@@ -66,6 +69,8 @@ export function archiveCandidate(candidate: Candidate, dest: 'accepted' | 'rejec
     ensureInboxDirs(cwd);
     candidateStore(dest, cwd).save(CandidateSchema.parse(candidate));
     candidateStore('pending', cwd).delete(candidate.id);
+    // Auto-refresh live companions after candidate archive (non-fatal)
+    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });
 }
 

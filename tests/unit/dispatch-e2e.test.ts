@@ -508,7 +508,7 @@ describe('dispatch-e2e/review-findings', () => {
     // Agent should be skipped — no claim, no inbox message created
     assert.equal(result.result.messages_sent.length, 0, 'no messages sent to busy agent');
     assert.equal(result.result.skipped.length, 1, 'agent skipped');
-    assert.ok(result.result.skipped[0]!.reason.includes('already active'), 'reason mentions active');
+    assert.ok(result.result.skipped[0]!.reason.includes('rejected by guards'), 'reason mentions guard rejection');
 
     // Verify no new claims were created for the busy agent
     const claims = listClaims(testDir).filter(c => c.status === 'active' && c.agent === 'codex');
@@ -517,6 +517,36 @@ describe('dispatch-e2e/review-findings', () => {
     // Verify no inbox message was sent
     const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
     assert.equal(inbox.messages.length, 0, 'no inbox message for busy agent');
+  });
+
+  it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st is active', () => {
+    // codex has an active session, but cline is available
+    saveCurrentSession({
+      host_id: 'test-host',
+      session_id: 'ses_codex_busy2',
+      started_at: new Date().toISOString(),
+      agent: 'codex',
+      agent_id: 'agt_codex',
+      last_seen_at: new Date().toISOString(),
+    }, testDir);
+
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_fallback', text: 'Task needing fallback', assignee: 'codex' })],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_fallback', rank: 1, hard_after: [], soft_after: [] },
+    ]), testDir);
+
+    // Provide both codex and cline in the pool — codex is preferred (assignee) but active
+    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex', 'cline'] }, testDir)!;
+    assert.ok(result, 'dispatch returns result');
+    assert.equal(result.result.messages_sent.length, 1, 'one message sent');
+    assert.equal(result.result.messages_sent[0]!.agent, 'cline', 'fell back to cline');
+    assert.equal(result.result.skipped.length, 0, 'plan was not skipped');
+    assert.ok(result.result.warnings.some(w => w.includes('codex')), 'warning about codex being active');
   });
 
   it('finding-2 (moyenne): checkActiveInstance uses config TTL, not hardcoded 5min', () => {

@@ -45,7 +45,7 @@ Your coding agent needs to reload to pick up the new MCP configuration.
 After reloading, tell your agent:
 
 ```text
-Call bclaw_work with intent "check brainclaw is working"
+Call bclaw_work with intent "resume" to check that brainclaw is connected.
 ```
 
 The agent should respond with session info, project context, and available tools. If it does, brainclaw is connected.
