@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-expect-error — .mjs script without type declarations
-import { runParallelTests } from '../../scripts/run-tests.mjs';
+// Path resolves from dist-test/tests/unit/ → project root scripts/
+import { runParallelTests } from '../../../scripts/run-tests.mjs';
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {

@@ -94,13 +94,19 @@ function setupAgents(dir: string): void {
 describe('core/dispatcher', () => {
   let testDir: string;
 
+  let previousNoSpawn: string | undefined;
+
   beforeEach(() => {
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_NO_SPAWN = '1';
     testDir = createTestStore();
     setupAgents(testDir);
   });
 
   afterEach(() => {
     cleanupTestStore(testDir);
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
   describe('analyzeSequence', () => {
@@ -437,7 +443,7 @@ describe('core/dispatcher', () => {
 
     it('is idempotent — does not duplicate assignments on second run', () => {
       const plans = [
-        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
+        makePlan({ id: 'pln_a', text: 'Task A', status: 'todo', assignee: 'codex' }),
       ];
       persistState({
         version: 1, write_version: 1,
@@ -449,15 +455,18 @@ describe('core/dispatcher', () => {
         { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
       ]), testDir);
 
-      // First dispatch — sends assignment
+      // First dispatch — sends assignment and creates coordinator-owned claim
       const result1 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
       assert.equal(result1.result.messages_sent.length, 1);
 
-      // Second dispatch — should skip because assignment already exists
+      // Second dispatch — plan now has active claim, so it moves to "active" (not "ready")
+      // This is the coordinator-owned claim idempotency: claimed plans are never re-dispatched
+      const analysis2 = analyzeSequence(testDir)!;
+      assert.equal(analysis2.ready.length, 0, 'plan with active claim is not ready');
+      assert.equal(analysis2.active.length, 1, 'plan is active (has claim)');
+
       const result2 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
       assert.equal(result2.result.messages_sent.length, 0);
-      assert.equal(result2.result.skipped.length, 1);
-      assert.ok(result2.result.skipped[0]!.reason.includes('Already assigned'));
     });
   });
 

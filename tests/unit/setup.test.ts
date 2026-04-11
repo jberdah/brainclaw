@@ -8,7 +8,7 @@ import { scanGitRepos } from '../../src/commands/setup.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
-const CLI_TIMEOUT_MS = 60000;
+const CLI_TIMEOUT_MS = 45000;
 let testHomeDir = '';
 
 function tmpDir(): string {
@@ -33,6 +33,7 @@ function run(
       ...process.env,
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_TEST_MODE: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
       HOME: testHomeDir,

@@ -333,14 +333,19 @@ describe('dispatch-regression/analyzeSequence', () => {
 
 describe('dispatch-regression/dispatch', () => {
   let testDir: string;
+  let previousNoSpawn: string | undefined;
 
   beforeEach(() => {
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_NO_SPAWN = '1';
     testDir = createTestStore();
     setupAgents(testDir);
   });
 
   afterEach(() => {
     cleanupTestStore(testDir);
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
   it('reuses an existing active claim for the same agent and scope', () => {

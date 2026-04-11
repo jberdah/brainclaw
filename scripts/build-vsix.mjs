@@ -15,6 +15,13 @@ const outVsix = join(extDir, 'brainclaw-vscode-0.1.0.vsix');
 const destDir = join(root, 'dist');
 const destVsix = join(destDir, 'brainclaw-vscode.vsix');
 
+// Skip gracefully when vscode-extension deps are not installed (e.g. CI)
+const hasVscodeDeps = existsSync(join(extDir, 'node_modules', '@types', 'vscode'));
+if (!hasVscodeDeps) {
+  console.log('⚠ Skipping vsix build — vscode-extension/node_modules not installed (run npm install in vscode-extension/ to enable)');
+  process.exit(0);
+}
+
 // 1. Compile extension TypeScript
 console.log('→ Compiling vscode-extension...');
 execSync('npx tsc -p tsconfig.json', { cwd: extDir, stdio: 'inherit' });

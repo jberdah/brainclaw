@@ -154,9 +154,13 @@ describe('bclaw_coordinate — side effects', () => {
   let previousTestMode: string | undefined;
   let restoreCwd: (() => void) | undefined;
 
+  let previousNoSpawn: string | undefined;
+
   beforeEach(() => {
     previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
     process.env.BRAINCLAW_TEST_MODE = '1';
+    process.env.BRAINCLAW_NO_SPAWN = '1';
     workspace = createTestWorkspace({
       prefix: 'bclaw-coordinate-fx-',
       currentAgent: 'claude-code',
@@ -169,11 +173,10 @@ describe('bclaw_coordinate — side effects', () => {
   afterEach(() => {
     restoreCwd?.();
     workspace.cleanup();
-    if (previousTestMode === undefined) {
-      delete process.env.BRAINCLAW_TEST_MODE;
-      return;
-    }
-    process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
   // ── assign ──────────────────────────────────────────────

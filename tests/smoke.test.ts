@@ -20,6 +20,9 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     env: {
       ...process.env,
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
+      BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
+      BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
+      BRAINCLAW_TEST_MODE: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
       BRAINCLAW_STORE_BOUNDARY: cwd,

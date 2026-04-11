@@ -446,7 +446,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   // Step 4: Agent detection & selection
   const detectedAi = detectAiAgent(env);
   const detectedName = detectedAi?.name;
-  const detectedSurfaces = buildAiSurfaceInventory();
+  const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
+  const detectedSurfaces = testMode ? [] : buildAiSurfaceInventory();
   console.log('');
   if (detectedName) {
     console.log(`Detected AI agent: ${detectedName}`);

@@ -33,7 +33,10 @@ function assertMinimalProtocol(content: string): void {
   assert.ok(content.includes('## brainclaw — session protocol'));
   assert.ok(content.includes('bclaw_work(intent)'));
   assert.ok(content.includes('bclaw_coordinate(intent)'));
-  assert.ok(!content.includes('bclaw_get_context'));
+  // bclaw_get_context may appear in the available-tools catalog, but the
+  // protocol section itself must not instruct agents to call it directly.
+  const protocolSection = content.split('## brainclaw — session protocol')[1]?.split('## brainclaw')[0] ?? '';
+  assert.ok(!protocolSection.includes('bclaw_get_context'), 'protocol section must not reference bclaw_get_context');
 }
 
 describe('instruction-templates', () => {
