@@ -4,6 +4,7 @@ import { mutate } from './mutation-pipeline.js';
 import { generateIdWithLabel, nowISO } from './ids.js';
 import { resolveEntityDir } from './io.js';
 import { SequenceItemSchema, SequenceSchema, type Sequence, type SequenceItem, type SequenceItemInput, type SequenceStatus } from './schema.js';
+import { refreshLiveCompanions } from '../commands/export.js';
 
 function sequencesDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('sequences', cwd ?? process.cwd(), mode);
@@ -70,6 +71,8 @@ export function saveSequence(sequence: Sequence, cwd?: string): void {
   mutate({ cwd }, () => {
     ensureSequencesDir(cwd);
     sequenceStore(cwd, 'write').save(SequenceSchema.parse(sequence));
+    // Auto-refresh live companions after sequence changes (non-fatal)
+    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });
 }
 

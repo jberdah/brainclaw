@@ -166,6 +166,85 @@ function runExportAll(cwd: string, options: ExportOptions): void {
  * These are gitignored files with current state (plans, claims, traps, sequences).
  * Only Tier B/C agents get live companions; Tier A receives live context via hooks/MCP.
  */
+/**
+ * Refresh live companion files silently. Returns count of files written.
+ * Non-fatal: errors are collected but never thrown. Safe to call from
+ * post-mutation hooks where a refresh failure must not break the mutation.
+ *
+ * Respects `auto_refresh_live` config flag (default: true).
+ */
+export function refreshLiveCompanions(cwd?: string): { written: number; errors: string[] } {
+  const effectiveCwd = cwd ?? process.cwd();
+  if (!memoryExists(effectiveCwd)) {
+    return { written: 0, errors: [] };
+  }
+
+  try {
+    const config = loadConfig(effectiveCwd);
+    if (config.auto_refresh_live === false) {
+      return { written: 0, errors: [] };
+    }
+
+    const state = loadState(effectiveCwd);
+    const instructions = getInstructionText({ project: undefined, agent: undefined }, effectiveCwd);
+    const activeClaims = listClaims(effectiveCwd).filter((c) => c.status === 'active');
+    const pendingCandidates = listCandidates('pending', effectiveCwd);
+    const seen = new Set<ExportFormat>();
+    const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
+      if (seen.has(t.format)) return false;
+      seen.add(t.format);
+      return true;
+    });
+
+    let written = 0;
+    const errors: string[] = [];
+    const liveGitignoreEntries: string[] = [];
+
+    for (const target of targets) {
+      try {
+        const profile = getAgentCapabilityProfile(target.agentName);
+        if (!profile) continue;
+
+        const input = {
+          profile,
+          state,
+          projectName: config.project_name,
+          brainclawVersion: getInstalledBrainclawVersion(),
+          resolvedInstructions: instructions,
+          projectVision: readProjectVision(effectiveCwd),
+          activeClaims,
+          pendingCandidates,
+        };
+
+        const live = renderLiveSection(input);
+        if (!live) continue; // Tier A — no live companion needed
+
+        const livePath = toLivePath(target.relativePath);
+        const fullPath = path.join(effectiveCwd, livePath);
+        const dir = path.dirname(fullPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        const existing = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : '';
+        if (existing !== live.content) {
+          fs.writeFileSync(fullPath, live.content, 'utf-8');
+          written++;
+        }
+        liveGitignoreEntries.push(livePath);
+      } catch (err) {
+        errors.push(`${target.agentName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (liveGitignoreEntries.length > 0) {
+      ensureGitignoreEntries(effectiveCwd, liveGitignoreEntries);
+    }
+
+    return { written, errors };
+  } catch (err) {
+    return { written: 0, errors: [err instanceof Error ? err.message : String(err)] };
+  }
+}
+
 export function runRefresh(cwd?: string): void {
   const effectiveCwd = cwd ?? process.cwd();
   if (!memoryExists(effectiveCwd)) {
@@ -173,59 +252,14 @@ export function runRefresh(cwd?: string): void {
     process.exit(1);
   }
 
-  const state = loadState(effectiveCwd);
-  const config = loadConfig(effectiveCwd);
-  const instructions = getInstructionText({ project: undefined, agent: undefined }, effectiveCwd);
-  const activeClaims = listClaims(effectiveCwd).filter((c) => c.status === 'active');
-  const pendingCandidates = listCandidates('pending', effectiveCwd);
-  const seen = new Set<ExportFormat>();
-  const targets = AGENT_EXPORT_REGISTRY.filter((t) => {
-    if (seen.has(t.format)) return false;
-    seen.add(t.format);
-    return true;
-  });
+  const result = refreshLiveCompanions(effectiveCwd);
 
-  let written = 0;
-  const liveGitignoreEntries: string[] = [];
-
-  for (const target of targets) {
-    const profile = getAgentCapabilityProfile(target.agentName);
-    if (!profile) continue;
-
-    const input = {
-      profile,
-      state,
-      projectName: config.project_name,
-      brainclawVersion: getInstalledBrainclawVersion(),
-      resolvedInstructions: instructions,
-      projectVision: readProjectVision(effectiveCwd),
-      activeClaims,
-      pendingCandidates,
-    };
-
-    const live = renderLiveSection(input);
-    if (!live) continue; // Tier A — no live companion needed
-
-    const livePath = toLivePath(target.relativePath);
-    const fullPath = path.join(effectiveCwd, livePath);
-    const dir = path.dirname(fullPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    const existing = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : '';
-    if (existing !== live.content) {
-      fs.writeFileSync(fullPath, live.content, 'utf-8');
-      console.log(`✔ ${livePath} (refreshed)`);
-      written++;
-    }
-    liveGitignoreEntries.push(livePath);
+  for (const err of result.errors) {
+    console.warn(`⚠ ${err}`);
   }
 
-  if (liveGitignoreEntries.length > 0) {
-    ensureGitignoreEntries(effectiveCwd, liveGitignoreEntries);
-  }
-
-  if (written > 0) {
-    console.log(`✔ Refreshed ${written} live companion file(s)`);
+  if (result.written > 0) {
+    console.log(`✔ Refreshed ${result.written} live companion file(s)`);
   } else {
     console.log('✔ All live companions are up to date.');
   }

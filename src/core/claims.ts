@@ -9,6 +9,7 @@ import { JsonStore } from './json-store.js';
 import { loadConfig } from './config.js';
 import { createWorktree } from './worktree.js';
 import { appendAuditEntry } from './audit.js';
+import { refreshLiveCompanions } from '../commands/export.js';
 
 function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
@@ -40,6 +41,8 @@ export function saveClaim(claim: Claim, cwd?: string): void {
       sort: (a, b) => a.created_at.localeCompare(b.created_at),
     });
     writeStore.save(ClaimSchema.parse(claim));
+    // Auto-refresh live companions after claim changes (non-fatal)
+    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });
 }
 

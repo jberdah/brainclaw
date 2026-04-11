@@ -86,6 +86,7 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
     cross_project_links: [],
     implicit_session_ttl: '4h',
     auto_reflect_notes: false,
+    auto_refresh_live: true,
     claims: {
       auto_release_after_hours: 24,
     },

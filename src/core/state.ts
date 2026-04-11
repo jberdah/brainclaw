@@ -8,6 +8,7 @@ import { commitMemoryChange } from './memory-git.js';
 import { appendEvent } from './event-log.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
 import { rebuildProjectMd } from './markdown.js';
+import { refreshLiveCompanions } from '../commands/export.js';
 export function emptyState(): State {
   return {
     version: 1,
@@ -109,6 +110,10 @@ function persistStateUnlocked(state: State, cwd: string, options: PersistStateOp
     summary: options.eventSummary,
   }, cwd);
   commitMemoryChange(options.commitMessage ?? 'state update', cwd);
+
+  // Auto-refresh live companion files (Tier B/C agents) after state mutations.
+  // Non-fatal: failures are logged but don't break the mutation.
+  try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
 }
 
 function cleanupLegacyDir(entityName: string, currentIds: Set<string>, cwd: string): void {
