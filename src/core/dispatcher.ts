@@ -44,6 +44,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
+import { createAssignment, transitionAssignment, generateAssignmentId } from './assignments.js';
+import { sweepAssignments } from './assignment-sweeper.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 import { generateId, nowISO } from './ids.js';
 import { applyHandoffUpdates } from '../commands/update-handoff.js';
@@ -109,6 +111,8 @@ export interface DispatchedItem {
   /** How the assignment was delivered */
   channel: 'inbox' | 'spawned_cli';
   claim_id?: string;
+  /** Assignment ID from the Agent SDK runtime protocol */
+  assignment_id?: string;
   /** E2E execution status */
   execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
   /** PID of spawned agent process (when execution_status is delivered_and_started) */
@@ -281,39 +285,52 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
  * Only emitted for 'full' briefMode — compact/task_card agents run in sandboxes
  * without MCP access, so the protocol section would be noise.
  */
-export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string }): string {
+export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
 
   parts.push('## Protocol');
   if (options?.claimId) {
     parts.push(`Your scope has been pre-claimed by the coordinator (claim: ${options.claimId}).`);
+  }
+  if (options?.assignmentId) {
+    parts.push(`Assignment: ${options.assignmentId}`);
+  }
+  if (options?.worktreePath) {
+    parts.push(`Worktree: ${options.worktreePath}`);
+  }
+  parts.push('');
+
+  // Assignment lifecycle protocol (Agent SDK)
+  if (options?.assignmentId) {
+    parts.push(`1. Call bclaw_assignment_update(assignment_id: "${options.assignmentId}", status: "accepted")`);
     if (options.worktreePath) {
-      parts.push(`Worktree: ${options.worktreePath}`);
-      parts.push('');
-      parts.push('1. Read this brief and the plan description');
       parts.push(`2. cd into the worktree: ${options.worktreePath}`);
-      parts.push('3. Call bclaw_session_start to register your session');
-      parts.push('4. Work on the assigned scope (claim already active)');
-      parts.push('5. Call bclaw_session_end with a narrative when done');
-      parts.push('6. Call bclaw_ack_message on this assignment');
-    } else {
-      parts.push('1. Read this brief and the plan description');
-      parts.push('2. Call bclaw_session_start to register your session');
-      parts.push('3. Work on the assigned scope (claim already active)');
-      parts.push('4. Call bclaw_session_end with a narrative when done');
-      parts.push('5. Call bclaw_ack_message on this assignment');
     }
+    parts.push(`${options.worktreePath ? '3' : '2'}. Call bclaw_assignment_update(assignment_id: "${options.assignmentId}", status: "started")`);
+    parts.push(`${options.worktreePath ? '4' : '3'}. Work on the assigned scope`);
+    parts.push(`${options.worktreePath ? '5' : '4'}. Periodically call bclaw_assignment_update(status: "progress", message: "...") as heartbeat`);
+    parts.push(`${options.worktreePath ? '6' : '5'}. When done: bclaw_assignment_update(status: "completed", artifacts: [...])`);
+    parts.push(`${options.worktreePath ? '7' : '6'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
+    parts.push(`${options.worktreePath ? '8' : '7'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+  } else if (options?.claimId) {
+    parts.push('1. Call bclaw_session_start to register your session');
+    if (options.worktreePath) {
+      parts.push(`2. cd into the worktree: ${options.worktreePath}`);
+    }
+    parts.push(`${options.worktreePath ? '3' : '2'}. Work on the assigned scope (claim already active)`);
+    parts.push(`${options.worktreePath ? '4' : '3'}. Call bclaw_session_end with a narrative when done`);
   } else {
-    parts.push('1. Read this brief and the plan description');
-    parts.push('2. Call bclaw_session_start to register your session');
-    parts.push('3. Call bclaw_claim to claim the scope before editing');
-    parts.push('4. Work in the worktree created by the claim');
-    parts.push('5. Call bclaw_session_end with a narrative when done');
-    parts.push('6. Call bclaw_ack_message on this assignment');
+    parts.push('1. Call bclaw_session_start to register your session');
+    parts.push('2. Call bclaw_claim to claim the scope before editing');
+    parts.push('3. Work in the worktree created by the claim');
+    parts.push('4. Call bclaw_session_end with a narrative when done');
   }
   parts.push('');
 
   parts.push('## Available tools');
+  if (options?.assignmentId) {
+    parts.push('- bclaw_assignment_update (report lifecycle: accepted/started/progress/completed/failed/blocked)');
+  }
   parts.push('- bclaw_session_start, bclaw_session_end (session lifecycle)');
   if (!options?.claimId) {
     parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
@@ -321,7 +338,6 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
   parts.push('- bclaw_get_context (project memory)');
   parts.push('- bclaw_check_policy (pre-edit verification)');
   parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
-  parts.push('- bclaw_ack_message (acknowledge assignment)');
   parts.push('');
 
   return parts.join('\n');
@@ -339,7 +355,7 @@ export function generateBrief(
   item: SequenceItem,
   cwd: string,
   briefMode?: BriefMode,
-  options?: { claimId?: string; worktreePath?: string },
+  options?: { claimId?: string; worktreePath?: string; assignmentId?: string },
 ): string {
   const mode = briefMode ?? 'full';
 
@@ -585,6 +601,9 @@ export interface DispatchOptions {
  * Run a dispatch cycle: analyze the sequence, generate briefs, send assignments.
  */
 export function dispatch(options: DispatchOptions, cwd: string): { analysis: DispatchAnalysis; result: DispatchResult } | null {
+  // Run assignment sweeper before dispatch to detect stuck/expired work
+  try { sweepAssignments(cwd, { actor: options.dispatcherAgent }); } catch { /* best-effort */ }
+
   const analysis = analyzeSequence(cwd);
   if (!analysis) return null;
 
@@ -690,9 +709,16 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       }
     }
 
-    // Generate brief with pre-created claim_id and worktree path
+    // Pre-generate assignment ID so it can be included in the brief
+    const preAssignmentId = claimId !== '(dry-run)' ? generateAssignmentId(cwd) : undefined;
+
+    // Generate brief with pre-created claim_id, worktree path, and assignment_id
     const briefMode = resolveBriefMode(targetAgent);
-    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath });
+    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, {
+      claimId,
+      worktreePath,
+      assignmentId: preAssignmentId?.id,
+    });
 
     // Build invoke command (if agent is CLI-spawnable)
     const invokeCmd = buildInvokeCommand(targetAgent, brief);
@@ -761,6 +787,34 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       try { attachAssignmentMessageToClaim(claimId, msgResult.id, cwd); } catch { /* best-effort */ }
     }
 
+    // Create Assignment entity (Agent SDK runtime protocol)
+    // Uses pre-generated ID so the brief already contains the assignment_id
+    const assignmentId = preAssignmentId?.id;
+    if (claimId !== '(dry-run)' && preAssignmentId) {
+      try {
+        createAssignment({
+          id: preAssignmentId.id,
+          short_label: preAssignmentId.short_label,
+          claim_id: claimId,
+          message_id: msgResult.id,
+          plan_id: readyItem.plan.id,
+          sequence_id: analysis.sequence.id,
+          agent: targetAgent,
+          dispatcher_agent: options.dispatcherAgent,
+          dispatcher_session_id: options.sessionId,
+          scope: readyItem.item.scope_hint ?? readyItem.plan.id,
+          description: readyItem.plan.text,
+          lane: readyItem.lane,
+          worktree_path: worktreePath,
+          tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
+        }, cwd);
+        // Transition to offered (message was just sent)
+        transitionAssignment(preAssignmentId.id, 'offered', {
+          actor: options.dispatcherAgent,
+        }, cwd);
+      } catch { /* best-effort: assignment creation should not block dispatch */ }
+    }
+
     const deliveryEntry: DispatchedItem = {
       agent: targetAgent,
       plan_id: readyItem.plan.id,
@@ -768,6 +822,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       lane: readyItem.lane,
       channel: 'inbox',
       claim_id: claimId,
+      assignment_id: assignmentId,
     };
     result.delivery_plan.push(deliveryEntry);
     result.messages_sent.push(deliveryEntry);

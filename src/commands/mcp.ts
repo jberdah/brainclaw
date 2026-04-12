@@ -1075,6 +1075,37 @@ const MCP_WRITE_TOOLS = [
       required: ['intent', 'task'],
     },
   },
+  {
+    name: 'bclaw_assignment_update',
+    description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignment_id: { type: 'string', description: 'Assignment ID from the dispatch brief (asgn_xxx).' },
+        status: { type: 'string', enum: ['accepted', 'started', 'progress', 'completed', 'failed', 'blocked'], description: 'Lifecycle status to report.' },
+        message: { type: 'string', description: 'Human-readable status message or progress note.' },
+        artifacts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', description: 'Artifact type: commit, branch, file, pr, test_result.' },
+              ref: { type: 'string', description: 'Reference: SHA, branch name, file path, PR URL.' },
+              description: { type: 'string', description: 'Optional description.' },
+            },
+            required: ['type', 'ref'],
+          },
+          description: 'Artifacts produced. Most useful for completed status.',
+        },
+        error_message: { type: 'string', description: 'Error details (for failed status).' },
+        blocker: { type: 'string', description: 'Blocker description (for blocked status).' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['assignment_id', 'status'],
+    },
+  },
 ] as const;
 
 const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
@@ -3069,6 +3100,83 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           }),
         };
       } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_assignment_update') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const assignmentId = typeof args.assignment_id === 'string' ? args.assignment_id : undefined;
+        const status = typeof args.status === 'string' ? args.status : undefined;
+        if (!assignmentId) return { response: createToolErrorResponse('input_error', 'assignment_id is required') };
+        if (!status) return { response: createToolErrorResponse('input_error', 'status is required') };
+        const message = args.message as string | undefined;
+        const errorMessage = args.error_message as string | undefined;
+        const blocker = args.blocker as string | undefined;
+        const artifacts = Array.isArray(args.artifacts) ? args.artifacts as Array<{ type: string; ref: string; description?: string }> : undefined;
+
+        const { loadAssignment, transitionAssignment: transitionAsgn, recordProgress: recordProg } = await import('../core/assignments.js');
+
+        const assignment = loadAssignment(assignmentId, cwd);
+        if (!assignment) {
+          return { response: createToolErrorResponse('not_found', `Assignment not found: ${assignmentId}`) };
+        }
+
+        // Agent guard: only the assigned agent can update
+        const callerAgent = resolved.identity!.agent_name;
+        if (assignment.agent !== callerAgent) {
+          return { response: createToolErrorResponse('trust_error', `Agent ${callerAgent} cannot update assignment owned by ${assignment.agent}`) };
+        }
+
+        if (status === 'progress') {
+          const updated = recordProg(assignmentId, {
+            message,
+            artifacts,
+            actor: callerAgent,
+            actor_id: resolved.identity!.agent_id,
+            session_id: connectionSessionId,
+          }, cwd);
+          return {
+            response: {
+              content: [{ type: 'text', text: `Assignment ${assignmentId} heartbeat recorded` }],
+              structuredContent: { assignment_id: assignmentId, status: updated.status, last_heartbeat_at: updated.last_heartbeat_at },
+            },
+          };
+        }
+
+        // Map status to FSM transition
+        const statusReason = status === 'failed' ? errorMessage
+          : status === 'blocked' ? blocker
+          : message;
+
+        const result = transitionAsgn(assignmentId, status as import('../core/schema.js').AssignmentStatus, {
+          session_id: connectionSessionId,
+          status_reason: statusReason,
+          artifacts,
+          error_message: errorMessage,
+          actor: callerAgent,
+          actor_id: resolved.identity!.agent_id,
+        }, cwd);
+
+        return {
+          response: {
+            content: [{ type: 'text', text: `Assignment ${assignmentId} updated: ${result.previous_status} → ${status}` }],
+            structuredContent: {
+              assignment_id: assignmentId,
+              status,
+              previous_status: result.previous_status,
+              ...(result.assignment.accepted_at && { accepted_at: result.assignment.accepted_at }),
+              ...(result.assignment.started_at && { started_at: result.assignment.started_at }),
+              ...(result.assignment.completed_at && { completed_at: result.assignment.completed_at }),
+              last_heartbeat_at: result.assignment.last_heartbeat_at,
+            },
+          },
+        };
+      } catch (err) {
         return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
       }
     }

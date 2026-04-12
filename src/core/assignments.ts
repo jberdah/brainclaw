@@ -233,6 +233,10 @@ export function recordProgress(
 // ── Assignment Creation (called by dispatcher) ───────────────
 
 export interface CreateAssignmentOptions {
+  /** Pre-generated ID (from generateAssignmentId). Auto-generated if omitted. */
+  id?: string;
+  /** Pre-generated short label. Auto-generated if omitted. */
+  short_label?: string;
   claim_id: string;
   message_id?: string;
   plan_id?: string;
@@ -257,7 +261,9 @@ export interface CreateAssignmentOptions {
  * and sending an inbox message.
  */
 export function createAssignment(options: CreateAssignmentOptions, cwd?: string): Assignment {
-  const { id, short_label } = generateAssignmentId(cwd);
+  const generated = options.id ? undefined : generateAssignmentId(cwd);
+  const id = options.id ?? generated!.id;
+  const short_label = options.short_label ?? generated!.short_label;
 
   const assignment: Assignment = AssignmentSchema.parse({
     schema_version: 1,
