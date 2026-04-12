@@ -35,7 +35,7 @@
  */
 import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
-import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim } from './claims.js';
+import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -44,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
-import { createAssignment, transitionAssignment, generateAssignmentId } from './assignments.js';
+import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { sweepAssignments } from './assignment-sweeper.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 import { generateId, nowISO } from './ids.js';
@@ -709,43 +709,19 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       }
     }
 
-    // Pre-generate assignment ID so it can be included in the brief
-    const preAssignmentId = claimId !== '(dry-run)' ? generateAssignmentId(cwd) : undefined;
-
-    // Generate brief with pre-created claim_id, worktree path, and assignment_id
-    const briefMode = resolveBriefMode(targetAgent);
-    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, {
-      claimId,
-      worktreePath,
-      assignmentId: preAssignmentId?.id,
-    });
-
-    // Build invoke command (if agent is CLI-spawnable)
-    const invokeCmd = buildInvokeCommand(targetAgent, brief);
-    if (invokeCmd) {
-      // Include BRAINCLAW_CLAIM_ID in the displayed command so copy-paste works
-      const cmdPrefix = buildEnvPrefix(claimId);
-      result.commands.push({
-        agent: targetAgent,
-        lane: readyItem.lane,
-        command: `${cmdPrefix}${invokeCmd.bashCommand}`,
-        shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh'),
-      });
-    }
-
+    // --- Dry-run path: skip assignment creation and message sending ---
     if (options.dryRun) {
-      const deliveryEntry: DispatchedItem = {
-        agent: targetAgent,
-        plan_id: readyItem.plan.id,
-        message_id: '(dry-run)',
-        lane: readyItem.lane,
-        channel: 'inbox',
-        claim_id: claimId,
-      };
+      const briefMode = resolveBriefMode(targetAgent);
+      const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath });
+      const invokeCmd = buildInvokeCommand(targetAgent, brief);
+      if (invokeCmd) {
+        const cmdPrefix = buildEnvPrefix(claimId);
+        result.commands.push({ agent: targetAgent, lane: readyItem.lane, command: `${cmdPrefix}${invokeCmd.bashCommand}`, shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh') });
+      }
+      const deliveryEntry: DispatchedItem = { agent: targetAgent, plan_id: readyItem.plan.id, message_id: '(dry-run)', lane: readyItem.lane, channel: 'inbox', claim_id: claimId };
       result.delivery_plan.push(deliveryEntry);
       result.messages_sent.push(deliveryEntry);
       assigned++;
-      // Multi-slot: track dry-run assignments and remove only at capacity
       cycleAssignments.set(targetAgent, (cycleAssignments.get(targetAgent) ?? 0) + 1);
       const dryExisting = allActiveClaims.filter(c => c.agent === targetAgent).length;
       const dryCycle = cycleAssignments.get(targetAgent) ?? 0;
@@ -757,7 +733,54 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       continue;
     }
 
-    // Send assignment message (always — serves as audit trail)
+    // --- Live path: create assignment FIRST, then brief, then message ---
+
+    // Step 1: Create Assignment entity (Agent SDK runtime protocol)
+    let assignmentId: string | undefined;
+    try {
+      const preId = generateAssignmentId(cwd);
+      const assignment = createAssignment({
+        id: preId.id,
+        short_label: preId.short_label,
+        claim_id: claimId,
+        plan_id: readyItem.plan.id,
+        sequence_id: analysis.sequence.id,
+        agent: targetAgent,
+        dispatcher_agent: options.dispatcherAgent,
+        dispatcher_session_id: options.sessionId,
+        scope: readyItem.item.scope_hint ?? readyItem.plan.id,
+        description: readyItem.plan.text,
+        lane: readyItem.lane,
+        worktree_path: worktreePath,
+        tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
+      }, cwd);
+      assignmentId = assignment.id;
+    } catch (err) {
+      result.warnings.push(`Assignment creation failed for ${readyItem.plan.id}: ${err instanceof Error ? err.message : String(err)}`);
+      // Continue without assignment — brief will use legacy protocol
+    }
+
+    // Step 2: Generate brief (includes assignment_id only if creation succeeded)
+    const briefMode = resolveBriefMode(targetAgent);
+    const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, {
+      claimId,
+      worktreePath,
+      assignmentId, // undefined if creation failed → legacy protocol in brief
+    });
+
+    // Step 3: Build invoke command
+    const invokeCmd = buildInvokeCommand(targetAgent, brief);
+    if (invokeCmd) {
+      const cmdPrefix = buildEnvPrefix(claimId);
+      result.commands.push({
+        agent: targetAgent,
+        lane: readyItem.lane,
+        command: `${cmdPrefix}${invokeCmd.bashCommand}`,
+        shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh'),
+      });
+    }
+
+    // Step 4: Send assignment message with assignment_id in payload
     const msgResult = sendMessage({
       from: options.dispatcherAgent,
       to: targetAgent,
@@ -773,6 +796,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         priority: readyItem.plan.priority,
         claim_id: claimId,
         worktree_path: worktreePath,
+        ...(assignmentId ? { assignment_id: assignmentId } : {}),
       },
       scope: readyItem.item.scope_hint,
       requires_ack: true,
@@ -782,37 +806,21 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
       session_id: options.sessionId,
     }, cwd);
 
-    // Attach message ID to the claim for tracing (claim→message→instance)
+    // Step 5: Link claim → message and claim → assignment
     if (claimId !== '(dry-run)') {
       try { attachAssignmentMessageToClaim(claimId, msgResult.id, cwd); } catch { /* best-effort */ }
+      if (assignmentId) {
+        try { linkClaimToAssignment(claimId, assignmentId, cwd); } catch { /* best-effort */ }
+      }
     }
 
-    // Create Assignment entity (Agent SDK runtime protocol)
-    // Uses pre-generated ID so the brief already contains the assignment_id
-    const assignmentId = preAssignmentId?.id;
-    if (claimId !== '(dry-run)' && preAssignmentId) {
+    // Step 6: Transition assignment to offered + attach message_id
+    if (assignmentId) {
       try {
-        createAssignment({
-          id: preAssignmentId.id,
-          short_label: preAssignmentId.short_label,
-          claim_id: claimId,
-          message_id: msgResult.id,
-          plan_id: readyItem.plan.id,
-          sequence_id: analysis.sequence.id,
-          agent: targetAgent,
-          dispatcher_agent: options.dispatcherAgent,
-          dispatcher_session_id: options.sessionId,
-          scope: readyItem.item.scope_hint ?? readyItem.plan.id,
-          description: readyItem.plan.text,
-          lane: readyItem.lane,
-          worktree_path: worktreePath,
-          tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
-        }, cwd);
-        // Transition to offered (message was just sent)
-        transitionAssignment(preAssignmentId.id, 'offered', {
-          actor: options.dispatcherAgent,
-        }, cwd);
-      } catch { /* best-effort: assignment creation should not block dispatch */ }
+        transitionAssignment(assignmentId, 'offered', { actor: options.dispatcherAgent }, cwd);
+        // Attach message_id to the assignment (wasn't available at creation time)
+        patchAssignmentMessageId(assignmentId, msgResult.id, cwd);
+      } catch { /* best-effort */ }
     }
 
     const deliveryEntry: DispatchedItem = {

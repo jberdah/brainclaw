@@ -306,6 +306,16 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
   return assignment;
 }
 
+// ── Post-creation patches ────────────────────────────────────
+
+/** Attach the inbox message_id after the message has been sent (message is created after assignment). */
+export function patchAssignmentMessageId(id: string, messageId: string, cwd?: string): void {
+  const assignment = loadAssignment(id, cwd);
+  if (!assignment) return;
+  assignment.message_id = messageId;
+  saveAssignment(assignment, cwd);
+}
+
 // ── Event Emission ───────────────────────────────────────────
 
 function emitAssignmentEvent(

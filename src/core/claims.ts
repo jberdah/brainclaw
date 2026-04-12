@@ -404,6 +404,13 @@ export function attachAssignmentMessageToClaim(claimId: string, messageId: strin
   saveClaim(claim, cwd);
 }
 
+/** Link a claim to its Assignment entity (Agent SDK runtime protocol). */
+export function linkClaimToAssignment(claimId: string, assignmentId: string, cwd?: string): void {
+  const claim = loadClaim(claimId, cwd);
+  claim.assignment_id = assignmentId;
+  saveClaim(claim, cwd);
+}
+
 /**
  * Adopt a claim from a spawned instance's session.
  * Sets session_id + adopted_at on the claim. Refuses if the claim is already

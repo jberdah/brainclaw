@@ -3105,6 +3105,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     }
 
     if (name === 'bclaw_assignment_update') {
+      // Contributor trust: lowest dispatchable level. The agent-owner guard
+      // below ensures only the assigned agent can update its own assignment.
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -3161,6 +3163,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           actor: callerAgent,
           actor_id: resolved.identity!.agent_id,
         }, cwd);
+
+        // When accepted: auto-acknowledge the inbox message (replaces bclaw_ack_message)
+        if (status === 'accepted' && assignment.message_id) {
+          try {
+            const { ackMessage } = await import('../core/messaging.js');
+            ackMessage(assignment.message_id, callerAgent, cwd);
+          } catch { /* best-effort: don't fail the update if ack fails */ }
+        }
 
         return {
           response: {

@@ -1,8 +1,8 @@
 /**
  * Assignment timeout sweeper — detects stuck/expired assignments.
  *
- * Runs opportunistically (no daemon): integrated into dispatch(),
- * session_start(), and available as CLI `brainclaw sweep`.
+ * Runs opportunistically (no daemon): integrated into dispatch().
+ * Future: integrate into session_start() and expose as CLI `brainclaw sweep`.
  *
  * @module
  */
