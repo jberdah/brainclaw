@@ -135,12 +135,14 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
     max_concurrent_tasks: 3,
-    prompt_delivery: { methods: ['temp_file', 'inline_arg', 'inbox_structured'], preferred: 'temp_file', max_inline_length: 4000 },
+    // Claude CLI: -p is a flag (print mode), prompt is positional or via stdin.
+    // Use stdin_pipe to avoid shell quoting issues with long prompts.
+    prompt_delivery: { methods: ['stdin_pipe', 'inline_arg', 'inbox_structured'], preferred: 'stdin_pipe', max_inline_length: 4000 },
     execution_env: { surface: 'cli' },
-    invoke_template: 'claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
+    invoke_template: 'claude -p --allowedTools "Edit,Write,Bash,Read,Glob,Grep" {prompt}',
     invoke_binary: 'claude',
-    invoke_review_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
-    invoke_consult_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
+    invoke_review_template: 'claude -p --allowedTools "Read,Glob,Grep" {prompt}',
+    invoke_consult_template: 'claude -p --allowedTools "Read,Glob,Grep" {prompt}',
   },
   'claude-sonnet': {
     name: 'claude-sonnet', category: 'code-agent', workflowModel: 'interactive',
@@ -149,12 +151,12 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
     max_concurrent_tasks: 6,
-    prompt_delivery: { methods: ['temp_file', 'inline_arg', 'inbox_structured'], preferred: 'temp_file', max_inline_length: 4000 },
+    prompt_delivery: { methods: ['stdin_pipe', 'inline_arg', 'inbox_structured'], preferred: 'stdin_pipe', max_inline_length: 4000 },
     execution_env: { surface: 'cli' },
-    invoke_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
+    invoke_template: 'claude --model sonnet -p --allowedTools "Edit,Write,Bash,Read,Glob,Grep" {prompt}',
     invoke_binary: 'claude',
-    invoke_review_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Read,Glob,Grep"',
-    invoke_consult_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Read,Glob,Grep"',
+    invoke_review_template: 'claude --model sonnet -p --allowedTools "Read,Glob,Grep" {prompt}',
+    invoke_consult_template: 'claude --model sonnet -p --allowedTools "Read,Glob,Grep" {prompt}',
   },
   cursor: {
     name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
@@ -607,7 +609,8 @@ export function buildInvokeCommand(
   // ── 5. Build the args array ───────────────────────────────────────────────
   // The args are the interpolated values; they are passed to execFile/spawn
   // without further shell quoting. The bashCommand is built separately.
-  const args = interpolatedTokens;
+  // Filter out empty strings from stdin_pipe delivery where {prompt} resolves to ''.
+  const args = interpolatedTokens.filter((tok) => tok !== '');
 
   // ── 6. Build the platform-aware bashCommand string ───────────────────────
   //
