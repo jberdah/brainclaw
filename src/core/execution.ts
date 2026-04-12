@@ -186,14 +186,22 @@ export function executeDispatchedCommand(
   const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
   const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
 
-  // Always use direct mode (shell: false) — the args are pre-interpolated
+  // On Windows, spawn with shell:false cannot resolve PATH-installed binaries
+  // (e.g. npm-installed CLIs like claude). Use shell:true on Windows to let
+  // cmd.exe resolve the executable, while keeping shell:false on POSIX for
+  // cleaner process trees.
   const child = spawn(invoke.executable, invoke.args, {
-    detached: true,
+    detached: !isWin32, // detached is unreliable on Windows with shell:true
+    shell: isWin32,
     stdio,
     cwd: options.worktreePath,
     env,
     windowsHide: true,
   });
+
+  // Catch async spawn errors (e.g. ENOENT when binary not in PATH) to prevent
+  // unhandled 'error' events from crashing the coordinator process.
+  child.on('error', () => { /* swallowed — attemptExecution caller already handles failure */ });
 
   // For stdin_pipe delivery, write the prompt to stdin then close
   if (needsStdin && child.stdin) {
