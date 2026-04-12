@@ -643,11 +643,16 @@ export const AssignmentSchema = z.object({
 
   // Timestamps
   created_at: z.string(),
+  updated_at: z.string().optional(),
   offered_at: z.string().optional(),
   accepted_at: z.string().optional(),
   started_at: z.string().optional(),
   completed_at: z.string().optional(),
   failed_at: z.string().optional(),
+  blocked_at: z.string().optional(),
+  timed_out_at: z.string().optional(),
+  expired_at: z.string().optional(),
+  rerouted_at: z.string().optional(),
   last_heartbeat_at: z.string().optional(),
 
   // Result

@@ -129,10 +129,15 @@ export interface TransitionOptions {
 export interface TransitionResult {
   assignment: Assignment;
   previous_status: AssignmentStatus;
+  /** True when the transition was a same-status no-op (idempotent retry). */
+  idempotent?: boolean;
 }
 
 /**
  * Transition an assignment to a new status with FSM validation.
+ * Same-status transitions are idempotent no-ops (returns current state
+ * with idempotent=true instead of throwing). This handles network retries
+ * where a worker calls accepted/started again after a timeout.
  * Updates relevant timestamps, emits event and audit entry.
  */
 export function transitionAssignment(
@@ -146,6 +151,15 @@ export function transitionAssignment(
     throw new Error(`Assignment not found: ${id}`);
   }
 
+  // Idempotent: same-status transition is a no-op (handles network retries)
+  if (assignment.status === newStatus) {
+    // Still update heartbeat for liveness tracking
+    assignment.last_heartbeat_at = nowISO();
+    assignment.updated_at = assignment.last_heartbeat_at;
+    saveAssignment(assignment, cwd);
+    return { assignment, previous_status: newStatus, idempotent: true };
+  }
+
   const validation = validateTransition(assignment.status, newStatus);
   if (!validation.valid) {
     throw new Error(validation.reason);
@@ -156,6 +170,7 @@ export function transitionAssignment(
 
   // Update status
   assignment.status = newStatus;
+  assignment.updated_at = now;
   assignment.last_heartbeat_at = now;
   if (options.status_reason) assignment.status_reason = options.status_reason;
   if (options.session_id) assignment.session_id = options.session_id;
@@ -171,6 +186,10 @@ export function transitionAssignment(
     case 'started':   assignment.started_at = now; break;
     case 'completed': assignment.completed_at = now; break;
     case 'failed':    assignment.failed_at = now; break;
+    case 'blocked':   assignment.blocked_at = now; break;
+    case 'timed_out': assignment.timed_out_at = now; break;
+    case 'expired':   assignment.expired_at = now; break;
+    case 'rerouted':  assignment.rerouted_at = now; break;
   }
 
   saveAssignment(assignment, cwd);
@@ -218,7 +237,9 @@ export function recordProgress(
     throw new Error(`Cannot record progress: assignment ${id} is ${assignment.status}, expected started`);
   }
 
-  assignment.last_heartbeat_at = nowISO();
+  const now = nowISO();
+  assignment.last_heartbeat_at = now;
+  assignment.updated_at = now;
   if (options.message) assignment.status_reason = options.message;
   if (options.artifacts?.length) {
     assignment.artifacts = [...assignment.artifacts, ...options.artifacts];
