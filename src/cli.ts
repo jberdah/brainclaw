@@ -95,7 +95,6 @@ import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
-import { runCodev, runCodevMetrics } from './commands/codev.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
@@ -104,6 +103,10 @@ const program = new Command();
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function isCodevEnabled(): boolean {
+  return process.env.BRAINCLAW_ENABLE_CODEV === '1';
 }
 
 program
@@ -1717,40 +1720,44 @@ federationCmd
     }
   });
 
-// --- codev ---
-program
-  .command('codev [topic]')
-  .description('Multi-perspective ideation session using persona-based consultation')
-  .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
-  .option('--checkpoint', 'Pause after clarification for human input')
-  .option('--spawn', 'Spawn each consultant as an agent CLI instance')
-  .option('--fresh', 'Clear cached responses before starting a new run')
-  .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
-  .option('--rounds <N>', 'Number of discussion rounds in spawn mode (default 3, min 2)', '3')
-  .option('--target-duration <seconds>', 'Target duration per round indicated to agents (default 120)', '120')
-  .option('--quorum <N>', 'Advance to next round after N agent responses (default: all)')
-  .option('--model-map <map>', 'Per-persona model overrides, e.g. simplificateur:sonnet,stratege:opus')
-  .option('--metrics', 'Display response timing metrics at end of session')
-  .option('--json', 'Output as JSON')
-  .action((topic, options) => {
-    const globalOpts = program.opts();
-    runCodev(topic, {
-      ...options,
-      rounds: parseInt(options.rounds, 10),
-      targetDuration: parseInt(options.targetDuration, 10),
-      quorum: options.quorum != null ? parseInt(options.quorum, 10) : undefined,
-      cwd: globalOpts.cwd,
+// --- codev (legacy experimental) ---
+if (isCodevEnabled()) {
+  program
+    .command('codev [topic]')
+    .description('Experimental legacy ideation session using persona-based consultation')
+    .option('--personas <tier>', 'Persona tier: tier1 (default), tier2, or list', 'tier1')
+    .option('--checkpoint', 'Pause after clarification for human input')
+    .option('--spawn', 'Spawn each consultant as an agent CLI instance')
+    .option('--fresh', 'Clear cached responses before starting a new run')
+    .option('--agents <list>', 'Comma-separated agent names for spawn (e.g. claude-code,codex,antigravity). Default: auto-detect')
+    .option('--rounds <N>', 'Number of discussion rounds in spawn mode (default 3, min 2)', '3')
+    .option('--target-duration <seconds>', 'Target duration per round indicated to agents (default 120)', '120')
+    .option('--quorum <N>', 'Advance to next round after N agent responses (default: all)')
+    .option('--model-map <map>', 'Per-persona model overrides, e.g. simplificateur:sonnet,stratege:opus')
+    .option('--metrics', 'Display response timing metrics at end of session')
+    .option('--json', 'Output as JSON')
+    .action(async (topic, options) => {
+      const globalOpts = program.opts();
+      const { runCodev } = await import('./commands/codev.js');
+      runCodev(topic, {
+        ...options,
+        rounds: parseInt(options.rounds, 10),
+        targetDuration: parseInt(options.targetDuration, 10),
+        quorum: options.quorum != null ? parseInt(options.quorum, 10) : undefined,
+        cwd: globalOpts.cwd,
+      });
     });
-  });
 
-program
-  .command('codev-metrics <thread>')
-  .description('Show per-agent avg/p95 response metrics for a CoDev thread')
-  .option('--json', 'Output as JSON')
-  .action((thread, options) => {
-    const globalOpts = program.opts();
-    runCodevMetrics(thread, { ...options, cwd: globalOpts.cwd });
-  });
+  program
+    .command('codev-metrics <thread>')
+    .description('Show per-agent avg/p95 response metrics for an experimental CoDev thread')
+    .option('--json', 'Output as JSON')
+    .action(async (thread, options) => {
+      const globalOpts = program.opts();
+      const { runCodevMetrics } = await import('./commands/codev.js');
+      runCodevMetrics(thread, { ...options, cwd: globalOpts.cwd });
+    });
+}
 
 // --- run (agent profiles) ---
 program

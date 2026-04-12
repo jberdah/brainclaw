@@ -796,6 +796,8 @@ For capable agents, prefer the MCP plan and claim tools for live runtime interac
 
 ### `brainclaw codev [topic]`
 
+Experimental legacy command. Hidden from the default CLI surface and only registered when `BRAINCLAW_ENABLE_CODEV=1` is set.
+
 Multi-perspective ideation session using persona-based group discussion.
 
 | Option | Description |
@@ -830,6 +832,8 @@ brainclaw codev --personas list
 ```
 
 ### `brainclaw codev-metrics <thread>`
+
+Experimental legacy command. Hidden from the default CLI surface and only registered when `BRAINCLAW_ENABLE_CODEV=1` is set.
 
 Show per-agent average and p95 response time metrics for a CoDev thread. Useful for diagnosing slow agents or comparing model performance across a multi-agent discussion.
 

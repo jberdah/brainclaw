@@ -150,6 +150,20 @@ describe('brainclaw CLI', () => {
     cleanupTestEnv({ dir, envBackup });
   });
 
+  it('hides legacy codev commands from default help', () => {
+    const res = run(['--help'], dir);
+    assert.equal(res.exitCode, 0);
+    assert.ok(!res.stdout.includes('codev'), `expected default help to hide codev, got: ${res.stdout}`);
+    assert.ok(!res.stdout.includes('codev-metrics'), `expected default help to hide codev-metrics, got: ${res.stdout}`);
+  });
+
+  it('exposes legacy codev commands when BRAINCLAW_ENABLE_CODEV=1', () => {
+    const res = run(['--help'], dir, { BRAINCLAW_ENABLE_CODEV: '1' });
+    assert.equal(res.exitCode, 0);
+    assert.ok(res.stdout.includes('codev [options] [topic]'), `expected experimental help to include codev, got: ${res.stdout}`);
+    assert.ok(res.stdout.includes('codev-metrics [options] <thread>'), `expected experimental help to include codev-metrics, got: ${res.stdout}`);
+  });
+
   describe('init', () => {
     it('reports the installed CLI version from package metadata', () => {
       const res = run(['--version'], dir);
