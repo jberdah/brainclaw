@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { clearCurrentSession, loadCurrentSession } from '../../src/core/identity.js';
-import { runSessionEnd } from '../../src/commands/session-end.js';
+import { endSession, runSessionEnd } from '../../src/commands/session-end.js';
 import { loadSessionSnapshot, runSessionStart, startSession } from '../../src/commands/session-start.js';
 import { listCandidates, saveCandidate } from '../../src/core/candidates.js';
+import { saveClaim } from '../../src/core/claims.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
-import { saveState } from '../../src/core/state.js';
+import { loadState, saveState } from '../../src/core/state.js';
 import { appendAuditEntry } from '../../src/core/audit.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -282,6 +283,94 @@ describe('session commands', { concurrency: false }, () => {
     const result = startSession({ cwd: workspace.dir, maintenanceMode: 'full' });
     assert.equal(result.memory_pressure?.memory_pressure, true);
     assert.equal(result.memory_pressure?.done_plans, 50);
+  });
+
+  it('materializes a reflected handoff and auto-dispatches review when requested', () => {
+    const previousSession = process.env.BRAINCLAW_SESSION_ID;
+    process.env.BRAINCLAW_SESSION_ID = 'sess_review_loop';
+    try {
+      workspace.registerAgent('codex');
+      initGitRepo(workspace.dir);
+      fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 1;\n', 'utf-8');
+      git(['add', '-A'], workspace.dir);
+      git(['commit', '-m', 'init'], workspace.dir);
+
+      saveState({
+        version: 1,
+        write_version: 1,
+        active_constraints: [],
+        recent_decisions: [],
+        known_traps: [],
+        open_handoffs: [],
+        plan_items: [{
+          id: 'pln_review_loop',
+          text: 'Implement the review loop handoff',
+          status: 'done',
+          priority: 'high',
+          type: 'feat',
+          created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+          updated_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          completed_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+          author: workspace.currentAgent.agent_name,
+          tags: ['review-loop'],
+          depends_on: [],
+        }],
+      }, workspace.dir);
+      saveClaim({
+        schema_version: 2,
+        id: 'clm_review_loop',
+        agent: workspace.currentAgent.agent_name,
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'tracked.ts',
+        description: 'Completed the review loop slice',
+        created_at: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+        released_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        plan_id: 'pln_review_loop',
+        status: 'released',
+      }, workspace.dir);
+
+      captureLogs(() => {
+        runSessionStart({ cwd: workspace.dir });
+      });
+
+      fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 2;\n', 'utf-8');
+      git(['add', 'tracked.ts'], workspace.dir);
+      git(['commit', '-m', 'feat: update tracked value'], workspace.dir);
+
+      const result = endSession({
+        session: 'sess_review_loop',
+        reflectHandoff: true,
+        dispatchReview: true,
+        reviewer: 'codex',
+        cwd: workspace.dir,
+      });
+
+      assert.ok(result.handoff);
+      assert.equal(result.handoff?.plan_id, 'pln_review_loop');
+      assert.equal(result.handoff?.review_dispatched, true);
+      assert.equal(result.handoff?.reviewer, 'codex');
+
+      const state = loadState(workspace.dir);
+      assert.equal(state.open_handoffs.length, 1);
+      assert.equal(state.open_handoffs[0]?.plan_id, 'pln_review_loop');
+      assert.equal(state.open_handoffs[0]?.to, 'codex');
+      assert.ok(state.open_handoffs[0]?.text.includes('feat: update tracked value'));
+      assert.ok(state.open_handoffs[0]?.contract?.linked_plans?.includes('pln_review_loop'));
+
+      const inboxDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'inbox', 'codex');
+      const [reviewFile] = fs.readdirSync(inboxDir).filter((file) => file.endsWith('.json'));
+      assert.ok(reviewFile);
+      const reviewMessage = JSON.parse(fs.readFileSync(path.join(inboxDir, reviewFile), 'utf-8')) as { type: string; ref: string; text: string };
+      assert.equal(reviewMessage.type, 'review');
+      assert.equal(reviewMessage.ref, result.handoff?.handoff_id);
+      assert.ok(reviewMessage.text.includes('Code Review Request'));
+    } finally {
+      if (previousSession === undefined) {
+        delete process.env.BRAINCLAW_SESSION_ID;
+      } else {
+        process.env.BRAINCLAW_SESSION_ID = previousSession;
+      }
+    }
   });
 
   it('only clears the active implicit session when the ended session matches it', () => {

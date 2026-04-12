@@ -5,7 +5,7 @@ import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.
 import { buildContextDiff } from '../core/context-diff.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
 import { listRuntimeNotes, saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
-import { loadState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
 import { createFederationMessage } from '../core/federation-message.js';
 import { pushSignal } from '../core/federation-transport.js';
@@ -13,12 +13,13 @@ import { loadConfig } from '../core/config.js';
 import { resolveCrossProjectLinks, type ResolvedCrossProjectLink } from '../core/cross-project.js';
 import { createCandidateFromInput } from './reflect.js';
 import { suggestCandidateTypes } from './reflect-runtime-note.js';
-import { nowISO } from '../core/ids.js';
+import { generateIdWithLabel, nowISO } from '../core/ids.js';
 import { appendAuditEntry, readAuditLog, type AuditAction, type AuditEntry } from '../core/audit.js';
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
 import { extractFilesFromDiff } from '../commands/handoff.js';
 import { suggestCompaction } from '../core/memory-compactor.js';
+import { dispatchReview } from '../core/dispatcher.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -30,6 +31,8 @@ export interface SessionEndOptions {
   autoReflect?: boolean;
   autoRelease?: boolean;
   reflectHandoff?: boolean;
+  dispatchReview?: boolean;
+  reviewer?: string;
   /** Include structured reflection questions in the result for the agent to answer. */
   reflect?: boolean;
   json?: boolean;
@@ -58,6 +61,14 @@ export interface SessionEndResult {
   };
   /** Hint about memory compaction opportunities. */
   compaction_hint?: string;
+  handoff?: {
+    handoff_id: string;
+    plan_id?: string;
+    review_dispatched: boolean;
+    reviewer?: string;
+    review_message_id?: string;
+    review_skip_reason?: string;
+  };
 }
 
 export interface OpenWorkWarning {
@@ -75,6 +86,11 @@ export interface SessionStatsSummary {
   candidates_created: number;
   last_brainclaw_write?: string;
   warnings: string[];
+}
+
+interface MaterializedSessionHandoff {
+  handoff_id: string;
+  plan_id?: string;
 }
 
 export function runSessionEnd(options: SessionEndOptions = {}): void {
@@ -106,6 +122,14 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
     console.log(`  Runtime notes in session: ${result.notes_in_session}`);
     if (options.autoReflect) {
       console.log(`  Candidates created from auto-reflect: ${result.candidates_created}`);
+    }
+    if (result.handoff) {
+      console.log(`  Reflected handoff: ${result.handoff.handoff_id}${result.handoff.plan_id ? ` (${result.handoff.plan_id})` : ''}`);
+      if (result.handoff.review_dispatched) {
+        console.log(`  Review dispatched: ${result.handoff.reviewer}${result.handoff.review_message_id ? ` [${result.handoff.review_message_id}]` : ''}`);
+      } else if (result.handoff.review_skip_reason) {
+        console.log(`  Review not dispatched: ${result.handoff.review_skip_reason}`);
+      }
     }
     if (result.context_diff) {
       console.log(`  ${result.context_diff}`);
@@ -216,7 +240,8 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     note_type: 'session_end',
   }, options.cwd);
 
-  // Reflect-handoff: generate a handoff candidate from git commits since session start
+  // Reflect-handoff: materialize an open handoff from git commits since session start
+  let reflectedHandoff: SessionEndResult['handoff'];
   if (options.reflectHandoff) {
     try {
       const snapshot = loadSessionSnapshot(sessionId, options.cwd);
@@ -234,13 +259,15 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
 
         // Extract files touched from the full diff for the contract
         let filesTouched: string[] = [];
+        let fullDiff: string | undefined;
         try {
-          const fullDiff = execSync(`git diff ${ref}..HEAD`, { encoding: 'utf-8', cwd, maxBuffer: 10 * 1024 * 1024 }).trim();
+          fullDiff = execSync(`git diff ${ref}..HEAD`, { encoding: 'utf-8', cwd, maxBuffer: 10 * 1024 * 1024 }).trim();
           filesTouched = extractFilesFromDiff(fullDiff);
         } catch { /* fall back to empty */ }
 
         // Extract linked plan IDs from released claims
         const linkedPlans = [...new Set(releasedClaims.map((c) => c.plan_id).filter(Boolean) as string[])];
+        const primaryPlanId = linkedPlans.length === 1 ? linkedPlans[0] : undefined;
 
         // Build contract metadata for the handoff text
         const contractLines: string[] = [];
@@ -258,13 +285,48 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
           summaryText !== `Session ended — ${sessionNotes.length} runtime note(s) created` ? `\nSummary: ${summaryText}` : '',
         ].filter(Boolean).join('\n');
 
-        createCandidateFromInput(handoffText, 'handoff', {
+        const narrativeParts = [
+          options.narrative?.trim(),
+          summaryText !== `Session ended — ${sessionNotes.length} runtime note(s) created` ? summaryText : undefined,
+        ].filter((value): value is string => Boolean(value && value.trim().length > 0));
+        const materialized = materializeSessionHandoff({
           author: actor.agent,
           authorId: actor.agent_id,
           sessionId,
-          source: `session-end:git-diff:${sessionId}`,
+          text: handoffText,
+          narrative: narrativeParts.length > 0 ? narrativeParts.join('\n\n') : undefined,
+          planId: primaryPlanId,
+          linkedPlans,
+          filesTouched,
+          fullDiff,
           cwd: options.cwd,
-        }, false, false, true);
+        });
+        reflectedHandoff = {
+          handoff_id: materialized.handoff_id,
+          plan_id: materialized.plan_id,
+          review_dispatched: false,
+          review_skip_reason: options.dispatchReview ? 'Reflected handoff is not reviewable yet' : undefined,
+        };
+        if (options.dispatchReview) {
+          const reviewResult = dispatchReview({
+            handoffId: materialized.handoff_id,
+            reviewer: options.reviewer,
+            dispatcherAgent: actor.agent,
+            dispatcherAgentId: actor.agent_id,
+            sessionId,
+          }, options.cwd ?? process.cwd());
+          const sent = reviewResult.reviews_sent.find((entry) => entry.handoff_id === materialized.handoff_id);
+          const skipped = reviewResult.skipped.find((entry) => entry.handoff_id === materialized.handoff_id);
+          if (sent) {
+            reflectedHandoff.review_dispatched = true;
+            reflectedHandoff.reviewer = sent.reviewer;
+            reflectedHandoff.review_message_id = sent.message_id;
+            reflectedHandoff.review_skip_reason = undefined;
+            updateReflectedHandoffRecipient(materialized.handoff_id, sent.reviewer, options.cwd);
+          } else if (skipped) {
+            reflectedHandoff.review_skip_reason = skipped.reason;
+          }
+        }
       }
     } catch { /* non-fatal — no git or no commits */ }
   }
@@ -348,6 +410,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     open_work_warning: openWorkWarning,
     session_stats: sessionStats,
     compaction_hint: compactionHint,
+    ...(reflectedHandoff ? { handoff: reflectedHandoff } : {}),
   };
 
   if (options.reflect) {
@@ -358,6 +421,57 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
   }
 
   return result;
+}
+
+function materializeSessionHandoff(input: {
+  author: string;
+  authorId?: string;
+  sessionId: string;
+  text: string;
+  narrative?: string;
+  planId?: string;
+  linkedPlans: string[];
+  filesTouched: string[];
+  fullDiff?: string;
+  cwd?: string;
+}): MaterializedSessionHandoff {
+  const cwd = input.cwd ?? process.cwd();
+  const state = loadState(cwd);
+  const { id, short_label } = generateIdWithLabel('open_handoffs', cwd);
+  state.open_handoffs.push({
+    id,
+    short_label,
+    from: input.author,
+    to: 'reviewer',
+    text: input.text,
+    created_at: nowISO(),
+    author: input.author,
+    author_id: input.authorId,
+    session_id: input.sessionId,
+    status: 'open',
+    plan_id: input.planId,
+    narrative: input.narrative,
+    tags: ['auto-handoff', `session:${input.sessionId}`],
+    related_paths: input.filesTouched.length > 0 ? input.filesTouched : undefined,
+    contract: input.filesTouched.length > 0 || input.linkedPlans.length > 0
+      ? {
+          files_touched: input.filesTouched.length > 0 ? input.filesTouched : undefined,
+          linked_plans: input.linkedPlans.length > 0 ? input.linkedPlans : undefined,
+        }
+      : undefined,
+    snapshot: input.fullDiff ? { diff: input.fullDiff } : undefined,
+  });
+  persistState(state, cwd);
+  return { handoff_id: id, plan_id: input.planId };
+}
+
+function updateReflectedHandoffRecipient(handoffId: string, reviewer: string, cwd?: string): void {
+  const effectiveCwd = cwd ?? process.cwd();
+  const state = loadState(effectiveCwd);
+  const handoff = state.open_handoffs.find((entry) => entry.id === handoffId);
+  if (!handoff) return;
+  handoff.to = reviewer;
+  persistState(state, effectiveCwd);
 }
 
 type FederationSignalEntityType = 'candidate' | 'handoff' | 'runtime_note';

@@ -1358,12 +1358,15 @@ Mark the end of an agent work session.
 | `--summary <text>` | Summary of work done |
 | `--auto-reflect` | Automatically reflect runtime notes from the session |
 | `--auto-release` | Automatically release all claims held during the session |
-| `--reflect-handoff` | Reflect any open handoffs as candidates |
+| `--reflect-handoff` | Materialize an open handoff from git commits since session start |
+| `--dispatch-review` | When used with `--reflect-handoff`, auto-dispatch a code review if the handoff is reviewable |
+| `--reviewer <name>` | Explicit reviewer for the reflected handoff review |
 | `--json` | Output as JSON |
 
 ```bash
 brainclaw session-end --auto-release
 brainclaw session-end --session sess_42 --summary "Completed auth refactor" --auto-reflect --auto-release
+brainclaw session-end --auto-release --reflect-handoff --dispatch-review --reviewer codex
 ```
 
 ---

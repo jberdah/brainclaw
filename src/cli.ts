@@ -1173,11 +1173,21 @@ program
   .option('--summary <text>', 'Session summary text')
   .option('--auto-reflect', 'Auto-reflect session notes as pending candidates')
   .option('--auto-release', 'Auto-release any active claims at session end')
-  .option('--reflect-handoff', 'Generate a handoff candidate from git commits since session start')
+  .option('--reflect-handoff', 'Materialize an open handoff from git commits since session start')
+  .option('--dispatch-review', 'When used with --reflect-handoff, auto-dispatch a code review if the handoff is reviewable')
+  .option('--reviewer <name>', 'Explicit reviewer to route the reflected handoff review to')
   .option('--reflect', 'Include structured reflection questions for the agent to answer')
   .option('--json', 'Output as JSON')
   .action((options) => {
-    runSessionEnd({ ...options, autoReflect: options.autoReflect, autoRelease: options.autoRelease, reflectHandoff: options.reflectHandoff, reflect: options.reflect });
+    runSessionEnd({
+      ...options,
+      autoReflect: options.autoReflect,
+      autoRelease: options.autoRelease,
+      reflectHandoff: options.reflectHandoff,
+      dispatchReview: options.dispatchReview,
+      reviewer: options.reviewer,
+      reflect: options.reflect,
+    });
   });
 
 // --- whoami ---

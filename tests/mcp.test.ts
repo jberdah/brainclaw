@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import YAML from 'yaml';
 import { SCHEMA_VERSION } from '../src/commands/mcp.js';
+import { saveClaim } from '../src/core/claims.js';
 import { saveState } from '../src/core/state.js';
 import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
@@ -64,6 +65,21 @@ function extractId(stdout: string): string {
   const match = stdout.match(/\[([a-z]+_[a-f0-9]+)\]/);
   if (!match) throw new Error(`No ID found in output: ${stdout}`);
   return match[1];
+}
+
+function git(args: string[], cwd: string): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(' ')} failed`);
+  return result.stdout;
+}
+
+function initGitRepo(dir: string): void {
+  git(['init'], dir);
+  git(['config', 'user.email', 'test@example.com'], dir);
+  git(['config', 'user.name', 'Test User'], dir);
 }
 
 function enableReputation(dir: string): void {
@@ -779,6 +795,95 @@ describe('MCP server', () => {
         },
       });
       assert.equal(fastResponse.result.memory_pressure, undefined);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('bclaw_session_end can reflect a handoff and auto-dispatch review', async () => {
+    initGitRepo(dir);
+    run(['register-agent', 'codex', '--kind', 'agent'], dir);
+    fs.writeFileSync(path.join(dir, 'tracked.ts'), 'export const value = 1;\n', 'utf-8');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'init'], dir);
+
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [{
+        id: 'pln_review_loop',
+        text: 'Implement the review loop handoff',
+        status: 'done',
+        priority: 'high',
+        type: 'feat',
+        created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+        updated_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        completed_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+        author: 'testuser',
+        tags: ['review-loop'],
+        depends_on: [],
+      }],
+    }, dir);
+    saveClaim({
+      schema_version: 2,
+      id: 'clm_review_loop',
+      agent: 'testuser',
+      scope: 'tracked.ts',
+      description: 'Completed the review loop slice',
+      created_at: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+      released_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      plan_id: 'pln_review_loop',
+      status: 'released',
+    }, dir);
+
+    const proc = startMcp(dir, { BRAINCLAW_SESSION_ID: 'sess_review_loop' });
+    try {
+      await initializeMcp(proc);
+
+      await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 53,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_start',
+          arguments: {
+            agent: 'testuser',
+          },
+        },
+      });
+
+      fs.writeFileSync(path.join(dir, 'tracked.ts'), 'export const value = 2;\n', 'utf-8');
+      git(['add', 'tracked.ts'], dir);
+      git(['commit', '-m', 'feat: update tracked value'], dir);
+
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 54,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_end',
+          arguments: {
+            agent: 'testuser',
+            reflectHandoff: true,
+            dispatchReview: true,
+            reviewer: 'codex',
+          },
+        },
+      });
+
+      assert.equal(response.result.isError, false);
+      assert.ok(response.result.handoff);
+      assert.equal(response.result.handoff.plan_id, 'pln_review_loop');
+      assert.equal(response.result.handoff.review_dispatched, true);
+      assert.equal(response.result.handoff.reviewer, 'codex');
+
+      const inboxDir = path.join(dir, '.brainclaw', 'coordination', 'inbox', 'codex');
+      const reviewFiles = fs.readdirSync(inboxDir).filter((file) => file.endsWith('.json'));
+      assert.equal(reviewFiles.length, 1);
     } finally {
       await stopMcp(proc);
     }

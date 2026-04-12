@@ -1063,7 +1063,7 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
     ? 'npx brainclaw'
     : `"${mcpCmd.command.replace(/\\/g, '/')}"`;
   const sessionCommand = `f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; ${bclawBin} session-start --include-context 2>/dev/null; else ${bclawBin} context-diff 2>/dev/null; fi`;
-  const stopCommand = `rm -f .claude/.bclaw-session; ${bclawBin} session-end --auto-release --reflect --reflect-handoff 2>/dev/null`;
+  const stopCommand = `rm -f .claude/.bclaw-session; ${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
 
   // Legacy commands to replace on upgrade (substring patterns to match old hooks)
   const legacyPatterns = [
