@@ -313,6 +313,8 @@ describe('MCP server', () => {
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_plans'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_claims'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_accept'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_reject'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_read_inbox'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_quick_capture'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_switch'));

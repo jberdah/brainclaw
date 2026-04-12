@@ -292,7 +292,7 @@ function renderAvailableTools(): string {
     '**Facades:** `bclaw_work`, `bclaw_coordinate`',
     '**Execution lifecycle:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
     '**Everyday reads:** `bclaw_get_context`, `bclaw_get_execution_context`, `bclaw_get_agent_board`, `bclaw_read_inbox`, `bclaw_read_handoff`',
-    '**Planning and review:** `bclaw_list_plans`, `bclaw_list_claims`, `bclaw_list_candidates`, `bclaw_create_candidate`, `bclaw_ack_message`',
+    '**Planning and review:** `bclaw_list_plans`, `bclaw_list_claims`, `bclaw_list_candidates`, `bclaw_create_candidate`, `bclaw_accept`, `bclaw_reject`, `bclaw_ack_message`',
     '**Capture, setup, and navigation:** `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_bootstrap`, `bclaw_release_notes`, `bclaw_switch`, `bclaw_setup`',
     '',
     'Advanced and legacy tools still exist. See `docs/integrations/mcp.md` for the broader catalog; raw MCP clients can request it with `tools/list` params `{ catalog: "all" }`.',

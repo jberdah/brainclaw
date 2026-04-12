@@ -36,106 +36,95 @@ When a human operator needs the CLI equivalent of `bclaw_write_note`, use `brain
 
 ## Available Tools
 
-The default published MCP catalog is curated around facades and everyday runtime tools. Advanced tools remain callable if an agent already knows their exact names, but they are intentionally not the default discovery path. Raw MCP clients can request the full registry with `tools/list` params `{ "catalog": "all" }`.
+All 57 MCP tools are discoverable via `tools/list`. Each tool carries an `annotations` object with `tier` and `category` metadata so clients can filter or group tools without server-side hiding.
 
-This section highlights the primary runtime tools agents are expected to use most often first, then documents the broader advanced surface.
+### Tool tiers
 
-**Default published tools**:
+Every tool has one of three tiers in its `annotations.tier` field:
 
-| Tool | Purpose |
-|---|---|
-| `bclaw_work` | Facade entry point: start session + load context + optionally claim a scope in one call |
-| `bclaw_coordinate` | Multi-agent coordination facade: assign, consult, review, reroute, or summarize |
-| `bclaw_get_context` | Ranked prompt-ready context for a specific path or scope |
-| `bclaw_get_execution_context` | Inspect local execution context, installable update status, and agent tooling |
-| `bclaw_session_start` | Start an agent session explicitly when a granular workflow needs session registration |
-| `bclaw_session_end` | End a granular session cleanly, optionally reflecting notes or handoffs |
-| `bclaw_claim` | Claim a scope explicitly before editing outside the facade path |
-| `bclaw_release_claim` | Release an explicit claim when the granular workflow is done |
-| `bclaw_bootstrap` | Brownfield bootstrap signals, interview prompts, and selective import preview/apply |
-| `bclaw_release_notes` | Agent-first release notes for the latest installable Brainclaw version |
-| `bclaw_switch` | Switch the active Brainclaw project in a multi-project workspace before further calls |
-| `bclaw_get_agent_board` | Coordination snapshot for plans, claims, handoffs, and instructions |
-| `bclaw_list_plans` | Structured plan listing with filters and compact mode |
-| `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
-| `bclaw_list_candidates` | Pending or archived review queue listing |
-| `bclaw_read_inbox` | Read messages from an agent inbox |
-| `bclaw_read_handoff` | Read active handoffs |
-| `bclaw_write_note` | Record a runtime note |
-| `bclaw_quick_capture` | Capture free-form text and classify it into a decision, trap, or runtime note |
-| `bclaw_create_candidate` | Create a memory candidate |
-| `bclaw_ack_message` | Acknowledge a processed assignment or review request |
-| `bclaw_setup` | Agent-driven onboarding wizard |
+- **facade** — High-level entry points for agents that don't need granular access. Start here.
+- **standard** — Day-to-day coordination tools: plans, claims, messaging, dispatch, review, memory. Returned by default alongside facades.
+- **advanced** — Specialized governance, audit, registry, sequences, and power tools.
 
-**Advanced read tools** (any trust level):
+By default, `tools/list` returns **facade + standard** tools (~33 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
-| Tool | Purpose |
-|---|---|
-| `bclaw_get_context` | Ranked prompt-ready context, supports `digest: true` |
-| `bclaw_bootstrap` | Derive brownfield bootstrap signals, return adaptive interview prompts, accept structured interview answers, and preview/apply a selective import proposal |
-| `bclaw_get_execution_context` | Inspect local execution context, installable update status, and agent tooling |
-| `bclaw_release_notes` | Agent-first release notes for the latest installable Brainclaw version: highlights, breaking risk, and action recommendation |
-| `bclaw_read_handoff` | Read active handoffs |
-| `bclaw_get_agent_board` | Coordination snapshot |
-| `bclaw_list_plans` | Structured plan listing with filters, pagination (`limit`/`offset`), `compact` mode, and `id` lookup |
-| `bclaw_list_sequences` | Coordination sequence listing with filters on status and id, supports `compact` mode |
-| `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
-| `bclaw_list_agents` | Registered agent inventory, optionally with bounded reputation |
-| `bclaw_list_instructions` | Raw or resolved instruction listing |
-| `bclaw_list_candidates` | Pending or archived review queue listing |
-| `bclaw_search` | Full-text search across memory |
-| `bclaw_check_policy` | Pre-execution policy check: verify claims, constraints, traps for a scope |
-| `bclaw_audit` | Audit log or governance posture report (`governance: true`) |
-| `bclaw_history` | Full mutation history of a memory item |
-| `bclaw_doctor` | Health checks (JSON output) |
-| `bclaw_get_discovery` | Scan workspace for MCP configs, skills, hooks, integrations |
-| `bclaw_conflict_check` | Check for overlapping claims between agents |
-| `bclaw_who` | List active agent sessions on this workspace |
-| `bclaw_estimation_report` | Estimation accuracy report for completed plans |
-| `bclaw_get_capabilities` | List registered project capabilities |
-| `bclaw_list_tools` | List registered project tools |
-| `bclaw_search_tools` | Search tools by name or description |
-| `bclaw_read_inbox` | Read messages from an agent inbox; filter by status, type, or thread; supports `markAsRead` |
-| `bclaw_get_thread` | Get all messages in a thread across all agent inboxes |
-| `bclaw_dispatch_analysis` | Analyze the active sequence: show ready, active, blocked, and done lanes plus available agents |
-| `bclaw_check_security` | Supply chain security scores for npm/pypi packages via Socket.dev (pass/warn/block verdict) |
+All tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
-**Advanced write tools** (contributor trust or above):
+### Tool categories
 
-| Tool | Purpose |
-|---|---|
-| `bclaw_write_note` | Record a runtime note, supports `autoReflect: true` |
-| `bclaw_quick_capture` | Capture free-form text and classify it into a decision, trap, or runtime note using keyword heuristics |
-| `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
-| `bclaw_accept` | Accept a pending candidate into canonical memory |
-| `bclaw_reject` | Reject a pending candidate |
-| `bclaw_claim` | Claim a work scope (advisory lock, auto-surfaces policy warnings) |
-| `bclaw_release_claim` | Release a claim, optionally updating the linked plan status |
-| `bclaw_session_start` | Start an agent session and register identity |
-| `bclaw_session_end` | End session, optionally auto-reflect notes as candidates |
-| `bclaw_create_plan` | Create a new plan item |
-| `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
-| `bclaw_add_step` | Add a sub-step to a plan item |
-| `bclaw_complete_step` | Mark a plan sub-step as done |
-| `bclaw_create_sequence` | Create a coordination sequence shared by agents |
-| `bclaw_update_sequence` | Update a sequence's status, metadata, or items |
-| `bclaw_send_message` | Send a message to another agent's inbox (assign, review, rfc, info, reply) |
-| `bclaw_ack_message` | Acknowledge a message in your inbox after processing it |
-| `bclaw_switch` | Change the active project for subsequent tool calls |
-| `bclaw_setup` | Agent-driven onboarding wizard |
-| `bclaw_delete_memory` | Delete a memory item by ID |
-| `bclaw_update_memory` | Update a memory item's text or metadata |
-| `bclaw_update_handoff` | Update a handoff status, narrative, contract, or structured review verdict |
-| `bclaw_add_capability` | Register a project capability |
-| `bclaw_add_tool` | Register a project tool |
+Each tool also has an `annotations.category` field: `session`, `context`, `memory`, `coordination`, `governance`, or `discovery`.
 
-**Advanced write tools** (trusted trust or above):
+### Facade tools
 
-| Tool | Purpose |
-|---|---|
-| `bclaw_dispatch` | Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to available agents; supports `dryRun` and `spawn` |
-| `bclaw_dispatch_review` | Dispatch code reviews for completed handoffs: auto-detects reviewable handoffs, generates a structured review brief, and delivers it via inbox or spawn |
-| `bclaw_compact` | LLM-driven semantic memory compaction (two-phase): phase 1 returns pressure assessment and eligible items, phase 2 archives items and creates new durable memory entries |
+| Tool | Category | Purpose |
+|---|---|---|
+| `bclaw_work` | session | Start session + load context + optionally claim a scope in one call |
+| `bclaw_coordinate` | coordination | Assign, consult, review, reroute, or summarize across agents |
+| `bclaw_setup` | session | Agent-driven onboarding wizard |
+
+### Standard tools
+
+| Tool | Category | Purpose |
+|---|---|---|
+| `bclaw_get_context` | context | Ranked prompt-ready context for a specific path or scope |
+| `bclaw_get_execution_context` | context | Inspect local execution context, update status, and agent tooling |
+| `bclaw_bootstrap` | context | Brownfield bootstrap signals, interview prompts, selective import |
+| `bclaw_release_notes` | context | Agent-first release notes with breaking risk assessment |
+| `bclaw_session_start` | session | Start a session explicitly (granular workflow) |
+| `bclaw_session_end` | session | End session, optionally auto-reflect notes or handoffs |
+| `bclaw_switch` | session | Switch active project in a multi-project workspace |
+| `bclaw_get_agent_board` | coordination | Coordination snapshot: plans, claims, handoffs, instructions |
+| `bclaw_list_plans` | coordination | Plan listing with filters, pagination, compact mode |
+| `bclaw_list_claims` | coordination | Claim listing with filters |
+| `bclaw_list_candidates` | coordination | Review queue listing (pending, accepted, rejected) |
+| `bclaw_read_inbox` | coordination | Read messages from an agent inbox |
+| `bclaw_read_handoff` | coordination | Read active handoffs with git diff and state snapshot |
+| `bclaw_dispatch_analysis` | coordination | Analyze active sequence: ready, active, blocked, done lanes |
+| `bclaw_claim` | coordination | Claim a work scope (advisory lock, auto-worktree) |
+| `bclaw_release_claim` | coordination | Release a claim, optionally updating linked plan status |
+| `bclaw_create_plan` | coordination | Create a new plan item |
+| `bclaw_update_plan` | coordination | Update plan status, effort, priority, or assignee |
+| `bclaw_add_step` | coordination | Add a sub-step to a plan item |
+| `bclaw_complete_step` | coordination | Mark a plan sub-step as done |
+| `bclaw_dispatch` | coordination | Run a dispatch cycle, generate briefs, assign to agents |
+| `bclaw_dispatch_review` | coordination | Dispatch code reviews for completed handoffs |
+| `bclaw_send_message` | coordination | Send a message to another agent's inbox |
+| `bclaw_ack_message` | coordination | Acknowledge a processed inbox message |
+| `bclaw_update_handoff` | coordination | Update handoff status, contract, or review verdict |
+| `bclaw_write_note` | memory | Record a runtime note |
+| `bclaw_quick_capture` | memory | Capture text, auto-classify as decision/trap/note |
+| `bclaw_create_candidate` | memory | Create a memory candidate for review |
+| `bclaw_accept` | memory | Accept a pending candidate into canonical memory |
+| `bclaw_reject` | memory | Reject a pending candidate |
+| `bclaw_search` | memory | Full-text search across all memory items (BM25) |
+
+### Advanced tools
+
+| Tool | Category | Purpose |
+|---|---|---|
+| `bclaw_audit` | governance | Audit log or governance posture report |
+| `bclaw_check_policy` | governance | Pre-execution policy check for a scope |
+| `bclaw_check_security` | governance | Supply chain security scores via Socket.dev |
+| `bclaw_conflict_check` | governance | Check for overlapping claims between agents |
+| `bclaw_doctor` | governance | Health checks on the memory store |
+| `bclaw_history` | governance | Full mutation history of a memory item |
+| `bclaw_estimation_report` | governance | Estimation accuracy report for completed plans |
+| `bclaw_list_agents` | discovery | Registered agent inventory with reputation |
+| `bclaw_list_instructions` | discovery | Raw or resolved instruction listing |
+| `bclaw_get_capabilities` | discovery | List registered project capabilities |
+| `bclaw_list_tools` | discovery | List registered project tools |
+| `bclaw_search_tools` | discovery | Search tools by name or description |
+| `bclaw_get_discovery` | discovery | Scan workspace for MCP configs, skills, hooks |
+| `bclaw_who` | discovery | List active agent sessions on workspace |
+| `bclaw_add_capability` | discovery | Register a project capability |
+| `bclaw_add_tool` | discovery | Register a project tool |
+| `bclaw_list_sequences` | coordination | Coordination sequence listing |
+| `bclaw_create_sequence` | coordination | Create a coordination sequence |
+| `bclaw_update_sequence` | coordination | Update a sequence's status, metadata, or items |
+| `bclaw_get_thread` | coordination | Get all messages in a thread across inboxes |
+| `bclaw_delete_memory` | memory | Delete a memory item by ID |
+| `bclaw_update_memory` | memory | Update a memory item's text or metadata |
+| `bclaw_compact` | memory | LLM-driven semantic memory compaction (two-phase) |
 
 ## When To Use MCP Versus Other Surfaces
 

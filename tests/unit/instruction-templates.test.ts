@@ -109,6 +109,8 @@ describe('instruction-templates', () => {
         'bclaw_list_claims',
         'bclaw_list_candidates',
         'bclaw_create_candidate',
+        'bclaw_accept',
+        'bclaw_reject',
         'bclaw_ack_message',
         'bclaw_write_note',
         'bclaw_quick_capture',
