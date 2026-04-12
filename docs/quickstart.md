@@ -2,6 +2,8 @@
 
 Get brainclaw running in your project in under 5 minutes.
 
+If you're about to cut a release that changes the CLI, MCP, or context surface, run the checklist in [release-maintenance.md](release-maintenance.md) before publishing a local pack or npm build.
+
 ## Step 1: Install
 
 ```bash
