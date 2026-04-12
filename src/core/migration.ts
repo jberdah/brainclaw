@@ -27,6 +27,7 @@ import {
   ProjectCapabilitySchema,
   ProjectToolSchema,
   InboxMessageSchema,
+  AssignmentSchema,
 } from './schema.js';
 
 export type VersionedDocumentType =
@@ -52,7 +53,8 @@ export type VersionedDocumentType =
   | 'capability'
   | 'tool'
   | 'trap'
-  | 'message';
+  | 'message'
+  | 'assignment';
 
 export type MigrationErrorKind =
   | 'parse'
@@ -125,6 +127,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   tool: createRegistryEntry(ProjectToolSchema),
   trap: createRegistryEntry(TrapSchema),
   message: createRegistryEntry(InboxMessageSchema),
+  assignment: createRegistryEntry(AssignmentSchema),
 };
 
 function createRegistryEntry<T>(schema: ZodType<T, ZodTypeDef, unknown>): MigrationRegistryEntry<T> {

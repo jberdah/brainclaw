@@ -20,7 +20,20 @@ export type EventAction =
   | 'session_start'
   | 'session_end'
   | 'rollback'
-  | 'upgrade';
+  | 'upgrade'
+  // Assignment lifecycle (Agent SDK runtime protocol)
+  | 'assignment_created'
+  | 'assignment_offered'
+  | 'assignment_accepted'
+  | 'assignment_started'
+  | 'assignment_progress'
+  | 'assignment_completed'
+  | 'assignment_failed'
+  | 'assignment_blocked'
+  | 'assignment_timed_out'
+  | 'assignment_expired'
+  | 'assignment_retrying'
+  | 'assignment_rerouted';
 
 export type EventItemType =
   | 'constraint'
@@ -34,7 +47,8 @@ export type EventItemType =
   | 'runtime_note'
   | 'instruction'
   | 'session'
-  | 'state';
+  | 'state'
+  | 'assignment';
 
 export interface MemoryEvent {
   ts: string;

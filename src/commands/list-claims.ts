@@ -1,5 +1,5 @@
 import { memoryExists } from '../core/io.js';
-import { listClaims, expireStaleActiveClaims, isClaimExpired } from '../core/claims.js';
+import { listClaims, expireStaleActiveClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.js';
 
 export interface ListClaimsOptions {
   json?: boolean;
@@ -55,6 +55,15 @@ export function runListClaims(options: ListClaimsOptions = {}): void {
     if (c.project) extras.push(`project ${c.project}`);
     if (c.expires_at && !isClaimExpired(c)) extras.push(`expires ${c.expires_at.slice(0, 16).replace('T', ' ')}`);
     const suffix = extras.length ? ` [${extras.join(', ')}]` : '';
-    console.log(`  [${c.id}] ${c.agent} → ${c.scope}: ${c.description}${suffix}${status}${expired}`);
+    // Liveness tag for active claims (omit for released/done)
+    let livenessTag = '';
+    if (c.status === 'active') {
+      const liveness = assessClaimLiveness(c, { cwd: options.cwd });
+      if (liveness.status === 'live') livenessTag = ' [LIVE]';
+      else if (liveness.status === 'orphaned') livenessTag = ' [ORPHANED]';
+      else if (liveness.status === 'never-adopted') livenessTag = ' [NEVER-ADOPTED]';
+      else if (liveness.status === 'stale') livenessTag = ' [STALE]';
+    }
+    console.log(`  [${c.id}] ${c.agent} → ${c.scope}: ${c.description}${suffix}${livenessTag}${status}${expired}`);
   }
 }

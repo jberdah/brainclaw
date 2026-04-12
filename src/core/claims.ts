@@ -105,14 +105,163 @@ export function expireStaleActiveClaims(cwd?: string): number {
 const DEFAULT_STALE_HOURS = 24;
 
 /**
- * Check if a claim is stale based on inactivity.
- * A claim is stale if created_at is older than threshold and no session is active for the agent.
+ * Threshold below which a newly created claim is considered "young" and must not be auto-released,
+ * even if it has no session yet (coordinator claims are created before the worker session starts).
  */
-export function isClaimStale(claim: Claim, thresholdHours?: number): boolean {
+const YOUNG_CLAIM_THRESHOLD_MS = 30 * 60_000; // 30 minutes
+
+/**
+ * Liveness status for an active claim.
+ *
+ * - `live`          — adopted session is still alive; do NOT auto-release.
+ * - `young`         — claim is too recently created to classify; do NOT auto-release.
+ * - `orphaned`      — claim was adopted (session_id + adopted_at set) but the session died (crash).
+ * - `stale`         — claim has a session_id but the session is dead and was never formally adopted
+ *                     (e.g. directly-created agent claim whose session ended).
+ * - `never-adopted` — no session_id ever assigned and claim is older than the stale threshold
+ *                     (coordinator claim that was never dispatched).
+ */
+export type ClaimLivenessStatus = 'live' | 'young' | 'orphaned' | 'stale' | 'never-adopted';
+
+export interface ClaimLivenessAssessment {
+  status: ClaimLivenessStatus;
+  /** Human-readable explanation of why this status was assigned. */
+  reason: string;
+  /** Claim age in milliseconds at assessment time. */
+  ageMs: number;
+  /** Session's last_seen_at age in milliseconds, if a session was found. */
+  sessionAgeMs?: number;
+}
+
+export interface AssessClaimLivenessOptions {
+  /** Auto-release threshold in hours (default: 24). */
+  thresholdHours?: number;
+  /** Session TTL in milliseconds — overrides config (for testing). */
+  sessionTtlMs?: number;
+  /** Current timestamp override (for testing). */
+  nowMs?: number;
+  /** brainclaw store root (for session file reads). */
+  cwd?: string;
+}
+
+/**
+ * Assess the liveness of an active claim against session state.
+ *
+ * Decision tree:
+ *  1. Young (< 30 min) → never auto-release — dispatcher may not have sent the worker yet.
+ *  2. Has session_id + session alive → 'live' — long-running work; do NOT release.
+ *  3. Has session_id + adopted_at + session dead → 'orphaned' — crash recovery scenario.
+ *  4. Has session_id + no adopted_at + session dead → 'stale' — direct agent claim, session ended.
+ *  5. No session_id + old → 'never-adopted' — coordinator claim never dispatched.
+ *  6. No session_id + within threshold → 'young'.
+ */
+export function assessClaimLiveness(
+  claim: Claim,
+  options: AssessClaimLivenessOptions = {},
+): ClaimLivenessAssessment {
+  const nowMs = options.nowMs ?? Date.now();
+  const thresholdMs = (options.thresholdHours ?? DEFAULT_STALE_HOURS) * 3_600_000;
+  const ageMs = nowMs - new Date(claim.created_at).getTime();
+
+  // 1. Too young to classify — don't release (worker may not have started yet)
+  if (ageMs < YOUNG_CLAIM_THRESHOLD_MS) {
+    return {
+      status: 'young',
+      reason: 'Claim is less than 30 minutes old — too new to classify',
+      ageMs,
+    };
+  }
+
+  // 2–4. Has a session_id — check session liveness
+  if (claim.session_id) {
+    let sessionAgeMs: number | undefined;
+    let sessionAlive = false;
+
+    try {
+      const session = loadSessionById(claim.session_id, options.cwd);
+      if (session) {
+        const sessionTtlMs = options.sessionTtlMs ?? resolveSessionTtlMs(options.cwd);
+        sessionAgeMs = nowMs - new Date(session.last_seen_at).getTime();
+        sessionAlive = sessionAgeMs < sessionTtlMs;
+      }
+    } catch { /* session file error — treat as dead */ }
+
+    if (sessionAlive) {
+      return {
+        status: 'live',
+        reason: `Session ${claim.session_id} is active (last_seen_at within TTL)`,
+        ageMs,
+        sessionAgeMs,
+      };
+    }
+
+    // Session is dead or not found
+    if (claim.adopted_at) {
+      // Worker was dispatched and formally adopted the claim — this is a crash
+      const sessionDesc = sessionAgeMs !== undefined
+        ? `last seen ${Math.round(sessionAgeMs / 3_600_000)}h ago`
+        : 'cannot be found';
+      return {
+        status: 'orphaned',
+        reason: `Session ${claim.session_id} was adopted at ${claim.adopted_at} but is now dead (${sessionDesc})`,
+        ageMs,
+        sessionAgeMs,
+      };
+    }
+
+    // session_id set (direct agent claim) but session ended normally — stale
+    if (ageMs >= thresholdMs) {
+      return {
+        status: 'stale',
+        reason: `Session ${claim.session_id} is no longer active and claim is ${Math.round(ageMs / 3_600_000)}h old`,
+        ageMs,
+        sessionAgeMs,
+      };
+    }
+
+    // session dead but claim still within threshold — treat as young
+    return {
+      status: 'young',
+      reason: 'Session ended but claim is still within the stale threshold',
+      ageMs,
+      sessionAgeMs,
+    };
+  }
+
+  // 5–6. No session_id — coordinator claim that was never dispatched
+  if (ageMs >= thresholdMs) {
+    return {
+      status: 'never-adopted',
+      reason: `No session ever adopted this claim and it is ${Math.round(ageMs / 3_600_000)}h old (threshold: ${options.thresholdHours ?? DEFAULT_STALE_HOURS}h)`,
+      ageMs,
+    };
+  }
+
+  return {
+    status: 'young',
+    reason: 'Claim has not been adopted by a session yet but is still within the stale threshold',
+    ageMs,
+  };
+}
+
+/** Resolve session TTL from config, falling back to 4 hours. */
+function resolveSessionTtlMs(cwd?: string): number {
+  try {
+    return parseTtl(loadConfig(cwd).implicit_session_ttl ?? '4h');
+  } catch {
+    return 4 * 3_600_000;
+  }
+}
+
+/**
+ * Check if a claim is stale based on session-aware liveness.
+ * Returns true for 'stale', 'orphaned', and 'never-adopted' statuses.
+ * A claim with a live session is never considered stale regardless of age.
+ */
+export function isClaimStale(claim: Claim, thresholdHours?: number, cwd?: string): boolean {
   if (claim.status !== 'active') return false;
-  const hours = thresholdHours ?? DEFAULT_STALE_HOURS;
-  const ageMs = Date.now() - new Date(claim.created_at).getTime();
-  return ageMs > hours * 3600_000;
+  const { status } = assessClaimLiveness(claim, { thresholdHours, cwd });
+  return status === 'stale' || status === 'orphaned' || status === 'never-adopted';
 }
 
 export interface StaleClaimResult {
@@ -124,6 +273,8 @@ export interface StaleClaimResult {
  * Detect and auto-release stale claims from other agents.
  * Uses claims.auto_release_after from config (default 24h).
  * Skips claims from the current agent (they should use session_end --auto-release).
+ * Skips claims whose session is still live ('live') or too young to classify ('young').
+ * Releases 'stale', 'orphaned' (crash recovery), and 'never-adopted' claims.
  */
 export function releaseStaleClaimsFromOtherAgents(currentAgent?: string, cwd?: string): StaleClaimResult {
   const config = loadConfig(cwd);
@@ -137,7 +288,9 @@ export function releaseStaleClaimsFromOtherAgents(currentAgent?: string, cwd?: s
   for (const claim of all) {
     if (claim.status !== 'active') continue;
     if (claim.agent === currentAgent) continue; // skip own claims
-    if (!isClaimStale(claim, thresholdHours)) continue;
+
+    const { status } = assessClaimLiveness(claim, { thresholdHours, cwd });
+    if (status === 'live' || status === 'young') continue;
 
     claim.status = 'released';
     claim.released_at = now;

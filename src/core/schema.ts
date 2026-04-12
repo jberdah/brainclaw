@@ -580,8 +580,87 @@ export const ClaimSchema = z.object({
   adopted_at: z.string().optional(),
   /** Message ID of the dispatch assignment that created this claim. For tracing claim→message→instance. */
   assignment_message_id: z.string().optional(),
+  /** Assignment ID from the Agent SDK runtime protocol. Links claim to its Assignment lifecycle entity. */
+  assignment_id: z.string().optional(),
 });
 export type Claim = z.infer<typeof ClaimSchema>;
+
+// --- Assignment schemas (Agent SDK runtime protocol) ---
+
+export const AssignmentStatusSchema = z.enum([
+  'created',     // Record exists, not yet offered to agent
+  'offered',     // Brief delivered to agent inbox
+  'accepted',    // Worker acknowledged receipt
+  'started',     // Worker reports active work begun
+  'completed',   // Worker reports successful completion
+  'failed',      // Worker reports failure
+  'blocked',     // Worker reports external blocker
+  'timed_out',   // Sweeper detected no heartbeat within TTL
+  'expired',     // Offered but never accepted within TTL
+  'retrying',    // Failed/timed-out assignment being requeued
+  'rerouted',    // Blocked assignment rerouted to different agent
+]);
+export type AssignmentStatus = z.infer<typeof AssignmentStatusSchema>;
+
+export const AssignmentArtifactSchema = z.object({
+  type: z.string(),
+  ref: z.string(),
+  description: z.string().optional(),
+});
+export type AssignmentArtifact = z.infer<typeof AssignmentArtifactSchema>;
+
+export const AssignmentSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+
+  // Cross-references (links, not replacement)
+  claim_id: z.string(),
+  message_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  sequence_id: z.string().optional(),
+  /** For retry chains: original assignment_id. */
+  correlation_id: z.string().optional(),
+
+  // Actors
+  agent: z.string(),
+  agent_id: z.string().optional(),
+  session_id: z.string().optional(),
+  dispatcher_agent: z.string(),
+  dispatcher_session_id: z.string().optional(),
+
+  // Task metadata
+  scope: z.string(),
+  description: z.string(),
+  lane: z.string().optional(),
+  worktree_path: z.string().optional(),
+
+  // Status FSM
+  status: AssignmentStatusSchema,
+  status_reason: z.string().optional(),
+
+  // Timestamps
+  created_at: z.string(),
+  offered_at: z.string().optional(),
+  accepted_at: z.string().optional(),
+  started_at: z.string().optional(),
+  completed_at: z.string().optional(),
+  failed_at: z.string().optional(),
+  last_heartbeat_at: z.string().optional(),
+
+  // Result
+  artifacts: z.array(AssignmentArtifactSchema).default([]),
+  error_message: z.string().optional(),
+  retry_count: z.number().int().default(0),
+  max_retries: z.number().int().default(2),
+
+  // Timeout config (ms)
+  heartbeat_ttl_ms: z.number().int().default(30 * 60_000),   // 30 min
+  acceptance_ttl_ms: z.number().int().default(15 * 60_000),  // 15 min
+
+  tags: TagsWithDefaultSchema,
+});
+export type Assignment = z.infer<typeof AssignmentSchema>;
 
 // --- Runtime notes schemas ---
 

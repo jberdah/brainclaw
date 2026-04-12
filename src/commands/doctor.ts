@@ -15,7 +15,7 @@ import { findInstructionConflicts, loadInstructions } from '../core/instructions
 import { memoryExists, memoryPath, readFileSync, resolveEntityDir } from '../core/io.js';
 import { logger } from '../core/logger.js';
 import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
-import { listClaims, isClaimExpired } from '../core/claims.js';
+import { listClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
@@ -31,6 +31,7 @@ import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
 import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
+import { detectStaleness, staleSummary } from '../core/staleness.js';
 import { InboxMessageSchema, type Handoff, type InboxMessage } from '../core/schema.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
@@ -1008,6 +1009,48 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'expired_items', status: 'ok', message: 'No expired items found' });
   }
 
+  // --- Stale memory check: age-based heuristics for plans, handoffs, candidates ---
+  try {
+    const pendingCandidatesForStaleness = listCandidates('pending', options.cwd);
+    const staleReport = detectStaleness(
+      state.plan_items,
+      state.known_traps,
+      state.open_handoffs,
+      pendingCandidatesForStaleness,
+    );
+    if (staleReport.warnings.length > 0) {
+      const summary = staleSummary(staleReport);
+      checks.push({
+        name: 'stale_memory',
+        status: 'warn',
+        message: `${staleReport.warnings.length} stale item(s) detected: ${summary}`,
+        details: staleReport.warnings.map((w) => ({
+          id: w.id,
+          entity: w.entity,
+          age_days: w.age_days,
+          reason: w.reason,
+          suggested_action: w.suggested_action,
+        })),
+      });
+      if (!options.json) {
+        console.warn(`⚠ Stale memory: ${summary}`);
+        for (const w of staleReport.warnings.slice(0, 5)) {
+          console.warn(`  [${w.entity}] ${w.text} — ${w.reason}`);
+          console.warn(`  → ${w.suggested_action}`);
+        }
+        if (staleReport.warnings.length > 5) {
+          console.warn(`  … and ${staleReport.warnings.length - 5} more. Run \`brainclaw doctor --json\` for the full list.`);
+        }
+      }
+      hasIssues = true;
+    } else {
+      checks.push({ name: 'stale_memory', status: 'ok', message: 'No stale items detected' });
+      if (!options.json) {
+        console.log('✔ No stale items detected');
+      }
+    }
+  } catch { /* non-fatal — staleness check should not block doctor */ }
+
   // --- Inbox message layout checks ---
   const inboxAudit = auditInboxMessages(options.cwd);
   const inboxIssueCount = inboxAudit.invalid.length + inboxAudit.orphaned.length;
@@ -1096,19 +1139,33 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'claim_plan_link', status: 'ok', message: 'No active claims to check' });
   }
 
-  // Stale claims check
+  // Stale claims check — session-aware: a claim with a live session is never considered stale
   const staleThresholdHours = config?.claims?.auto_release_after_hours ?? 24;
+  const livenessById = new Map(
+    activeClaims.map(c => [c.id, assessClaimLiveness(c, { thresholdHours: staleThresholdHours, cwd: options.cwd })]),
+  );
   const staleClaims = activeClaims.filter(c => {
-    const ageMs = Date.now() - new Date(c.created_at).getTime();
-    return ageMs > staleThresholdHours * 3600_000;
+    const s = livenessById.get(c.id)!.status;
+    return s === 'stale' || s === 'never-adopted';
   });
+  const orphanedClaims = activeClaims.filter(c => livenessById.get(c.id)!.status === 'orphaned');
+
   if (staleClaims.length > 0) {
-    const details = staleClaims.map(c => `${c.agent} → ${c.scope}`).join(', ');
-    checks.push({ name: 'claims_stale', status: 'warn', message: `${staleClaims.length} stale claim(s) (>${staleThresholdHours}h): ${details}` });
-    if (!options.json) console.warn(`⚠ ${staleClaims.length} stale claim(s) older than ${staleThresholdHours}h: ${details}`);
     hasIssues = true;
+    const details = staleClaims.map(c => `${c.agent} → ${c.scope}`).join(', ');
+    checks.push({ name: 'claims_stale', status: 'warn', message: `${staleClaims.length} stale claim(s) (no live session, >${staleThresholdHours}h): ${details}` });
+    if (!options.json) console.warn(`⚠ ${staleClaims.length} stale claim(s) (no live session, >${staleThresholdHours}h): ${details}`);
   } else {
     checks.push({ name: 'claims_stale', status: 'ok', message: `No stale claims (threshold: ${staleThresholdHours}h)` });
+  }
+
+  if (orphanedClaims.length > 0) {
+    hasIssues = true;
+    const details = orphanedClaims.map(c => `${c.agent} → ${c.scope}`).join(', ');
+    checks.push({ name: 'claims_orphaned', status: 'warn', message: `${orphanedClaims.length} orphaned claim(s) (session crashed): ${details}. Run 'brainclaw prune' or 'brainclaw claim release' to clean up.` });
+    if (!options.json) console.warn(`⚠ ${orphanedClaims.length} orphaned claim(s) — session was adopted but died (crash recovery): ${details}`);
+  } else if (activeClaims.some(c => c.adopted_at)) {
+    checks.push({ name: 'claims_orphaned', status: 'ok', message: 'No orphaned claims' });
   }
 
   // Expired-but-still-active claims (TTL passed but prune not run)
