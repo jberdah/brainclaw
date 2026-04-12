@@ -598,8 +598,13 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
   }
 
   // Match ready items to available agents
-  const agentPool = options.agents?.length
-    ? options.agents
+  // Normalize: options.agents may arrive as a single string from some MCP clients
+  const rawAgents = options.agents;
+  const normalizedAgents = rawAgents
+    ? (Array.isArray(rawAgents) ? rawAgents : [rawAgents]) as string[]
+    : undefined;
+  const agentPool = normalizedAgents?.length
+    ? [...normalizedAgents]
     : [...analysis.available_agents];
 
   // Collect all active claims for scoring
@@ -622,8 +627,11 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
 
     for (const candidate of scored) {
       // Idempotency: skip if there's already a non-archived assign for this plan+agent
+      // BUT allow re-dispatch if the linked claim has been released (stale assignment)
       if (!options.dryRun && hasActiveAssignment(candidate.agent, readyItem.plan.id, cwd)) {
-        continue; // try next agent
+        const hasClaim = allActiveClaims.some(c => c.agent === candidate.agent && c.plan_id === readyItem.plan.id);
+        if (hasClaim) continue; // truly active — skip
+        // Claim released but message not archived: stale assignment, allow re-dispatch
       }
 
       // Claim-based capacity guard: check claims (existing + this cycle) against max_concurrent_tasks.

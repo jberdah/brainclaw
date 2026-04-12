@@ -111,7 +111,8 @@ export type AgentName =
   | 'nanoclaw'
   | 'nemoclaw'
   | 'picoclaw'
-  | 'zeroclaw';
+  | 'zeroclaw'
+  | 'claude-sonnet';
 
 /** Agent name aliases — maps common short names to canonical profile names. */
 const AGENT_ALIASES: Record<string, AgentName> = {
@@ -140,6 +141,20 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'claude',
     invoke_review_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
     invoke_consult_template: 'claude -p "{prompt}" --allowedTools "Read,Glob,Grep"',
+  },
+  'claude-sonnet': {
+    name: 'claude-sonnet', category: 'code-agent', workflowModel: 'interactive',
+    hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
+    instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
+    role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    max_concurrent_tasks: 6,
+    prompt_delivery: { methods: ['temp_file', 'inline_arg', 'inbox_structured'], preferred: 'temp_file', max_inline_length: 4000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"',
+    invoke_binary: 'claude',
+    invoke_review_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Read,Glob,Grep"',
+    invoke_consult_template: 'claude --model sonnet -p "{prompt}" --allowedTools "Read,Glob,Grep"',
   },
   cursor: {
     name: 'cursor', category: 'code-agent', workflowModel: 'interactive',
