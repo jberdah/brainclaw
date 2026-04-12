@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import YAML from 'yaml';
 import { SCHEMA_VERSION } from '../src/commands/mcp.js';
+import { saveState } from '../src/core/state.js';
 import { AGENT_ENV_KEYS } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
@@ -717,6 +718,67 @@ describe('MCP server', () => {
 
       // content should include at least 3 parts (session + context + board)
       assert.ok(response.result.content.length >= 3);
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('bclaw_session_start allows opting into the fast path explicitly', async () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: Array.from({ length: 50 }, (_, index) => ({
+        id: `pln_done_${index}`,
+        text: `Completed plan ${index}`,
+        status: 'done',
+        priority: 'medium',
+        type: 'chore',
+        created_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        updated_at: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(),
+        completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        author: 'testuser',
+        project_id: 'prj_test',
+        tags: [],
+        depends_on: [],
+      })),
+    }, dir);
+
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+
+      const fullResponse = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 51,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_start',
+          arguments: {
+            agent: 'testuser',
+            maintenanceMode: 'full',
+          },
+        },
+      });
+      assert.equal(fullResponse.result.memory_pressure.memory_pressure, true);
+      assert.equal(fullResponse.result.memory_pressure.done_plans, 50);
+
+      const fastResponse = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 52,
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_session_start',
+          arguments: {
+            agent: 'testuser',
+            maintenanceMode: 'fast',
+          },
+        },
+      });
+      assert.equal(fastResponse.result.memory_pressure, undefined);
     } finally {
       await stopMcp(proc);
     }

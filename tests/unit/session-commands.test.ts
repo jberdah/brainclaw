@@ -254,6 +254,36 @@ describe('session commands', { concurrency: false }, () => {
     assert.deepEqual(result.agent_git_hygiene?.tracked_paths, []);
   });
 
+  it('runs non-critical maintenance work when maintenanceMode is full', () => {
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: Array.from({ length: 50 }, (_, index) => ({
+        id: `pln_done_${index}`,
+        text: `Completed plan ${index}`,
+        status: 'done',
+        priority: 'medium',
+        type: 'chore',
+        created_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        updated_at: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(),
+        completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        author: workspace.currentAgent.agent_name,
+        author_id: workspace.currentAgent.agent_id,
+        project_id: 'prj_session_test',
+        tags: [],
+        depends_on: [],
+      })),
+    }, workspace.dir);
+
+    const result = startSession({ cwd: workspace.dir, maintenanceMode: 'full' });
+    assert.equal(result.memory_pressure?.memory_pressure, true);
+    assert.equal(result.memory_pressure?.done_plans, 50);
+  });
+
   it('only clears the active implicit session when the ended session matches it', () => {
     clearCurrentSession(workspace.dir);
     captureLogs(() => {

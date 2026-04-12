@@ -731,6 +731,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         context: { type: 'string', description: 'Context target path.' },
+        maintenanceMode: { type: 'string', enum: ['fast', 'full'], description: 'Maintenance mode. Default is full for explicit session-start calls; use fast to skip non-critical maintenance work.' },
         includeContext: { type: 'boolean', description: 'Include project memory context in the response (equivalent to bclaw_get_context).' },
         includeBoard: { type: 'boolean', description: 'Include agent board (plans, claims, handoffs) in the response (equivalent to bclaw_get_agent_board).' },
         contextProfile: { type: 'string', description: 'Context profile when includeContext is true: dev (default), dense, compact, copilot, quick, briefing, openclaw, ops, research. If unset, uses the agent default profile.' },
@@ -2685,6 +2686,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         agent: resolved.identity?.agent_name ?? (typeof args.agent === 'string' ? args.agent : undefined),
         agentId: resolved.identity?.agent_id ?? (typeof args.agentId === 'string' ? args.agentId : undefined),
         context: args.context as string | undefined,
+        maintenanceMode: args.maintenanceMode === 'fast' ? 'fast' : 'full',
         cwd,
       });
 

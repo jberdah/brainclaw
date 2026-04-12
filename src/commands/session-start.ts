@@ -71,7 +71,10 @@ export interface SessionStartResult extends SessionSnapshot {
 
 export function runSessionStart(options: SessionStartOptions = {}): void {
   try {
-    const snapshot = startSession(options);
+    const snapshot = startSession({
+      ...options,
+      maintenanceMode: options.maintenanceMode ?? 'full',
+    });
 
     // --include-context: output full project context (replaces separate `brainclaw context` call)
     if (options.includeContext) {
