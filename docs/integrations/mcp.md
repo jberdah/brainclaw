@@ -22,14 +22,13 @@ That now also includes Brainclaw's own install channel state: `bclaw_get_executi
 
 The default dynamic workflow is:
 
-1. `bclaw_session_start` to open work and get the current board/context
-2. `bclaw_get_execution_context` early in the session when the agent needs local tooling signals or package update visibility
-3. `bclaw_get_context` when the target path or task changes
-4. `bclaw_list_plans` and `bclaw_list_claims` to inspect active work
-5. `bclaw_claim` before editing (auto-runs policy checks and surfaces warnings)
-6. `bclaw_check_policy` for explicit pre-execution governance checks on a scope
-7. `bclaw_write_note` for runtime observations
-8. `bclaw_session_end` to close cleanly and hand work off
+1. `bclaw_work` to start the session and load the relevant context in one call
+2. `bclaw_get_execution_context` early when the agent needs local tooling signals or package update visibility
+3. `bclaw_get_context` only when the target path changes or the agent needs a narrower refresh than the facade returned
+4. `bclaw_coordinate` for assign, consult, review, reroute, or summarize flows across agents
+5. `bclaw_read_inbox` and `bclaw_read_handoff` when resuming delegated work
+6. `bclaw_write_note` or `bclaw_quick_capture` for runtime observations during work
+7. `bclaw_create_candidate` when the result should enter the review queue as durable shared memory
 
 This keeps session continuity inside Brainclaw instead of pushing the agent back to manual CLI usage.
 
@@ -37,9 +36,38 @@ When a human operator needs the CLI equivalent of `bclaw_write_note`, use `brain
 
 ## Available Tools
 
-This section highlights the primary runtime tools agents are expected to use most often. It is not intended to be the full protocol registry.
+The default published MCP catalog is curated around facades and everyday runtime tools. Advanced tools remain callable if an agent already knows their exact names, but they are intentionally not the default discovery path. Raw MCP clients can request the full registry with `tools/list` params `{ "catalog": "all" }`.
 
-**Read tools** (any trust level):
+This section highlights the primary runtime tools agents are expected to use most often first, then documents the broader advanced surface.
+
+**Default published tools**:
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_work` | Facade entry point: start session + load context + optionally claim a scope in one call |
+| `bclaw_coordinate` | Multi-agent coordination facade: assign, consult, review, reroute, or summarize |
+| `bclaw_get_context` | Ranked prompt-ready context for a specific path or scope |
+| `bclaw_get_execution_context` | Inspect local execution context, installable update status, and agent tooling |
+| `bclaw_session_start` | Start an agent session explicitly when a granular workflow needs session registration |
+| `bclaw_session_end` | End a granular session cleanly, optionally reflecting notes or handoffs |
+| `bclaw_claim` | Claim a scope explicitly before editing outside the facade path |
+| `bclaw_release_claim` | Release an explicit claim when the granular workflow is done |
+| `bclaw_bootstrap` | Brownfield bootstrap signals, interview prompts, and selective import preview/apply |
+| `bclaw_release_notes` | Agent-first release notes for the latest installable Brainclaw version |
+| `bclaw_switch` | Switch the active Brainclaw project in a multi-project workspace before further calls |
+| `bclaw_get_agent_board` | Coordination snapshot for plans, claims, handoffs, and instructions |
+| `bclaw_list_plans` | Structured plan listing with filters and compact mode |
+| `bclaw_list_claims` | Structured claim listing with CLI-equivalent filters |
+| `bclaw_list_candidates` | Pending or archived review queue listing |
+| `bclaw_read_inbox` | Read messages from an agent inbox |
+| `bclaw_read_handoff` | Read active handoffs |
+| `bclaw_write_note` | Record a runtime note |
+| `bclaw_quick_capture` | Capture free-form text and classify it into a decision, trap, or runtime note |
+| `bclaw_create_candidate` | Create a memory candidate |
+| `bclaw_ack_message` | Acknowledge a processed assignment or review request |
+| `bclaw_setup` | Agent-driven onboarding wizard |
+
+**Advanced read tools** (any trust level):
 
 | Tool | Purpose |
 |---|---|
@@ -72,7 +100,7 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_dispatch_analysis` | Analyze the active sequence: show ready, active, blocked, and done lanes plus available agents |
 | `bclaw_check_security` | Supply chain security scores for npm/pypi packages via Socket.dev (pass/warn/block verdict) |
 
-**Write tools** (contributor trust or above):
+**Advanced write tools** (contributor trust or above):
 
 | Tool | Purpose |
 |---|---|
@@ -101,20 +129,13 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_add_capability` | Register a project capability |
 | `bclaw_add_tool` | Register a project tool |
 
-**Write tools** (trusted trust or above):
+**Advanced write tools** (trusted trust or above):
 
 | Tool | Purpose |
 |---|---|
 | `bclaw_dispatch` | Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to available agents; supports `dryRun` and `spawn` |
 | `bclaw_dispatch_review` | Dispatch code reviews for completed handoffs: auto-detects reviewable handoffs, generates a structured review brief, and delivers it via inbox or spawn |
 | `bclaw_compact` | LLM-driven semantic memory compaction (two-phase): phase 1 returns pressure assessment and eligible items, phase 2 archives items and creates new durable memory entries |
-
-**Facade tools** (auto-registers identity, no pre-existing trust required):
-
-| Tool | Purpose |
-|---|---|
-| `bclaw_work` | Facade entry point: start session + load context + optionally claim a scope in one call; `intent` controls behavior (`execute` creates a claim, `consult`/`resume`/`review` skip it) |
-| `bclaw_coordinate` | Multi-agent coordination facade: assign tasks (with claims), consult agents (no claim), create a review candidate, reroute a claim, or summarize a thread |
 
 ## When To Use MCP Versus Other Surfaces
 

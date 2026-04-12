@@ -1009,6 +1009,33 @@ const MCP_WRITE_TOOLS = [
 ] as const;
 
 const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
+const DEFAULT_PUBLISHED_TOOL_NAMES = [
+  'bclaw_work',
+  'bclaw_coordinate',
+  'bclaw_get_context',
+  'bclaw_get_execution_context',
+  'bclaw_session_start',
+  'bclaw_session_end',
+  'bclaw_claim',
+  'bclaw_release_claim',
+  'bclaw_bootstrap',
+  'bclaw_release_notes',
+  'bclaw_switch',
+  'bclaw_get_agent_board',
+  'bclaw_list_plans',
+  'bclaw_list_claims',
+  'bclaw_list_candidates',
+  'bclaw_read_inbox',
+  'bclaw_read_handoff',
+  'bclaw_write_note',
+  'bclaw_quick_capture',
+  'bclaw_create_candidate',
+  'bclaw_ack_message',
+  'bclaw_setup',
+] as const;
+const DEFAULT_PUBLISHED_TOOLS = DEFAULT_PUBLISHED_TOOL_NAMES
+  .map((name) => ALL_TOOLS.find((tool) => tool.name === name))
+  .filter((tool): tool is typeof ALL_TOOLS[number] => Boolean(tool));
 
 class McpProtocolError extends Error {
   code: number;
@@ -1625,7 +1652,13 @@ export class McpServerConnection {
 
       if (method === 'tools/list') {
         if (!isNotification) {
-          this.sendResult(id ?? null, { tools: ALL_TOOLS });
+          const params = message.params === undefined ? {} : requireObjectParams(message.params, id ?? null);
+          const catalog = typeof params.catalog === 'string' ? params.catalog : undefined;
+          const include = typeof params.include === 'string' ? params.include : undefined;
+          const tools = catalog === 'all' || include === 'all' || params.advanced === true
+            ? ALL_TOOLS
+            : DEFAULT_PUBLISHED_TOOLS;
+          this.sendResult(id ?? null, { tools });
         }
         return;
       }

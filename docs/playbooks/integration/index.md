@@ -96,7 +96,7 @@ The event log (`event-log.ts`) supports cursor-based polling but there are no We
 **Impact:** Integrators building real-time dashboards or reactive agents must build their own polling + change detection.
 
 ### No rate limiting or quota enforcement
-No throttling or per-agent call budgets anywhere in the MCP handler path. `circuit-breaker.ts` exists but is unused. LLM-invoking tools (`bclaw_compact`, codev) have no usage limits. Agents can make unlimited calls.
+No throttling or per-agent call budgets anywhere in the MCP handler path. `circuit-breaker.ts` exists but is unused. LLM-invoking tools (`bclaw_compact`, plus legacy experimental `codev` when enabled) have no usage limits. Agents can make unlimited calls.
 **Impact:** A misbehaving agent can overwhelm the store or run up LLM costs without any guardrail.
 
 ### Memory type system is closed
@@ -112,7 +112,7 @@ Usage tracking (`usage.ts`) records chars and estimated tokens per tool/agent, b
 **Impact:** Governance teams can see usage after the fact but cannot prevent overruns.
 
 ### Tool discovery lacks trust/dependency introspection
-`tools/list` returns all 57 tools flat with schemas, but there is no categorization by concern, no indication of required trust level per tool, no tool dependency graph ("bclaw_dispatch requires active sequence"). Agents must read source code to understand tool preconditions.
+The default `tools/list` catalog is now curated around facades and daily runtime tools, and raw MCP clients can request the full registry, but there is still no trust-level annotation per tool and no tool dependency graph ("bclaw_dispatch requires active sequence"). Agents still need docs or source to understand tool preconditions.
 **Impact:** New agent integrations require trial-and-error to discover which tools work in their context.
 
 ### No metrics MCP endpoint

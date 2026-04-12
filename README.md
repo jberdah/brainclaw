@@ -129,14 +129,15 @@ The agent can now use brainclaw. The simplest way:
 "Use bclaw_work to start a session, then work on [your task]."
 ```
 
-Or with the granular tools:
+If the agent needs lower-level MCP calls after starting with the facades, the usual ones are:
 
 ```text
-bclaw_session_start   → open session, see the board
-bclaw_get_context     → load project memory for your scope
-bclaw_claim           → claim files before editing
-bclaw_write_note      → record observations during work
-bclaw_session_end     → close session, hand off cleanly
+bclaw_get_context        → narrow or refresh project memory for a scope
+bclaw_switch             → change the active Brainclaw project in a multi-project workspace
+bclaw_read_inbox         → pick up assigned work or review requests
+bclaw_write_note         → record runtime observations during work
+bclaw_read_handoff       → inspect an existing handoff with its snapshot
+bclaw_create_candidate   → turn a durable finding into the review queue
 ```
 
 ### 5. Verify it works

@@ -287,20 +287,15 @@ function renderAvailableTools(): string {
   return [
     '## brainclaw — available tools',
     '',
-    'Beyond the two facades above, 57 tools are available via MCP (use tools/list for full catalog):',
+    'The default MCP catalog is intentionally small. Start with the facades, then use the everyday tools below when you need a lower-level read or write.',
     '',
-    '**Context:** `bclaw_get_context`, `bclaw_get_execution_context`, `bclaw_bootstrap`, `bclaw_release_notes`',
-    '**Session:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
-    '**Memory:** `bclaw_search`, `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_update_memory`, `bclaw_delete_memory`, `bclaw_compact`',
-    '**Plans:** `bclaw_create_plan`, `bclaw_list_plans`, `bclaw_update_plan`, `bclaw_add_step`, `bclaw_complete_step`',
-    '**Sequences:** `bclaw_create_sequence`, `bclaw_list_sequences`, `bclaw_update_sequence`',
-    '**Dispatch:** `bclaw_dispatch`, `bclaw_dispatch_analysis`, `bclaw_dispatch_review`',
-    '**Messaging:** `bclaw_send_message`, `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_get_thread`',
-    '**Review:** `bclaw_create_candidate`, `bclaw_list_candidates`, `bclaw_accept`, `bclaw_reject`',
-    '**Awareness:** `bclaw_get_agent_board`, `bclaw_list_claims`, `bclaw_list_agents`, `bclaw_who`, `bclaw_conflict_check`',
-    '**Handoffs:** `bclaw_read_handoff`, `bclaw_update_handoff`',
-    '**Navigate:** `bclaw_switch`, `bclaw_get_discovery`',
-    '**Governance:** `bclaw_check_policy`, `bclaw_audit`, `bclaw_history`, `bclaw_doctor`, `bclaw_check_security`',
+    '**Facades:** `bclaw_work`, `bclaw_coordinate`',
+    '**Execution lifecycle:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
+    '**Everyday reads:** `bclaw_get_context`, `bclaw_get_execution_context`, `bclaw_get_agent_board`, `bclaw_read_inbox`, `bclaw_read_handoff`',
+    '**Planning and review:** `bclaw_list_plans`, `bclaw_list_claims`, `bclaw_list_candidates`, `bclaw_create_candidate`, `bclaw_ack_message`',
+    '**Capture, setup, and navigation:** `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_bootstrap`, `bclaw_release_notes`, `bclaw_switch`, `bclaw_setup`',
+    '',
+    'Advanced and legacy tools still exist. See `docs/integrations/mcp.md` for the broader catalog; raw MCP clients can request it with `tools/list` params `{ catalog: "all" }`.',
   ].join('\n');
 }
 

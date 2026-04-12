@@ -286,12 +286,41 @@ describe('MCP server', () => {
       const response = await sendMcpRequest(proc, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
       assert.equal(response.jsonrpc, '2.0');
       assert.ok(Array.isArray(response.result.tools));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_work'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_coordinate'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_get_context'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_session_start'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_session_end'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_claim'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_release_claim'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_plans'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_claims'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_read_inbox'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_quick_capture'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_switch'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_agents'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_instructions'));
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
+  it('returns the full catalog when tools/list requests catalog=all', async () => {
+    const proc = startMcp(dir);
+    try {
+      await initializeMcp(proc);
+      const response = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/list',
+        params: { catalog: 'all' },
+      });
+      assert.equal(response.jsonrpc, '2.0');
+      assert.ok(Array.isArray(response.result.tools));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_agents'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_instructions'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_dispatch'));
     } finally {
       await stopMcp(proc);
     }
@@ -402,7 +431,7 @@ describe('MCP server', () => {
         params: { protocolVersion: '2099-01-01' },
       });
 
-      assert.equal(response.result.protocolVersion, '2025-11-25');
+      assert.equal(response.result.protocolVersion, '2024-11-05');
 
       await sendMcpNotification(proc, { jsonrpc: '2.0', method: 'notifications/initialized' });
 

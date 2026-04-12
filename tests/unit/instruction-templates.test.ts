@@ -89,33 +89,39 @@ describe('instruction-templates', () => {
       assert.ok(!result.content.includes('REQUIRED'));
     });
 
-    it('includes available tools section with categorized tool names', () => {
+    it('includes a curated facade-first available tools section', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.ok(result.sectionsIncluded.includes('available-tools'), 'should include available-tools section');
       assert.ok(result.content.includes('## brainclaw — available tools'));
-      // Verify tool categories and key tools are present
       const toolNames = [
-        // Context
-        'bclaw_get_context', 'bclaw_get_execution_context', 'bclaw_bootstrap',
-        // Session
-        'bclaw_session_start', 'bclaw_session_end', 'bclaw_claim', 'bclaw_release_claim',
-        // Memory
-        'bclaw_search', 'bclaw_write_note', 'bclaw_quick_capture', 'bclaw_update_memory', 'bclaw_compact',
-        // Plans & Sequences
-        'bclaw_create_plan', 'bclaw_list_plans', 'bclaw_update_plan', 'bclaw_add_step', 'bclaw_complete_step',
-        'bclaw_create_sequence', 'bclaw_list_sequences', 'bclaw_update_sequence',
-        // Dispatch & Messaging
-        'bclaw_dispatch', 'bclaw_dispatch_analysis', 'bclaw_send_message', 'bclaw_read_inbox', 'bclaw_get_thread',
-        // Review
-        'bclaw_create_candidate', 'bclaw_accept', 'bclaw_reject',
-        // Awareness
-        'bclaw_get_agent_board', 'bclaw_list_claims', 'bclaw_who', 'bclaw_conflict_check',
-        // Navigate & Governance
-        'bclaw_switch', 'bclaw_get_discovery', 'bclaw_check_policy', 'bclaw_audit', 'bclaw_doctor',
+        'bclaw_work',
+        'bclaw_coordinate',
+        'bclaw_session_start',
+        'bclaw_session_end',
+        'bclaw_claim',
+        'bclaw_release_claim',
+        'bclaw_get_context',
+        'bclaw_get_execution_context',
+        'bclaw_get_agent_board',
+        'bclaw_read_inbox',
+        'bclaw_read_handoff',
+        'bclaw_list_plans',
+        'bclaw_list_claims',
+        'bclaw_list_candidates',
+        'bclaw_create_candidate',
+        'bclaw_ack_message',
+        'bclaw_write_note',
+        'bclaw_quick_capture',
+        'bclaw_bootstrap',
+        'bclaw_release_notes',
+        'bclaw_switch',
+        'bclaw_setup',
       ];
       for (const tool of toolNames) {
         assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
       }
+      assert.ok(result.content.includes('tools/list` params `{ catalog: "all" }`'));
+      assert.ok(!result.content.includes('57 tools are available via MCP'));
     });
 
     it('renderLiveSection returns undefined for tier A', () => {
