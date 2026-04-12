@@ -781,30 +781,42 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     }
 
     // Step 4: Send assignment message with assignment_id in payload
-    const msgResult = sendMessage({
-      from: options.dispatcherAgent,
-      to: targetAgent,
-      type: 'assign',
-      text: brief,
-      ref: readyItem.plan.id,
-      payload: {
-        plan_id: readyItem.plan.id,
-        plan_short_label: readyItem.plan.short_label,
-        sequence_id: analysis.sequence.id,
-        lane: readyItem.lane,
-        rank: readyItem.item.rank,
-        priority: readyItem.plan.priority,
+    let msgResult;
+    try {
+      msgResult = sendMessage({
+        from: options.dispatcherAgent,
+        to: targetAgent,
+        type: 'assign',
+        text: brief,
+        ref: readyItem.plan.id,
+        payload: {
+          plan_id: readyItem.plan.id,
+          plan_short_label: readyItem.plan.short_label,
+          sequence_id: analysis.sequence.id,
+          lane: readyItem.lane,
+          rank: readyItem.item.rank,
+          priority: readyItem.plan.priority,
+          claim_id: claimId,
+          worktree_path: worktreePath,
+          ...(assignmentId ? { assignment_id: assignmentId } : {}),
+        },
+        scope: readyItem.item.scope_hint,
+        requires_ack: true,
         claim_id: claimId,
-        worktree_path: worktreePath,
-        ...(assignmentId ? { assignment_id: assignmentId } : {}),
-      },
-      scope: readyItem.item.scope_hint,
-      requires_ack: true,
-      claim_id: claimId,
-      tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
-      author_id: options.dispatcherAgentId,
-      session_id: options.sessionId,
-    }, cwd);
+        assignment_id: assignmentId,
+        tags: ['dispatch', ...(readyItem.lane ? [`lane:${readyItem.lane}`] : [])],
+        author_id: options.dispatcherAgentId,
+        session_id: options.sessionId,
+      }, cwd);
+    } catch (msgErr) {
+      // If message send fails, transition assignment to failed to avoid zombie
+      if (assignmentId) {
+        try { transitionAssignment(assignmentId, 'offered', { actor: options.dispatcherAgent }, cwd); } catch { /* ignore */ }
+        try { transitionAssignment(assignmentId, 'expired', { actor: options.dispatcherAgent, status_reason: `Message delivery failed: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}` }, cwd); } catch { /* ignore */ }
+      }
+      result.warnings.push(`Message send failed for ${readyItem.plan.id}: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+      continue;
+    }
 
     // Step 5: Link claim → message and claim → assignment
     if (claimId !== '(dry-run)') {

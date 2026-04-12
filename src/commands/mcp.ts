@@ -3121,6 +3121,9 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const blocker = args.blocker as string | undefined;
         const artifacts = Array.isArray(args.artifacts) ? args.artifacts as Array<{ type: string; ref: string; description?: string }> : undefined;
 
+        // Warn if no active session (audit trail will be incomplete)
+        const effectiveSessionId = connectionSessionId ?? 'unknown';
+
         const { loadAssignment, transitionAssignment: transitionAsgn, recordProgress: recordProg } = await import('../core/assignments.js');
 
         const assignment = loadAssignment(assignmentId, cwd);
@@ -3140,7 +3143,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             artifacts,
             actor: callerAgent,
             actor_id: resolved.identity!.agent_id,
-            session_id: connectionSessionId,
+            session_id: effectiveSessionId,
           }, cwd);
           return {
             response: {
@@ -3156,7 +3159,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           : message;
 
         const result = transitionAsgn(assignmentId, status as import('../core/schema.js').AssignmentStatus, {
-          session_id: connectionSessionId,
+          session_id: effectiveSessionId,
           status_reason: statusReason,
           artifacts,
           error_message: errorMessage,

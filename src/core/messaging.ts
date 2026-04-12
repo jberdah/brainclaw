@@ -75,6 +75,8 @@ export interface SendMessageInput {
   session_id?: string;
   /** Top-level claim_id for dispatch routing. Authoritative over payload.claim_id. */
   claim_id?: string;
+  /** Top-level assignment_id for Agent SDK protocol. Authoritative over payload.assignment_id. */
+  assignment_id?: string;
 }
 
 export interface SendMessageResult {
@@ -112,6 +114,7 @@ export function sendMessage(input: SendMessageInput, cwd: string): SendMessageRe
       host_id: input.host_id,
       session_id: input.session_id,
       claim_id: input.claim_id,
+      assignment_id: input.assignment_id,
       tags: input.tags ?? [],
     };
 

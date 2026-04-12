@@ -381,6 +381,8 @@ export const InboxMessageSchema = z.object({
   /** Top-level claim_id for dispatch routing. Instances filter their inbox by this field.
    *  Also present in payload.claim_id for backward compat — this top-level field is authoritative. */
   claim_id: z.string().optional(),
+  /** Top-level assignment_id for Agent SDK protocol. Enables filtering/display without parsing payload. */
+  assignment_id: z.string().optional(),
   tags: TagsWithDefaultSchema,
 });
 export type InboxMessage = z.infer<typeof InboxMessageSchema>;

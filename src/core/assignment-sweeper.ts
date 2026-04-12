@@ -55,6 +55,23 @@ export function sweepAssignments(
       }
     }
 
+    // Check accepted assignments that never started (accepted but worker died before starting)
+    if (assignment.status === 'accepted') {
+      const acceptedAt = assignment.accepted_at ?? assignment.last_heartbeat_at;
+      if (!acceptedAt) continue;
+      const ageMs = now - new Date(acceptedAt).getTime();
+      // Use acceptance_ttl for accepted→timed_out (same window: agent should start quickly after accepting)
+      if (ageMs > assignment.acceptance_ttl_ms) {
+        try {
+          transitionAssignment(assignment.id, 'timed_out', {
+            status_reason: `Accepted but not started within ${Math.round(ageMs / 60_000)} minutes`,
+            actor,
+          }, cwd);
+          result.timed_out.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });
+        } catch { /* skip */ }
+      }
+    }
+
     // Check offered assignments for acceptance timeout
     if (assignment.status === 'offered') {
       const offeredAt = assignment.offered_at;

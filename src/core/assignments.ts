@@ -92,7 +92,7 @@ export function generateAssignmentId(cwd?: string): { id: string; short_label: s
 const VALID_TRANSITIONS = new Map<string, Set<string>>([
   ['created',   new Set(['offered'])],
   ['offered',   new Set(['accepted', 'expired'])],
-  ['accepted',  new Set(['started'])],
+  ['accepted',  new Set(['started', 'timed_out'])],
   ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out'])],
   ['failed',    new Set(['retrying'])],
   ['timed_out', new Set(['retrying'])],
