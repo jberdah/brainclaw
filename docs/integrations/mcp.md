@@ -125,7 +125,7 @@ This section highlights the primary runtime tools agents are expected to use mos
 | `bclaw_setup` | Agent-driven onboarding wizard |
 | `bclaw_delete_memory` | Delete a memory item by ID |
 | `bclaw_update_memory` | Update a memory item's text or metadata |
-| `bclaw_update_handoff` | Update a handoff status or add narrative |
+| `bclaw_update_handoff` | Update a handoff status, narrative, contract, or structured review verdict |
 | `bclaw_add_capability` | Register a project capability |
 | `bclaw_add_tool` | Register a project tool |
 

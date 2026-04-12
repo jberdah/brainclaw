@@ -286,6 +286,17 @@ describe('commands/mcp read tools', () => {
           project_id: 'prj_mcp_read_test',
           status: 'open',
           tags: ['auth'],
+          review: {
+            reviewer: 'codex',
+            requested_at: iso(4),
+            thread_id: 'thr_review',
+            verdict: 'request_changes',
+            reviewed_by: 'codex',
+            reviewed_at: iso(3),
+            summary: 'One edge case is still unhandled.',
+            blocking_issues: ['Missing null guard in callback flow.'],
+            suggestions: ['Add a regression test for null payloads.'],
+          },
           snapshot: {
             diff: 'diff --git a/src/auth.ts b/src/auth.ts',
           },
@@ -299,6 +310,8 @@ describe('commands/mcp read tools', () => {
     }, { cwd: workspace.dir });
     assert.ok(handoffResponse.content[0].text.includes('From: copilot'));
     assert.ok(handoffResponse.content[0].text.includes('Review the auth patch'));
+    assert.ok(handoffResponse.content[0].text.includes('Verdict: request_changes'));
+    assert.ok(handoffResponse.content[0].text.includes('Missing null guard in callback flow.'));
     assert.ok(handoffResponse.content[0].text.includes('Uncommitted Git Diff'));
 
     const missingResponse = handleMcpReadToolCall('bclaw_read_handoff', {

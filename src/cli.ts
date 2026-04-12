@@ -564,11 +564,25 @@ program
 // --- update-handoff ---
 program
   .command('update-handoff <id>')
-  .description('Update the status of a handoff')
+  .description('Update the status, recipient, or review state of a handoff')
   .option('--status <status>', 'Status: open, accepted, closed')
   .option('--to <agent>', 'Change the receiving agent')
+  .option('--narrative <text>', 'Update the narrative attached to the handoff')
+  .option('--reviewer <agent>', 'Set or override the assigned reviewer')
+  .option('--review-verdict <verdict>', 'Set review verdict: approve or request_changes')
+  .option('--reviewed-by <agent>', 'Set the reviewer identity that produced the verdict')
+  .option('--review-summary <text>', 'Attach a short review summary')
+  .option('--blocking-issue <text>', 'Add a blocking review issue (repeatable)', collect, [])
+  .option('--suggestion <text>', 'Add a non-blocking review suggestion (repeatable)', collect, [])
   .action((id, options) => {
-    runUpdateHandoff(id, options);
+    runUpdateHandoff(id, {
+      ...options,
+      review_verdict: options.reviewVerdict,
+      reviewed_by: options.reviewedBy,
+      review_summary: options.reviewSummary,
+      blocking_issues: options.blockingIssue,
+      suggestions: options.suggestion,
+    });
   });
 
 // --- doctor ---

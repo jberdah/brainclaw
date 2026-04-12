@@ -34,7 +34,7 @@
  * @module
  */
 import { getActiveSequence } from './sequence.js';
-import { loadState } from './state.js';
+import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim } from './claims.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
@@ -45,6 +45,8 @@ import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
+import { generateId, nowISO } from './ids.js';
+import { applyHandoffUpdates } from '../commands/update-handoff.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -995,6 +997,7 @@ export interface DispatchReviewResult {
     plan_id?: string;
     reviewer: string;
     message_id: string;
+    thread_id?: string;
     channel: 'inbox';
   }>;
   skipped: Array<{
@@ -1008,11 +1011,11 @@ export interface DispatchReviewResult {
  */
 export function dispatchReview(options: DispatchReviewOptions, cwd: string): DispatchReviewResult {
   const result: DispatchReviewResult = { reviews_sent: [], skipped: [] };
+  const state = loadState(cwd);
 
   // Find reviewable handoffs
   let reviewable: ReviewableHandoff[];
   if (options.handoffId) {
-    const state = loadState(cwd);
     const handoff = state.open_handoffs.find(h => h.id === options.handoffId || h.short_label === options.handoffId);
     if (!handoff) {
       result.skipped.push({ handoff_id: options.handoffId, reason: 'Handoff not found' });
@@ -1041,7 +1044,19 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
     }
     reviewable = [{ handoff, plan }];
   } else {
-    reviewable = findReviewableHandoffs(cwd);
+    reviewable = state.open_handoffs
+      .filter((handoff) => {
+        if (handoff.status === 'closed') return false;
+        if (!handoff.plan_id) return false;
+        const plan = state.plan_items.find((entry) => entry.id === handoff.plan_id);
+        if (!plan || plan.status !== 'done') return false;
+        if (hasActiveReviewMessage(handoff.id, cwd)) return false;
+        return true;
+      })
+      .map((handoff) => ({
+        handoff,
+        plan: state.plan_items.find((entry) => entry.id === handoff.plan_id)!,
+      }));
   }
 
   if (reviewable.length === 0) return result;
@@ -1071,10 +1086,13 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
         plan_id: plan?.id,
         reviewer,
         message_id: '(dry-run)',
+        thread_id: handoff.review?.thread_id,
         channel: 'inbox',
       });
       continue;
     }
+
+    const reviewThreadId = handoff.review?.thread_id ?? generateId('thread');
 
     // Send review message
     const msgResult = sendMessage({
@@ -1083,6 +1101,7 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
       type: 'review',
       text: brief,
       ref: handoff.id,
+      thread_id: reviewThreadId,
       payload: {
         handoff_id: handoff.id,
         plan_id: plan?.id,
@@ -1094,11 +1113,21 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
       session_id: options.sessionId,
     }, cwd);
 
+    applyHandoffUpdates(handoff, {
+      requester: options.dispatcherAgent,
+      reviewer,
+      requested_at: nowISO(),
+      review_thread_id: reviewThreadId,
+      review_message_id: msgResult.id,
+    });
+    persistState(state, cwd);
+
     result.reviews_sent.push({
       handoff_id: handoff.id,
       plan_id: plan?.id,
       reviewer,
       message_id: msgResult.id,
+      thread_id: reviewThreadId,
       channel: 'inbox',
     });
   }

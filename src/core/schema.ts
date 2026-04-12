@@ -60,6 +60,9 @@ export type MemoryVisibility = z.infer<typeof MemoryVisibilitySchema>;
 export const HandoffStatusSchema = z.enum(['open', 'accepted', 'closed']);
 export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
 
+export const ReviewVerdictSchema = z.enum(['approve', 'request_changes']);
+export type ReviewVerdict = z.infer<typeof ReviewVerdictSchema>;
+
 export const DecisionOutcomeSchema = z.enum(['approved', 'rejected', 'deferred', 'pending']);
 export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
 
@@ -141,6 +144,21 @@ export const HandoffContractSchema = z.object({
 });
 export type HandoffContract = z.infer<typeof HandoffContractSchema>;
 
+export const HandoffReviewSchema = z.object({
+  requester: z.string().optional(),
+  reviewer: z.string().optional(),
+  requested_at: z.string().optional(),
+  thread_id: z.string().optional(),
+  message_id: z.string().optional(),
+  verdict: ReviewVerdictSchema.optional(),
+  reviewed_at: z.string().optional(),
+  reviewed_by: z.string().optional(),
+  summary: z.string().optional(),
+  blocking_issues: z.array(z.string()).optional(),
+  suggestions: z.array(z.string()).optional(),
+});
+export type HandoffReview = z.infer<typeof HandoffReviewSchema>;
+
 export const HandoffSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -162,6 +180,7 @@ export const HandoffSchema = z.object({
   tags: TagsSchema,
   related_paths: z.array(z.string()).optional(),
   contract: HandoffContractSchema.optional(),
+  review: HandoffReviewSchema.optional(),
   snapshot: z.object({
     diff: z.string().optional(),
   }).optional(),

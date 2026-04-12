@@ -338,6 +338,21 @@ export function handleMcpReadToolCall(
         if (c.tests_to_verify?.length) text += `Tests to verify:\n${c.tests_to_verify.map(t => `  - ${t}`).join('\n')}\n`;
         if (c.linked_plans?.length) text += `Linked plans:\n${c.linked_plans.map(l => `  - ${l}`).join('\n')}\n`;
       }
+      if (handoff.review) {
+        const review = handoff.review;
+        text += '\n--- Review ---\n';
+        if (review.requester) text += `Requester: ${review.requester}\n`;
+        if (review.reviewer) text += `Reviewer: ${review.reviewer}\n`;
+        if (review.requested_at) text += `Requested at: ${review.requested_at}\n`;
+        if (review.thread_id) text += `Thread: ${review.thread_id}\n`;
+        if (review.message_id) text += `Review message: ${review.message_id}\n`;
+        if (review.verdict) text += `Verdict: ${review.verdict}\n`;
+        if (review.reviewed_by) text += `Reviewed by: ${review.reviewed_by}\n`;
+        if (review.reviewed_at) text += `Reviewed at: ${review.reviewed_at}\n`;
+        if (review.summary) text += `Summary: ${review.summary}\n`;
+        if (review.blocking_issues?.length) text += `Blocking issues:\n${review.blocking_issues.map((issue) => `  - ${issue}`).join('\n')}\n`;
+        if (review.suggestions?.length) text += `Suggestions:\n${review.suggestions.map((suggestion) => `  - ${suggestion}`).join('\n')}\n`;
+      }
       text += '\n';
       if (handoff.snapshot?.diff) {
         text += `--- Uncommitted Git Diff ---\n\`\`\`diff\n${handoff.snapshot.diff}\n\`\`\`\n`;

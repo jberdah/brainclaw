@@ -616,8 +616,16 @@ describe('core/dispatcher', () => {
       assert.equal(result.reviews_sent[0]!.handoff_id, 'hnd_ok');
       assert.equal(result.reviews_sent[0]!.plan_id, 'pln_a');
       assert.equal(result.reviews_sent[0]!.channel, 'inbox');
+      assert.ok(result.reviews_sent[0]!.thread_id?.startsWith('thr_'));
       // Reviewer should not be the author
       assert.notEqual(result.reviews_sent[0]!.reviewer, 'claude-code');
+
+      const updated = loadState(testDir);
+      const updatedHandoff = updated.open_handoffs.find((entry) => entry.id === 'hnd_ok');
+      assert.equal(updatedHandoff?.review?.requester, 'coordinator');
+      assert.equal(updatedHandoff?.review?.reviewer, result.reviews_sent[0]!.reviewer);
+      assert.equal(updatedHandoff?.review?.thread_id, result.reviews_sent[0]!.thread_id);
+      assert.equal(updatedHandoff?.review?.message_id, result.reviews_sent[0]!.message_id);
     });
 
     it('explicit handoffId applies same reviewability checks — closed', () => {
@@ -730,6 +738,8 @@ describe('core/dispatcher', () => {
       assert.equal(result.reviews_sent.length, 1);
       assert.equal(result.reviews_sent[0]!.message_id, '(dry-run)');
       assert.equal(result.reviews_sent[0]!.handoff_id, 'hnd_dry');
+      const updated = loadState(testDir);
+      assert.equal(updated.open_handoffs[0]?.review, undefined);
     });
   });
 

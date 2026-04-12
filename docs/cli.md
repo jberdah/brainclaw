@@ -977,10 +977,18 @@ Update an existing handoff.
 |---|---|
 | `--status <status>` | New status |
 | `--to <name>` | Change recipient |
+| `--narrative <text>` | Replace the handoff narrative |
+| `--reviewer <name>` | Set or override the assigned reviewer |
+| `--review-verdict <verdict>` | Capture a structured review verdict: `approve` or `request_changes` |
+| `--reviewed-by <name>` | Record who produced the verdict |
+| `--review-summary <text>` | Attach a short review summary |
+| `--blocking-issue <text>` | Add a blocking issue (repeatable) |
+| `--suggestion <text>` | Add a non-blocking suggestion (repeatable) |
 
 ```bash
-brainclaw update-handoff hnd_001 --status done
+brainclaw update-handoff hnd_001 --status closed
 brainclaw update-handoff hnd_001 --to alice
+brainclaw update-handoff hnd_001 --review-verdict request_changes --reviewed-by codex --blocking-issue "Null guard missing"
 ```
 
 ---

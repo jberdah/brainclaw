@@ -362,4 +362,55 @@ describe('commands/mcp protocol core', () => {
       workspace.cleanup();
     }
   });
+
+  it('updates handoff review verdicts through MCP', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-mcp-protocol-', currentAgent: 'codex' });
+    try {
+      saveState({
+        version: 1,
+        write_version: 1,
+        active_constraints: [],
+        recent_decisions: [],
+        known_traps: [],
+        open_handoffs: [{
+          id: 'hnd_reviewable',
+          short_label: 'hnd#1',
+          from: 'claude-code',
+          to: 'codex',
+          text: 'Review auth patch',
+          created_at: new Date().toISOString(),
+          author: 'claude-code',
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_test_workspace',
+          status: 'open',
+          tags: ['review'],
+        }],
+        plan_items: [],
+      }, workspace.dir);
+
+      const result = await executeMcpToolCall({
+        name: 'bclaw_update_handoff',
+        args: {
+          id: 'hnd_reviewable',
+          agent: workspace.currentAgent.agent_name,
+          review_verdict: 'approve',
+          reviewed_by: workspace.currentAgent.agent_name,
+          review_summary: 'Patch looks consistent with the plan.',
+          suggestions: ['Consider adding a higher-level integration test.'],
+        },
+        cwd: workspace.dir,
+      });
+      assert.equal(result.response.isError, false);
+
+      const state = loadState(workspace.dir);
+      const handoff = state.open_handoffs.find((entry) => entry.id === 'hnd_reviewable');
+      assert.equal(handoff?.review?.verdict, 'approve');
+      assert.equal(handoff?.review?.reviewed_by, 'codex');
+      assert.equal(handoff?.review?.summary, 'Patch looks consistent with the plan.');
+      assert.deepEqual(handoff?.review?.suggestions, ['Consider adding a higher-level integration test.']);
+      assert.equal(typeof handoff?.review?.reviewed_at, 'string');
+    } finally {
+      workspace.cleanup();
+    }
+  });
 });

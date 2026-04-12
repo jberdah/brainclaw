@@ -21,6 +21,7 @@ import { acceptCandidate } from './accept.js';
 import { rejectCandidate } from './reject.js';
 import { startSession } from './session-start.js';
 import { endSession } from './session-end.js';
+import { applyHandoffUpdates } from './update-handoff.js';
 import {
   agentCanWriteDirect,
   AgentIdentityResolutionError,
@@ -925,7 +926,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_update_handoff',
-    description: 'Update the status, recipient, or contract of an open handoff. Requires contributor trust level or above. Use targetProject to push the resulting handoff state to a linked project.',
+    description: 'Update the status, recipient, contract, or review state of an open handoff. Requires contributor trust level or above. Use targetProject to push the resulting handoff state to a linked project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -940,6 +941,12 @@ const MCP_WRITE_TOOLS = [
         tests_to_verify: { type: 'array', items: { type: 'string' }, description: 'Tests the receiving agent should verify.' },
         linked_plans: { type: 'array', items: { type: 'string' }, description: 'Linked plan IDs.' },
         narrative: { type: 'string', description: 'Free-text narrative of what happened and why, beyond the auto-generated commit list.' },
+        reviewer: { type: 'string', description: 'Assigned reviewer for the handoff review.' },
+        review_verdict: { type: 'string', enum: ['approve', 'request_changes'], description: 'Structured review verdict for this handoff.' },
+        reviewed_by: { type: 'string', description: 'Agent or reviewer who produced the verdict.' },
+        review_summary: { type: 'string', description: 'Short summary of the review outcome.' },
+        blocking_issues: { type: 'array', items: { type: 'string' }, description: 'Blocking issues raised by review.' },
+        suggestions: { type: 'array', items: { type: 'string' }, description: 'Non-blocking suggestions raised by review.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -3549,17 +3556,22 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!handoff) {
         return { response: createToolErrorResponse('not_found', `Handoff not found: ${handoffId}`) };
       }
-      if (args.status) handoff.status = args.status as 'open' | 'closed';
-      if (args.to) handoff.to = String(args.to);
-      if (args.narrative) handoff.narrative = String(args.narrative);
-      // Update contract fields
-      const contractUpdates: Record<string, string[]> = {};
-      for (const key of ['files_touched', 'pre_conditions', 'post_conditions', 'tests_to_verify', 'linked_plans'] as const) {
-        if (Array.isArray(args[key])) contractUpdates[key] = args[key] as string[];
-      }
-      if (Object.keys(contractUpdates).length > 0) {
-        handoff.contract = { ...handoff.contract, ...contractUpdates };
-      }
+      applyHandoffUpdates(handoff, {
+        status: args.status as 'open' | 'accepted' | 'closed' | undefined,
+        to: typeof args.to === 'string' ? String(args.to) : undefined,
+        narrative: typeof args.narrative === 'string' ? String(args.narrative) : undefined,
+        files_touched: Array.isArray(args.files_touched) ? args.files_touched as string[] : undefined,
+        pre_conditions: Array.isArray(args.pre_conditions) ? args.pre_conditions as string[] : undefined,
+        post_conditions: Array.isArray(args.post_conditions) ? args.post_conditions as string[] : undefined,
+        tests_to_verify: Array.isArray(args.tests_to_verify) ? args.tests_to_verify as string[] : undefined,
+        linked_plans: Array.isArray(args.linked_plans) ? args.linked_plans as string[] : undefined,
+        reviewer: typeof args.reviewer === 'string' ? String(args.reviewer) : undefined,
+        review_verdict: args.review_verdict as 'approve' | 'request_changes' | undefined,
+        reviewed_by: typeof args.reviewed_by === 'string' ? String(args.reviewed_by) : undefined,
+        review_summary: typeof args.review_summary === 'string' ? String(args.review_summary) : undefined,
+        blocking_issues: Array.isArray(args.blocking_issues) ? args.blocking_issues as string[] : undefined,
+        suggestions: Array.isArray(args.suggestions) ? args.suggestions as string[] : undefined,
+      });
       saveState(state, cwd);
       appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'update', item_id: handoffId, item_type: 'handoff' }, cwd);
       const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
@@ -3575,6 +3587,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               handoff_id: handoffId,
               status: handoff.status,
               to: handoff.to,
+              review: handoff.review,
               target_project: targetLink.projectName,
               target_path: targetLink.absolutePath,
               schema_version: SCHEMA_VERSION,
@@ -3590,6 +3603,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           handoff_id: handoffId,
           status: handoff.status,
           to: handoff.to,
+          review: handoff.review,
           schema_version: SCHEMA_VERSION,
         }),
       };

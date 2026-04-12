@@ -93,6 +93,31 @@ describe('update-handoff command', () => {
     assert.equal(handoff.status, 'closed');
   });
 
+  it('captures a structured review verdict on the handoff', () => {
+    const createRes = run(['handoff', 'Review auth patch', '--from', 'copilot', '--to', 'claude'], dir);
+    const handoffId = extractId(createRes.stdout);
+
+    const updateRes = run([
+      'update-handoff',
+      handoffId,
+      '--review-verdict', 'request_changes',
+      '--reviewed-by', 'codex',
+      '--review-summary', 'Null handling is still incomplete.',
+      '--blocking-issue', 'Missing null guard in auth callback path.',
+      '--suggestion', 'Add a regression test for empty provider payloads.',
+    ], dir);
+    assert.equal(updateRes.exitCode, 0, updateRes.stderr);
+
+    const [hFile] = fs.readdirSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs')).filter(f => f.endsWith('.json'));
+    const handoff = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'handoffs', hFile), 'utf-8'));
+    assert.equal(handoff.review.verdict, 'request_changes');
+    assert.equal(handoff.review.reviewed_by, 'codex');
+    assert.equal(handoff.review.summary, 'Null handling is still incomplete.');
+    assert.deepEqual(handoff.review.blocking_issues, ['Missing null guard in auth callback path.']);
+    assert.deepEqual(handoff.review.suggestions, ['Add a regression test for empty provider payloads.']);
+    assert.equal(typeof handoff.review.reviewed_at, 'string');
+  });
+
   it('errors on unknown handoff id', () => {
     const res = run(['update-handoff', 'hnd_doesnotexist', '--status', 'accepted'], dir);
     assert.equal(res.exitCode, 1);
