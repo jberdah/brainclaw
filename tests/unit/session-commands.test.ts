@@ -106,7 +106,7 @@ describe('session commands', { concurrency: false }, () => {
       assert.ok(snapshot);
       assert.equal(snapshot?.agent, workspace.currentAgent.agent_name);
       assert.equal(snapshot?.context_target, 'auth');
-      assert.ok(snapshot?.initial_context_hash);
+      assert.equal(snapshot?.initial_context_hash, undefined);
       assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_start_test');
 
       const sessionDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime', workspace.currentAgent.agent_name);

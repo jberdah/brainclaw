@@ -28,16 +28,6 @@ function sessionSnapshotPath(sessionId: string, cwd?: string): string {
   return path.join(sessionsDir(cwd), `${sessionId}.json`);
 }
 
-function createHash(data: string): string {
-  let hash = 0;
-  for (let i = 0; i < data.length; i++) {
-    const chr = data.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
-    hash |= 0;
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
 export interface SessionStartOptions {
   agent?: string;
   agentId?: string;
@@ -47,6 +37,11 @@ export interface SessionStartOptions {
   /** Output full project context (like `brainclaw context`) after starting the session. */
   includeContext?: boolean;
   cwd?: string;
+  /**
+   * Internal maintenance mode. `fast` keeps the critical session-start path short;
+   * `full` also runs reconciliation and other best-effort maintenance work.
+   */
+  maintenanceMode?: 'fast' | 'full';
 }
 
 export interface SharedCheckoutWarning {
@@ -153,12 +148,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   requireMinimumTrustLevel(registered, 'contributor');
   const actor = buildOperationalIdentity(registered.agent_name, options.cwd, { agentId: registered.agent_id });
 
-  // Capture initial context snapshot
-  let initialContextHash: string | undefined;
-  try {
-    const ctx = buildContext({ target: options.context, agent: actor.agent, cwd: options.cwd });
-    initialContextHash = createHash(JSON.stringify(ctx.selected));
-  } catch { /* non-fatal */ }
+  const maintenanceMode = options.maintenanceMode ?? 'fast';
 
   // Capture git HEAD SHA for later handoff generation
   let gitSha: string | undefined;
@@ -175,7 +165,6 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     agent_id: actor.agent_id,
     started_at: nowISO(),
     context_target: options.context,
-    initial_context_hash: initialContextHash,
     git_sha: gitSha,
     ...(model ? { model } : {}),
   };
@@ -226,22 +215,24 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
   appendAuditEntry({ action: 'session_start', actor: actor.agent, actor_id: actor.agent_id, item_id: snapshot.session_id, item_type: 'session', session_id: snapshot.session_id, host_id: actor.host_id }, options.cwd);
   const agentGitHygiene = auditLocalAgentWorkspaceFiles(options.cwd ?? process.cwd());
 
-  // Inventory reconciliation — detect new/disappeared agents on this machine
+  // Non-critical maintenance work lives behind the full mode only.
   let inventoryAdvisory: string[] | undefined;
-  try {
-    const previousInventory = loadAgentInventory();
-    const currentInventory = buildAgentInventory();
-    const diff = diffInventory(previousInventory, currentInventory);
-    saveAgentInventory(currentInventory);
+  if (maintenanceMode === 'full') {
+    try {
+      const previousInventory = loadAgentInventory();
+      const currentInventory = buildAgentInventory();
+      const diff = diffInventory(previousInventory, currentInventory);
+      saveAgentInventory(currentInventory);
 
-    const lines: string[] = [];
-    if (diff.appeared.length > 0) lines.push(`New agents detected: ${diff.appeared.join(', ')}`);
-    if (diff.disappeared.length > 0) lines.push(`Agents no longer detected: ${diff.disappeared.join(', ')}`);
-    for (const vc of diff.version_changed) {
-      lines.push(`${vc.name} version changed: ${vc.from ?? '?'} → ${vc.to ?? '?'}`);
-    }
-    if (lines.length > 0) inventoryAdvisory = lines;
-  } catch { /* non-fatal — inventory scan failure should not block session start */ }
+      const lines: string[] = [];
+      if (diff.appeared.length > 0) lines.push(`New agents detected: ${diff.appeared.join(', ')}`);
+      if (diff.disappeared.length > 0) lines.push(`Agents no longer detected: ${diff.disappeared.join(', ')}`);
+      for (const vc of diff.version_changed) {
+        lines.push(`${vc.name} version changed: ${vc.from ?? '?'} → ${vc.to ?? '?'}`);
+      }
+      if (lines.length > 0) inventoryAdvisory = lines;
+    } catch { /* non-fatal — inventory scan failure should not block session start */ }
+  }
 
   // Shared checkout detection: warn if other active sessions share the same worktree
   let sharedCheckoutWarning: SharedCheckoutWarning | undefined;
@@ -273,79 +264,85 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
 
   // Stale claim auto-release: release claims from OTHER agents that are older than threshold
   let staleClaimsReleased: Array<{ id: string; agent: string; scope: string }> | undefined;
-  try {
-    const staleResult = releaseStaleClaimsFromOtherAgents(actor.agent, options.cwd);
-    if (staleResult.released.length > 0) {
-      staleClaimsReleased = staleResult.released.map(c => ({ id: c.id, agent: c.agent, scope: c.scope }));
-    }
-  } catch { /* non-fatal */ }
+  if (maintenanceMode === 'full') {
+    try {
+      const staleResult = releaseStaleClaimsFromOtherAgents(actor.agent, options.cwd);
+      if (staleResult.released.length > 0) {
+        staleClaimsReleased = staleResult.released.map(c => ({ id: c.id, agent: c.agent, scope: c.scope }));
+      }
+    } catch { /* non-fatal */ }
+  }
 
   // Memory pressure check: hint agent to run bclaw_compact if store is large
   let memoryPressure: MemoryPressureResult | undefined;
-  try {
-    const pressure = checkMemoryPressure(options.cwd);
-    if (pressure.memory_pressure) {
-      memoryPressure = pressure;
-    }
-  } catch { /* non-fatal */ }
+  if (maintenanceMode === 'full') {
+    try {
+      const pressure = checkMemoryPressure(options.cwd);
+      if (pressure.memory_pressure) {
+        memoryPressure = pressure;
+      }
+    } catch { /* non-fatal */ }
+  }
 
   // Materialize incoming federation signals from linked projects
-  try {
-    const federationSignals = pullSignalsFromLinkedProjects(options.cwd);
-    let materialized = 0;
-    for (const signal of federationSignals) {
-      try {
-        const origin = `remote:${signal.from.project_name}:${signal.from.agent_name}`;
-        if (signal.type === 'candidate') {
-          const parsed = CandidateSchema.safeParse(signal.payload);
-          if (parsed.success) {
-            const { id, short_label } = generateCandidateIdWithLabel(options.cwd);
-            saveCandidate({
-              ...parsed.data,
-              id,
-              short_label,
-              created_at: nowISO(),
-              source: origin,
-              star_count: 0,
-              starred_by: [],
-              usage_count: 0,
-              usage_events: [],
-              status: 'pending',
-            }, options.cwd);
-          }
-        } else if (signal.type === 'handoff') {
-          const parsed = HandoffSchema.safeParse(signal.payload);
-          if (parsed.success) {
-            const { id, short_label } = generateIdWithLabel('open_handoffs', options.cwd);
-            mutateState((state) => {
-              state.open_handoffs.push({
+  if (maintenanceMode === 'full') {
+    try {
+      const federationSignals = pullSignalsFromLinkedProjects(options.cwd);
+      let materialized = 0;
+      for (const signal of federationSignals) {
+        try {
+          const origin = `remote:${signal.from.project_name}:${signal.from.agent_name}`;
+          if (signal.type === 'candidate') {
+            const parsed = CandidateSchema.safeParse(signal.payload);
+            if (parsed.success) {
+              const { id, short_label } = generateCandidateIdWithLabel(options.cwd);
+              saveCandidate({
                 ...parsed.data,
                 id,
                 short_label,
                 created_at: nowISO(),
+                source: origin,
+                star_count: 0,
+                starred_by: [],
+                usage_count: 0,
+                usage_events: [],
+                status: 'pending',
+              }, options.cwd);
+            }
+          } else if (signal.type === 'handoff') {
+            const parsed = HandoffSchema.safeParse(signal.payload);
+            if (parsed.success) {
+              const { id, short_label } = generateIdWithLabel('open_handoffs', options.cwd);
+              mutateState((state) => {
+                state.open_handoffs.push({
+                  ...parsed.data,
+                  id,
+                  short_label,
+                  created_at: nowISO(),
+                  tags: [...(parsed.data.tags ?? []), origin],
+                });
+              }, options.cwd);
+            }
+          } else if (signal.type === 'runtime_note') {
+            const parsed = RuntimeNoteSchema.safeParse(signal.payload);
+            if (parsed.success) {
+              saveRuntimeNote({
+                ...parsed.data,
+                id: generateRuntimeNoteId(),
+                created_at: nowISO(),
                 tags: [...(parsed.data.tags ?? []), origin],
-              });
-            }, options.cwd);
+              }, options.cwd);
+            }
           }
-        } else if (signal.type === 'runtime_note') {
-          const parsed = RuntimeNoteSchema.safeParse(signal.payload);
-          if (parsed.success) {
-            saveRuntimeNote({
-              ...parsed.data,
-              id: generateRuntimeNoteId(),
-              created_at: nowISO(),
-              tags: [...(parsed.data.tags ?? []), origin],
-            }, options.cwd);
-          }
-        }
-        markSignalProcessed(signal.from.project_path, signal.id);
-        materialized++;
-      } catch { /* skip this signal — do not block session start */ }
-    }
-    if (materialized > 0) {
-      console.log(`✔ Materialized ${materialized} federation signal(s) from linked projects`);
-    }
-  } catch { /* Non-fatal — federation pull failure should not block session start */ }
+          markSignalProcessed(signal.from.project_path, signal.id);
+          materialized++;
+        } catch { /* skip this signal — do not block session start */ }
+      }
+      if (materialized > 0) {
+        console.log(`✔ Materialized ${materialized} federation signal(s) from linked projects`);
+      }
+    } catch { /* Non-fatal — federation pull failure should not block session start */ }
+  }
 
   return {
     ...snapshot,
