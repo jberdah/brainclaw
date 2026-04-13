@@ -12,7 +12,8 @@
 import { memoryExists } from '../core/io.js';
 import { readInbox, ackMessage, archiveMessage, sendMessage, countPending, getThread } from '../core/messaging.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
-import type { MessageType, MessageStatus } from '../core/schema.js';
+import { resolveStoreChain } from '../core/store-resolution.js';
+import type { MessageType, MessageStatus, InboxMessage } from '../core/schema.js';
 
 export interface InboxListOptions {
   agent?: string;
@@ -22,6 +23,8 @@ export interface InboxListOptions {
   all?: boolean;
   json?: boolean;
   cwd?: string;
+  /** Read from local store only, skipping parent stores in the chain. Default: false (chain mode). */
+  localOnly?: boolean;
 }
 
 export function runInboxList(options: InboxListOptions): void {
@@ -34,28 +37,51 @@ export function runInboxList(options: InboxListOptions): void {
   const effectiveCwd = cwd ?? process.cwd();
   const agent = options.agent ?? resolveCurrentAgentName(effectiveCwd) ?? 'unknown';
   const status = options.all ? undefined : (options.status as MessageStatus | undefined) ?? 'pending';
+  const msgType = options.type as MessageType | undefined;
+  const threadId = options.thread;
 
-  const result = readInbox({
-    agent,
-    status,
-    type: options.type as MessageType | undefined,
-    thread_id: options.thread,
-    markAsRead: false,
-  }, effectiveCwd);
+  let messages: InboxMessage[];
+  if (options.localOnly) {
+    const result = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
+    messages = result.messages;
+  } else {
+    const chain = resolveStoreChain(effectiveCwd);
+    const seenIds = new Set<string>();
+    messages = [];
+    for (const store of chain) {
+      try {
+        // Fetch all messages from this store (no pagination limit)
+        const storeResult = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false, limit: 1_000_000 }, store.cwd);
+        for (const msg of storeResult.messages) {
+          if (!seenIds.has(msg.id)) {
+            seenIds.add(msg.id);
+            messages.push(msg);
+          }
+        }
+      } catch { /* skip unreadable stores */ }
+    }
+    // Fallback when no chain found
+    if (messages.length === 0 && chain.length === 0) {
+      const result = readInbox({ agent, status, type: msgType, thread_id: threadId, markAsRead: false }, effectiveCwd);
+      messages = result.messages;
+    }
+  }
+
+  const total = messages.length;
 
   if (options.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ total, offset: 0, limit: total, messages }, null, 2));
     return;
   }
 
   const label = status ? `${status} messages` : 'all messages';
-  console.log(`\n📬 Inbox for ${agent} — ${result.total} ${label}\n`);
+  console.log(`\n📬 Inbox for ${agent} — ${total} ${label}\n`);
 
-  if (result.messages.length === 0) {
+  if (messages.length === 0) {
     console.log('  (no messages)');
   }
 
-  for (const msg of result.messages) {
+  for (const msg of messages) {
     const ack = msg.requires_ack ? ' [ACK required]' : '';
     const thread = msg.thread_id ? ` thread:${msg.thread_id}` : '';
     const ref = msg.ref ? ` ref:${msg.ref}` : '';

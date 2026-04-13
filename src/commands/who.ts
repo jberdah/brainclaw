@@ -1,13 +1,16 @@
 import os from 'node:os';
 import { loadAllSessions, gcStaleSessions } from '../core/identity.js';
 import { listClaims } from '../core/claims.js';
-import type { CurrentSessionState } from '../core/schema.js';
+import { resolveStoreChain } from '../core/store-resolution.js';
+import type { CurrentSessionState, Claim } from '../core/schema.js';
 
 export interface WhoOptions {
   json?: boolean;
   all?: boolean;
   gc?: boolean;
   cwd?: string;
+  /** Read claims from local store only, skipping parent stores in the chain. Default: false (chain mode). */
+  localOnly?: boolean;
 }
 
 export function runWho(options: WhoOptions = {}): void {
@@ -31,7 +34,27 @@ export function runWho(options: WhoOptions = {}): void {
     ? allSessions
     : allSessions.filter(s => (now - Date.parse(s.last_seen_at)) <= ttlMs);
 
-  const activeClaims = listClaims(cwd).filter(c => c.status === 'active');
+  let activeClaims: Claim[];
+  if (options.localOnly) {
+    activeClaims = listClaims(cwd).filter(c => c.status === 'active');
+  } else {
+    const chain = resolveStoreChain(cwd);
+    const seenIds = new Set<string>();
+    activeClaims = [];
+    for (const store of chain) {
+      try {
+        for (const claim of listClaims(store.cwd)) {
+          if (claim.status === 'active' && !seenIds.has(claim.id)) {
+            seenIds.add(claim.id);
+            activeClaims.push(claim);
+          }
+        }
+      } catch { /* skip unreadable stores */ }
+    }
+    if (activeClaims.length === 0 && chain.length === 0) {
+      activeClaims = listClaims(cwd).filter(c => c.status === 'active');
+    }
+  }
 
   const enriched = sessions.map(s => {
     const age = now - Date.parse(s.last_seen_at);
