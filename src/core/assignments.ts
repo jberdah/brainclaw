@@ -61,7 +61,14 @@ export function saveAssignment(assignment: Assignment, cwd?: string): void {
 }
 
 export function loadAssignment(id: string, cwd?: string): Assignment | undefined {
-  return assignmentStore(cwd).load(id);
+  // JsonStore.load throws when the id is missing; honor the declared
+  // "| undefined" return type so callers (e.g. transitionAssignment)
+  // can emit their own 'Assignment not found' error with the right wording.
+  try {
+    return assignmentStore(cwd).load(id);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ListAssignmentsFilter {
