@@ -8,10 +8,10 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate, rende
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { loadState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -2849,34 +2849,27 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!claimId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      let claimObj;
       try {
-        claimObj = loadClaim(claimId, cwd);
+        loadClaim(claimId, cwd); // validate existence before delegating
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      saveClaim({ ...claimObj, status: 'released' as const, released_at: nowISO() }, cwd);
-      appendAuditEntry({ actor: claimObj.agent, actor_id: claimObj.agent_id, action: 'release_claim', item_id: claimId, item_type: 'claim', scope: claimObj.scope, session_id: claimObj.session_id, host_id: claimObj.host_id }, cwd);
-      const releasePlanStatus = args.planStatus as string | undefined;
-      let releasePlanUpdated = false;
-      if (releasePlanStatus && claimObj.plan_id) {
-        const releaseState = loadState(cwd);
-        const releasePlan = releaseState.plan_items.find((item) => item.id === claimObj.plan_id);
-        if (releasePlan) {
-          const ts = nowISO();
-          releasePlan.status = releasePlanStatus as PlanStatus;
-          if (releasePlanStatus === 'in_progress' && !releasePlan.started_at) releasePlan.started_at = ts;
-          if (releasePlanStatus === 'done' && !releasePlan.completed_at) releasePlan.completed_at = ts;
-          releasePlan.updated_at = ts;
-          persistState(releaseState, cwd);
-          releasePlanUpdated = true;
-        }
-      }
+      const cascadeResult = releaseClaimWithCascade(claimId, {
+        planStatus: args.planStatus as string | undefined,
+        cwd,
+      });
+      const { planTransitioned, planWarning, planId: cascadePlanId, newPlanStatus: cascadeNewStatus } = cascadeResult;
+      const summaryText = [
+        `✔ Released claim [${claimId}]`,
+        planTransitioned ? ` — plan ${cascadePlanId} → ${cascadeNewStatus}` : '',
+        planWarning ? ` ⚠ ${planWarning}` : '',
+      ].join('');
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Released claim [${claimId}]${releasePlanUpdated ? ` — plan ${claimObj.plan_id} → ${releasePlanStatus}` : ''}` }],
+          content: [{ type: 'text', text: summaryText }],
           claim_id: claimId,
-          ...(releasePlanUpdated ? { plan_id: claimObj.plan_id, plan_status: releasePlanStatus } : {}),
+          ...(planTransitioned ? { plan_id: cascadePlanId, plan_status: cascadeNewStatus } : {}),
+          ...(planWarning ? { plan_warning: planWarning, plan_id: cascadePlanId } : {}),
         }),
       };
     }
