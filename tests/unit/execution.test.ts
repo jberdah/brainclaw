@@ -152,7 +152,9 @@ describe('attemptExecution', () => {
     });
     assert.equal(result.execution_status, 'command_ready_manual');
     assert.ok(result.shell, 'should include shell type');
-    assert.equal(result.shell, process.platform === 'win32' ? 'cmd' : 'bash');
+    // Shell field: 'cmd' on Windows, 'bash' when invoke.shell=true on POSIX, else 'sh'
+    const expectedShell = process.platform === 'win32' ? 'cmd' : (invoke.shell ? 'bash' : 'sh');
+    assert.equal(result.shell, expectedShell);
   });
 
   it('manual fallback prefixes claim_id differently on POSIX and Windows', async () => {
