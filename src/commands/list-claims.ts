@@ -1,5 +1,7 @@
 import { memoryExists } from '../core/io.js';
 import { listClaims, expireStaleActiveClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.js';
+import { resolveStoreChain } from '../core/store-resolution.js';
+import type { Claim } from '../core/schema.js';
 
 export interface ListClaimsOptions {
   json?: boolean;
@@ -8,6 +10,8 @@ export interface ListClaimsOptions {
   plan?: string;
   agent?: string;
   cwd?: string;
+  /** Read from local store only, skipping parent stores in the chain. Default: false (chain mode). */
+  localOnly?: boolean;
 }
 
 export function runListClaims(options: ListClaimsOptions = {}): void {
@@ -16,10 +20,35 @@ export function runListClaims(options: ListClaimsOptions = {}): void {
     process.exit(1);
   }
 
-  // Auto-expire claims whose TTL has passed before listing
+  const effectiveCwd = options.cwd ?? process.cwd();
+
+  // Auto-expire claims whose TTL has passed before listing (local store only — writes are always local)
   expireStaleActiveClaims(options.cwd);
 
-  let claims = listClaims(options.cwd);
+  let claims: Claim[];
+  if (options.localOnly) {
+    claims = listClaims(options.cwd);
+  } else {
+    const chain = resolveStoreChain(effectiveCwd);
+    const seenIds = new Set<string>();
+    claims = [];
+    for (const store of chain) {
+      try {
+        // Expire stale claims in each parent store too
+        expireStaleActiveClaims(store.cwd);
+        for (const claim of listClaims(store.cwd)) {
+          if (!seenIds.has(claim.id)) {
+            seenIds.add(claim.id);
+            claims.push(claim);
+          }
+        }
+      } catch { /* skip unreadable stores */ }
+    }
+    // Fallback when no chain found
+    if (claims.length === 0 && chain.length === 0) {
+      claims = listClaims(options.cwd);
+    }
+  }
   if (!options.all) {
     claims = claims.filter(c => c.status === 'active');
   }

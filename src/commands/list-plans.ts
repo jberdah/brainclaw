@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
+import { resolveStoreChain } from '../core/store-resolution.js';
 import type { PlanItem, PlanStatus, PlanType } from '../core/schema.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
 
@@ -13,6 +14,8 @@ export interface ListPlansOptions {
   all?: boolean;
   recursive?: boolean;
   cwd?: string;
+  /** Read from local store only, skipping parent stores in the chain. Default: false (chain mode). */
+  localOnly?: boolean;
 }
 
 export interface DescendantPlanGroup {
@@ -89,7 +92,30 @@ export function runListPlans(options: ListPlansOptions = {}): void {
     process.exit(1);
   }
 
-  const localPlans = filterPlans(loadState(options.cwd).plan_items, options);
+  const effectiveCwd = options.cwd ?? process.cwd();
+  let rawPlans: PlanItem[];
+  if (options.localOnly) {
+    rawPlans = loadState(options.cwd).plan_items;
+  } else {
+    const chain = resolveStoreChain(effectiveCwd);
+    const seenIds = new Set<string>();
+    rawPlans = [];
+    for (const store of chain) {
+      try {
+        for (const plan of loadState(store.cwd).plan_items) {
+          if (!seenIds.has(plan.id)) {
+            seenIds.add(plan.id);
+            rawPlans.push(plan);
+          }
+        }
+      } catch { /* skip unreadable stores */ }
+    }
+    // Fallback when no chain found (should not happen if memoryExists passed)
+    if (rawPlans.length === 0 && chain.length === 0) {
+      rawPlans = loadState(options.cwd).plan_items;
+    }
+  }
+  const localPlans = filterPlans(rawPlans, options);
 
   if (options.recursive) {
     const cwd = options.cwd ?? process.cwd();

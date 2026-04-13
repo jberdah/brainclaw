@@ -9,6 +9,7 @@ interface PlanResourceOptions extends PlanOptions, UpdatePlanOptions {
   json?: boolean;
   all?: boolean;
   recursive?: boolean;
+  localOnly?: boolean;
 }
 
 const KNOWN_SUBCOMMANDS = new Set(['create', 'list', 'ls', 'update', 'delete', 'show', 'get']);
@@ -35,6 +36,7 @@ export function runPlanResource(subcommand: string, args: string[], options: Pla
       project: options.project,
       all: options.all,
       recursive: options.recursive,
+      localOnly: options.localOnly,
     });
     return;
   }
