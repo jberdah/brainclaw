@@ -97,6 +97,7 @@ import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
+import { runHarvestCandidates } from './commands/harvest.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
 
 const program = new Command();
@@ -456,8 +457,9 @@ program
   .option('--actual-effort <effort>', 'Actual effort spent (e.g. "20min", "1h30m")')
   .option('--store <target>', 'Target store level: local (default), repo, workspace, user')
   .option('--recursive', 'Include plans from descendant brainclaw projects (for list)')
+  .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
-    runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort });
+    runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort, localOnly: options.localOnly });
   });
 
 // --- list-plans ---
@@ -471,8 +473,9 @@ program
   .option('--project <project>', 'Filter by project namespace')
   .option('--all', 'Include done and dropped plan items')
   .option('--recursive', 'Include plans from descendant brainclaw projects')
+  .option('--local-only', 'Read from local store only (skip parent stores in chain)')
   .action((options) => {
-    runListPlans(options);
+    runListPlans({ ...options, localOnly: options.localOnly });
   });
 
 program
@@ -905,6 +908,18 @@ program
     runReject(id, options.reason, options.by);
   });
 
+// --- harvest-candidates ---
+program
+  .command('harvest-candidates')
+  .description('Harvest candidates from worktree inboxes into the main project store (codex sandbox bridge)')
+  .option('--dry-run', 'Preview what would be imported without writing anything')
+  .option('--worktree <path>', 'Explicit worktree path to scan (repeatable)', collect, [])
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    const globalOpts = program.opts();
+    runHarvestCandidates({ ...options, cwd: globalOpts.cwd });
+  });
+
 // --- prune-candidates ---
 program
   .command('prune-candidates')
@@ -928,8 +943,9 @@ program
   .option('--json', 'Output as JSON for list')
   .option('--plan-status <status>', 'Optional linked plan status when releasing: todo, in_progress, blocked, done, dropped')
   .option('--store <target>', 'Target store level: local (default), repo, workspace')
+  .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
-    runClaimResource(subcommand, args, { ...options, planStatus: options.planStatus });
+    runClaimResource(subcommand, args, { ...options, planStatus: options.planStatus, localOnly: options.localOnly });
   });
 
 // --- list-claims ---
@@ -941,8 +957,9 @@ program
   .option('--project <project>', 'Filter by project namespace')
   .option('--plan <id>', 'Filter by linked plan item')
   .option('--agent <agent>', 'Filter by agent name')
+  .option('--local-only', 'Read from local store only (skip parent stores in chain)')
   .action((options) => {
-    runListClaims(options);
+    runListClaims({ ...options, localOnly: options.localOnly });
   });
 
 // --- release-claim ---
@@ -1371,8 +1388,9 @@ inboxCmd
   .option('--thread <id>', 'Filter by thread ID')
   .option('--all', 'Show all messages, not just pending')
   .option('--json', 'Output as JSON')
+  .option('--local-only', 'Read from local store only (skip parent stores in chain)')
   .action((options) => {
-    runInboxList(options);
+    runInboxList({ ...options, localOnly: options.localOnly });
   });
 
 inboxCmd
@@ -1582,10 +1600,11 @@ program
   .option('--json', 'Output as JSON')
   .option('--all', 'Include stale sessions')
   .option('--gc', 'Remove stale sessions')
+  .option('--local-only', 'Read claims from local store only (skip parent stores in chain)')
   .action(async (options) => {
     const globalOpts = program.opts();
     const { runWho } = await import('./commands/who.js');
-    runWho({ json: options.json, all: options.all, gc: options.gc, cwd: globalOpts.cwd });
+    runWho({ json: options.json, all: options.all, gc: options.gc, cwd: globalOpts.cwd, localOnly: options.localOnly });
   });
 
 const worktreeCmd = program

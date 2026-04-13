@@ -8,10 +8,10 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate, rende
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { loadState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -62,6 +62,7 @@ import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBr
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { createAssignment, generateAssignmentId, patchAssignmentMessageId, transitionAssignment } from '../core/assignments.js';
+import { harvestCandidates } from './harvest.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -1229,6 +1230,21 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['action_id', 'outcome'],
+    },
+  },
+  {
+    name: 'bclaw_harvest_candidates',
+    description: 'Harvest candidates from worktree inboxes into the main project store. Use this as the coordinator-side bridge for agents running under --sandbox workspace-write (e.g. Codex), which cannot write to the main store via MCP and instead write to their worktree .brainclaw/coordination/inbox/. Requires trusted trust level.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktreePaths: { type: 'array', items: { type: 'string' }, description: 'Explicit worktree paths to scan. Defaults to all active worktrees under ~/.brainclaw/worktrees/<project-hash>/.' },
+        dryRun: { type: 'boolean', description: 'When true, report what would be harvested without writing anything.' },
+        agent: { type: 'string', description: 'Coordinator agent name for runtime event attribution.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: [],
     },
   },
 ] as const;
@@ -2849,34 +2865,27 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       if (!claimId) {
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
-      let claimObj;
       try {
-        claimObj = loadClaim(claimId, cwd);
+        loadClaim(claimId, cwd); // validate existence before delegating
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      saveClaim({ ...claimObj, status: 'released' as const, released_at: nowISO() }, cwd);
-      appendAuditEntry({ actor: claimObj.agent, actor_id: claimObj.agent_id, action: 'release_claim', item_id: claimId, item_type: 'claim', scope: claimObj.scope, session_id: claimObj.session_id, host_id: claimObj.host_id }, cwd);
-      const releasePlanStatus = args.planStatus as string | undefined;
-      let releasePlanUpdated = false;
-      if (releasePlanStatus && claimObj.plan_id) {
-        const releaseState = loadState(cwd);
-        const releasePlan = releaseState.plan_items.find((item) => item.id === claimObj.plan_id);
-        if (releasePlan) {
-          const ts = nowISO();
-          releasePlan.status = releasePlanStatus as PlanStatus;
-          if (releasePlanStatus === 'in_progress' && !releasePlan.started_at) releasePlan.started_at = ts;
-          if (releasePlanStatus === 'done' && !releasePlan.completed_at) releasePlan.completed_at = ts;
-          releasePlan.updated_at = ts;
-          persistState(releaseState, cwd);
-          releasePlanUpdated = true;
-        }
-      }
+      const cascadeResult = releaseClaimWithCascade(claimId, {
+        planStatus: args.planStatus as string | undefined,
+        cwd,
+      });
+      const { planTransitioned, planWarning, planId: cascadePlanId, newPlanStatus: cascadeNewStatus } = cascadeResult;
+      const summaryText = [
+        `✔ Released claim [${claimId}]`,
+        planTransitioned ? ` — plan ${cascadePlanId} → ${cascadeNewStatus}` : '',
+        planWarning ? ` ⚠ ${planWarning}` : '',
+      ].join('');
       return {
         response: toolResponse({
-          content: [{ type: 'text', text: `✔ Released claim [${claimId}]${releasePlanUpdated ? ` — plan ${claimObj.plan_id} → ${releasePlanStatus}` : ''}` }],
+          content: [{ type: 'text', text: summaryText }],
           claim_id: claimId,
-          ...(releasePlanUpdated ? { plan_id: claimObj.plan_id, plan_status: releasePlanStatus } : {}),
+          ...(planTransitioned ? { plan_id: cascadePlanId, plan_status: cascadeNewStatus } : {}),
+          ...(planWarning ? { plan_warning: planWarning, plan_id: cascadePlanId } : {}),
         }),
       };
     }
@@ -4655,6 +4664,34 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         response: toolResponse({
           content: [{ type: 'text', text: summaryParts.join('\n') }],
           structuredContent: facadeResponse as unknown as Record<string, unknown>,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_harvest_candidates') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const worktreePaths = Array.isArray(args.worktreePaths) ? (args.worktreePaths as string[]) : undefined;
+      const dryRun = args.dryRun === true;
+      const harvestResult = harvestCandidates({
+        worktreePaths,
+        dryRun,
+        cwd,
+        agent: resolvedIdentity.agent_name,
+      });
+      const dryTag = dryRun ? ' (dry-run)' : '';
+      const summary = `✔ Harvest complete${dryTag}: ${harvestResult.harvested.length} imported, ${harvestResult.skipped.length} skipped, ${harvestResult.errors.length} error(s).`;
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: summary }],
+          harvested: harvestResult.harvested.length,
+          skipped: harvestResult.skipped.length,
+          errors: harvestResult.errors,
+          candidates: harvestResult.harvested.map((c) => ({ id: c.id, type: c.type })),
+          dry_run: dryRun,
         }),
       };
     }

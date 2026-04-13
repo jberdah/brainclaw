@@ -230,6 +230,10 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'opencode',
     invoke_review_template: 'opencode "{prompt}"',
   },
+  // Sandbox note: when running under --sandbox workspace-write, Codex cannot reach
+  // the main project store via MCP. Use filesystem-direct writes instead:
+  // write candidates to .brainclaw/coordination/inbox/cnd_<id>.json in the active
+  // worktree. The coordinator then syncs them via bclaw_harvest_candidates.
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,

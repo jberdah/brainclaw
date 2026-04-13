@@ -5,6 +5,7 @@ import { runReleaseClaim, type ReleaseClaimOptions } from './release-claim.js';
 interface ClaimResourceOptions extends ClaimOptions, ReleaseClaimOptions {
   json?: boolean;
   all?: boolean;
+  localOnly?: boolean;
 }
 
 export function runClaimResource(subcommand: string, args: string[], options: ClaimResourceOptions): void {
@@ -32,6 +33,7 @@ export function runClaimResource(subcommand: string, args: string[], options: Cl
       plan: options.plan,
       agent: options.agent,
       cwd: options.cwd,
+      localOnly: options.localOnly,
     });
     return;
   }
