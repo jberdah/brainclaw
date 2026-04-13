@@ -29,7 +29,7 @@ describe('agent-capability', () => {
 
   it('getAllAgentCapabilityProfiles returns all known agents', () => {
     const all = getAllAgentCapabilityProfiles();
-    assert.equal(all.length, 16);
+    assert.equal(all.length, 17);
   });
 
   it('isKnownAgent validates known names', () => {
