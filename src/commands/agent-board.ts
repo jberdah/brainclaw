@@ -64,6 +64,21 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
     console.log(`  [${claim.id}] ${claim.agent} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}`);
   }
   console.log('');
+  console.log(`Active assignments: ${board.active_assignments.length}`);
+  for (const assignment of board.active_assignments.slice(0, 10)) {
+    console.log(`  [${assignment.id}] ${assignment.agent} (${assignment.status}) -> ${assignment.scope}${assignment.plan_id ? ` (plan ${assignment.plan_id})` : ''}`);
+  }
+  console.log('');
+  console.log(`Active runs: ${board.active_runs.length}`);
+  for (const run of board.active_runs.slice(0, 10)) {
+    console.log(`  [${run.id}] ${run.agent} (${run.status}/${run.transport}) -> ${run.scope}${run.assignment_id ? ` (assignment ${run.assignment_id})` : ''} [attempt ${run.attempt_index}]`);
+  }
+  console.log('');
+  console.log(`Pending actions: ${board.active_actions.length}`);
+  for (const action of board.active_actions.slice(0, 10)) {
+    console.log(`  [${action.id}] ${action.kind} for ${action.agent} (${action.status})${action.assignment_id ? ` [assignment ${action.assignment_id}]` : ''}: ${action.title}`);
+  }
+  console.log('');
   console.log(`Active sequence: ${board.active_sequence ? `1 (${board.active_sequence.name})` : '0'}`);
   if (board.active_sequence) {
     console.log(`  [${board.active_sequence.id}] ${board.active_sequence.name} (${board.active_sequence.status})`);

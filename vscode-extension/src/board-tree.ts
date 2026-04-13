@@ -39,6 +39,9 @@ export class BrainclawTreeItem extends vscode.TreeItem {
 interface BoardData {
   active_plans: any[];
   active_claims: any[];
+  active_assignments?: any[];
+  active_runs?: any[];
+  active_actions?: any[];
   open_handoffs: any[];
   runtime_notes: any[];
   other_agents?: any[];
@@ -87,6 +90,18 @@ function activeClaims(board: BoardData): any[] {
   return board.active_claims ?? [];
 }
 
+function activeAssignments(board: BoardData): any[] {
+  return board.active_assignments ?? [];
+}
+
+function activeRuns(board: BoardData): any[] {
+  return board.active_runs ?? [];
+}
+
+function activeActions(board: BoardData): any[] {
+  return board.active_actions ?? [];
+}
+
 function visibleHandoffs(board: BoardData): any[] {
   return (board.open_handoffs ?? [])
     .filter((handoff: any) => handoff.status !== 'closed')
@@ -108,6 +123,9 @@ const SECTION = {
   ACTIVITY: 'activity',
   PLANS: 'plans',
   CLAIMS: 'claims',
+  ASSIGNMENTS: 'assignments',
+  RUNS: 'runs',
+  ACTIONS: 'actions',
   HANDOFFS: 'handoffs',
   SPRINT: 'sprint',
   TRAPS: 'traps',
@@ -419,10 +437,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return this._projectBoards.get(normalizedPath) ?? null;
   }
 
-  private _projectSummary(board: BoardData): { plans: number; claims: number; agents: number; sessions: number } {
+  private _projectSummary(board: BoardData): { plans: number; claims: number; assignments: number; runs: number; actions: number; agents: number; sessions: number } {
     return {
       plans: activePlans(board).length,
       claims: activeClaims(board).length,
+      assignments: activeAssignments(board).length,
+      runs: activeRuns(board).length,
+      actions: activeActions(board).length,
       agents: workingAgents(board).length,
       sessions: openSessions(board),
     };
@@ -520,8 +541,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
       if (board) {
         const summary = this._projectSummary(board);
-        description = `${summary.plans} plans · ${summary.claims} claims · ${summary.agents} agents · ${summary.sessions} sessions`;
-        tooltip += `\nActive plans: ${summary.plans}\nActive claims: ${summary.claims}\nAgents working: ${summary.agents}\nOpen sessions: ${summary.sessions}`;
+        description = `${summary.plans} plans · ${summary.claims} claims · ${summary.assignments} assignments · ${summary.runs} runs · ${summary.actions} actions · ${summary.agents} agents · ${summary.sessions} sessions`;
+        tooltip += `\nActive plans: ${summary.plans}\nActive claims: ${summary.claims}\nActive assignments: ${summary.assignments}\nActive runs: ${summary.runs}\nPending actions: ${summary.actions}\nAgents working: ${summary.agents}\nOpen sessions: ${summary.sessions}`;
       } else if (this._projectErrors.has(normalizedPath)) {
         description = 'Board unavailable';
         tooltip += `\nError: ${this._projectErrors.get(normalizedPath)}`;
@@ -624,6 +645,21 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       sections.push(this._sectionHeader(`Claims (${claims.length})`, SECTION.CLAIMS, 'lock', claims.length, projectPath, expandWhenPopulated));
     }
 
+    const assignments = activeAssignments(board);
+    if (assignments.length > 0) {
+      sections.push(this._sectionHeader(`Assignments (${assignments.length})`, SECTION.ASSIGNMENTS, 'server-process', assignments.length, projectPath, expandWhenPopulated));
+    }
+
+    const runs = activeRuns(board);
+    if (runs.length > 0) {
+      sections.push(this._sectionHeader(`Runs (${runs.length})`, SECTION.RUNS, 'pulse', runs.length, projectPath, expandWhenPopulated));
+    }
+
+    const actions = activeActions(board);
+    if (actions.length > 0) {
+      sections.push(this._sectionHeader(`Actions (${actions.length})`, SECTION.ACTIONS, 'debug-pause', actions.length, projectPath, expandWhenPopulated));
+    }
+
     const handoffs = visibleHandoffs(board);
     if (handoffs.length > 0) {
       sections.push(this._sectionHeader(`Handoffs (${handoffs.length})`, SECTION.HANDOFFS, 'arrow-swap', handoffs.length, projectPath, expandWhenPopulated));
@@ -680,6 +716,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       case SECTION.ACTIVITY: return this._buildActivity(board, projectPath);
       case SECTION.PLANS: return this._buildPlans(board, projectPath);
       case SECTION.CLAIMS: return this._buildClaims(board, projectPath);
+      case SECTION.ASSIGNMENTS: return this._buildAssignments(board, projectPath);
+      case SECTION.RUNS: return this._buildRuns(board, projectPath);
+      case SECTION.ACTIONS: return this._buildActions(board, projectPath);
       case SECTION.HANDOFFS: return this._buildHandoffs(board, projectPath);
       case SECTION.SPRINT: return this._buildSprint(board, projectPath);
       case SECTION.TRAPS: return this._buildTraps(board, projectPath);
@@ -790,6 +829,104 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         `Claimed by: ${claim.agent}\nScope: ${claim.scope}\nDescription: ${claim.description ?? ''}\nSince: ${ago}`,
         'claim',
         claim.id,
+        projectPath,
+      );
+    });
+  }
+
+  private _buildAssignments(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const assignments = activeAssignments(board);
+    if (assignments.length === 0) {
+      return [new BrainclawTreeItem('No active assignments', vscode.TreeItemCollapsibleState.None)];
+    }
+
+    return assignments.map((assignment: any) => {
+      const heartbeatAgo = assignment.last_heartbeat_at ? timeAgo(assignment.last_heartbeat_at) : 'no heartbeat yet';
+      const icon = assignment.status === 'started'
+        ? 'play-circle'
+        : assignment.status === 'accepted'
+          ? 'check'
+          : assignment.status === 'offered'
+            ? 'mail'
+            : assignment.status === 'blocked'
+              ? 'warning'
+              : 'circle-outline';
+      const label = assignment.description?.slice(0, 80) || assignment.scope || assignment.id;
+      const plan = assignment.plan_id ? `\nPlan: ${assignment.plan_id}` : '';
+
+      return new BrainclawTreeItem(
+        label,
+        vscode.TreeItemCollapsibleState.None,
+        `${assignment.status} · ${assignment.agent} · ${heartbeatAgo}`,
+        new vscode.ThemeIcon(icon),
+        `Assignment: ${assignment.id}\nAgent: ${assignment.agent}\nStatus: ${assignment.status}\nScope: ${assignment.scope}${plan}\nLast heartbeat: ${heartbeatAgo}`,
+        'assignment',
+        assignment.id,
+        projectPath,
+      );
+    });
+  }
+
+  private _buildRuns(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const runs = activeRuns(board);
+    if (runs.length === 0) {
+      return [new BrainclawTreeItem('No active runs', vscode.TreeItemCollapsibleState.None)];
+    }
+
+    return runs.map((run: any) => {
+      const ago = run.last_event_at ? timeAgo(run.last_event_at) : 'no events yet';
+      const icon = run.status === 'running'
+        ? 'play-circle'
+        : run.status === 'launching'
+          ? 'loading~spin'
+          : run.status === 'waiting_input'
+            ? 'clock'
+            : run.status === 'blocked'
+              ? 'warning'
+              : 'circle-outline';
+      const label = `${run.description?.slice(0, 70) || run.scope || run.id} [#${run.attempt_index}]`;
+      return new BrainclawTreeItem(
+        label,
+        vscode.TreeItemCollapsibleState.None,
+        `${run.status} · ${run.transport} · ${ago}`,
+        new vscode.ThemeIcon(icon),
+        `Run: ${run.id}\nAssignment: ${run.assignment_id}\nAgent: ${run.agent}\nStatus: ${run.status}\nTransport: ${run.transport}\nAttempt: ${run.attempt_index}\nScope: ${run.scope}\nLast event: ${ago}`,
+        'run',
+        run.id,
+        projectPath,
+      );
+    });
+  }
+
+  private _buildActions(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const actions = activeActions(board);
+    if (actions.length === 0) {
+      return [new BrainclawTreeItem('No pending actions', vscode.TreeItemCollapsibleState.None)];
+    }
+
+    return actions.map((action: any) => {
+      const ago = action.updated_at ? timeAgo(action.updated_at) : timeAgo(action.created_at);
+      const icon = action.kind === 'approval'
+        ? 'shield'
+        : action.kind === 'plan_approval'
+          ? 'checklist'
+          : action.kind === 'user_input'
+            ? 'comment-discussion'
+            : 'question';
+      const label = action.title?.slice(0, 80) || action.prompt?.slice(0, 80) || action.id;
+      const scope = action.scope ? `\nScope: ${action.scope}` : '';
+      const options = Array.isArray(action.options) && action.options.length > 0
+        ? `\nOptions: ${action.options.join(', ')}`
+        : '';
+
+      return new BrainclawTreeItem(
+        label,
+        vscode.TreeItemCollapsibleState.None,
+        `${action.kind} · ${action.agent} · ${ago}`,
+        new vscode.ThemeIcon(icon),
+        `Action: ${action.id}\nKind: ${action.kind}\nAgent: ${action.agent}\nStatus: ${action.status}\nPrompt: ${action.prompt}${scope}${options}`,
+        'action',
+        action.id,
         projectPath,
       );
     });
