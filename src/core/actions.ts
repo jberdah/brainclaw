@@ -70,6 +70,66 @@ function expireStaleActions(actions: ActionRequired[], cwd?: string): ActionRequ
       action.status = 'expired';
       action.updated_at = nowISO();
       try { saveActionRequired(action, cwd); } catch { /* best-effort */ }
+      const expiryReason = `Action required expired: ${action.title}`;
+      try {
+        const run = action.run_id ? loadAgentRun(action.run_id, cwd) : undefined;
+        if (run && !['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'].includes(run.status)) {
+          transitionAgentRun(run.id, 'timed_out', {
+            actor: action.agent,
+            actor_id: action.agent_id,
+            session_id: action.session_id,
+            status_reason: expiryReason,
+          }, cwd);
+        }
+      } catch { /* best-effort */ }
+      try {
+        const assignment = loadAssignment(action.assignment_id, cwd);
+        if (assignment && assignment.status === 'blocked') {
+          transitionAssignment(assignment.id, 'failed', {
+            actor: action.agent,
+            actor_id: action.agent_id,
+            session_id: action.session_id,
+            status_reason: expiryReason,
+            error_message: expiryReason,
+          }, cwd);
+        }
+      } catch { /* best-effort */ }
+      try {
+        appendAuditEntry({
+          actor: action.agent,
+          actor_id: action.agent_id,
+          action: 'update',
+          item_id: action.id,
+          item_type: 'state',
+          before: { status: 'pending' },
+          after: { status: 'expired' },
+          scope: action.scope,
+          session_id: action.session_id,
+        }, cwd);
+      } catch { /* best-effort */ }
+      try {
+        createRuntimeEvent({
+          agent: action.agent,
+          agent_id: action.agent_id,
+          session_id: action.session_id,
+          event_type: 'observation',
+          text: `Action expired: ${action.title}`,
+          tags: ['agent-runtime', 'action-expired', `kind:${action.kind}`],
+          assignment_id: action.assignment_id,
+          run_id: action.run_id,
+          claim_id: action.claim_id,
+          plan_id: action.plan_id,
+          sequence_id: action.sequence_id,
+          scope: action.scope,
+          status: action.status,
+          status_reason: expiryReason,
+          metadata: {
+            protocol: 'brainclaw.agent_runtime.action_required.v1',
+            action_id: action.id,
+            outcome: 'expired',
+          },
+        }, cwd);
+      } catch { /* best-effort */ }
     }
   }
   return actions;

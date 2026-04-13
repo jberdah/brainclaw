@@ -152,6 +152,7 @@ describe('attemptExecution', () => {
     });
     assert.equal(result.execution_status, 'command_ready_manual');
     assert.ok(result.shell, 'should include shell type');
+    assert.equal(result.shell, process.platform === 'win32' ? 'cmd' : 'bash');
   });
 
   it('manual fallback prefixes claim_id differently on POSIX and Windows', async () => {
@@ -166,6 +167,7 @@ describe('attemptExecution', () => {
     }));
     assert.equal(posix.execution_status, 'command_ready_manual');
     assert.ok(posix.command?.startsWith('BRAINCLAW_CLAIM_ID=clm_posix '), 'POSIX command uses inline env prefix');
+    assert.equal(posix.shell, 'sh');
 
     const win = await withPlatform('win32', () => attemptExecution(invoke, {
       agent: 'codex',
@@ -175,6 +177,7 @@ describe('attemptExecution', () => {
     }));
     assert.equal(win.execution_status, 'command_ready_manual');
     assert.ok(win.command?.startsWith('set BRAINCLAW_CLAIM_ID=clm_win && '), 'Windows command uses cmd-style env prefix');
+    assert.equal(win.shell, 'cmd');
   });
 });
 

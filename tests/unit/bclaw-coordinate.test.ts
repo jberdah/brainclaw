@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { CoordinateRequestSchema } from '../../src/core/facade-schema.js';
 import { getSpawnableAgents } from '../../src/core/agent-capability.js';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
+import { findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
+import { loadAssignment } from '../../src/core/assignments.js';
 import { listClaims } from '../../src/core/claims.js';
 import { readInbox } from '../../src/core/messaging.js';
 import type { FacadeResponse } from '../../src/core/facade-schema.js';
@@ -211,6 +213,16 @@ describe('bclaw_coordinate — side effects', () => {
       // Brief should contain claim reference and assignment header
       assert.ok(assignMsg.text.includes('pre-claimed by coordinator'), 'Brief should mention pre-claimed scope');
       assert.ok(assignMsg.text.includes('# Assignment:'), 'Brief should have assignment header');
+      assert.ok(assignMsg.assignment_id, 'assign message should carry assignment_id');
+      assert.equal(assignMsg.payload?.assignment_id, assignMsg.assignment_id, 'payload should carry matching assignment_id');
+      assert.equal(claims[0].assignment_id, assignMsg.assignment_id, 'claim should link to assignment');
+      const assignment = loadAssignment(assignMsg.assignment_id!, workspace.dir);
+      assert.equal(assignment?.status, 'offered');
+      assert.equal(assignment?.message_id, assignMsg.id);
+      const run = findLatestAgentRunForAssignment(assignMsg.assignment_id!, workspace.dir);
+      assert.equal(run?.transport, 'manual_command');
+      assert.equal(run?.status, 'waiting_input');
+      assert.equal(run?.message_id, assignMsg.id);
     });
 
     it('returns delivery_plan with channel=inbox and command hints', async () => {
@@ -352,6 +364,12 @@ describe('bclaw_coordinate — side effects', () => {
 
       const inbox = readInbox({ agent: 'github-copilot' }, workspace.dir);
       assert.ok(inbox.messages.length >= 1, 'Expected inbox message for rerouted agent');
+      const rerouteMsg = inbox.messages.find(m => m.type === 'assign');
+      assert.ok(rerouteMsg?.assignment_id, 'Reroute assign message should carry assignment_id');
+      const rerouteAssignment = loadAssignment(rerouteMsg.assignment_id!, workspace.dir);
+      assert.equal(rerouteAssignment?.status, 'offered');
+      const rerouteRun = findLatestAgentRunForAssignment(rerouteMsg.assignment_id!, workspace.dir);
+      assert.equal(rerouteRun?.status, 'waiting_input');
     });
   });
 

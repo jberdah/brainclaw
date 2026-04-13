@@ -11,7 +11,7 @@ import { loadConfig } from '../core/config.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
-import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment } from '../core/claims.js';
 import { createSequence, updateSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -33,7 +33,7 @@ import {
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateId } from '../core/ids.js';
-import { buildOperationalIdentity, loadSessionById } from '../core/identity.js';
+import { buildOperationalIdentity, loadAllSessions, loadSessionById } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
@@ -60,6 +60,8 @@ import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, ap
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
+import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
+import { createAssignment, generateAssignmentId, patchAssignmentMessageId, transitionAssignment } from '../core/assignments.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -2956,11 +2958,15 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       };
 
       if (args.includeContext) {
+        const contextAgent = resolved.identity?.agent_name ?? result.agent;
+        const previousSession = loadAllSessions(cwd)
+          .find((session) => session.agent === contextAgent && session.session_id !== result.session_id);
         const ctxResult = buildContext({
           target: args.context as string | undefined,
-          agent: resolved.identity?.agent_name ?? result.agent,
+          agent: contextAgent,
           profile: args.contextProfile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing' | undefined,
           cwd,
+          sinceSession: previousSession?.session_id,
         });
         const format = normaliseFormat(args.contextFormat);
         const ctxText = renderContextForMcp(ctxResult, format, {});
@@ -4114,18 +4120,71 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             overall = 'command_ready_manual';
           }
           if (execResult.error) opts.warnings.push(execResult.error);
+          if (entry.assignment_id && entry.claim_id) {
+            try {
+              const run = createAgentRun({
+                assignment_id: entry.assignment_id,
+                claim_id: entry.claim_id,
+                message_id: entry.message_id,
+                agent: entry.agent,
+                transport: execResult.execution_status === 'delivered_and_started'
+                  ? 'cli_spawn'
+                  : execResult.execution_status === 'command_ready_manual'
+                    ? 'manual_command'
+                    : 'inbox_only',
+                scope: worktreePath ?? entry.scope ?? entry.ref ?? entry.assignment_id,
+                description: `Coordinate execution attempt for ${entry.scope ?? entry.ref ?? entry.assignment_id}`,
+                worktree_path: worktreePath,
+                command: execResult.command,
+                shell: execResult.shell,
+                pid: execResult.pid,
+                status_reason: execResult.error,
+                tags: ['coordinate-run', `message:${entry.message_type}`],
+              }, opts.cwd);
+
+              if (execResult.execution_status === 'delivered_and_started') {
+                transitionAgentRun(run.id, 'launching', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  pid: execResult.pid,
+                  status_reason: 'CLI spawn launched by coordinator',
+                }, opts.cwd);
+                transitionAgentRun(run.id, 'running', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  pid: execResult.pid,
+                  status_reason: 'CLI process started',
+                }, opts.cwd);
+              } else if (execResult.execution_status === 'command_ready_manual') {
+                transitionAgentRun(run.id, 'waiting_input', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  status_reason: execResult.error ?? 'Awaiting manual command execution',
+                }, opts.cwd);
+              } else {
+                transitionAgentRun(run.id, 'waiting_input', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  status_reason: 'Awaiting inbox pickup by assigned agent',
+                }, opts.cwd);
+              }
+            } catch (runErr) {
+              opts.warnings.push(`AgentRun creation failed for ${entry.assignment_id}: ${runErr instanceof Error ? runErr.message : String(runErr)}`);
+            }
+          }
         }
         return overall;
       };
 
       /** Build a coordinate brief: delegates to shared generateDispatchBrief(). */
-      const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string }): string => {
+      const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string }): string => {
         return generateDispatchBrief({
           task,
           agent: agentName,
           claimId: options?.claimId,
           scope: options?.scope,
           worktreePath: options?.worktreePath,
+          assignmentId: options?.assignmentId,
         });
       };
       type CoordinateDeliveryEntry = {
@@ -4161,6 +4220,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         requiresAck?: boolean;
         threadId?: string;
         claimId?: string;
+        assignmentId?: string;
         releasedClaimId?: string;
         tags?: string[];
         payload?: Record<string, unknown>;
@@ -4177,6 +4237,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           requires_ack: input.requiresAck,
           thread_id: input.threadId,
           claim_id: input.claimId,
+          assignment_id: input.assignmentId,
           tags: input.tags ?? [],
           author_id: senderAgentId,
           session_id: connectionSessionId,
@@ -4212,6 +4273,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             scope: input.scope,
             thread_id: input.threadId,
             claim_id: input.claimId,
+            assignment_id: input.assignmentId,
             released_claim_id: input.releasedClaimId,
             command: commandHint?.command,
             shell: commandHint?.shell,
@@ -4280,28 +4342,8 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             entity: 'claim',
             id: claimId,
           });
-          const assignBrief = buildCoordinateBrief(agentName, req.task, { claimId, scope: assignScope, worktreePath: claimResult.worktreePath });
-          const queued = queueCoordinateMessage({
-            agent: agentName,
-            text: assignBrief,
-            messageType: 'assign',
-            ref: assignScope,
-            scope: assignScope,
-            requiresAck: true,
-            claimId,
-            tags: ['coordinate', 'assign'],
-            payload: {
-              intent: req.intent,
-              scope: assignScope,
-              claim_id: claimId,
-              worktree_path: claimResult.worktreePath,
-              constraints: req.constraints,
-            },
-            commandMode: 'worker',
-          });
-          // Create Assignment record for observability parity with bclaw_dispatch
+          let assignmentId: string | undefined;
           try {
-            const { createAssignment, generateAssignmentId } = await import('../core/assignments.js');
             const preId = generateAssignmentId(cwd);
             const assignment = createAssignment({
               id: preId.id,
@@ -4314,10 +4356,47 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               description: req.task,
               tags: ['coordinate', 'assign'],
             }, cwd);
-            queued.entry.assignment_id = assignment.id;
+            assignmentId = assignment.id;
             artifacts.push({ type: 'assignment', id: assignment.id });
           } catch (err) {
             warnings.push(`Assignment creation failed for ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          const assignBrief = buildCoordinateBrief(agentName, req.task, {
+            claimId,
+            scope: assignScope,
+            worktreePath: claimResult.worktreePath,
+            assignmentId,
+          });
+          const queued = queueCoordinateMessage({
+            agent: agentName,
+            text: assignBrief,
+            messageType: 'assign',
+            ref: assignScope,
+            scope: assignScope,
+            requiresAck: true,
+            claimId,
+            assignmentId,
+            tags: ['coordinate', 'assign'],
+            payload: {
+              intent: req.intent,
+              scope: assignScope,
+              claim_id: claimId,
+              ...(assignmentId ? { assignment_id: assignmentId } : {}),
+              worktree_path: claimResult.worktreePath,
+              constraints: req.constraints,
+            },
+            commandMode: 'worker',
+          });
+          if (assignmentId) {
+            try {
+              attachAssignmentMessageToClaim(claimId, queued.entry.message_id, cwd);
+              linkClaimToAssignment(claimId, assignmentId, cwd);
+              transitionAssignment(assignmentId, 'offered', { actor: senderAgent }, cwd);
+              patchAssignmentMessageId(assignmentId, queued.entry.message_id, cwd);
+              queued.entry.assignment_id = assignmentId;
+            } catch (err) {
+              warnings.push(`Assignment linkage failed for ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
 
           delivery_plan.push(queued.entry);
@@ -4431,7 +4510,31 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               entity: 'claim',
               id: newClaimId,
             });
-            const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, { claimId: newClaimId, scope: oldClaim.scope, worktreePath: rerouteClaimResult.worktreePath });
+            let rerouteAssignmentId: string | undefined;
+            try {
+              const preId = generateAssignmentId(cwd);
+              const assignment = createAssignment({
+                id: preId.id,
+                short_label: preId.short_label,
+                claim_id: newClaimId,
+                agent: newAgentName,
+                dispatcher_agent: senderAgent,
+                dispatcher_session_id: connectionSessionId,
+                scope: oldClaim.scope,
+                description: req.task,
+                tags: ['coordinate', 'assign', 'reroute'],
+              }, cwd);
+              rerouteAssignmentId = assignment.id;
+              artifacts.push({ type: 'assignment', id: assignment.id });
+            } catch (err) {
+              warnings.push(`Assignment creation failed for ${newAgentName}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            const rerouteBrief = buildCoordinateBrief(newAgentName, req.task, {
+              claimId: newClaimId,
+              scope: oldClaim.scope,
+              worktreePath: rerouteClaimResult.worktreePath,
+              assignmentId: rerouteAssignmentId,
+            });
             const delivery_plan: CoordinateDeliveryEntry[] = [];
             const reroutePrepared: PreparedInvoke[] = [];
             const queued = queueCoordinateMessage({
@@ -4442,12 +4545,14 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               scope: oldClaim.scope,
               requiresAck: true,
               claimId: newClaimId,
+              assignmentId: rerouteAssignmentId,
               releasedClaimId: oldClaim.id,
               tags: ['coordinate', 'assign', 'reroute'],
               payload: {
                 intent: req.intent,
                 scope: oldClaim.scope,
                 claim_id: newClaimId,
+                ...(rerouteAssignmentId ? { assignment_id: rerouteAssignmentId } : {}),
                 worktree_path: rerouteClaimResult.worktreePath,
                 released_claim_id: oldClaim.id,
                 previous_agent: oldClaim.agent,
@@ -4455,6 +4560,17 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               },
               commandMode: 'worker',
             });
+            if (rerouteAssignmentId) {
+              try {
+                attachAssignmentMessageToClaim(newClaimId, queued.entry.message_id, cwd);
+                linkClaimToAssignment(newClaimId, rerouteAssignmentId, cwd);
+                transitionAssignment(rerouteAssignmentId, 'offered', { actor: senderAgent }, cwd);
+                patchAssignmentMessageId(rerouteAssignmentId, queued.entry.message_id, cwd);
+                queued.entry.assignment_id = rerouteAssignmentId;
+              } catch (err) {
+                warnings.push(`Assignment linkage failed for ${newAgentName}: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
             delivery_plan.push(queued.entry);
             reroutePrepared.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: rerouteClaimResult.worktreePath });
 

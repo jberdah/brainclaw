@@ -248,12 +248,31 @@ describe('Agent SDK ActionRequired', () => {
       scope: 'src/runtime/expire',
       description: 'Expiry test',
     }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'dispatcher' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: worker.agent_name, session_id: 'sess_expire' }, workspace.dir);
+    transitionAssignment(assignment.id, 'started', { actor: worker.agent_name, session_id: 'sess_expire' }, workspace.dir);
+    const run = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: assignment.claim_id,
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      session_id: 'sess_expire',
+      transport: 'manual_command',
+      scope: assignment.scope,
+      description: 'Expired action run',
+    }, workspace.dir);
+    transitionAgentRun(run.id, 'running', { actor: worker.agent_name, session_id: 'sess_expire' }, workspace.dir);
+    transitionAgentRun(run.id, 'blocked', { actor: worker.agent_name, session_id: 'sess_expire' }, workspace.dir);
+    transitionAssignment(assignment.id, 'blocked', { actor: worker.agent_name, session_id: 'sess_expire' }, workspace.dir);
 
     // Create an action with a very short TTL (already expired)
     const action = createActionRequired({
       assignment_id: assignment.id,
+      run_id: run.id,
+      claim_id: assignment.claim_id,
       agent: worker.agent_name,
       agent_id: worker.agent_id,
+      session_id: 'sess_expire',
       kind: 'approval',
       title: 'Old approval',
       prompt: 'This should expire',
@@ -271,5 +290,7 @@ describe('Agent SDK ActionRequired', () => {
     const expired = listActionRequired(workspace.dir, { status: 'expired' });
     assert.equal(expired.length, 1, 'Action should be expired');
     assert.equal(expired[0].id, action.id);
+    assert.equal(loadAssignment(assignment.id, workspace.dir)?.status, 'failed');
+    assert.equal(loadAgentRun(run.id, workspace.dir)?.status, 'timed_out');
   });
 });

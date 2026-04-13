@@ -477,6 +477,8 @@ export interface DispatchBriefOptions {
   agent: string;
   /** Pre-created claim ID */
   claimId?: string;
+  /** Pre-created assignment ID for Agent SDK runtime protocol. */
+  assignmentId?: string;
   /** Scope string */
   scope?: string;
   /** Pre-created worktree path */
@@ -498,6 +500,7 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
     parts.push(buildProtocolSection({
       claimId: options.claimId,
       worktreePath: options.worktreePath,
+      assignmentId: options.assignmentId,
     }));
   }
 

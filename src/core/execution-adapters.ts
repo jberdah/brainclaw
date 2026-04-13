@@ -93,7 +93,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     const envPrefix = buildManualEnvPrefix(options.claimId);
     return {
       command: `${envPrefix}${invoke.bashCommand}`,
-      shell: invoke.shell ? 'bash' : invoke.executable,
+      shell: process.platform === 'win32' ? 'cmd' : (invoke.shell ? 'bash' : 'sh'),
     };
   }
 
