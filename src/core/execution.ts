@@ -7,27 +7,18 @@
  *
  * @module
  */
-import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { appendAuditEntry } from './audit.js';
-import { nowISO } from './ids.js';
 import { loadAllSessions } from './identity.js';
 import { loadConfig } from './config.js';
+import {
+  defaultExecutionAdapter,
+  type ExecutionAdapter,
+  type SpawnCapability,
+  type SpawnResult,
+} from './execution-adapters.js';
 
 // ── Types ───────────────────────────────────────────────────
-
-export interface SpawnCapability {
-  canSpawn: boolean;
-  reason: string;
-}
-
-export interface SpawnResult {
-  pid: number;
-  started_at: string;
-  status: 'started';
-}
 
 export interface ExecutionResult {
   execution_status: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
@@ -39,19 +30,6 @@ export interface ExecutionResult {
 }
 
 // ── Helpers ────────────────────────────────────────────────
-
-/**
- * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID in manual commands.
- * POSIX: `BRAINCLAW_CLAIM_ID=clm_xxx `
- * Windows (cmd): `set BRAINCLAW_CLAIM_ID=clm_xxx && `
- */
-function buildManualEnvPrefix(claimId?: string): string {
-  if (!claimId) return '';
-  if (process.platform === 'win32') {
-    return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
-  }
-  return `BRAINCLAW_CLAIM_ID=${claimId} `;
-}
 
 /** Parse a duration string like '4h', '30m', '1d' to milliseconds. */
 function parseDurationMs(value: string): number {
@@ -128,27 +106,7 @@ export function checkActiveInstance(agentName: string, cwd: string): ActiveInsta
  *    (heuristic: stdin is a TTY, or BRAINCLAW_CAN_SPAWN env is set)
  */
 export function canSpawnAgent(agentName: string): SpawnCapability {
-  const profile = getCapabilityProfile(agentName);
-  if (!profile) {
-    return { canSpawn: false, reason: `unknown agent profile: ${agentName}` };
-  }
-  if (!profile.runtime.spawnable_cli) {
-    return { canSpawn: false, reason: `agent ${agentName} is not CLI-spawnable` };
-  }
-  if (!profile.invoke_template || !profile.invoke_binary) {
-    return { canSpawn: false, reason: `agent ${agentName} has no invoke template` };
-  }
-
-  // Explicit opt-out via env var (e.g. true sandbox environments)
-  if (process.env.BRAINCLAW_NO_SPAWN === '1') {
-    return { canSpawn: false, reason: 'BRAINCLAW_NO_SPAWN is set' };
-  }
-
-  // Default: allow spawn. MCP stdio servers CAN spawn detached processes —
-  // the old TTY check was overly conservative. If a true sandbox blocks
-  // the spawn (e.g. Codex --full-auto), attemptExecution() catches the
-  // error and falls back to command_ready_manual gracefully.
-  return { canSpawn: true, reason: 'agent has spawnable profile' };
+  return defaultExecutionAdapter.canSpawn(agentName);
 }
 
 // ── Process spawning ────────────────────────────────────────
@@ -164,64 +122,7 @@ export function executeDispatchedCommand(
   invoke: InvokeCommand,
   options: { worktreePath?: string; claimId?: string; agent: string },
 ): SpawnResult {
-  const isWin32 = process.platform === 'win32';
-
-  const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
-    ...(invoke.env ?? {}),
-    ...(options.claimId ? { BRAINCLAW_CLAIM_ID: options.claimId } : {}),
-  };
-
-  // Pre-write prompt to temp file when using temp_file delivery.
-  // buildInvokeCommand generates the path but does NOT write the file —
-  // the bashCommand embeds a printf for manual copy-paste, but spawn()
-  // in direct mode bypasses the shell, so we must write it ourselves.
-  if (invoke.promptDelivery === 'temp_file' && invoke.tempFilePath && invoke.promptText) {
-    const dir = path.dirname(invoke.tempFilePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(invoke.tempFilePath, invoke.promptText, 'utf-8');
-  }
-
-  // Decide stdio mode: stdin_pipe needs a writable stdin
-  const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
-  const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
-
-  // On Windows, spawn with shell:false cannot resolve PATH-installed binaries
-  // (e.g. npm-installed CLIs like claude). Use shell:true on Windows to let
-  // cmd.exe resolve the executable, while keeping shell:false on POSIX for
-  // cleaner process trees.
-  const child = spawn(invoke.executable, invoke.args, {
-    detached: !isWin32, // detached is unreliable on Windows with shell:true
-    shell: isWin32,
-    stdio,
-    cwd: options.worktreePath,
-    env,
-    windowsHide: true,
-  });
-
-  // Catch async spawn errors (e.g. ENOENT when binary not in PATH) to prevent
-  // unhandled 'error' events from crashing the coordinator process.
-  child.on('error', () => { /* swallowed — attemptExecution caller already handles failure */ });
-
-  // For stdin_pipe delivery, write the prompt to stdin then close
-  if (needsStdin && child.stdin) {
-    child.stdin.write(invoke.promptText!);
-    child.stdin.end();
-  }
-
-  // Detach from parent process
-  child.unref();
-
-  const pid = child.pid;
-  if (!pid) {
-    throw new Error(`Failed to spawn agent ${options.agent}: no PID returned`);
-  }
-
-  return {
-    pid,
-    started_at: nowISO(),
-    status: 'started',
-  };
+  return defaultExecutionAdapter.start(invoke, options);
 }
 
 // ── Execution orchestrator ──────────────────────────────────
@@ -236,7 +137,7 @@ export function executeDispatchedCommand(
  * - If autoExecute=false or not spawnable: return command_ready_manual with command string
  * - If spawn fails: log warning, fallback to command_ready_manual
  */
-export function attemptExecution(
+export async function attemptExecution(
   invoke: InvokeCommand | undefined,
   options: {
     agent: string;
@@ -246,23 +147,26 @@ export function attemptExecution(
     dispatcherAgent: string;
     dispatcherAgentId?: string;
     cwd?: string;
+    adapter?: ExecutionAdapter;
   },
-): ExecutionResult {
+): Promise<ExecutionResult> {
+  const adapter = options.adapter ?? defaultExecutionAdapter;
+
   // No invoke command available (IDE-only agents, etc.)
   if (!invoke) {
     return { execution_status: 'inbox_only' };
   }
 
-  const spawnCheck = canSpawnAgent(options.agent);
+  const spawnCheck = adapter.canSpawn(options.agent);
 
   // Opt-out or can't spawn: return command for manual execution
   // Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes correctly
   if (!options.autoExecute || !spawnCheck.canSpawn) {
-    const envPrefix = buildManualEnvPrefix(options.claimId);
+    const manual = adapter.prepareManualCommand(invoke, options);
     return {
       execution_status: 'command_ready_manual',
-      command: `${envPrefix}${invoke.bashCommand}`,
-      shell: invoke.shell ? 'bash' : invoke.executable,
+      command: manual.command,
+      shell: manual.shell,
     };
   }
 
@@ -280,23 +184,19 @@ export function attemptExecution(
         after: { reason: instanceCheck.reason, active_sessions: instanceCheck.activeSessions, skipped: true },
       }, options.cwd);
 
-      const envPrefix2 = buildManualEnvPrefix(options.claimId);
+      const manual = adapter.prepareManualCommand(invoke, options);
       return {
         execution_status: 'command_ready_manual',
-        command: `${envPrefix2}${invoke.bashCommand}`,
-        shell: invoke.shell ? 'bash' : invoke.executable,
+        command: manual.command,
+        shell: manual.shell,
         error: `Spawn skipped: ${instanceCheck.reason}. Use the command manually.`,
       };
     }
   }
 
-  // Attempt spawn
+  // Attempt spawn (await handles both sync and async adapters)
   try {
-    const result = executeDispatchedCommand(invoke, {
-      worktreePath: options.worktreePath,
-      claimId: options.claimId,
-      agent: options.agent,
-    });
+    const result = await adapter.start(invoke, options);
 
     // Audit success
     appendAuditEntry({
@@ -330,11 +230,11 @@ export function attemptExecution(
     }, options.cwd);
 
     // Graceful fallback — include BRAINCLAW_CLAIM_ID for manual routing
-    const envPrefix3 = buildManualEnvPrefix(options.claimId);
+    const manual = adapter.prepareManualCommand(invoke, options);
     return {
       execution_status: 'command_ready_manual',
-      command: `${envPrefix3}${invoke.bashCommand}`,
-      shell: invoke.shell ? 'bash' : invoke.executable,
+      command: manual.command,
+      shell: manual.shell,
       error: `Spawn failed (${errorMsg}), falling back to manual execution`,
     };
   }

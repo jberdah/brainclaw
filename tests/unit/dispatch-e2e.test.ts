@@ -21,6 +21,8 @@ import {
 } from '../../src/core/dispatcher.js';
 import { buildInvokeCommand, resolveBriefMode } from '../../src/core/agent-capability.js';
 import { canSpawnAgent } from '../../src/core/execution.js';
+import { loadAssignment, transitionAssignment, recordProgress } from '../../src/core/assignments.js';
+import { listAgentRuns, findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
 import { saveSequence } from '../../src/core/sequence.js';
 import { listClaims, saveClaim, loadClaim, adoptClaimSession } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
@@ -121,7 +123,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('claude-code: full cycle — dispatch creates claim, sends inbox, generates temp_file invoke', () => {
+  it('claude-code: full cycle — dispatch creates claim, assignment, inbox, and stdin_pipe invoke', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -132,30 +134,44 @@ describe('dispatch-e2e/per-agent-cycle', () => {
       { planId: 'pln_claude', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'claude-code');
     assert.ok(result.result.messages_sent[0]!.claim_id, 'claim created');
+    assert.ok(result.result.messages_sent[0]!.assignment_id, 'assignment created');
 
     // Verify inbox message
     const inbox = readInbox({ agent: 'claude-code', markAsRead: false }, testDir);
     const assignMsg = inbox.messages.find(m => m.type === 'assign');
     assert.ok(assignMsg, 'inbox has assign message');
     assert.ok(assignMsg!.text.includes('Implement auth module'), 'brief contains plan text');
-    assert.ok(assignMsg!.text.includes('## Protocol'), 'brief has protocol section (full mode)');
+    assert.ok(!assignMsg!.text.includes('## Protocol'), 'compact mode omits protocol section for stdin_pipe agents');
+    assert.ok(assignMsg!.assignment_id, 'message has top-level assignment_id');
+    assert.equal(assignMsg!.assignment_id, result.result.messages_sent[0]!.assignment_id);
+    assert.equal(assignMsg!.payload?.assignment_id, assignMsg!.assignment_id, 'payload carries matching assignment_id');
+
+    const assignment = loadAssignment(assignMsg!.assignment_id!, testDir);
+    assert.ok(assignment, 'assignment persisted');
+    assert.equal(assignment!.status, 'offered');
+    assert.equal(assignment!.message_id, assignMsg!.id);
+    assert.equal(assignment!.claim_id, result.result.messages_sent[0]!.claim_id);
+    const run = findLatestAgentRunForAssignment(assignMsg!.assignment_id!, testDir);
+    assert.ok(run, 'run created for assignment');
+    assert.equal(run!.transport, 'manual_command');
+    assert.equal(run!.status, 'waiting_input');
 
     // Verify invoke command
     const invokeCmd = buildInvokeCommand('claude-code', 'test brief');
     assert.ok(invokeCmd, 'claude-code is invokable');
     assert.equal(invokeCmd.executable, 'claude');
-    assert.equal(invokeCmd.promptDelivery, 'temp_file', 'claude-code uses temp_file delivery');
+    assert.equal(invokeCmd.promptDelivery, 'stdin_pipe', 'claude-code uses stdin_pipe delivery');
 
     // Verify brief mode
-    assert.equal(resolveBriefMode('claude-code'), 'full');
+    assert.equal(resolveBriefMode('claude-code'), 'compact');
   });
 
-  it('codex: full cycle — dispatch creates claim, sends inbox, generates stdin_pipe invoke', () => {
+  it('codex: full cycle — dispatch creates claim, sends inbox, generates stdin_pipe invoke', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -166,10 +182,11 @@ describe('dispatch-e2e/per-agent-cycle', () => {
       { planId: 'pln_codex', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'codex');
+    assert.ok(result.result.messages_sent[0]!.assignment_id, 'assignment created');
 
     // Verify inbox message is compact (no protocol section for Codex)
     const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
@@ -177,6 +194,18 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.ok(assignMsg, 'inbox has assign message');
     assert.ok(assignMsg!.text.includes('Write unit tests'), 'brief contains plan text');
     assert.ok(!assignMsg!.text.includes('## Protocol'), 'compact mode omits protocol section');
+    assert.ok(assignMsg!.assignment_id, 'message has top-level assignment_id');
+    assert.equal(assignMsg!.assignment_id, result.result.messages_sent[0]!.assignment_id);
+    assert.equal(assignMsg!.payload?.assignment_id, assignMsg!.assignment_id);
+
+    const assignment = loadAssignment(assignMsg!.assignment_id!, testDir);
+    assert.ok(assignment, 'assignment persisted');
+    assert.equal(assignment!.status, 'offered');
+    assert.equal(assignment!.message_id, assignMsg!.id);
+    const run = findLatestAgentRunForAssignment(assignMsg!.assignment_id!, testDir);
+    assert.ok(run, 'run created for assignment');
+    assert.equal(run!.transport, 'manual_command');
+    assert.equal(run!.status, 'waiting_input');
 
     // Verify invoke command
     const invokeCmd = buildInvokeCommand('codex', 'test brief');
@@ -188,7 +217,106 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(resolveBriefMode('codex'), 'compact');
   });
 
-  it('github-copilot: inbox-only — dispatch creates claim and message but no spawn', () => {
+  it('assignment lifecycle can progress from dispatch to terminal states for key CLI agents', async () => {
+    for (const [agent, planId, terminal] of [
+      ['claude-code', 'pln_lifecycle_claude', 'completed'],
+      ['codex', 'pln_lifecycle_codex', 'failed'],
+    ] as const) {
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [],
+        plan_items: [makePlan({ id: planId, text: `Lifecycle task for ${agent}`, assignee: agent })],
+      }, testDir);
+      saveSequence(makeSequence([
+        { planId, rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: [agent] }, testDir))!;
+      const assignmentId = result.result.messages_sent[0]!.assignment_id;
+      assert.ok(assignmentId, `${agent} dispatch creates an assignment`);
+
+      const accepted = transitionAssignment(assignmentId!, 'accepted', {
+        actor: agent,
+        session_id: `ses_${agent}`,
+      }, testDir);
+      assert.equal(accepted.assignment.status, 'accepted');
+
+      const started = transitionAssignment(assignmentId!, 'started', {
+        actor: agent,
+        session_id: `ses_${agent}`,
+      }, testDir);
+      assert.equal(started.assignment.status, 'started');
+
+      const progressed = recordProgress(assignmentId!, {
+        actor: agent,
+        session_id: `ses_${agent}`,
+        message: `Halfway through ${agent}`,
+      }, testDir);
+      assert.equal(progressed.status, 'started');
+      assert.ok(progressed.last_heartbeat_at, 'heartbeat recorded');
+
+      const terminalResult = transitionAssignment(assignmentId!, terminal, {
+        actor: agent,
+        session_id: `ses_${agent}`,
+        ...(terminal === 'failed' ? { error_message: `simulated failure for ${agent}` } : {}),
+      }, testDir);
+      assert.equal(terminalResult.assignment.status, terminal);
+
+      const reloaded = loadAssignment(assignmentId!, testDir);
+      assert.equal(reloaded!.status, terminal, `${agent} assignment reaches ${terminal}`);
+      assert.equal(reloaded!.session_id, `ses_${agent}`);
+      const run = findLatestAgentRunForAssignment(assignmentId!, testDir);
+      assert.ok(run, 'latest run available');
+      assert.equal(run!.status, terminal === 'completed' ? 'completed' : 'failed');
+      if (terminal === 'completed') {
+        assert.ok(reloaded!.completed_at, 'completed timestamp set');
+      } else {
+        assert.ok(reloaded!.failed_at, 'failed timestamp set');
+      }
+    }
+  });
+
+  it('assignment lifecycle also works for inbox-oriented profiles', async () => {
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [],
+      plan_items: [makePlan({ id: 'pln_lifecycle_copilot', text: 'Review task for copilot', assignee: 'github-copilot' })],
+    }, testDir);
+    saveSequence(makeSequence([
+      { planId: 'pln_lifecycle_copilot', rank: 1, hard_after: [], soft_after: [] },
+    ]), testDir);
+
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'] }, testDir))!;
+    const assignmentId = result.result.messages_sent[0]!.assignment_id;
+    assert.ok(assignmentId, 'inbox-oriented dispatch still creates an assignment');
+    assert.equal(result.result.messages_sent[0]!.execution_status, 'inbox_only');
+
+    transitionAssignment(assignmentId!, 'accepted', {
+      actor: 'github-copilot',
+      session_id: 'ses_github_copilot',
+    }, testDir);
+    transitionAssignment(assignmentId!, 'started', {
+      actor: 'github-copilot',
+      session_id: 'ses_github_copilot',
+    }, testDir);
+    recordProgress(assignmentId!, {
+      actor: 'github-copilot',
+      session_id: 'ses_github_copilot',
+      message: 'Review in progress',
+    }, testDir);
+    const completed = transitionAssignment(assignmentId!, 'completed', {
+      actor: 'github-copilot',
+      session_id: 'ses_github_copilot',
+    }, testDir);
+
+    assert.equal(completed.assignment.status, 'completed');
+    assert.ok(loadAssignment(assignmentId!, testDir)!.completed_at, 'completed timestamp persisted');
+    assert.equal(findLatestAgentRunForAssignment(assignmentId!, testDir)!.status, 'completed');
+  });
+
+  it('github-copilot: inbox-only — dispatch creates claim and message but no spawn', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -199,7 +327,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
       { planId: 'pln_copilot', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'github-copilot');
@@ -215,7 +343,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(invokeCmd, undefined, 'copilot has no invoke command (spawnable_cli=false)');
   });
 
-  it('cline: full cycle — inline_arg delivery', () => {
+  it('cline: full cycle — inline_arg delivery', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -226,7 +354,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
       { planId: 'pln_cline', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['cline'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['cline'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'cline');
@@ -289,7 +417,7 @@ describe('dispatch-e2e/scoreAgents', () => {
     assert.equal(scores.length, 0);
   });
 
-  it('scoring integrates with dispatch — best agent gets selected', () => {
+  it('scoring integrates with dispatch — best agent gets selected', async () => {
     // Use a test store to verify that dispatch actually uses scoring
     const dir = createTestStore();
     try {
@@ -312,7 +440,7 @@ describe('dispatch-e2e/scoreAgents', () => {
         { planId: 'pln_integ', rank: 1, hard_after: [], soft_after: [] },
       ]), dir);
 
-      const result = dispatch({ dispatcherAgent: 'coordinator' }, dir)!;
+      const result = (await dispatch({ dispatcherAgent: 'coordinator' }, dir))!;
       assert.equal(result.result.messages_sent[0]!.agent, 'codex', 'scoring selects assignee');
 
       if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
@@ -393,10 +521,10 @@ describe('dispatch-e2e/checkActiveInstance', () => {
 // ── generateDispatchBrief ─────────────────────────────────────────────────
 
 describe('dispatch-e2e/generateDispatchBrief', () => {
-  it('generates brief with task and protocol for MCP-capable agents', () => {
+  it('generates brief with task and protocol for full-mode agents', () => {
     const brief = generateDispatchBrief({
       task: 'Implement the login page',
-      agent: 'claude-code',
+      agent: 'cline',
       claimId: 'clm_test',
       scope: 'src/auth/',
       worktreePath: '/tmp/worktree-auth',
@@ -421,10 +549,10 @@ describe('dispatch-e2e/generateDispatchBrief', () => {
     assert.ok(!brief.includes('bclaw_session_start'), 'compact mode omits tools');
   });
 
-  it('includes claim instruction to self-claim when no pre-claim', () => {
+  it('includes claim instruction to self-claim for full-mode agents when no pre-claim', () => {
     const brief = generateDispatchBrief({
       task: 'Fix the bug',
-      agent: 'claude-code',
+      agent: 'cline',
     });
 
     assert.ok(brief.includes('bclaw_claim'), 'includes claim instruction when no pre-claim');
@@ -483,7 +611,7 @@ describe('dispatch-e2e/review-findings', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('finding-1 (haute): agent at capacity is skipped BEFORE claim/inbox creation', () => {
+  it('finding-1 (haute): agent at capacity is skipped BEFORE claim/inbox creation', async () => {
     // Saturate codex (max_concurrent_tasks=5) with 5 active claims
     for (let i = 1; i <= 5; i++) {
       saveClaim({
@@ -507,7 +635,7 @@ describe('dispatch-e2e/review-findings', () => {
       { planId: 'pln_busy', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     // Agent should be skipped — no claim, no inbox message created
     assert.equal(result.result.messages_sent.length, 0, 'no messages sent to busy agent');
@@ -523,7 +651,7 @@ describe('dispatch-e2e/review-findings', () => {
     assert.equal(inbox.messages.length, 0, 'no inbox message for busy agent');
   });
 
-  it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st at capacity', () => {
+  it('finding-1b (haute): dispatch falls back to 2nd best agent when 1st at capacity', async () => {
     // Saturate codex (max_concurrent_tasks=5) with 5 active claims
     for (let i = 1; i <= 5; i++) {
       saveClaim({
@@ -548,7 +676,7 @@ describe('dispatch-e2e/review-findings', () => {
     ]), testDir);
 
     // Provide both codex and cline in the pool — codex is preferred (assignee) but active
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex', 'cline'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex', 'cline'] }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1, 'one message sent');
     assert.equal(result.result.messages_sent[0]!.agent, 'cline', 'fell back to cline');
@@ -616,7 +744,7 @@ describe('dispatch-e2e/multi-instance', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('dispatches 2 plans to same agent type with distinct claims', () => {
+  it('dispatches 2 plans to same agent type with distinct claims', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -631,7 +759,7 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_m2', rank: 2, hard_after: [], soft_after: [], scope_hint: 'src/b/' },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], maxAssignments: 2 }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], maxAssignments: 2 }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 2, 'both plans dispatched to codex');
     assert.equal(result.result.messages_sent[0]!.agent, 'codex');
@@ -639,6 +767,8 @@ describe('dispatch-e2e/multi-instance', () => {
     // Each should have a distinct claim_id
     const claimIds = result.result.messages_sent.map(m => m.claim_id);
     assert.notEqual(claimIds[0], claimIds[1], 'distinct claim IDs');
+    const runs = listAgentRuns(testDir, { agent: 'codex' });
+    assert.equal(runs.length, 2, 'one run per dispatched assignment');
   });
 
   it('readInbox with claimId filters to only matching messages', () => {
@@ -662,7 +792,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(filtered.messages[0]!.claim_id, 'clm_aaa');
   });
 
-  it('scope lock is global — blocks dispatch to different agent on same scope', () => {
+  it('scope lock is global — blocks dispatch to different agent on same scope', async () => {
     // Create a claim for codex on src/shared.ts
     saveClaim({
       schema_version: 2, id: 'clm_scope_lock', agent: 'codex',
@@ -679,7 +809,7 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_scope', rank: 1, hard_after: [], soft_after: [], scope_hint: 'src/shared.ts' },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir))!;
     // Scope is locked by codex — claude-code dispatch should be skipped
     assert.equal(result.result.messages_sent.length, 0, 'no messages — scope locked by codex');
     assert.equal(result.result.skipped.length, 1, 'plan skipped');
@@ -731,7 +861,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(result.adopted, true, 're-adoption allowed when session file is missing');
   });
 
-  it('backward compat: dispatch without multi-instance still works', () => {
+  it('backward compat: dispatch without multi-instance still works', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -742,13 +872,13 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_compat', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator' }, testDir))!;
     assert.ok(result, 'dispatch works');
     assert.equal(result.result.messages_sent.length, 1, 'one message sent');
     assert.ok(result.result.messages_sent[0]!.claim_id, 'has claim_id');
   });
 
-  it('codex-review: cross-agent scope conflict skips without creating new claim', () => {
+  it('codex-review: cross-agent scope conflict skips without creating new claim', async () => {
     // codex holds src/shared.ts — dispatch to claude-code on same scope should fail
     saveClaim({
       schema_version: 2, id: 'clm_codex_holds', agent: 'codex',
@@ -765,7 +895,7 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_conflict', rank: 1, hard_after: [], soft_after: [], scope_hint: 'src/conflict.ts' },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['claude-code'] }, testDir))!;
     assert.equal(result.result.messages_sent.length, 0, 'no dispatch — scope locked');
     assert.equal(result.result.skipped.length, 1);
     assert.ok(result.result.skipped[0]!.reason.includes('locked by codex'));
@@ -775,7 +905,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(allClaims[0]!.agent, 'codex', 'claim still belongs to codex');
   });
 
-  it('codex-review: fallback manual command includes BRAINCLAW_CLAIM_ID', () => {
+  it('codex-review: fallback manual command includes BRAINCLAW_CLAIM_ID', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -787,7 +917,7 @@ describe('dispatch-e2e/multi-instance', () => {
     ]), testDir);
 
     // autoExecute=false forces command_ready_manual
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], autoExecute: false }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], autoExecute: false }, testDir))!;
     assert.equal(result.result.messages_sent.length, 1);
     const claimId = result.result.messages_sent[0]!.claim_id;
     assert.ok(claimId, 'has claim_id');
@@ -797,7 +927,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(result.result.messages_sent[0]!.execution_status, 'command_ready_manual');
   });
 
-  it('codex-review: dryRun dispatches multiple plans to same multi-slot agent', () => {
+  it('codex-review: dryRun dispatches multiple plans to same multi-slot agent', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -812,9 +942,9 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_dry2', rank: 2, hard_after: [], soft_after: [], scope_hint: 'src/dry2/' },
     ]), testDir);
 
-    const result = dispatch({
+    const result = (await dispatch({
       dispatcherAgent: 'coordinator', agents: ['codex'], maxAssignments: 2, dryRun: true,
-    }, testDir)!;
+    }, testDir))!;
     assert.equal(result.result.messages_sent.length, 2, 'both plans previewed in dry-run');
     assert.equal(result.result.messages_sent[0]!.agent, 'codex');
     assert.equal(result.result.messages_sent[1]!.agent, 'codex');
@@ -842,7 +972,7 @@ describe('dispatch-e2e/multi-instance', () => {
     assert.equal(check.canSpawnMore, true, 'codex has full capacity');
   });
 
-  it('codex-review-r2: commands[] includes BRAINCLAW_CLAIM_ID prefix', () => {
+  it('codex-review-r2: commands[] includes BRAINCLAW_CLAIM_ID prefix', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -853,7 +983,7 @@ describe('dispatch-e2e/multi-instance', () => {
       { planId: 'pln_cmd', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir)!;
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir))!;
     assert.ok(result.result.commands.length > 0, 'has commands');
     const cmd = result.result.commands[0]!.command;
     assert.ok(cmd.includes('BRAINCLAW_CLAIM_ID='), 'command includes claim_id env var');

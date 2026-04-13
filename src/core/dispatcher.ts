@@ -45,6 +45,7 @@ import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
+import { createAgentRun, transitionAgentRun } from './agentruns.js';
 import { sweepAssignments } from './assignment-sweeper.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 import { generateId, nowISO } from './ids.js';
@@ -600,7 +601,7 @@ export interface DispatchOptions {
 /**
  * Run a dispatch cycle: analyze the sequence, generate briefs, send assignments.
  */
-export function dispatch(options: DispatchOptions, cwd: string): { analysis: DispatchAnalysis; result: DispatchResult } | null {
+export async function dispatch(options: DispatchOptions, cwd: string): Promise<{ analysis: DispatchAnalysis; result: DispatchResult } | null> {
   // Run assignment sweeper before dispatch to detect stuck/expired work
   try { sweepAssignments(cwd, { actor: options.dispatcherAgent }); } catch { /* best-effort */ }
 
@@ -866,7 +867,7 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
     const autoExecute = options.autoExecute !== false; // default true
     for (const prepared of preparedEntries) {
       const entry = prepared.deliveryEntry;
-      const execResult = attemptExecution(prepared.invokeCmd, {
+      const execResult = await attemptExecution(prepared.invokeCmd, {
         agent: entry.agent,
         autoExecute,
         worktreePath: prepared.worktreePath,
@@ -881,6 +882,61 @@ export function dispatch(options: DispatchOptions, cwd: string): { analysis: Dis
         entry.channel = 'spawned_cli';
       }
       if (execResult.error) result.warnings.push(execResult.error);
+
+      if (entry.assignment_id && entry.claim_id) {
+        try {
+          const run = createAgentRun({
+            assignment_id: entry.assignment_id,
+            claim_id: entry.claim_id,
+            message_id: entry.message_id,
+            plan_id: entry.plan_id,
+            sequence_id: analysis.sequence.id,
+            agent: entry.agent,
+            transport: execResult.execution_status === 'delivered_and_started'
+              ? 'cli_spawn'
+              : execResult.execution_status === 'command_ready_manual'
+                ? 'manual_command'
+                : 'inbox_only',
+            scope: prepared.worktreePath ?? entry.plan_id,
+            description: `Execution attempt for ${entry.plan_id}`,
+            worktree_path: prepared.worktreePath,
+            command: execResult.command,
+            shell: execResult.shell,
+            pid: execResult.pid,
+            status_reason: execResult.error,
+            tags: ['dispatch-run', ...(entry.lane ? [`lane:${entry.lane}`] : [])],
+          }, cwd);
+
+          if (execResult.execution_status === 'delivered_and_started') {
+            transitionAgentRun(run.id, 'launching', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              pid: execResult.pid,
+              status_reason: 'CLI spawn launched by dispatcher',
+            }, cwd);
+            transitionAgentRun(run.id, 'running', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              pid: execResult.pid,
+              status_reason: 'CLI process started',
+            }, cwd);
+          } else if (execResult.execution_status === 'command_ready_manual') {
+            transitionAgentRun(run.id, 'waiting_input', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              status_reason: execResult.error ?? 'Awaiting manual command execution',
+            }, cwd);
+          } else {
+            transitionAgentRun(run.id, 'waiting_input', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              status_reason: 'Awaiting inbox pickup by assigned agent',
+            }, cwd);
+          }
+        } catch (runErr) {
+          result.warnings.push(`AgentRun creation failed for ${entry.assignment_id}: ${runErr instanceof Error ? runErr.message : String(runErr)}`);
+        }
+      }
     }
   }
 

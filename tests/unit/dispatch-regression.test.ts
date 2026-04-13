@@ -348,7 +348,7 @@ describe('dispatch-regression/dispatch', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('reuses an existing active claim for the same agent and scope', () => {
+  it('reuses an existing active claim for the same agent and scope', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -372,7 +372,7 @@ describe('dispatch-regression/dispatch', () => {
       status: 'active',
     }, testDir);
 
-    const dispatchResult = dispatch({
+    const dispatchResult = await dispatch({
       dispatcherAgent: 'claude-code',
       agents: ['codex'],
     }, testDir);
@@ -404,8 +404,7 @@ describe('dispatch-regression/buildInvokeCommand', () => {
     assert.ok(result.bashCommand.includes('-p'), 'uses -p flag');
     assert.ok(result.bashCommand.includes('--allowedTools'), 'includes --allowedTools');
     assert.ok(result.bashCommand.includes('Edit,Write,Bash,Read,Glob,Grep'), 'worker tools included');
-    // claude-code uses temp_file delivery — brief is in a temp file, not inline
-    assert.equal(result.promptDelivery, 'temp_file', 'claude-code uses temp_file delivery');
+    assert.equal(result.promptDelivery, 'stdin_pipe', 'claude-code uses stdin_pipe delivery');
     assert.equal(result.executable, 'claude');
   });
 
@@ -447,14 +446,47 @@ describe('dispatch-regression/buildInvokeCommand', () => {
     assert.ok(!result.bashCommand.includes('{cwd}'), 'no unreplaced {cwd} placeholder');
   });
 
-  it('long briefs use temp_file delivery rather than inline_arg', () => {
-    const longBrief = 'x'.repeat(4100);
-    const result = buildInvokeCommand('claude-code', longBrief, { mode: 'worker' });
+  it('long briefs for inline-first agents fall back to temp_file delivery', () => {
+    const longBrief = 'x'.repeat(9000);
+    const result = buildInvokeCommand('opencode', longBrief, { mode: 'worker' });
     assert.ok(result, 'should return InvokeCommand');
     assert.equal(result.promptDelivery, 'temp_file', 'long brief triggers temp_file delivery');
-    // On POSIX the prompt is written via printf inside bashCommand; on Windows
-    // the caller writes the file. Either way, promptDelivery must be temp_file.
     assert.ok(result.bashCommand.includes('bclaw_prompt_'), 'command references a temp file path');
+  });
+
+  it('claude-code uses piped stdin on POSIX when platform override is linux', () => {
+    const result = buildInvokeCommand('claude-code', 'Do the task', {
+      mode: 'worker',
+      platform: 'linux',
+    });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.equal(result.promptDelivery, 'stdin_pipe');
+    assert.ok(result.bashCommand.includes("printf '%s'"), 'POSIX command pipes prompt through printf');
+    assert.ok(result.bashCommand.includes('| claude'), 'POSIX command pipes into claude');
+  });
+
+  it('claude-code omits stdin piping in manual Windows command generation', () => {
+    const result = buildInvokeCommand('claude-code', 'Do the task', {
+      mode: 'worker',
+      platform: 'win32',
+    });
+    assert.ok(result, 'should return InvokeCommand');
+    assert.equal(result.promptDelivery, 'stdin_pipe');
+    assert.ok(!result.bashCommand.includes("printf '%s'"), 'Windows command does not embed POSIX printf piping');
+    assert.ok(result.bashCommand.startsWith('claude '), 'Windows command is still directly invokable');
+  });
+
+  it('temp_file delivery differs between POSIX and Windows command rendering', () => {
+    const longBrief = 'x'.repeat(9000);
+    const posix = buildInvokeCommand('opencode', longBrief, { mode: 'worker', platform: 'linux' });
+    const win = buildInvokeCommand('opencode', longBrief, { mode: 'worker', platform: 'win32' });
+
+    assert.ok(posix && win, 'both platform variants resolve');
+    assert.equal(posix.promptDelivery, 'temp_file');
+    assert.equal(win.promptDelivery, 'temp_file');
+    assert.ok(posix.bashCommand.includes("printf '%s'"), 'POSIX temp_file command writes the file before invoke');
+    assert.ok(!win.bashCommand.includes("printf '%s'"), 'Windows temp_file command assumes caller wrote the file');
+    assert.ok(win.bashCommand.includes('bclaw_prompt_'), 'Windows command still references the temp file');
   });
 });
 

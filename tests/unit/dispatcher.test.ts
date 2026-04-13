@@ -310,7 +310,7 @@ describe('core/dispatcher', () => {
   });
 
   describe('dispatch', () => {
-    it('sends assignment messages to available agents', () => {
+    it('sends assignment messages to available agents', async () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
         makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
@@ -326,9 +326,9 @@ describe('core/dispatcher', () => {
         { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [], lane: 'testing' },
       ]), testDir);
 
-      const result = dispatch({
+      const result = (await dispatch({
         dispatcherAgent: 'coordinator',
-      }, testDir)!;
+      }, testDir))!;
 
       assert.ok(result);
       assert.equal(result.result.messages_sent.length, 2);
@@ -338,7 +338,7 @@ describe('core/dispatcher', () => {
       assert.ok(agents.includes('codex'));
     });
 
-    it('respects plan assignee preference', () => {
+    it('respects plan assignee preference', async () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'todo', assignee: 'codex' }),
       ];
@@ -352,14 +352,14 @@ describe('core/dispatcher', () => {
         { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
       ]), testDir);
 
-      const result = dispatch({
+      const result = (await dispatch({
         dispatcherAgent: 'coordinator',
-      }, testDir)!;
+      }, testDir))!;
 
       assert.equal(result.result.messages_sent[0]!.agent, 'codex');
     });
 
-    it('dry run does not send messages', () => {
+    it('dry run does not send messages', async () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
       ];
@@ -373,10 +373,10 @@ describe('core/dispatcher', () => {
         { planId: 'pln_a', rank: 1, hard_after: [], soft_after: [] },
       ]), testDir);
 
-      const result = dispatch({
+      const result = (await dispatch({
         dispatcherAgent: 'coordinator',
         dryRun: true,
-      }, testDir)!;
+      }, testDir))!;
 
       assert.equal(result.result.messages_sent.length, 1);
       assert.equal(result.result.messages_sent[0]!.message_id, '(dry-run)');
@@ -389,7 +389,7 @@ describe('core/dispatcher', () => {
       assert.equal(agentDirs.length, 0);
     });
 
-    it('skips when all agents at full capacity', () => {
+    it('skips when all agents at full capacity', async () => {
       // claude-code has max_concurrent_tasks=3, codex has 5
       // Create enough plans+claims to saturate both
       const plans = [
@@ -434,13 +434,13 @@ describe('core/dispatcher', () => {
         { planId: 'pln_cx5', rank: 9, hard_after: [], soft_after: [] },
       ]), testDir);
 
-      const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      const result = (await dispatch({ dispatcherAgent: 'coordinator' }, testDir))!;
       assert.equal(result.result.messages_sent.length, 0, 'no messages — all agents at capacity');
       assert.equal(result.result.skipped.length, 1);
       assert.ok(result.result.skipped[0]!.reason.includes('No available agent'));
     });
 
-    it('filters by lane', () => {
+    it('filters by lane', async () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'todo' }),
         makePlan({ id: 'pln_b', text: 'Task B', status: 'todo' }),
@@ -456,21 +456,21 @@ describe('core/dispatcher', () => {
         { planId: 'pln_b', rank: 2, hard_after: [], soft_after: [], lane: 'testing' },
       ]), testDir);
 
-      const result = dispatch({
+      const result = (await dispatch({
         dispatcherAgent: 'coordinator',
         lanes: ['testing'],
-      }, testDir)!;
+      }, testDir))!;
 
       assert.equal(result.result.messages_sent.length, 1);
       assert.equal(result.result.messages_sent[0]!.lane, 'testing');
     });
 
-    it('returns null when no active sequence', () => {
-      const result = dispatch({ dispatcherAgent: 'coordinator' }, testDir);
+    it('returns null when no active sequence', async () => {
+      const result = await dispatch({ dispatcherAgent: 'coordinator' }, testDir);
       assert.equal(result, null);
     });
 
-    it('is idempotent — does not duplicate assignments on second run', () => {
+    it('is idempotent — does not duplicate assignments on second run', async () => {
       const plans = [
         makePlan({ id: 'pln_a', text: 'Task A', status: 'todo', assignee: 'codex' }),
       ];
@@ -485,7 +485,7 @@ describe('core/dispatcher', () => {
       ]), testDir);
 
       // First dispatch — sends assignment and creates coordinator-owned claim
-      const result1 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      const result1 = (await dispatch({ dispatcherAgent: 'coordinator' }, testDir))!;
       assert.equal(result1.result.messages_sent.length, 1);
 
       // Second dispatch — plan now has active claim, so it moves to "active" (not "ready")
@@ -494,7 +494,7 @@ describe('core/dispatcher', () => {
       assert.equal(analysis2.ready.length, 0, 'plan with active claim is not ready');
       assert.equal(analysis2.active.length, 1, 'plan is active (has claim)');
 
-      const result2 = dispatch({ dispatcherAgent: 'coordinator' }, testDir)!;
+      const result2 = (await dispatch({ dispatcherAgent: 'coordinator' }, testDir))!;
       assert.equal(result2.result.messages_sent.length, 0);
     });
   });

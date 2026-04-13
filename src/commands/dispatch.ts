@@ -81,7 +81,7 @@ export function runDispatchAnalysis(options: DispatchCommandOptions): void {
   console.log('');
 }
 
-export function runDispatch(options: DispatchCommandOptions): void {
+export async function runDispatch(options: DispatchCommandOptions): Promise<void> {
   const cwd = options.cwd;
   if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
@@ -91,7 +91,7 @@ export function runDispatch(options: DispatchCommandOptions): void {
   const effectiveCwd = cwd ?? process.cwd();
   const dispatcherAgent = options.agent ?? resolveCurrentAgentName(effectiveCwd) ?? 'brainclaw';
 
-  const result = dispatch({
+  const result = await dispatch({
     agents: options.agents?.split(',').map(a => a.trim()),
     lanes: options.lanes?.split(',').map(l => l.trim()),
     maxAssignments: options.max,
