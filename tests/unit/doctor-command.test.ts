@@ -257,6 +257,35 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'runtime_sessions' && check.status === 'warn'));
   });
 
+  it('ignores agent-runtime protocol events in incomplete runtime session warnings', () => {
+    const runtimeDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'runtime', 'agent-runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'assignment-events.json'), JSON.stringify([
+      {
+        id: 'evt_assignment_started',
+        agent: 'codex',
+        session_id: 'sess_agent_runtime',
+        event_type: 'assignment_started',
+        created_at: new Date().toISOString(),
+        text: 'Assignment started',
+        tags: ['agent-runtime', 'assignment'],
+        assignment_id: 'asgn_agent_runtime',
+        claim_id: 'clm_agent_runtime',
+        status: 'started',
+      },
+    ], null, 2), 'utf-8');
+
+    const captured = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+
+    const parsed = JSON.parse(captured.logs.at(-1) as string);
+    const check = parsed.checks.find((entry: { name: string }) => entry.name === 'runtime_sessions');
+    assert.ok(check);
+    assert.equal(check.status, 'ok');
+    assert.equal(parsed.metrics.runtime_events, 1);
+  });
+
   it('reports outdated and invalid documents with migration-check enabled', () => {
     const claimsDir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
     fs.mkdirSync(claimsDir, { recursive: true });

@@ -9,7 +9,7 @@ import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
 import { saveCandidate, generateCandidateIdWithLabel, listCandidates, archiveCandidate } from '../core/candidates.js';
 import { detectDuplicates } from '../core/duplicates.js';
 import { RuntimeEventSchema, type CandidateType, type Candidate, type Constraint, type Decision, type Trap, type Handoff } from '../core/schema.js';
-import { listRuntimeEventsBySession } from '../core/events.js';
+import { isReflectableRuntimeEvent, listRuntimeEventsBySession } from '../core/events.js';
 import { agentCanWriteDirect, requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { generateTrapIdWithLabel } from '../core/traps.js';
@@ -93,6 +93,9 @@ function runReflectBatchFromFile(filepath: string, baseOptions: ReflectOptions):
   for (const rawEvent of rawEvents) {
     try {
       const event = RuntimeEventSchema.parse(rawEvent);
+      if (!isReflectableRuntimeEvent(event)) {
+        continue;
+      }
       const candidateType = event.candidate_type ?? mapEventTypeToCandidateType(event.event_type);
       createCandidateFromInput(event.text, candidateType, {
         ...baseOptions,
@@ -126,6 +129,9 @@ function runReflectBatchFromSession(session: string, baseOptions: ReflectOptions
 
   let created = 0;
   for (const event of events) {
+    if (!isReflectableRuntimeEvent(event)) {
+      continue;
+    }
     const candidateType = event.candidate_type ?? mapEventTypeToCandidateType(event.event_type);
     createCandidateFromInput(event.text, candidateType, {
       ...baseOptions,

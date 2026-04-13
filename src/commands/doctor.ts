@@ -19,7 +19,7 @@ import { listClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.
 import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
-import { listRuntimeEvents } from '../core/events.js';
+import { isTaskLifecycleRuntimeEvent, listRuntimeEvents } from '../core/events.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
 import { loadVersionedJsonFile, scanMigrationStatus } from '../core/migration.js';
@@ -1226,7 +1226,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   const events = listRuntimeEvents(options.cwd);
   if (events.length > 0) {
     const sessions = new Map<string, Set<string>>();
-    for (const event of events) {
+    for (const event of events.filter(isTaskLifecycleRuntimeEvent)) {
       const sessionValue = resolveEventSessionId(event);
       if (!sessionValue) continue;
       const set = sessions.get(sessionValue) ?? new Set<string>();

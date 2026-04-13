@@ -33,7 +33,17 @@ export type EventAction =
   | 'assignment_timed_out'
   | 'assignment_expired'
   | 'assignment_retrying'
-  | 'assignment_rerouted';
+  | 'assignment_rerouted'
+  | 'run_created'
+  | 'run_launching'
+  | 'run_waiting_input'
+  | 'run_running'
+  | 'run_blocked'
+  | 'run_completed'
+  | 'run_failed'
+  | 'run_cancelled'
+  | 'run_timed_out'
+  | 'run_interrupted';
 
 export type EventItemType =
   | 'constraint'
@@ -48,7 +58,8 @@ export type EventItemType =
   | 'instruction'
   | 'session'
   | 'state'
-  | 'assignment';
+  | 'assignment'
+  | 'agent_run';
 
 export interface MemoryEvent {
   ts: string;
