@@ -64,8 +64,10 @@ describe('core/candidates', () => {
     assert.equal(stored.usage_events.length, 2);
   });
 
-  it('schema backward compat: legacy free-text source on disk is silently dropped (catch → undefined → human)', () => {
-    // Simulate old disk data where source was a free-text string like 'runtime-note:...'
+  it('schema backward compat: legacy free-text source migrates to origin field on parse', () => {
+    // Simulate old disk data where source was a free-text string like 'runtime-note:...'.
+    // The preprocess step moves the free-text value into `origin` so provenance is preserved
+    // while `source` stays strictly enum. resolvedSource() then infers the enum from origin.
     const legacyRaw = {
       id: 'cnd_disk_legacy',
       type: 'decision',
@@ -81,8 +83,29 @@ describe('core/candidates', () => {
       usage_events: [],
     };
     const parsed = CandidateSchema.parse(legacyRaw);
-    assert.equal(parsed.source, undefined, 'invalid enum value should be silently dropped by .catch(undefined)');
-    assert.equal(resolvedSource(parsed), 'human', 'dropped source should resolve to human (backward compat)');
+    assert.equal(parsed.source, undefined, 'non-enum source is dropped from the enum field');
+    assert.equal(parsed.origin, 'runtime-note:claude:note_123abc', 'free-text provenance preserved in origin');
+    assert.equal(resolvedSource(parsed), 'agent', 'runtime-note:* origin pattern resolves to agent');
+  });
+
+  it('schema backward compat: legacy session-end free-text source resolves to auto', () => {
+    const legacyAuto = {
+      id: 'cnd_disk_session_end',
+      type: 'handoff',
+      text: 'Old auto-generated handoff',
+      created_at: iso(15),
+      author: 'claude',
+      tags: [],
+      status: 'pending',
+      source: 'session-end:git-diff:sess_abc123',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    };
+    const parsed = CandidateSchema.parse(legacyAuto);
+    assert.equal(parsed.origin, 'session-end:git-diff:sess_abc123');
+    assert.equal(resolvedSource(parsed), 'auto', 'session-end:* origin resolves to auto');
   });
 
   it('source filter: resolvedSource defaults missing source to human', () => {

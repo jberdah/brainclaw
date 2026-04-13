@@ -230,7 +230,13 @@ function trackCandidateSignals(
     if (bucket === 'rejected') {
       stats.signals.rejected_candidates_authored += 1;
     }
-    if (candidate.source === 'auto') {
+    // Count runtime-origin candidates: either explicit `source: 'auto'` (session-end
+    // auto handoffs) or any runtime-note / session-end origin string (back-compat
+    // with writers that still set only `origin`).
+    const isRuntimeOrigin = candidate.source === 'auto'
+      || candidate.origin?.startsWith('runtime-note:') === true
+      || candidate.origin?.startsWith('session-end:') === true;
+    if (isRuntimeOrigin) {
       stats.signals.promoted_runtime_candidates += 1;
       if (bucket === 'accepted') {
         stats.signals.promoted_runtime_accepted += 1;

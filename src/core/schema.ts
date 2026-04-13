@@ -484,7 +484,27 @@ export const CandidateContradictionSchema = z.object({
 });
 export type CandidateContradiction = z.infer<typeof CandidateContradictionSchema>;
 
-export const CandidateSchema = z.object({
+/** Legacy candidates stored `source` as free-text (e.g. 'session-end:git-diff:sess_xxx',
+ *  'runtime-note:agent:id'). Worker 2 narrowed `source` to an enum. To preserve
+ *  provenance without rewriting files, we migrate free-text values to `origin`
+ *  on read via this preprocess. Files are NOT rewritten — preprocess only
+ *  affects parsed in-memory values. */
+const CANDIDATE_SOURCE_ENUM = new Set(['auto', 'agent', 'human']);
+const candidatePreprocess = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const obj = raw as Record<string, unknown>;
+  const src = obj.source;
+  if (typeof src === 'string' && !CANDIDATE_SOURCE_ENUM.has(src)) {
+    // Free-text source → preserve into origin (if not already set), drop from source.
+    const clone: Record<string, unknown> = { ...obj };
+    if (clone.origin === undefined) clone.origin = src;
+    clone.source = undefined;
+    return clone;
+  }
+  return raw;
+};
+
+export const CandidateSchema = z.preprocess(candidatePreprocess, z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
   short_label: z.string().optional(),
@@ -497,8 +517,14 @@ export const CandidateSchema = z.object({
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),
-  /** Who originated this candidate. Missing field or unknown legacy value treated as 'human'. */
+  /** Normalized category of the originator. Missing field / unknown legacy value
+   *  falls back to `origin`-based inference, then to 'human'. */
   source: CandidateSourceSchema.optional().catch(undefined),
+  /** Free-text provenance string preserved for reputation/audit. Examples:
+   *  'session-end:git-diff:sess_xxx', 'runtime-note:<agent>:<note_id>',
+   *  'mcp:quick-capture', 'cross-project:<project>'. Used alongside `source`
+   *  (which is the enum); not narrowed by Zod. */
+  origin: z.string().optional(),
   tags: TagsSchema,
   status: CandidateStatusSchema,
   // type-specific optional fields
@@ -520,7 +546,7 @@ export const CandidateSchema = z.object({
   resolved_at: z.string().optional(),
   resolved_by: z.string().optional(),
   resolution_reason: z.string().optional(),
-});
+}));
 export type Candidate = z.infer<typeof CandidateSchema>;
 
 export const ReflectiveMemoryConfigSchema = z.object({

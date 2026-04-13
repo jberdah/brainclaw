@@ -218,7 +218,14 @@ export function createCandidateFromInput(
     project_id: options.projectId ?? actorIdentity.project_id,
     host_id: options.hostId ?? actorIdentity.host_id,
     session_id: options.sessionId ?? actorIdentity.session_id,
+    // Normalize source to the enum when possible; otherwise infer from the
+    // free-text origin value below. Preserves legacy provenance patterns
+    // (runtime-note:*, mcp:*, session-end:*, cross-project:*) in `origin`
+    // while keeping `source` strictly enum-constrained.
     source: CandidateSourceSchema.safeParse(options.source).data,
+    origin: typeof options.source === 'string' && !CandidateSourceSchema.safeParse(options.source).success
+      ? options.source
+      : undefined,
     tags: options.tag ?? [],
     status: 'pending' as const,
     severity: type === 'trap' ? (options.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium' : undefined,

@@ -49,7 +49,10 @@ describe('commands/runtime-note', () => {
 
     const pending = listCandidates('pending', workspace.dir);
     assert.equal(pending.length, 1);
-    assert.equal(pending[0].source, `runtime-note:${workspace.currentAgent.agent_name}:${result.noteId}`);
+    // Provenance: the free-text `runtime-note:*` identifier is preserved in `origin`;
+    // `source` is left undefined and resolvedSource() infers 'agent' from the pattern.
+    assert.equal(pending[0].origin, `runtime-note:${workspace.currentAgent.agent_name}:${result.noteId}`);
+    assert.equal(pending[0].source, undefined);
     assert.equal(pending[0].session_id, result.sessionId);
   });
 

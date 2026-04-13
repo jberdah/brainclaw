@@ -196,7 +196,8 @@ describe('Reflective Memory (Phase 1)', () => {
       const candidate = JSON.parse(fs.readFileSync(path.join(dir, '.brainclaw', 'coordination', 'inbox', `${cndId1}.json`), 'utf-8'));
       assert.equal(candidate.text, 'Node is not on PATH on this host');
       assert.equal(candidate.type, 'trap');
-      assert.equal(candidate.source, `runtime-note:copilot:${rtnId1}`);
+      // Provenance preserved in `origin`; `source` is the normalized enum (undefined for runtime-note).
+      assert.equal(candidate.origin, `runtime-note:copilot:${rtnId1}`);
       assert.match(candidate.author_id, /^agt_[a-f0-9]+$/);
       assert.match(candidate.project_id, /^prj_[a-f0-9]+$/);
       assert.equal(candidate.host_id, 'host-a');

@@ -21,12 +21,30 @@ export interface ListCandidatesFilter {
 
 /**
  * Return the effective source for a candidate.
- * Candidates without a source field are legacy items and default to 'human'
- * (so they are never auto-hidden). This default is only applied in memory —
- * no files are rewritten.
+ *
+ * Resolution order:
+ *   1. Explicit `source` field if set to a valid enum value ('auto'|'agent'|'human').
+ *   2. Inferred from `origin` free-text pattern (e.g. 'runtime-note:...' → 'agent',
+ *      'session-end:...' → 'auto', 'mcp:...' / 'cross-project:...' → 'agent').
+ *   3. Default 'human' for legacy items without any provenance.
+ *
+ * This default is only applied in memory — no files are rewritten.
  */
 export function resolvedSource(candidate: Candidate): CandidateSource {
-  return candidate.source ?? 'human';
+  if (candidate.source) return candidate.source;
+  return inferSourceFromOrigin(candidate.origin);
+}
+
+/** Infer the enum `source` from a free-text `origin` pattern. */
+export function inferSourceFromOrigin(origin?: string): CandidateSource {
+  if (!origin) return 'human';
+  if (origin.startsWith('session-end:')) return 'auto';
+  if (origin.startsWith('runtime-note:')) return 'agent';
+  if (origin.startsWith('mcp:')) return 'agent';
+  if (origin.startsWith('cross-project:')) return 'agent';
+  // Unknown origin pattern — treat as agent since something explicit was set,
+  // but not matching an auto pattern. Human sources typically have no origin.
+  return 'agent';
 }
 
 function inboxDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
