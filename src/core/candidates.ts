@@ -1,12 +1,33 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CandidateSchema, type Candidate } from './schema.js';
+import { CandidateSchema, type Candidate, type CandidateSource } from './schema.js';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { refreshLiveCompanions } from '../commands/export.js';
+
+export interface ListCandidatesFilter {
+  /** Filter by a specific source value. */
+  source?: CandidateSource;
+  /**
+   * When false, exclude auto-generated candidates (source === 'auto').
+   * When true, include only auto-generated candidates.
+   * Omitting this field applies no filter on auto_generated status.
+   */
+  auto_generated?: boolean;
+}
+
+/**
+ * Return the effective source for a candidate.
+ * Candidates without a source field are legacy items and default to 'human'
+ * (so they are never auto-hidden). This default is only applied in memory —
+ * no files are rewritten.
+ */
+export function resolvedSource(candidate: Candidate): CandidateSource {
+  return candidate.source ?? 'human';
+}
 
 function inboxDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('inbox', cwd ?? process.cwd(), mode);
@@ -59,9 +80,24 @@ export function updateCandidate(candidate: Candidate, cwd?: string): void {
   saveCandidate(candidate, cwd);
 }
 
-export function listCandidates(status?: 'pending' | 'accepted' | 'rejected', cwd?: string): Candidate[] {
+export function listCandidates(status?: 'pending' | 'accepted' | 'rejected', cwd?: string, filter?: ListCandidatesFilter): Candidate[] {
   const candidates = candidateStore('pending', cwd).list();
-  return status ? candidates.filter((candidate) => candidate.status === status) : candidates;
+  const byStatus = status ? candidates.filter((candidate) => candidate.status === status) : candidates;
+  return applySourceFilter(byStatus, filter);
+}
+
+function applySourceFilter(candidates: Candidate[], filter?: ListCandidatesFilter): Candidate[] {
+  if (!filter) return candidates;
+  let result = candidates;
+  if (filter.source !== undefined) {
+    result = result.filter((c) => resolvedSource(c) === filter.source);
+  }
+  if (filter.auto_generated === false) {
+    result = result.filter((c) => resolvedSource(c) !== 'auto');
+  } else if (filter.auto_generated === true) {
+    result = result.filter((c) => resolvedSource(c) === 'auto');
+  }
+  return result;
 }
 
 export function archiveCandidate(candidate: Candidate, dest: 'accepted' | 'rejected', cwd?: string): void {

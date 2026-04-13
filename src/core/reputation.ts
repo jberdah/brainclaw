@@ -230,7 +230,7 @@ function trackCandidateSignals(
     if (bucket === 'rejected') {
       stats.signals.rejected_candidates_authored += 1;
     }
-    if (candidate.source?.startsWith('runtime-note:')) {
+    if (candidate.source === 'auto') {
       stats.signals.promoted_runtime_candidates += 1;
       if (bucket === 'accepted') {
         stats.signals.promoted_runtime_accepted += 1;
