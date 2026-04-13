@@ -456,6 +456,10 @@ export const CandidateTypeSchema = z.enum([
 ]);
 export type CandidateType = z.infer<typeof CandidateTypeSchema>;
 
+/** Who originated this candidate. 'auto' = session-end auto-reflect; 'agent' = intentional agent action; 'human' = human-created or unknown legacy item. */
+export const CandidateSourceSchema = z.enum(['auto', 'agent', 'human']);
+export type CandidateSource = z.infer<typeof CandidateSourceSchema>;
+
 export const CandidateStatusSchema = z.enum(['pending', 'accepted', 'rejected']);
 export type CandidateStatus = z.infer<typeof CandidateStatusSchema>;
 
@@ -493,7 +497,8 @@ export const CandidateSchema = z.object({
   project_id: z.string().optional(),
   host_id: z.string().optional(),
   session_id: z.string().optional(),
-  source: z.string().optional(),
+  /** Who originated this candidate. Missing field or unknown legacy value treated as 'human'. */
+  source: CandidateSourceSchema.optional().catch(undefined),
   tags: TagsSchema,
   status: CandidateStatusSchema,
   // type-specific optional fields

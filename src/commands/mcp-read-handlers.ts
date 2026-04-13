@@ -18,7 +18,8 @@ import { loadConfig } from '../core/config.js';
 import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
+import { listArchivedCandidates, listCandidates, resolvedSource } from '../core/candidates.js';
+import type { CandidateSource } from '../core/schema.js';
 import { listClaims } from '../core/claims.js';
 import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
@@ -1066,6 +1067,20 @@ export function handleMcpReadToolCall(
               ...listArchivedCandidates('rejected', cwd),
             ]
           : listCandidates('pending', cwd);
+
+    // source / auto_generated filters — resolved source defaults missing field to 'human' (backward compat)
+    if (args.source !== undefined) {
+      const validSources: CandidateSource[] = ['auto', 'agent', 'human'];
+      const sourceArg = String(args.source) as CandidateSource;
+      if (validSources.includes(sourceArg)) {
+        candidates = candidates.filter((c) => resolvedSource(c) === sourceArg);
+      }
+    }
+    if (args.auto_generated === false) {
+      candidates = candidates.filter((c) => resolvedSource(c) !== 'auto');
+    } else if (args.auto_generated === true) {
+      candidates = candidates.filter((c) => resolvedSource(c) === 'auto');
+    }
 
     if (args.type) {
       candidates = candidates.filter((candidate) => candidate.type === args.type);

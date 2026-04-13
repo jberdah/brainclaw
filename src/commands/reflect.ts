@@ -8,7 +8,7 @@ import { scanText } from '../core/security.js';
 import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
 import { saveCandidate, generateCandidateIdWithLabel, listCandidates, archiveCandidate } from '../core/candidates.js';
 import { detectDuplicates } from '../core/duplicates.js';
-import { RuntimeEventSchema, type CandidateType, type Candidate, type Constraint, type Decision, type Trap, type Handoff } from '../core/schema.js';
+import { CandidateSourceSchema, RuntimeEventSchema, type CandidateSource, type CandidateType, type Candidate, type Constraint, type Decision, type Trap, type Handoff } from '../core/schema.js';
 import { isReflectableRuntimeEvent, listRuntimeEventsBySession } from '../core/events.js';
 import { agentCanWriteDirect, requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
@@ -24,7 +24,7 @@ export interface ReflectOptions {
   projectId?: string;
   hostId?: string;
   sessionId?: string;
-  source?: string;
+  source?: CandidateSource | string;
   severity?: string;
   from?: string;
   to?: string;
@@ -218,7 +218,7 @@ export function createCandidateFromInput(
     project_id: options.projectId ?? actorIdentity.project_id,
     host_id: options.hostId ?? actorIdentity.host_id,
     session_id: options.sessionId ?? actorIdentity.session_id,
-    source: options.source,
+    source: CandidateSourceSchema.safeParse(options.source).data,
     tags: options.tag ?? [],
     status: 'pending' as const,
     severity: type === 'trap' ? (options.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium' : undefined,

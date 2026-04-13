@@ -436,6 +436,8 @@ export const MCP_READ_TOOLS = [
         status: { type: 'string', description: 'Candidate bucket: pending, accepted, rejected, or all.' },
         type: { type: 'string', description: 'Filter by candidate type.' },
         assignee: { type: 'string', description: 'Filter pending candidates by assignee tag (assignee:<name>).' },
+        source: { type: 'string', enum: ['auto', 'agent', 'human'], description: 'Filter by candidate source: auto (session-end auto-reflect), agent (intentional agent action), human (human-created or legacy).' },
+        auto_generated: { type: 'boolean', description: 'When false, exclude auto-generated candidates (source=auto). When true, show only auto-generated candidates.' },
         limit: { type: 'number', description: 'Maximum number of candidates to return (default: 20).' },
         offset: { type: 'number', description: 'Number of candidates to skip (for pagination).' },
         compact: { type: 'boolean', description: 'Return only key fields (id, type, text, status) to reduce output size.' },

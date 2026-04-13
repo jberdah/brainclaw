@@ -120,7 +120,7 @@ describe('core/context', () => {
       text: 'Persist auth gateway findings in canonical memory',
       created_at: iso(25),
       status: 'accepted',
-      source: 'runtime-note:testuser:rtn_auth_resume',
+      source: 'auto',
       resolved_at: iso(5),
       resolved_by: currentAgent.agent_name,
       resolution_reason: 'Useful and durable.',

@@ -347,7 +347,7 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
             authorId: note.agent_id,
             projectId: note.project_id,
             sessionId: note.session_id,
-            source: `runtime-note:${note.agent}:${note.id}`,
+            source: 'auto',
             cwd: options.cwd,
           }, false, false, true);
           if (creation.candidateId) {

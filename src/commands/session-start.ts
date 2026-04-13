@@ -309,7 +309,7 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
                 id,
                 short_label,
                 created_at: nowISO(),
-                source: origin,
+                source: undefined, // remote federation signal — treated as 'human' (legacy default)
                 star_count: 0,
                 starred_by: [],
                 usage_count: 0,
