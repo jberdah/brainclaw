@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ClaimSchema, type Claim } from './schema.js';
+import { ClaimSchema, type Claim, type PlanStatus } from './schema.js';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
@@ -11,6 +11,8 @@ import { createWorktree } from './worktree.js';
 import { appendAuditEntry } from './audit.js';
 import { refreshLiveCompanions } from '../commands/export.js';
 import { loadSessionById } from './identity.js';
+import { loadState, persistState } from './state.js';
+import { createRuntimeEvent } from './events.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -72,6 +74,137 @@ export function releaseClaim(id: string, cwd?: string): Claim {
   claim.released_at = nowISO();
   saveClaim(claim, cwd);
   return claim;
+}
+
+export interface ReleaseClaimCascadeOptions {
+  planStatus?: string;
+  cwd?: string;
+}
+
+export interface ReleaseClaimCascadeResult {
+  claim: Claim;
+  planTransitioned: boolean;
+  /** Set when planStatus=done but other active claims still exist — plan stays in_progress. */
+  planWarning?: string;
+  planId?: string;
+  newPlanStatus?: string;
+  otherActiveClaimsCount?: number;
+}
+
+/**
+ * Release a claim and optionally cascade the status to its linked plan.
+ *
+ * Rules:
+ * - planStatus='done'    → only transition plan if NO OTHER active claims on same plan (last-claim rule).
+ *                          If other active claims exist, warn and leave plan in_progress.
+ * - planStatus='blocked' → always propagate to plan.
+ * - planStatus='todo'/'in_progress' or undefined → no cascade.
+ *
+ * Emits `plan_cascade_to_done` runtime event when auto-transitioning to done.
+ */
+export function releaseClaimWithCascade(
+  id: string,
+  options: ReleaseClaimCascadeOptions = {},
+): ReleaseClaimCascadeResult {
+  const { planStatus, cwd } = options;
+
+  // Release the claim (idempotent: already-released claims are returned as-is)
+  const claim = loadClaim(id, cwd);
+  if (claim.status === 'released') {
+    return { claim, planTransitioned: false };
+  }
+  claim.status = 'released';
+  claim.released_at = nowISO();
+  saveClaim(claim, cwd);
+
+  appendAuditEntry(
+    {
+      actor: claim.agent,
+      actor_id: claim.agent_id,
+      action: 'release_claim',
+      item_id: id,
+      item_type: 'claim',
+      scope: claim.scope,
+      session_id: claim.session_id,
+      host_id: claim.host_id,
+    },
+    cwd,
+  );
+
+  // No cascade requested or no linked plan
+  if (!planStatus || !claim.plan_id) {
+    return { claim, planTransitioned: false };
+  }
+
+  const state = loadState(cwd);
+  const plan = state.plan_items.find((item) => item.id === claim.plan_id);
+  if (!plan) {
+    return { claim, planTransitioned: false };
+  }
+
+  const ts = nowISO();
+
+  if (planStatus === 'blocked') {
+    // Always propagate blocked status to plan
+    plan.status = 'blocked' as PlanStatus;
+    plan.updated_at = ts;
+    persistState(state, cwd);
+    return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'blocked' };
+  }
+
+  if (planStatus === 'done') {
+    // Count OTHER active claims on the same plan (current claim already released above)
+    const otherActive = listClaims(cwd).filter(
+      (c) => c.status === 'active' && c.plan_id === claim.plan_id && c.id !== id,
+    );
+
+    if (otherActive.length > 0) {
+      const planWarning = `Plan has ${otherActive.length} other active claim(s); staying in_progress`;
+      appendAuditEntry(
+        {
+          actor: claim.agent,
+          action: 'update',
+          item_id: plan.id,
+          item_type: 'plan',
+          after: { cascade_blocked: true, reason: planWarning },
+        },
+        cwd,
+      );
+      return {
+        claim,
+        planTransitioned: false,
+        planWarning,
+        planId: plan.id,
+        newPlanStatus: plan.status,
+        otherActiveClaimsCount: otherActive.length,
+      };
+    }
+
+    // Last active claim released → auto-transition plan to done
+    plan.status = 'done' as PlanStatus;
+    if (!plan.completed_at) plan.completed_at = ts;
+    plan.updated_at = ts;
+    persistState(state, cwd);
+
+    createRuntimeEvent(
+      {
+        agent: claim.agent,
+        agent_id: claim.agent_id,
+        event_type: 'plan_cascade_to_done',
+        claim_id: id,
+        plan_id: plan.id,
+        session_id: claim.session_id,
+        host_id: claim.host_id,
+        text: `Plan ${plan.id} auto-transitioned to done — last active claim released by ${claim.agent}`,
+      },
+      cwd,
+    );
+
+    return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'done' };
+  }
+
+  // planStatus='todo', 'in_progress', or other — no cascade
+  return { claim, planTransitioned: false };
 }
 
 export function generateClaimId(): string {
