@@ -6,6 +6,9 @@ import { handleMcpReadToolCall } from '../../src/commands/mcp.js';
 import { startSession } from '../../src/commands/session-start.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveClaim } from '../../src/core/claims.js';
+import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { createAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
+import { queryRuntimeEvents } from '../../src/core/events.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { createSequence } from '../../src/core/sequence.js';
 import { saveState } from '../../src/core/state.js';
@@ -318,6 +321,161 @@ describe('commands/mcp read tools', () => {
       id: 'hnd_missing',
     }, { cwd: workspace.dir });
     assert.ok(missingResponse.content[0].text.includes('Handoff not found: hnd_missing'));
+  });
+
+  it('lists assignments through the MCP read handler with filters and compact output', () => {
+    const assignmentA = createAssignment({
+      claim_id: 'clm_assignment_a',
+      plan_id: 'pln_assignment_a',
+      sequence_id: 'seq_assignment',
+      agent: 'copilot',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/runtime/a',
+      description: 'First runtime assignment',
+    }, workspace.dir);
+    transitionAssignment(assignmentA.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignmentA.id, 'accepted', { actor: 'copilot', session_id: 'sess_assignment_a' }, workspace.dir);
+
+    const assignmentB = createAssignment({
+      claim_id: 'clm_assignment_b',
+      plan_id: 'pln_assignment_b',
+      sequence_id: 'seq_assignment',
+      agent: 'claude-code',
+      dispatcher_agent: 'codex',
+      scope: 'src/runtime/b',
+      description: 'Second runtime assignment',
+    }, workspace.dir);
+    transitionAssignment(assignmentB.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignmentB.id, 'accepted', { actor: 'claude-code', session_id: 'sess_assignment_b' }, workspace.dir);
+    transitionAssignment(assignmentB.id, 'started', { actor: 'claude-code' }, workspace.dir);
+
+    const response = handleMcpReadToolCall('bclaw_list_assignments', {
+      status: 'accepted',
+      agent: 'copilot',
+      compact: true,
+    }, { cwd: workspace.dir });
+
+    assert.ok(response.content[0].text.includes('assignment(s)'));
+    const structured = response.structuredContent as {
+      total: number;
+      assignments: Array<{ id: string; agent: string; status: string; scope: string; plan_id?: string }>;
+    };
+    assert.equal(structured.total, 1);
+    assert.equal(structured.assignments[0].id, assignmentA.id);
+    assert.equal(structured.assignments[0].agent, 'copilot');
+    assert.equal(structured.assignments[0].status, 'accepted');
+    assert.equal(structured.assignments[0].plan_id, 'pln_assignment_a');
+
+    const byId = handleMcpReadToolCall('bclaw_list_assignments', {
+      id: assignmentB.id,
+    }, { cwd: workspace.dir });
+    const byIdStructured = byId.structuredContent as {
+      total: number;
+      assignments: Array<{ id: string; status: string }>;
+    };
+    assert.equal(byIdStructured.total, 1);
+    assert.equal(byIdStructured.assignments[0].id, assignmentB.id);
+    assert.equal(byIdStructured.assignments[0].status, 'started');
+  });
+
+  it('lists AgentRuns through the MCP read handler with filters and compact output', () => {
+    const runA = createAgentRun({
+      assignment_id: 'asgn_run_a',
+      claim_id: 'clm_run_a',
+      plan_id: 'pln_run_a',
+      sequence_id: 'seq_runs',
+      agent: 'copilot',
+      transport: 'manual_command',
+      scope: 'src/runtime/run-a',
+      description: 'Manual run A',
+    }, workspace.dir);
+    transitionAgentRun(runA.id, 'waiting_input', { actor: 'codex' }, workspace.dir);
+
+    const runB = createAgentRun({
+      assignment_id: 'asgn_run_b',
+      claim_id: 'clm_run_b',
+      plan_id: 'pln_run_b',
+      sequence_id: 'seq_runs',
+      agent: 'claude-code',
+      transport: 'cli_spawn',
+      scope: 'src/runtime/run-b',
+      description: 'Spawned run B',
+    }, workspace.dir);
+    transitionAgentRun(runB.id, 'launching', { actor: 'codex', pid: 4321 }, workspace.dir);
+    transitionAgentRun(runB.id, 'running', { actor: 'claude-code', session_id: 'sess_run_b', pid: 4321 }, workspace.dir);
+
+    const response = handleMcpReadToolCall('bclaw_list_runs', {
+      transport: 'manual_command',
+      agent: 'copilot',
+      compact: true,
+    }, { cwd: workspace.dir });
+
+    assert.ok(response.content[0].text.includes('run(s)'));
+    const structured = response.structuredContent as {
+      total: number;
+      runs: Array<{ id: string; agent: string; status: string; transport: string; assignment_id: string }>;
+    };
+    assert.equal(structured.total, 1);
+    assert.equal(structured.runs[0].id, runA.id);
+    assert.equal(structured.runs[0].agent, 'copilot');
+    assert.equal(structured.runs[0].transport, 'manual_command');
+
+    const byId = handleMcpReadToolCall('bclaw_list_runs', {
+      id: runB.id,
+    }, { cwd: workspace.dir });
+    const byIdStructured = byId.structuredContent as {
+      total: number;
+      runs: Array<{ id: string; status: string; transport: string }>;
+    };
+    assert.equal(byIdStructured.total, 1);
+    assert.equal(byIdStructured.runs[0].id, runB.id);
+    assert.equal(byIdStructured.runs[0].status, 'running');
+    assert.equal(byIdStructured.runs[0].transport, 'cli_spawn');
+  });
+
+  it('lists correlated assignment runtime events through the MCP read handler', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_runtime_evt',
+      plan_id: 'pln_runtime_evt',
+      sequence_id: 'seq_runtime_evt',
+      agent: 'copilot',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/runtime/events',
+      description: 'Runtime event assignment',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'copilot', session_id: 'sess_runtime_evt' }, workspace.dir);
+
+    const run = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: assignment.claim_id,
+      plan_id: assignment.plan_id,
+      sequence_id: assignment.sequence_id,
+      agent: 'copilot',
+      transport: 'manual_command',
+      scope: assignment.scope,
+      description: 'Runtime event run',
+    }, workspace.dir);
+    transitionAgentRun(run.id, 'waiting_input', { actor: 'codex' }, workspace.dir);
+    transitionAgentRun(run.id, 'running', { actor: 'copilot', session_id: 'sess_runtime_evt' }, workspace.dir);
+
+    assert.ok(queryRuntimeEvents({ assignment_id: assignment.id }, workspace.dir).length >= 4);
+
+    const response = handleMcpReadToolCall('bclaw_assignment_events', {
+      assignmentId: assignment.id,
+      compact: true,
+    }, { cwd: workspace.dir });
+
+    assert.ok(response.content[0].text.includes('runtime event(s)'));
+    const structured = response.structuredContent as {
+      total: number;
+      events: Array<{ assignment_id?: string; run_id?: string; event_type: string }>;
+    };
+    assert.ok(structured.total >= 4);
+    assert.ok(structured.events.some((event) => event.event_type === 'assignment_accepted'));
+    assert.ok(structured.events.some((event) => event.event_type === 'run_running' && event.run_id === run.id));
   });
 
   it('rejects malformed read-tool calls and reports empty search results', () => {

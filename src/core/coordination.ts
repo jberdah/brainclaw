@@ -2,6 +2,9 @@ import { findAgentIdentityByName, listAgentIdentities, resolveAgentScope, resolv
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
 import { listClaims } from './claims.js';
+import { listAssignments } from './assignments.js';
+import { listAgentRuns } from './agentruns.js';
+import { listActionRequired } from './actions.js';
 import { getActiveSequence } from './sequence.js';
 import { resolveCrossProjectLinks, listIncomingCrossProjectSignals, type CrossProjectSignalEnvelope } from './cross-project.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
@@ -104,6 +107,26 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     active_claims: agent
       ? filteredClaims.filter((claim) => claim.agent === agent)
       : filteredClaims,
+    active_assignments: (agent
+      ? listAssignments(options.cwd, { agent })
+      : listAssignments(options.cwd)
+    ).filter((assignment) =>
+      !['completed', 'failed', 'expired', 'rerouted'].includes(assignment.status) &&
+      (!project || !assignment.plan_id || filteredPlans.some((plan) => plan.id === assignment.plan_id))
+    ),
+    active_runs: (agent
+      ? listAgentRuns(options.cwd, { agent })
+      : listAgentRuns(options.cwd)
+    ).filter((run) =>
+      !['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'].includes(run.status) &&
+      (!project || !run.plan_id || filteredPlans.some((plan) => plan.id === run.plan_id))
+    ),
+    active_actions: (agent
+      ? listActionRequired(options.cwd, { agent, status: 'pending' })
+      : listActionRequired(options.cwd, { status: 'pending' })
+    ).filter((action) =>
+      !project || !action.plan_id || filteredPlans.some((plan) => plan.id === action.plan_id)
+    ),
     active_sequence: enrichSequenceWithPlanStatus(activeSequence, state.plan_items),
     runtime_notes: filteredNotes,
     session_meta_hidden: sessionMetaHidden,

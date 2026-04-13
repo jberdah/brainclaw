@@ -316,6 +316,86 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_list_assignments',
+    description: 'List assignment runtime records with optional filters on status, agent, claim, plan, sequence, or id.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter by assignment status: created, offered, accepted, started, completed, failed, blocked, timed_out, expired, retrying, rerouted.' },
+        agent: { type: 'string', description: 'Filter by assigned agent name.' },
+        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
+        planId: { type: 'string', description: 'Filter by linked plan ID.' },
+        sequenceId: { type: 'string', description: 'Filter by linked sequence ID.' },
+        id: { type: 'string', description: 'Get a single assignment by ID or short label.' },
+        limit: { type: 'number', description: 'Maximum number of assignments to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of assignments to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_runs',
+    description: 'List AgentRun execution attempts with optional filters on status, transport, agent, assignment, claim, plan, sequence, or id.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter by run status: created, launching, waiting_input, running, blocked, completed, failed, cancelled, timed_out, interrupted.' },
+        transport: { type: 'string', description: 'Filter by transport: cli_spawn, manual_command, inbox_only.' },
+        agent: { type: 'string', description: 'Filter by assigned agent name.' },
+        assignmentId: { type: 'string', description: 'Filter by linked assignment ID.' },
+        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
+        planId: { type: 'string', description: 'Filter by linked plan ID.' },
+        sequenceId: { type: 'string', description: 'Filter by linked sequence ID.' },
+        id: { type: 'string', description: 'Get a single run by ID or short label.' },
+        limit: { type: 'number', description: 'Maximum number of runs to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of runs to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_assignment_events',
+    description: 'List correlated runtime events for assignments and runs with filters on assignment, run, claim, session, agent, or event type.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignmentId: { type: 'string', description: 'Filter by linked assignment ID.' },
+        runId: { type: 'string', description: 'Filter by linked run ID.' },
+        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
+        sessionId: { type: 'string', description: 'Filter by runtime session ID.' },
+        agent: { type: 'string', description: 'Filter by agent name.' },
+        eventType: { type: 'string', description: 'Filter by runtime event type.' },
+        id: { type: 'string', description: 'Get a single runtime event by ID.' },
+        limit: { type: 'number', description: 'Maximum number of events to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of events to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
+      },
+    },
+  },
+  {
+    name: 'bclaw_list_actions',
+    description: 'List pending or resolved ActionRequired items for runtime approvals, questions, and clarifications.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter by action status: pending, resolved, rejected, cancelled.' },
+        kind: { type: 'string', description: 'Filter by action kind: approval, user_input, clarification, plan_approval.' },
+        agent: { type: 'string', description: 'Filter by agent name.' },
+        assignmentId: { type: 'string', description: 'Filter by linked assignment ID.' },
+        runId: { type: 'string', description: 'Filter by linked run ID.' },
+        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
+        id: { type: 'string', description: 'Get a single action by ID or short label.' },
+        limit: { type: 'number', description: 'Maximum number of actions to return (default: 20).' },
+        offset: { type: 'number', description: 'Number of actions to skip (for pagination).' },
+        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
+      },
+    },
+  },
+  {
     name: 'bclaw_list_agents',
     description: 'List registered agent identities and optionally include bounded reputation summaries.',
     annotations: { tier: 'advanced', category: 'discovery' },
@@ -1100,10 +1180,40 @@ const MCP_WRITE_TOOLS = [
         },
         error_message: { type: 'string', description: 'Error details (for failed status).' },
         blocker: { type: 'string', description: 'Blocker description (for blocked status).' },
+        action_required: {
+          type: 'object',
+          description: 'Optional ActionRequired payload when status=blocked. Lets the worker request approval, user input, or clarification before resuming.',
+          properties: {
+            kind: { type: 'string', enum: ['approval', 'user_input', 'clarification', 'plan_approval'], description: 'Kind of action needed.' },
+            title: { type: 'string', description: 'Short title shown to supervisors/UI.' },
+            prompt: { type: 'string', description: 'Question or approval prompt to answer.' },
+            options: { type: 'array', items: { type: 'string' }, description: 'Optional answer choices.' },
+            response_schema: { type: 'object', description: 'Optional structured response schema hint.' },
+            tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+          },
+          required: ['kind', 'title', 'prompt'],
+        },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['assignment_id', 'status'],
+    },
+  },
+  {
+    name: 'bclaw_assignment_action',
+    description: 'Resolve or reject a pending ActionRequired item and update the linked Assignment/AgentRun state.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action_id: { type: 'string', description: 'ActionRequired ID (act_xxx).' },
+        outcome: { type: 'string', enum: ['resolved', 'rejected', 'cancelled'], description: 'How the supervisor resolves the pending action.' },
+        text: { type: 'string', description: 'Human-readable response or rationale.' },
+        payload: { type: 'object', description: 'Optional structured response payload.' },
+        agent: { type: 'string', description: 'Supervisor/agent responding to the action.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['action_id', 'outcome'],
     },
   },
 ] as const;
@@ -3026,7 +3136,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       try {
-        const result = dispatch({
+        const result = await dispatch({
           agents: args.agents as string[] | undefined,
           lanes: args.lanes as string[] | undefined,
           maxAssignments: args.maxAssignments as number | undefined,
@@ -3119,6 +3229,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         const message = args.message as string | undefined;
         const errorMessage = args.error_message as string | undefined;
         const blocker = args.blocker as string | undefined;
+        const actionRequiredInput = args.action_required as Record<string, unknown> | undefined;
         const artifacts = Array.isArray(args.artifacts) ? args.artifacts as Array<{ type: string; ref: string; description?: string }> : undefined;
 
         // Warn if no active session (audit trail will be incomplete)
@@ -3175,6 +3286,40 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           } catch { /* best-effort: don't fail the update if ack fails */ }
         }
 
+        let createdActionId: string | undefined;
+        if (status === 'blocked' && actionRequiredInput) {
+          const kind = String(actionRequiredInput.kind ?? '').trim();
+          const title = String(actionRequiredInput.title ?? '').trim();
+          const prompt = String(actionRequiredInput.prompt ?? '').trim();
+          if (!['approval', 'user_input', 'clarification', 'plan_approval'].includes(kind) || !title || !prompt) {
+            return { response: createToolErrorResponse('validation_error', 'action_required must include kind, title, and prompt when status=blocked') };
+          }
+          const { createActionRequired } = await import('../core/actions.js');
+          const { findLatestAgentRunForAssignment } = await import('../core/agentruns.js');
+          const latestRun = findLatestAgentRunForAssignment(assignmentId, cwd);
+          const action = createActionRequired({
+            assignment_id: assignmentId,
+            run_id: latestRun?.id,
+            claim_id: assignment.claim_id,
+            message_id: assignment.message_id,
+            plan_id: assignment.plan_id,
+            sequence_id: assignment.sequence_id,
+            agent: callerAgent,
+            agent_id: resolved.identity!.agent_id,
+            session_id: effectiveSessionId,
+            kind: kind as import('../core/schema.js').ActionRequiredKind,
+            scope: assignment.scope,
+            title,
+            prompt,
+            options: Array.isArray(actionRequiredInput.options) ? actionRequiredInput.options.map(String) : [],
+            response_schema: (actionRequiredInput.response_schema && typeof actionRequiredInput.response_schema === 'object')
+              ? actionRequiredInput.response_schema as Record<string, unknown>
+              : undefined,
+            tags: Array.isArray(actionRequiredInput.tags) ? actionRequiredInput.tags.map(String) : ['action-required'],
+          }, cwd);
+          createdActionId = action.id;
+        }
+
         return {
           response: {
             content: [{ type: 'text', text: `Assignment ${assignmentId} updated: ${result.previous_status} → ${status}` }],
@@ -3186,6 +3331,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
               ...(result.assignment.started_at && { started_at: result.assignment.started_at }),
               ...(result.assignment.completed_at && { completed_at: result.assignment.completed_at }),
               last_heartbeat_at: result.assignment.last_heartbeat_at,
+              ...(createdActionId ? { action_id: createdActionId } : {}),
             },
           },
         };
@@ -3246,6 +3392,54 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           }),
         };
       } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
+      }
+    }
+
+    if (name === 'bclaw_assignment_action') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const actionId = typeof args.action_id === 'string' ? args.action_id : undefined;
+        const outcome = typeof args.outcome === 'string' ? args.outcome : undefined;
+        if (!actionId) return { response: createToolErrorResponse('input_error', 'action_id is required') };
+        if (!outcome || !['resolved', 'rejected', 'cancelled'].includes(outcome)) {
+          return { response: createToolErrorResponse('validation_error', 'outcome must be one of: resolved, rejected, cancelled') };
+        }
+
+        const { resolveActionRequired, loadActionRequired } = await import('../core/actions.js');
+
+        // Guard: an agent cannot resolve its own action (defeats approval workflow)
+        const pendingAction = loadActionRequired(actionId, cwd);
+        if (pendingAction && pendingAction.agent === resolved.identity!.agent_name) {
+          return { response: createToolErrorResponse('trust_error', `Agent '${resolved.identity!.agent_name}' cannot resolve its own action. A supervisor or different agent must respond.`) };
+        }
+
+        const action = resolveActionRequired(actionId, {
+          outcome: outcome as 'resolved' | 'rejected' | 'cancelled',
+          text: typeof args.text === 'string' ? args.text : undefined,
+          payload: args.payload && typeof args.payload === 'object' ? args.payload as Record<string, unknown> : undefined,
+          responded_by: resolved.identity!.agent_name,
+          responded_by_id: resolved.identity!.agent_id,
+          session_id: connectionSessionId ?? 'unknown',
+        }, cwd);
+
+        return {
+          response: {
+            content: [{ type: 'text', text: `Action ${actionId} ${action.status}` }],
+            structuredContent: {
+              action_id: action.id,
+              assignment_id: action.assignment_id,
+              run_id: action.run_id,
+              status: action.status,
+              resolved_at: action.resolved_at,
+              response: action.response,
+            },
+          },
+        };
+      } catch (err) {
         return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
       }
     }
@@ -3896,13 +4090,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       const preparedInvokes: PreparedInvoke[] = [];
 
       /** Run E2E execution phase on prepared delivery entries. Returns overall execution status. */
-      const runCoordinateExecution = (
+      const runCoordinateExecution = async (
         prepared: PreparedInvoke[],
         opts: { autoExecute: boolean; senderAgent: string; senderAgentId?: string; cwd: string; warnings: string[] },
-      ): 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' => {
+      ): Promise<'delivered_and_started' | 'command_ready_manual' | 'inbox_only'> => {
         let overall: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' = 'inbox_only';
         for (const { entry, invoke, worktreePath } of prepared) {
-          const execResult = attemptExecution(invoke, {
+          const execResult = await attemptExecution(invoke, {
             agent: entry.agent,
             autoExecute: opts.autoExecute,
             worktreePath,
@@ -3944,6 +4138,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         scope?: string;
         thread_id?: string;
         claim_id?: string;
+        assignment_id?: string;
         released_claim_id?: string;
         command?: string;
         shell?: string;
@@ -4104,12 +4299,33 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             },
             commandMode: 'worker',
           });
+          // Create Assignment record for observability parity with bclaw_dispatch
+          try {
+            const { createAssignment, generateAssignmentId } = await import('../core/assignments.js');
+            const preId = generateAssignmentId(cwd);
+            const assignment = createAssignment({
+              id: preId.id,
+              short_label: preId.short_label,
+              claim_id: claimId,
+              agent: agentName,
+              dispatcher_agent: senderAgent,
+              dispatcher_session_id: connectionSessionId,
+              scope: assignScope,
+              description: req.task,
+              tags: ['coordinate', 'assign'],
+            }, cwd);
+            queued.entry.assignment_id = assignment.id;
+            artifacts.push({ type: 'assignment', id: assignment.id });
+          } catch (err) {
+            warnings.push(`Assignment creation failed for ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+
           delivery_plan.push(queued.entry);
           preparedInvokes.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: claimResult.worktreePath });
         }
 
         // E2E execution phase: attempt to spawn assigned agents
-        const overallExecStatus = runCoordinateExecution(preparedInvokes, {
+        const overallExecStatus = await runCoordinateExecution(preparedInvokes, {
           autoExecute: req.autoExecute !== false,
           senderAgent, senderAgentId, cwd, warnings,
         });
@@ -4242,7 +4458,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             delivery_plan.push(queued.entry);
             reroutePrepared.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: rerouteClaimResult.worktreePath });
 
-            const rerouteExecStatus = runCoordinateExecution(reroutePrepared, {
+            const rerouteExecStatus = await runCoordinateExecution(reroutePrepared, {
               autoExecute: req.autoExecute !== false,
               senderAgent, senderAgentId, cwd, warnings,
             });

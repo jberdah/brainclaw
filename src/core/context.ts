@@ -21,9 +21,11 @@ import { loadState } from './state.js';
 import { readAuditLog, type AuditAction, type AuditEntry } from './audit.js';
 import { listCandidates } from './candidates.js';
 import { listClaims, isClaimExpired } from './claims.js';
+import { listAssignments } from './assignments.js';
 import { listRuntimeNotes } from './runtime.js';
 import { isTrapActive, listOperationalTraps } from './traps.js';
 import { buildEstimationReport } from '../commands/estimation-report.js';
+import { detectStaleness, type StalenessWarning } from './staleness.js';
 import type { Claim, InstructionEntry, PlanItem, ProjectMode, ProjectStrategy } from './schema.js';
 
 export const CONTEXT_SCHEMA_VERSION = '1.2';
@@ -67,6 +69,14 @@ export interface ContextItem {
 
 export interface OpenWorkSummary {
   active_claims: Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id' | 'expires_at'>[];
+  active_assignments: Array<{
+    id: string;
+    status: string;
+    scope: string;
+    description: string;
+    plan_id?: string;
+    last_heartbeat_at?: string;
+  }>;
   in_progress_plans: Pick<PlanItem, 'id' | 'text' | 'assignee'>[];
 }
 
@@ -110,6 +120,7 @@ export interface ContextResult {
   claim_conflicts?: ClaimConflict[];
   workflow_hints?: string[];
   project_vision?: string;
+  stale_warnings?: StalenessWarning[];
   selected: ContextItem[];
 }
 
@@ -579,14 +590,25 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const currentSession = loadCurrentSession(contextCwd);
   if (currentAgentIdentity || agent) {
     const claimPlanIds = new Set(myClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
+    const activeAssignments = listAssignments(contextCwd, { agent: agentName }).filter((assignment) =>
+      !['completed', 'failed', 'expired', 'rerouted'].includes(assignment.status),
+    );
     const inProgressPlans = state.plan_items.filter(
       (p) =>
         p.status === 'in_progress' &&
         (p.assignee === agentName || claimPlanIds.has(p.id))
     );
-    if (myClaims.length > 0 || inProgressPlans.length > 0) {
+    if (myClaims.length > 0 || activeAssignments.length > 0 || inProgressPlans.length > 0) {
       openWork = {
         active_claims: myClaims.map(({ id, scope, description, created_at, plan_id, expires_at }) => ({ id, scope, description, created_at, plan_id, expires_at })),
+        active_assignments: activeAssignments.map(({ id, status, scope, description, plan_id, last_heartbeat_at }) => ({
+          id,
+          status,
+          scope,
+          description,
+          plan_id,
+          last_heartbeat_at,
+        })),
         in_progress_plans: inProgressPlans.map(({ id, text, assignee }) => ({ id, text, assignee })),
       };
     }
@@ -638,6 +660,21 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     } catch { /* skip unavailable linked project */ }
   }
 
+  // Staleness detection: non-blocking, capped at 5 warnings to keep context lean
+  let staleWarnings: StalenessWarning[] | undefined;
+  try {
+    const pendingCandidatesForStaleness = listCandidates('pending', contextCwd);
+    const staleReport = detectStaleness(
+      state.plan_items,
+      state.known_traps,
+      state.open_handoffs,
+      pendingCandidatesForStaleness,
+    );
+    if (staleReport.warnings.length > 0) {
+      staleWarnings = staleReport.warnings.slice(0, 5);
+    }
+  } catch { /* non-fatal */ }
+
   const result: ContextResult = {
     context_schema: CONTEXT_SCHEMA_VERSION,
     profile,
@@ -683,6 +720,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
     claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
     workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
+    stale_warnings: staleWarnings,
     selected,
   };
 
@@ -697,7 +735,7 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
   const lines: string[] = [];
   lines.push(`# Agent Context (${result.profile})`);
   lines.push('');
-  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.in_progress_plans.length > 0)) {
+  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.active_assignments.length > 0 || result.open_work.in_progress_plans.length > 0)) {
     lines.push('## ⚠ Your open work');
     lines.push('');
     if (result.open_work.active_claims.length > 0) {
@@ -709,6 +747,15 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
         const ttlInfo = claim.expires_at && !expired ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
         lines.push(`- [${claim.id}] ${claim.description}${planRef}${ttlInfo}${expired}`);
         lines.push(`  scope: ${claim.scope}`);
+      }
+    }
+    if (result.open_work.active_assignments.length > 0) {
+      lines.push('Active assignments (runtime state):');
+      for (const assignment of result.open_work.active_assignments) {
+        const planRef = assignment.plan_id ? ` [plan: ${assignment.plan_id}]` : '';
+        const heartbeat = assignment.last_heartbeat_at ? ` [heartbeat: ${assignment.last_heartbeat_at.slice(0, 16).replace('T', ' ')}]` : '';
+        lines.push(`- [${assignment.id}] ${assignment.description}${planRef} (${assignment.status})${heartbeat}`);
+        lines.push(`  scope: ${assignment.scope}`);
       }
     }
     if (result.open_work.in_progress_plans.length > 0) {
@@ -968,6 +1015,12 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       lines.push(`sd=${result.context_diff.since_session ?? ''}`);
       lines.push(`dc=${result.context_diff.counts.total}`);
     }
+    if (result.stale_warnings && result.stale_warnings.length > 0) {
+      lines.push(`sw=${result.stale_warnings.length}`);
+      for (const w of result.stale_warnings) {
+        lines.push(`  - en=${w.entity} id=${w.id} ag=${w.age_days} tx="${w.reason}"`);
+      }
+    }
     if (result.resume_summary) {
       lines.push(`rt=${result.resume_summary.internal_trust}`);
       lines.push('rs:');
@@ -1082,11 +1135,17 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
         lines.push(`    - ${item}`);
       }
     }
+    if (result.stale_warnings && result.stale_warnings.length > 0) {
+      lines.push('stale_warnings:');
+      for (const w of result.stale_warnings) {
+        lines.push(`  - entity=${w.entity} id=${w.id} age_days=${w.age_days} reason="${w.reason}" action="${w.suggested_action}"`);
+      }
+    }
     if (result.target) {
       lines.push(`target: ${result.target}`);
     }
   }
-  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.in_progress_plans.length > 0)) {
+  if (result.open_work && (result.open_work.active_claims.length > 0 || result.open_work.active_assignments.length > 0 || result.open_work.in_progress_plans.length > 0)) {
     lines.push(compact ? 'ow:' : 'open_work:');
     if (result.open_work.active_claims.length > 0) {
       lines.push(compact ? '  claims:' : '  active_claims:');
@@ -1097,6 +1156,18 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
         } else {
           const planRef = claim.plan_id ? ` plan_id=${claim.plan_id}` : '';
           lines.push(`    - id=${claim.id}${planRef} scope="${claim.scope}" description="${claim.description}"`);
+        }
+      }
+    }
+    if (result.open_work.active_assignments.length > 0) {
+      lines.push(compact ? '  assignments:' : '  active_assignments:');
+      for (const assignment of result.open_work.active_assignments) {
+        if (compact) {
+          const planRef = assignment.plan_id ? ` pl=${assignment.plan_id}` : '';
+          lines.push(`    - id=${assignment.id}${planRef} st=${assignment.status} sc="${assignment.scope}" tx="${assignment.description}"`);
+        } else {
+          const planRef = assignment.plan_id ? ` plan_id=${assignment.plan_id}` : '';
+          lines.push(`    - id=${assignment.id}${planRef} status=${assignment.status} scope="${assignment.scope}" description="${assignment.description}"`);
         }
       }
     }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../../src/core/context.js';
 import { saveClaim } from '../../src/core/claims.js';
+import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { saveState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { State } from '../../src/core/schema.js';
@@ -139,6 +140,27 @@ describe('open_work in context', () => {
     assert.equal(result.open_work.in_progress_plans[0].id, 'pln_linked01');
   });
 
+  it('open_work includes active assignments for the current agent', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_assignment_ctx',
+      plan_id: 'pln_assignment_ctx',
+      agent: 'testuser',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/core/context.ts',
+      description: 'Context runtime assignment',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'testuser', session_id: 'sess_assignment_ctx' }, workspace.dir);
+
+    const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+    assert.ok(result.open_work);
+    assert.equal(result.open_work.active_assignments.length, 1);
+    assert.equal(result.open_work.active_assignments[0].id, assignment.id);
+    assert.equal(result.open_work.active_assignments[0].status, 'accepted');
+    assert.equal(result.open_work.active_assignments[0].scope, 'src/core/context.ts');
+  });
+
   it('renderContextMarkdown shows open_work section at the top', () => {
     saveClaim({
       id: 'clm_test005',
@@ -165,6 +187,25 @@ describe('open_work in context', () => {
     assert.ok(md.includes('release when done'));
   });
 
+  it('renderContextMarkdown shows active assignments in open_work', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_test_assignment_md',
+      agent: 'testuser',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/core/runtime.ts',
+      description: 'Markdown assignment visibility',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'testuser' }, workspace.dir);
+
+    const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+    const md = renderContextMarkdown(result);
+    assert.ok(md.includes('Active assignments (runtime state):'));
+    assert.ok(md.includes(assignment.id));
+    assert.ok(md.includes('Markdown assignment visibility'));
+  });
+
   it('renderContextPromptTemplate (non-compact) includes open_work block', () => {
     saveClaim({
       id: 'clm_test006',
@@ -182,6 +223,25 @@ describe('open_work in context', () => {
     assert.ok(tmpl.includes('open_work:'));
     assert.ok(tmpl.includes('clm_test006'));
     assert.ok(tmpl.includes('Template test claim'));
+  });
+
+  it('renderContextPromptTemplate includes active_assignments block when present', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_test_assignment_tmpl',
+      agent: 'testuser',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/core/foo.ts',
+      description: 'Template assignment visibility',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'testuser' }, workspace.dir);
+
+    const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+    const tmpl = renderContextPromptTemplate(result, false);
+    assert.ok(tmpl.includes('active_assignments:'));
+    assert.ok(tmpl.includes(assignment.id));
+    assert.ok(tmpl.includes('Template assignment visibility'));
   });
 
   it('renderContextPromptTemplate (compact) includes ow: block', () => {

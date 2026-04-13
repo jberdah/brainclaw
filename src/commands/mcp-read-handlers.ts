@@ -20,6 +20,10 @@ import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
 import { listClaims } from '../core/claims.js';
+import { listAssignments } from '../core/assignments.js';
+import { listAgentRuns } from '../core/agentruns.js';
+import { listActionRequired } from '../core/actions.js';
+import { queryRuntimeEvents } from '../core/events.js';
 import { listSequences } from '../core/sequence.js';
 import {
   listAgentIdentities,
@@ -42,8 +46,8 @@ import { listCapabilities, listTools as listRegistryTools } from '../core/regist
 import { listAvailableProjects, switchProject } from './switch.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
-import { BootstrapInterviewAnswerSchema } from '../core/schema.js';
-import type { BootstrapInterviewAnswer, PlanStatus, PlanType, SequenceStatus } from '../core/schema.js';
+import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
+import type { ActionRequiredKind, ActionRequiredStatus, AssignmentStatus, BootstrapInterviewAnswer, PlanStatus, PlanType, RuntimeEventType, SequenceStatus } from '../core/schema.js';
 import {
   type McpToolResponse,
   type McpReadToolContext,
@@ -58,6 +62,17 @@ function normalizeBootstrapInterviewAnswersArg(value: unknown): BootstrapIntervi
     return [];
   }
   return value.map((entry) => BootstrapInterviewAnswerSchema.parse(entry));
+}
+
+/** Validate a string enum filter or return undefined. Throws on invalid. */
+function validateEnumFilter<T extends string>(value: unknown, schema: { safeParse: (v: unknown) => { success: boolean } }, label: string): T | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const str = String(value);
+  const result = schema.safeParse(str);
+  if (!result.success) {
+    throw new Error(`Invalid ${label}: '${str}'`);
+  }
+  return str as T;
 }
 
 function normalizeBootstrapInterviewAudienceArg(value: unknown): 'cli' | 'ide_chat' | 'any' {
@@ -398,6 +413,25 @@ export function handleMcpReadToolCall(
       const session = claim.session_id ? ` session=${claim.session_id}` : '';
       lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}`);
     }
+    lines.push(`Active assignments: ${board.active_assignments.length}`);
+    for (const assignment of board.active_assignments.slice(0, 10)) {
+      const plan = assignment.plan_id ? ` plan=${assignment.plan_id}` : '';
+      const session = assignment.session_id ? ` session=${assignment.session_id}` : '';
+      lines.push(`- [${assignment.id}] ${assignment.agent} (${assignment.status}) -> ${assignment.scope}${plan}${session}`);
+    }
+    lines.push(`Active runs: ${board.active_runs.length}`);
+    for (const run of board.active_runs.slice(0, 10)) {
+      const assignment = run.assignment_id ? ` assignment=${run.assignment_id}` : '';
+      const attempt = ` attempt=${run.attempt_index}`;
+      const session = run.session_id ? ` session=${run.session_id}` : '';
+      lines.push(`- [${run.id}] ${run.agent} (${run.status}/${run.transport}) -> ${run.scope}${assignment}${attempt}${session}`);
+    }
+    lines.push(`Pending actions: ${board.active_actions.length}`);
+    for (const action of board.active_actions.slice(0, 10)) {
+      const run = action.run_id ? ` run=${action.run_id}` : '';
+      const session = action.session_id ? ` session=${action.session_id}` : '';
+      lines.push(`- [${action.id}] ${action.agent} (${action.kind}) -> ${action.title}${run}${session}`);
+    }
     lines.push(`Active sequence: ${board.active_sequence ? `1 (${board.active_sequence.name})` : '0'}`);
     if (board.active_sequence) {
       lines.push(`- [${board.active_sequence.id}] ${board.active_sequence.name} (${board.active_sequence.status})`);
@@ -664,6 +698,265 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: { total, offset, limit, claims: page },
+    };
+  }
+
+  if (name === 'bclaw_list_assignments') {
+    const status = validateEnumFilter<AssignmentStatus>(args.status, AssignmentStatusSchema, 'assignment status');
+    const id = args.id as string | undefined;
+    const claimId = args.claimId as string | undefined;
+    const planId = args.planId as string | undefined;
+    const sequenceId = args.sequenceId as string | undefined;
+    const agent = args.agent as string | undefined;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    let assignments = listAssignments(cwd, {
+      ...(status ? { status } : {}),
+      ...(agent ? { agent } : {}),
+      ...(claimId ? { claim_id: claimId } : {}),
+      ...(planId ? { plan_id: planId } : {}),
+      ...(sequenceId ? { sequence_id: sequenceId } : {}),
+    });
+    if (id) {
+      assignments = assignments.filter((assignment) =>
+        assignment.id === id || assignment.short_label === id,
+      );
+    }
+
+    const total = assignments.length;
+    const page = assignments.slice(offset, offset + limit);
+    const compact = args.compact === true;
+    const lines = page.length === 0
+      ? ['No assignments found.']
+      : [
+          `${total} assignment(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((assignment) => {
+            if (compact) {
+              return `[${assignment.id}] ${assignment.agent} (${assignment.status}) -> ${assignment.scope}`;
+            }
+            const refs: string[] = [];
+            if (assignment.claim_id) refs.push(`claim ${assignment.claim_id}`);
+            if (assignment.plan_id) refs.push(`plan ${assignment.plan_id}`);
+            if (assignment.sequence_id) refs.push(`sequence ${assignment.sequence_id}`);
+            if (assignment.session_id) refs.push(`session ${assignment.session_id.slice(-8)}`);
+            const suffix = refs.length ? ` [${refs.join(', ')}]` : '';
+            return `[${assignment.id}] ${assignment.agent} (${assignment.status}) -> ${assignment.scope}: ${assignment.description}${suffix}`;
+          }),
+        ];
+
+    const outputAssignments = compact
+      ? page.map((assignment) => ({
+          id: assignment.id,
+          short_label: assignment.short_label,
+          agent: assignment.agent,
+          status: assignment.status,
+          scope: assignment.scope,
+          claim_id: assignment.claim_id,
+          plan_id: assignment.plan_id,
+          sequence_id: assignment.sequence_id,
+          updated_at: assignment.updated_at,
+          last_heartbeat_at: assignment.last_heartbeat_at,
+        }))
+      : page;
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, assignments: outputAssignments },
+    };
+  }
+
+  if (name === 'bclaw_list_runs') {
+    const status = validateEnumFilter<import('../core/schema.js').AgentRunStatus>(args.status, AgentRunStatusSchema, 'run status');
+    const transport = validateEnumFilter<import('../core/schema.js').AgentRunTransport>(args.transport, AgentRunTransportSchema, 'run transport');
+    const id = args.id as string | undefined;
+    const assignmentId = args.assignmentId as string | undefined;
+    const claimId = args.claimId as string | undefined;
+    const planId = args.planId as string | undefined;
+    const sequenceId = args.sequenceId as string | undefined;
+    const agent = args.agent as string | undefined;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    let runs = listAgentRuns(cwd, {
+      ...(status ? { status } : {}),
+      ...(transport ? { transport } : {}),
+      ...(agent ? { agent } : {}),
+      ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      ...(claimId ? { claim_id: claimId } : {}),
+      ...(planId ? { plan_id: planId } : {}),
+      ...(sequenceId ? { sequence_id: sequenceId } : {}),
+    });
+    if (id) {
+      runs = runs.filter((run) =>
+        run.id === id || run.short_label === id,
+      );
+    }
+
+    const total = runs.length;
+    const page = runs.slice(offset, offset + limit);
+    const compact = args.compact === true;
+    const lines = page.length === 0
+      ? ['No runs found.']
+      : [
+          `${total} run(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((run) => {
+            if (compact) {
+              return `[${run.id}] ${run.agent} (${run.status}/${run.transport}) -> ${run.assignment_id}`;
+            }
+            const refs: string[] = [`assignment ${run.assignment_id}`, `attempt ${run.attempt_index}`];
+            if (run.claim_id) refs.push(`claim ${run.claim_id}`);
+            if (run.plan_id) refs.push(`plan ${run.plan_id}`);
+            if (run.session_id) refs.push(`session ${run.session_id.slice(-8)}`);
+            const suffix = refs.length ? ` [${refs.join(', ')}]` : '';
+            return `[${run.id}] ${run.agent} (${run.status}/${run.transport}) -> ${run.scope}: ${run.description}${suffix}`;
+          }),
+        ];
+
+    const outputRuns = compact
+      ? page.map((run) => ({
+          id: run.id,
+          short_label: run.short_label,
+          agent: run.agent,
+          status: run.status,
+          transport: run.transport,
+          assignment_id: run.assignment_id,
+          claim_id: run.claim_id,
+          plan_id: run.plan_id,
+          sequence_id: run.sequence_id,
+          attempt_index: run.attempt_index,
+          updated_at: run.updated_at,
+          last_event_at: run.last_event_at,
+        }))
+      : page;
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, runs: outputRuns },
+    };
+  }
+
+  if (name === 'bclaw_assignment_events') {
+    const id = args.id as string | undefined;
+    const assignmentId = args.assignmentId as string | undefined;
+    const runId = args.runId as string | undefined;
+    const claimId = args.claimId as string | undefined;
+    const sessionId = args.sessionId as string | undefined;
+    const agent = args.agent as string | undefined;
+    const eventType = args.eventType as RuntimeEventType | undefined;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const compact = args.compact === true;
+
+    let events = queryRuntimeEvents({
+      ...(id ? { id } : {}),
+      ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      ...(runId ? { run_id: runId } : {}),
+      ...(claimId ? { claim_id: claimId } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(agent ? { agent } : {}),
+      ...(eventType ? { event_type: eventType } : {}),
+    }, cwd);
+
+    const total = events.length;
+    const page = events.slice(offset, offset + limit);
+    const lines = page.length === 0
+      ? ['No runtime events found.']
+      : [
+          `${total} runtime event(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((event) => {
+            if (compact) {
+              return `[${event.id}] ${event.event_type} ${event.agent}${event.assignment_id ? ` assignment=${event.assignment_id}` : ''}${event.run_id ? ` run=${event.run_id}` : ''}`;
+            }
+            const refs: string[] = [];
+            if (event.assignment_id) refs.push(`assignment ${event.assignment_id}`);
+            if (event.run_id) refs.push(`run ${event.run_id}`);
+            if (event.claim_id) refs.push(`claim ${event.claim_id}`);
+            if (event.session_id) refs.push(`session ${event.session_id.slice(-8)}`);
+            const suffix = refs.length ? ` [${refs.join(', ')}]` : '';
+            return `[${event.id}] ${event.event_type} ${event.agent}: ${event.text}${suffix}`;
+          }),
+        ];
+
+    const outputEvents = compact
+      ? page.map((event) => ({
+          id: event.id,
+          created_at: event.created_at,
+          event_type: event.event_type,
+          agent: event.agent,
+          assignment_id: event.assignment_id,
+          run_id: event.run_id,
+          claim_id: event.claim_id,
+          session_id: event.session_id,
+          status: event.status,
+          status_reason: event.status_reason,
+        }))
+      : page;
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, events: outputEvents },
+    };
+  }
+
+  if (name === 'bclaw_list_actions') {
+    const status = validateEnumFilter<ActionRequiredStatus>(args.status, ActionRequiredStatusSchema, 'action status');
+    const kind = validateEnumFilter<ActionRequiredKind>(args.kind, ActionRequiredKindSchema, 'action kind');
+    const id = args.id as string | undefined;
+    const assignmentId = args.assignmentId as string | undefined;
+    const runId = args.runId as string | undefined;
+    const claimId = args.claimId as string | undefined;
+    const agent = args.agent as string | undefined;
+    const offset = Math.max(0, Number(args.offset) || 0);
+    const limit = Math.max(1, Number(args.limit) || 20);
+    const compact = args.compact === true;
+
+    let actions = listActionRequired(cwd, {
+      ...(status ? { status } : {}),
+      ...(kind ? { kind } : {}),
+      ...(agent ? { agent } : {}),
+      ...(assignmentId ? { assignment_id: assignmentId } : {}),
+      ...(runId ? { run_id: runId } : {}),
+      ...(claimId ? { claim_id: claimId } : {}),
+    });
+    if (id) {
+      actions = actions.filter((action) => action.id === id || action.short_label === id);
+    }
+
+    const total = actions.length;
+    const page = actions.slice(offset, offset + limit);
+    const lines = page.length === 0
+      ? ['No actions found.']
+      : [
+          `${total} action(s)${total > limit ? ` (showing ${offset + 1}-${offset + page.length})` : ''}:`,
+          ...page.map((action) => {
+            if (compact) {
+              return `[${action.id}] ${action.kind} (${action.status}) -> ${action.assignment_id}`;
+            }
+            const refs: string[] = [`assignment ${action.assignment_id}`];
+            if (action.run_id) refs.push(`run ${action.run_id}`);
+            if (action.claim_id) refs.push(`claim ${action.claim_id}`);
+            if (action.session_id) refs.push(`session ${action.session_id.slice(-8)}`);
+            const suffix = refs.length ? ` [${refs.join(', ')}]` : '';
+            return `[${action.id}] ${action.kind} (${action.status}) ${action.title}: ${action.prompt}${suffix}`;
+          }),
+        ];
+
+    const outputActions = compact
+      ? page.map((action) => ({
+          id: action.id,
+          kind: action.kind,
+          status: action.status,
+          assignment_id: action.assignment_id,
+          run_id: action.run_id,
+          claim_id: action.claim_id,
+          title: action.title,
+          updated_at: action.updated_at,
+          resolved_at: action.resolved_at,
+        }))
+      : page;
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { total, offset, limit, actions: outputActions },
     };
   }
 

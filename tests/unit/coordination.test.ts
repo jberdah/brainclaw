@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { archiveCandidate } from '../../src/core/candidates.js';
+import { createActionRequired } from '../../src/core/actions.js';
 import { saveClaim } from '../../src/core/claims.js';
+import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { createAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
 import { buildCoordinationSnapshot } from '../../src/core/coordination.js';
 import { createInstruction } from '../../src/core/instructions.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
@@ -145,6 +148,45 @@ describe('core/coordination', () => {
     for (const claim of claims) {
       saveClaim(claim, workspace.dir);
     }
+    const assignment = createAssignment({
+      claim_id: 'clm_auth',
+      plan_id: 'pln_auth',
+      sequence_id: 'seq_auth_runtime',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/auth/',
+      description: 'Auth runtime assignment',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: copilot.agent_name, session_id: 'sess_assignment' }, workspace.dir);
+    const run = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: 'clm_auth',
+      plan_id: 'pln_auth',
+      sequence_id: 'seq_auth_runtime',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      transport: 'manual_command',
+      scope: 'src/auth/',
+      description: 'Auth runtime pickup',
+    }, workspace.dir);
+    transitionAgentRun(run.id, 'waiting_input', { actor: 'codex' }, workspace.dir);
+    const action = createActionRequired({
+      assignment_id: assignment.id,
+      run_id: run.id,
+      claim_id: 'clm_auth',
+      plan_id: 'pln_auth',
+      sequence_id: 'seq_auth_runtime',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      session_id: 'sess_assignment',
+      kind: 'clarification',
+      scope: 'src/auth/',
+      title: 'Clarify auth rollout',
+      prompt: 'Need approval on rollout sequencing',
+      options: ['approve', 'revise'],
+    }, workspace.dir);
 
     const notes: RuntimeNote[] = [
       {
@@ -266,6 +308,15 @@ describe('core/coordination', () => {
     assert.equal(board.active_plans[0].claims.length, 1);
     assert.equal(board.active_claims.length, 1);
     assert.equal(board.active_claims[0].id, 'clm_auth');
+    assert.equal(board.active_assignments.length, 1);
+    assert.equal(board.active_assignments[0].id, assignment.id);
+    assert.equal(board.active_assignments[0].status, 'accepted');
+    assert.equal(board.active_runs.length, 1);
+    assert.equal(board.active_runs[0].id, run.id);
+    assert.equal(board.active_runs[0].status, 'waiting_input');
+    assert.equal(board.active_actions.length, 1);
+    assert.equal(board.active_actions[0].id, action.id);
+    assert.equal(board.active_actions[0].kind, 'clarification');
     assert.equal(board.active_sequence?.name, 'post-gpt4-review');
     assert.equal(board.active_sequence?.items[0].lane, 'vision');
     assert.deepEqual(board.active_sequence?.items[3].hard_after, ['PROJECT.md', 'constraint-categorization']);
