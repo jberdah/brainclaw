@@ -20,6 +20,8 @@ import { nowISO, generateIdWithLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { appendAuditEntry } from './audit.js';
 import { appendEvent } from './event-log.js';
+import { createRuntimeEvent } from './events.js';
+import { findLatestAgentRunForAssignment, recordAgentRunProgress, syncAgentRunFromAssignmentTransition } from './agentruns.js';
 
 // ── Directory / Store ────────────────────────────────────────
 
@@ -97,7 +99,7 @@ const VALID_TRANSITIONS = new Map<string, Set<string>>([
   ['failed',    new Set(['retrying'])],
   ['timed_out', new Set(['retrying'])],
   ['retrying',  new Set(['offered'])],
-  ['blocked',   new Set(['rerouted'])],
+  ['blocked',   new Set(['rerouted', 'started', 'failed'])],
   // Terminal: completed, expired, rerouted (no outgoing transitions)
 ]);
 
@@ -194,6 +196,18 @@ export function transitionAssignment(
 
   saveAssignment(assignment, cwd);
   emitAssignmentEvent(assignment, `assignment_${newStatus}`, options.actor, cwd);
+  try {
+    syncAgentRunFromAssignmentTransition(assignment, newStatus, {
+      actor: options.actor,
+      actor_id: options.actor_id,
+      session_id: options.session_id,
+      status_reason: options.status_reason,
+      artifacts: options.artifacts,
+      error_message: options.error_message,
+    }, cwd);
+  } catch {
+    /* best-effort: run state should not break assignment lifecycle */
+  }
 
   appendAuditEntry({
     actor: options.actor ?? assignment.agent,
@@ -247,6 +261,20 @@ export function recordProgress(
 
   saveAssignment(assignment, cwd);
   emitAssignmentEvent(assignment, 'assignment_progress', options.actor, cwd);
+  try {
+    const latestRun = findLatestAgentRunForAssignment(assignment.id, cwd);
+    if (latestRun) {
+      recordAgentRunProgress(latestRun.id, {
+        message: options.message,
+        artifacts: options.artifacts,
+        actor: options.actor,
+        actor_id: options.actor_id,
+        session_id: options.session_id,
+      }, cwd);
+    }
+  } catch {
+    /* best-effort */
+  }
 
   return assignment;
 }
@@ -345,6 +373,7 @@ function emitAssignmentEvent(
   actor?: string,
   cwd?: string,
 ): void {
+  const text = `${assignment.description} [${assignment.status}]${assignment.status_reason ? ` — ${assignment.status_reason}` : ''}`;
   appendEvent({
     ts: nowISO(),
     agent: actor ?? assignment.agent,
@@ -354,4 +383,31 @@ function emitAssignmentEvent(
     item_id: assignment.id,
     summary: `${assignment.status}: ${assignment.description.slice(0, 80)}`,
   }, cwd);
+  try {
+    createRuntimeEvent({
+      agent: actor ?? assignment.agent,
+      agent_id: assignment.agent_id,
+      project_id: undefined,
+      session_id: assignment.session_id,
+      event_type: action as import('./schema.js').RuntimeEvent['event_type'],
+      text,
+      tags: ['agent-runtime', 'assignment'],
+      assignment_id: assignment.id,
+      claim_id: assignment.claim_id,
+      message_id: assignment.message_id,
+      plan_id: assignment.plan_id,
+      sequence_id: assignment.sequence_id,
+      correlation_id: assignment.correlation_id,
+      scope: assignment.scope,
+      status: assignment.status,
+      status_reason: assignment.status_reason,
+      related_paths: [assignment.scope],
+      metadata: {
+        dispatcher_agent: assignment.dispatcher_agent,
+        protocol: 'brainclaw.agent_runtime.v0',
+      },
+    }, cwd);
+  } catch {
+    /* best-effort: runtime event emission should not break assignment lifecycle */
+  }
 }

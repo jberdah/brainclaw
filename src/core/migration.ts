@@ -28,6 +28,8 @@ import {
   ProjectToolSchema,
   InboxMessageSchema,
   AssignmentSchema,
+  AgentRunSchema,
+  ActionRequiredSchema,
 } from './schema.js';
 
 export type VersionedDocumentType =
@@ -54,7 +56,9 @@ export type VersionedDocumentType =
   | 'tool'
   | 'trap'
   | 'message'
-  | 'assignment';
+  | 'assignment'
+  | 'agent_run'
+  | 'action_required';
 
 export type MigrationErrorKind =
   | 'parse'
@@ -128,6 +132,8 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   trap: createRegistryEntry(TrapSchema),
   message: createRegistryEntry(InboxMessageSchema),
   assignment: createRegistryEntry(AssignmentSchema),
+  agent_run: createRegistryEntry(AgentRunSchema),
+  action_required: createRegistryEntry(ActionRequiredSchema),
 };
 
 function createRegistryEntry<T>(schema: ZodType<T, ZodTypeDef, unknown>): MigrationRegistryEntry<T> {
@@ -295,6 +301,8 @@ export function scanMigrationStatus(cwd?: string): MigrationCheckEntry[] {
   collectDirectory(entries, resolveEntityDir('runtime-hosts', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('runtime-private', effectiveCwd, 'read'), 'runtime_note', true);
   collectDirectory(entries, resolveEntityDir('surface-tasks', effectiveCwd, 'read'), 'ai_surface_task');
+  collectDirectory(entries, resolveEntityDir('runs', effectiveCwd, 'read'), 'agent_run');
+  collectDirectory(entries, resolveEntityDir('actions', effectiveCwd, 'read'), 'action_required');
   collectDirectory(entries, resolveEntityDir('instructions', effectiveCwd, 'read'), 'instruction');
   collectDirectory(entries, path.join(resolveEntityDir('bootstrap', effectiveCwd, 'read'), 'seeds'), 'memory_seed');
   collectDirectory(entries, resolveEntityDir('agents', effectiveCwd, 'read'), 'agent_identity');

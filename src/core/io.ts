@@ -46,6 +46,8 @@ const ENTITY_DIR_MAP: Record<string, string> = {
   'runtime-private': 'coordination/runtime-private',
   'surface-tasks': 'coordination/surface-tasks',
   'assignments': 'coordination/assignments',
+  'runs': 'coordination/runs',
+  'actions': 'coordination/actions',
 
   // discovery/ — Project entity: what's available
   'bootstrap': 'discovery/bootstrap',

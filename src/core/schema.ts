@@ -669,6 +669,123 @@ export const AssignmentSchema = z.object({
 });
 export type Assignment = z.infer<typeof AssignmentSchema>;
 
+// --- AgentRun schemas (execution-layer runtime state) ---
+
+export const AgentRunTransportSchema = z.enum([
+  'cli_spawn',
+  'manual_command',
+  'inbox_only',
+]);
+export type AgentRunTransport = z.infer<typeof AgentRunTransportSchema>;
+
+export const AgentRunStatusSchema = z.enum([
+  'created',
+  'launching',
+  'waiting_input',
+  'running',
+  'blocked',
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'interrupted',
+]);
+export type AgentRunStatus = z.infer<typeof AgentRunStatusSchema>;
+
+export const AgentRunSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+
+  assignment_id: z.string(),
+  claim_id: z.string(),
+  message_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  sequence_id: z.string().optional(),
+  retry_of_run_id: z.string().optional(),
+  attempt_index: z.number().int().positive().default(1),
+
+  agent: z.string(),
+  agent_id: z.string().optional(),
+  session_id: z.string().optional(),
+
+  transport: AgentRunTransportSchema,
+  status: AgentRunStatusSchema,
+  status_reason: z.string().optional(),
+
+  scope: z.string(),
+  description: z.string(),
+  worktree_path: z.string().optional(),
+  command: z.string().optional(),
+  shell: z.string().optional(),
+  pid: z.number().int().positive().optional(),
+  provider_run_id: z.string().optional(),
+
+  created_at: z.string(),
+  updated_at: z.string().optional(),
+  launched_at: z.string().optional(),
+  started_at: z.string().optional(),
+  blocked_at: z.string().optional(),
+  completed_at: z.string().optional(),
+  failed_at: z.string().optional(),
+  cancelled_at: z.string().optional(),
+  timed_out_at: z.string().optional(),
+  interrupted_at: z.string().optional(),
+  last_event_at: z.string().optional(),
+
+  artifacts: z.array(AssignmentArtifactSchema).default([]),
+  error_message: z.string().optional(),
+  tags: TagsWithDefaultSchema,
+});
+export type AgentRun = z.infer<typeof AgentRunSchema>;
+
+// --- ActionRequired schema (runtime pause/resume) ---
+
+export const ActionRequiredKindSchema = z.enum(['approval', 'user_input', 'clarification', 'plan_approval']);
+export type ActionRequiredKind = z.infer<typeof ActionRequiredKindSchema>;
+
+export const ActionRequiredStatusSchema = z.enum(['pending', 'resolved', 'rejected', 'cancelled', 'expired']);
+export type ActionRequiredStatus = z.infer<typeof ActionRequiredStatusSchema>;
+
+export const ActionRequiredResponseSchema = z.object({
+  outcome: z.enum(['resolved', 'rejected', 'cancelled']),
+  text: z.string().optional(),
+  payload: z.record(z.unknown()).optional(),
+  responded_by: z.string(),
+  responded_by_id: z.string().optional(),
+  responded_at: z.string(),
+});
+export type ActionRequiredResponse = z.infer<typeof ActionRequiredResponseSchema>;
+
+export const ActionRequiredSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+  id: z.string(),
+  short_label: z.string().optional(),
+  assignment_id: z.string(),
+  run_id: z.string().optional(),
+  claim_id: z.string().optional(),
+  message_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  sequence_id: z.string().optional(),
+  agent: z.string(),
+  agent_id: z.string().optional(),
+  session_id: z.string().optional(),
+  kind: ActionRequiredKindSchema,
+  status: ActionRequiredStatusSchema.default('pending'),
+  scope: z.string().optional(),
+  title: z.string(),
+  prompt: z.string(),
+  options: z.array(z.string()).default([]),
+  response_schema: z.record(z.unknown()).optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  expires_at: z.string().optional(),
+  resolved_at: z.string().optional(),
+  response: ActionRequiredResponseSchema.optional(),
+  tags: TagsWithDefaultSchema,
+});
+export type ActionRequired = z.infer<typeof ActionRequiredSchema>;
+
 // --- Runtime notes schemas ---
 
 export const RuntimeNoteSchema = z.object({
@@ -734,6 +851,28 @@ export const RuntimeEventTypeSchema = z.enum([
   'task_finished',
   'session_start',
   'session_end',
+  'assignment_created',
+  'assignment_offered',
+  'assignment_accepted',
+  'assignment_started',
+  'assignment_progress',
+  'assignment_completed',
+  'assignment_failed',
+  'assignment_blocked',
+  'assignment_timed_out',
+  'assignment_expired',
+  'assignment_retrying',
+  'assignment_rerouted',
+  'run_created',
+  'run_launching',
+  'run_waiting_input',
+  'run_running',
+  'run_blocked',
+  'run_completed',
+  'run_failed',
+  'run_cancelled',
+  'run_timed_out',
+  'run_interrupted',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 
@@ -748,6 +887,17 @@ export const RuntimeEventSchema = z.object({
   created_at: z.string(),
   text: z.string(),
   tags: TagsWithDefaultSchema,
+  assignment_id: z.string().optional(),
+  run_id: z.string().optional(),
+  claim_id: z.string().optional(),
+  message_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  sequence_id: z.string().optional(),
+  correlation_id: z.string().optional(),
+  scope: z.string().optional(),
+  transport: z.enum(['cli_spawn', 'manual_command', 'inbox_only']).optional(),
+  status: z.string().optional(),
+  status_reason: z.string().optional(),
   // Optional routing and type hints for candidate generation
   candidate_type: CandidateTypeSchema.optional(),
   severity: SeveritySchema.optional(),
