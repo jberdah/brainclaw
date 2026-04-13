@@ -61,7 +61,7 @@ import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from 
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
-import { createAssignment, generateAssignmentId, patchAssignmentMessageId, transitionAssignment } from '../core/assignments.js';
+import { createAssignment, generateAssignmentId, patchAssignmentMessageId, transitionAssignment, bumpActiveAssignmentHeartbeat, getActiveAssignmentForAgent } from '../core/assignments.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -2200,7 +2200,7 @@ import { handleMcpReadToolCall } from './mcp-read-handlers.js';
 export { handleMcpReadToolCall };
 
 
-export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
+async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const { name, args, cwd, connectionSessionId } = payload;
 
   try {
@@ -4667,4 +4667,78 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
       response: createToolErrorResponse('command_error', error instanceof Error ? error.message : String(error)),
     };
   }
+}
+
+// ── MCP Ergonomics: implicit heartbeat + auto-session ────────────────────────
+
+/**
+ * Public entry point for MCP tool execution.
+ *
+ * Before delegating to the inner handler it performs two ergonomic tasks:
+ *
+ * 1. **Implicit heartbeat** — if `BRAINCLAW_CLAIM_ID` is set in the environment
+ *    (worker was dispatched by the coordinator), bump `last_heartbeat_at` on the
+ *    active assignment. Any tool call proves liveness; no explicit heartbeat is
+ *    needed.
+ *
+ * 2. **Auto-session** — if `connectionSessionId` is absent AND
+ *    `BRAINCLAW_CLAIM_ID` is set AND the claim has no adopted session yet,
+ *    start a session implicitly and adopt the claim. The resulting session_id is
+ *    returned as `nextConnectionSessionId` so the MCP connection picks it up for
+ *    all subsequent calls.
+ *
+ * Both operations are best-effort: failures are silently swallowed so they never
+ * break tool execution.
+ */
+export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
+  const { cwd } = payload;
+  const envClaimId = process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined;
+
+  // ── Auto-session ────────────────────────────────────────────────────────────
+  let autoSessionId: string | undefined;
+  let effectiveConnectionSessionId = payload.connectionSessionId;
+
+  if (!effectiveConnectionSessionId && envClaimId) {
+    try {
+      const claim = loadClaim(envClaimId, cwd);
+      if (!claim.session_id) {
+        const sessionResult = startSession({ cwd, maintenanceMode: 'fast' });
+        autoSessionId = sessionResult.session_id;
+        effectiveConnectionSessionId = autoSessionId;
+        try { adoptClaimSession(envClaimId, autoSessionId, cwd); } catch { /* best-effort */ }
+        // Link session_id to any active assignment for this claim so runtime events
+        // no longer show session_id="unknown".
+        try {
+          const { listAssignments: listA, saveAssignment: saveA } = await import('../core/assignments.js');
+          const active = listA(cwd, { claim_id: envClaimId }).filter(
+            (a) => !['completed', 'expired', 'rerouted'].includes(a.status),
+          );
+          for (const a of active) {
+            if (!a.session_id) {
+              a.session_id = autoSessionId;
+              saveA(a, cwd);
+            }
+          }
+        } catch { /* best-effort */ }
+      }
+    } catch { /* best-effort — claim may not exist in this worktree */ }
+  }
+
+  // ── Implicit heartbeat ──────────────────────────────────────────────────────
+  if (envClaimId) {
+    try {
+      bumpActiveAssignmentHeartbeat(envClaimId, undefined, cwd);
+    } catch { /* best-effort */ }
+  }
+
+  // ── Delegate to inner handler ───────────────────────────────────────────────
+  const outcome = await _executeMcpToolCallInner({
+    ...payload,
+    connectionSessionId: effectiveConnectionSessionId,
+  });
+
+  if (autoSessionId && !outcome.nextConnectionSessionId) {
+    return { ...outcome, nextConnectionSessionId: autoSessionId };
+  }
+  return outcome;
 }
