@@ -10,6 +10,8 @@ import {
   transitionAssignment,
   recordProgress,
   validateTransition,
+  getActiveAssignmentForAgent,
+  bumpActiveAssignmentHeartbeat,
 } from '../../src/core/assignments.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { AssignmentStatus } from '../../src/core/schema.js';
@@ -236,6 +238,124 @@ describe('Assignment — recordProgress', () => {
       () => recordProgress(a.id, { message: 'nope' }, ws.dir),
       /expected started/,
     );
+  });
+});
+
+describe('Assignment — getActiveAssignmentForAgent', () => {
+  it('returns undefined when no assignments exist', () => {
+    const result = getActiveAssignmentForAgent('agent_nonexistent', ws.dir);
+    assert.equal(result, undefined);
+  });
+
+  it('returns the active assignment by agent_id', () => {
+    const worker = ws.registerAgent('worker-lookup');
+    const a = createAssignment({
+      claim_id: 'clm_lookup_1',
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      dispatcher_agent: 'test-dispatcher',
+      scope: 'src/lookup',
+      description: 'Lookup test',
+    }, ws.dir);
+    transitionAssignment(a.id, 'offered', { actor: 'test-dispatcher' }, ws.dir);
+    transitionAssignment(a.id, 'accepted', { actor: worker.agent_name }, ws.dir);
+
+    const found = getActiveAssignmentForAgent(worker.agent_id!, ws.dir);
+    assert.ok(found);
+    assert.equal(found.id, a.id);
+  });
+
+  it('ignores terminal assignments', () => {
+    const worker = ws.registerAgent('worker-terminal');
+    const a = createAssignment({
+      claim_id: 'clm_terminal_1',
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      dispatcher_agent: 'test-dispatcher',
+      scope: 'src/terminal',
+      description: 'Terminal test',
+    }, ws.dir);
+    transitionAssignment(a.id, 'offered', { actor: 'test-dispatcher' }, ws.dir);
+    transitionAssignment(a.id, 'accepted', { actor: worker.agent_name }, ws.dir);
+    transitionAssignment(a.id, 'started', { actor: worker.agent_name }, ws.dir);
+    transitionAssignment(a.id, 'completed', { actor: worker.agent_name }, ws.dir);
+
+    const found = getActiveAssignmentForAgent(worker.agent_id!, ws.dir);
+    assert.equal(found, undefined);
+  });
+
+  it('uses claimId fast-path when provided', () => {
+    const worker = ws.registerAgent('worker-claim-lookup');
+    const a = createAssignment({
+      claim_id: 'clm_claim_path_1',
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      dispatcher_agent: 'test-dispatcher',
+      scope: 'src/claim-path',
+      description: 'Claim path test',
+    }, ws.dir);
+    transitionAssignment(a.id, 'offered', { actor: 'test-dispatcher' }, ws.dir);
+
+    const found = getActiveAssignmentForAgent(worker.agent_id!, ws.dir, 'clm_claim_path_1');
+    assert.ok(found);
+    assert.equal(found.id, a.id);
+
+    // Wrong claim_id — fast-path misses, falls back to agent scan, still finds the same assignment
+    const foundByFallback = getActiveAssignmentForAgent(worker.agent_id!, ws.dir, 'clm_wrong_claim');
+    assert.ok(foundByFallback, 'falls back to agent scan on claim miss');
+    assert.equal(foundByFallback.id, a.id, 'same assignment found via fallback');
+  });
+});
+
+describe('Assignment — bumpActiveAssignmentHeartbeat', () => {
+  it('bumps last_heartbeat_at without status change', () => {
+    const worker = ws.registerAgent('worker-heartbeat');
+    const a = createAssignment({
+      claim_id: 'clm_hb_1',
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      dispatcher_agent: 'test-dispatcher',
+      scope: 'src/hb',
+      description: 'Heartbeat test',
+    }, ws.dir);
+    transitionAssignment(a.id, 'offered', { actor: 'test-dispatcher' }, ws.dir);
+    transitionAssignment(a.id, 'accepted', { actor: worker.agent_name }, ws.dir);
+
+    const before = loadAssignment(a.id, ws.dir)!;
+    const bumped = bumpActiveAssignmentHeartbeat('clm_hb_1', worker.agent_id, ws.dir);
+    assert.ok(bumped, 'returns true when assignment found');
+
+    const after = loadAssignment(a.id, ws.dir)!;
+    assert.equal(after.status, 'accepted');
+    assert.ok(after.last_heartbeat_at);
+    assert.ok(
+      new Date(after.last_heartbeat_at!).getTime() >= new Date(before.last_heartbeat_at!).getTime(),
+      'last_heartbeat_at advanced',
+    );
+  });
+
+  it('returns false when no active assignment found', () => {
+    const result = bumpActiveAssignmentHeartbeat('clm_missing', 'agent_missing', ws.dir);
+    assert.equal(result, false);
+  });
+
+  it('does not bump terminal assignments', () => {
+    const worker = ws.registerAgent('worker-hb-terminal');
+    const a = createAssignment({
+      claim_id: 'clm_hb_terminal_1',
+      agent: worker.agent_name,
+      agent_id: worker.agent_id,
+      dispatcher_agent: 'test-dispatcher',
+      scope: 'src/hb-terminal',
+      description: 'HB terminal test',
+    }, ws.dir);
+    transitionAssignment(a.id, 'offered', { actor: 'test-dispatcher' }, ws.dir);
+    transitionAssignment(a.id, 'accepted', { actor: worker.agent_name }, ws.dir);
+    transitionAssignment(a.id, 'started', { actor: worker.agent_name }, ws.dir);
+    transitionAssignment(a.id, 'completed', { actor: worker.agent_name }, ws.dir);
+
+    const result = bumpActiveAssignmentHeartbeat('clm_hb_terminal_1', worker.agent_id, ws.dir);
+    assert.equal(result, false, 'does not bump completed assignment');
   });
 });
 

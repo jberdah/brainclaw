@@ -362,6 +362,51 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
   return assignment;
 }
 
+// ── Active Assignment Lookup ─────────────────────────────────
+
+/** Statuses that indicate a finished assignment (no longer active). */
+const TERMINAL_STATUSES = new Set<AssignmentStatus>(['completed', 'expired', 'rerouted']);
+
+/**
+ * Return the most recently created non-terminal assignment for the given agent.
+ * When `claimId` is provided, it is used as a fast-path lookup before falling
+ * back to an agent-wide scan.
+ */
+export function getActiveAssignmentForAgent(
+  agentId: string,
+  cwd?: string,
+  claimId?: string,
+): Assignment | undefined {
+  if (claimId) {
+    const byClaim = listAssignments(cwd, { claim_id: claimId });
+    const active = byClaim.filter((a) => !TERMINAL_STATUSES.has(a.status));
+    // listAssignments returns ascending-by-created_at — last is most recent
+    if (active.length > 0) return active[active.length - 1];
+  }
+  if (!agentId) return undefined;
+  const all = listAssignments(cwd);
+  const active = all.filter((a) => a.agent_id === agentId && !TERMINAL_STATUSES.has(a.status));
+  return active.length > 0 ? active[active.length - 1] : undefined;
+}
+
+/**
+ * Bump `last_heartbeat_at` on the most recent active assignment for the given
+ * claim (or agent). Best-effort — throws are suppressed by the caller.
+ */
+export function bumpActiveAssignmentHeartbeat(
+  claimId: string | undefined,
+  agentId: string | undefined,
+  cwd?: string,
+): boolean {
+  const assignment = getActiveAssignmentForAgent(agentId ?? '', cwd, claimId);
+  if (!assignment) return false;
+  const now = nowISO();
+  assignment.last_heartbeat_at = now;
+  assignment.updated_at = now;
+  saveAssignment(assignment, cwd);
+  return true;
+}
+
 // ── Post-creation patches ────────────────────────────────────
 
 /** Attach the inbox message_id after the message has been sent (message is created after assignment). */
