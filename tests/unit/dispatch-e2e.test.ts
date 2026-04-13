@@ -146,7 +146,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     const assignMsg = inbox.messages.find(m => m.type === 'assign');
     assert.ok(assignMsg, 'inbox has assign message');
     assert.ok(assignMsg!.text.includes('Implement auth module'), 'brief contains plan text');
-    assert.ok(!assignMsg!.text.includes('## Protocol'), 'compact mode omits protocol section for stdin_pipe agents');
+    assert.ok(assignMsg!.text.includes('## Protocol'), 'full mode includes protocol section for interactive agents (claude-code)');
     assert.ok(assignMsg!.assignment_id, 'message has top-level assignment_id');
     assert.equal(assignMsg!.assignment_id, result.result.messages_sent[0]!.assignment_id);
     assert.equal(assignMsg!.payload?.assignment_id, assignMsg!.assignment_id, 'payload carries matching assignment_id');
@@ -167,8 +167,8 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(invokeCmd.executable, 'claude');
     assert.equal(invokeCmd.promptDelivery, 'stdin_pipe', 'claude-code uses stdin_pipe delivery');
 
-    // Verify brief mode
-    assert.equal(resolveBriefMode('claude-code'), 'compact');
+    // Verify brief mode: claude-code is interactive (not task-based) so gets full
+    assert.equal(resolveBriefMode('claude-code'), 'full');
   });
 
   it('codex: full cycle — dispatch creates claim, sends inbox, generates stdin_pipe invoke', async () => {

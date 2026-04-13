@@ -690,8 +690,13 @@ export type BriefMode = 'full' | 'compact' | 'task_card';
  *
  * Resolution rules:
  *   1. Agent is NOT spawnable_cli (IDE-only) → 'task_card'
- *   2. Agent's prompt_delivery.preferred is 'stdin_pipe' (sandboxed) → 'compact'
+ *   2. Agent's workflowModel is 'task-based' (headless one-shot, e.g. codex) → 'compact'
  *   3. Otherwise → 'full'
+ *
+ * Note: stdin_pipe as prompt delivery is an optimization used by several
+ * interactive agents (claude-code, cline prefer it for long prompts) and
+ * does NOT indicate a sandboxed runtime — use workflowModel as the
+ * discriminator instead.
  *
  * Falls back to 'full' for unknown agents.
  */
@@ -700,7 +705,7 @@ export function resolveBriefMode(agentName: string): BriefMode {
   if (!profile) return 'full';
 
   if (!profile.runtime.spawnable_cli) return 'task_card';
-  if (profile.prompt_delivery.preferred === 'stdin_pipe') return 'compact';
+  if (profile.workflowModel === 'task-based') return 'compact';
   return 'full';
 }
 
