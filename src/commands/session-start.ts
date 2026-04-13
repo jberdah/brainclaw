@@ -80,10 +80,15 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
     if (options.includeContext) {
       try {
         const cwd = options.cwd ?? process.cwd();
+        // Find the previous session for the same agent to auto-surface a context diff on resume.
+        // We exclude the session just created so we always point at the prior one.
+        const previousSession = loadAllSessions(cwd)
+          .find((s) => s.agent === snapshot.agent && s.session_id !== snapshot.session_id);
         const contextResult = buildContext({
           target: options.context,
           agent: snapshot.agent,
           cwd,
+          sinceSession: previousSession?.session_id,
         });
         console.log(renderContextPromptTemplate(contextResult, false));
         writeContextMarker({
