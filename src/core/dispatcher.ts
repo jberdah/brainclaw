@@ -311,20 +311,24 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     parts.push(`${options.worktreePath ? '4' : '3'}. Work on the assigned scope`);
     parts.push(`${options.worktreePath ? '5' : '4'}. Periodically call bclaw_assignment_update(status: "progress", message: "...") as heartbeat`);
     parts.push(`${options.worktreePath ? '6' : '5'}. When done: bclaw_assignment_update(status: "completed", artifacts: [...])`);
-    parts.push(`${options.worktreePath ? '7' : '6'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
-    parts.push(`${options.worktreePath ? '8' : '7'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+    const claimRef = options?.claimId ? `id: "${options.claimId}"` : 'id: "<claim_id>"';
+    parts.push(`${options.worktreePath ? '7' : '6'}. Release the claim: bclaw_release_claim(${claimRef}, planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
+    parts.push(`${options.worktreePath ? '8' : '7'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
+    parts.push(`${options.worktreePath ? '9' : '8'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
   } else if (options?.claimId) {
     parts.push('1. Call bclaw_session_start to register your session');
     if (options.worktreePath) {
       parts.push(`2. cd into the worktree: ${options.worktreePath}`);
     }
     parts.push(`${options.worktreePath ? '3' : '2'}. Work on the assigned scope (claim already active)`);
-    parts.push(`${options.worktreePath ? '4' : '3'}. Call bclaw_session_end with a narrative when done`);
+    parts.push(`${options.worktreePath ? '4' : '3'}. Release the claim: bclaw_release_claim(id: "${options.claimId}", planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
+    parts.push(`${options.worktreePath ? '5' : '4'}. Call bclaw_session_end with a narrative when done`);
   } else {
     parts.push('1. Call bclaw_session_start to register your session');
     parts.push('2. Call bclaw_claim to claim the scope before editing');
     parts.push('3. Work in the worktree created by the claim');
-    parts.push('4. Call bclaw_session_end with a narrative when done');
+    parts.push('4. Release the claim when done: bclaw_release_claim(id: "clm_xxx", planStatus: "done") — required for hard_after sequence gating to unlock the next step');
+    parts.push('5. Call bclaw_session_end with a narrative when done');
   }
   parts.push('');
 
@@ -460,6 +464,15 @@ export function generateBrief(
     parts.push(buildProtocolSection(options));
   }
 
+  // Codex-specific constraints: focus and speed guidance for sandboxed runs
+  if (mode === 'compact') {
+    parts.push('## Constraints');
+    parts.push('- Focus on specified files only — do not explore the broader codebase');
+    parts.push('- Produce output quickly; if blocked, capture as trap candidate and move on');
+    parts.push('- Sandbox blocks MCP writes: use filesystem writes for candidates, coordinator harvests');
+    parts.push('');
+  }
+
   return parts.join('\n');
 }
 
@@ -502,6 +515,15 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
       worktreePath: options.worktreePath,
       assignmentId: options.assignmentId,
     }));
+  }
+
+  // Codex-specific constraints: focus and speed guidance for sandboxed runs
+  if (options.agent === 'codex') {
+    parts.push('## Constraints');
+    parts.push('- Focus on specified files only — do not explore the broader codebase');
+    parts.push('- Produce output quickly; if blocked, capture as trap candidate and move on');
+    parts.push('- Sandbox blocks MCP writes: use filesystem writes for candidates, coordinator harvests');
+    parts.push('');
   }
 
   return parts.join('\n');

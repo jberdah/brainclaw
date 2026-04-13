@@ -14,6 +14,8 @@ import {
   analyzeSequence,
   dispatch,
   generateBrief,
+  buildProtocolSection,
+  generateDispatchBrief,
 } from '../../src/core/dispatcher.js';
 import { buildInvokeCommand } from '../../src/core/agent-capability.js';
 import { saveSequence } from '../../src/core/sequence.js';
@@ -629,5 +631,152 @@ describe('dispatch-regression/generateBrief', () => {
     const brief = generateBrief(plan, item, testDir);
 
     assert.ok(brief.includes('src/core/auth.ts and related tests'), 'brief includes scope hint');
+  });
+});
+
+// ── buildProtocolSection / generateDispatchBrief ───────────────────────────
+
+describe('dispatch-regression/buildProtocolSection', () => {
+  it('includes bclaw_release_claim with planStatus=done in full-mode brief (claimId path)', () => {
+    const section = buildProtocolSection({ claimId: 'clm_test123' });
+    assert.ok(section.includes('bclaw_release_claim'), 'protocol includes release claim tool');
+    assert.ok(section.includes('planStatus: "done"'), 'release step specifies planStatus done');
+    assert.ok(
+      section.includes('hard_after') || section.includes('sequence gating'),
+      'release step mentions hard_after gating',
+    );
+  });
+
+  it('includes bclaw_release_claim in full-mode brief (assignmentId + claimId path)', () => {
+    const section = buildProtocolSection({
+      assignmentId: 'asgn_abc',
+      claimId: 'clm_xyz',
+      worktreePath: '/some/worktree',
+    });
+    assert.ok(section.includes('bclaw_release_claim'), 'protocol includes release claim');
+    assert.ok(section.includes('clm_xyz'), 'release step references the provided claim id');
+    assert.ok(section.includes('planStatus: "done"'), 'release step specifies planStatus done');
+  });
+
+  it('includes bclaw_release_claim in default path (no claimId, no assignmentId)', () => {
+    const section = buildProtocolSection();
+    assert.ok(section.includes('bclaw_release_claim'), 'default protocol includes release claim');
+    assert.ok(section.includes('planStatus: "done"'), 'release step specifies planStatus done');
+  });
+});
+
+describe('dispatch-regression/generateDispatchBrief', () => {
+  it('includes Constraints section when agent is codex', () => {
+    const brief = generateDispatchBrief({
+      task: 'Implement the feature',
+      agent: 'codex',
+      claimId: 'clm_codex1',
+    });
+    assert.ok(brief.includes('## Constraints'), 'codex brief includes Constraints section');
+    assert.ok(
+      brief.includes('do not explore the broader codebase'),
+      'codex constraints warn against broad exploration',
+    );
+    assert.ok(
+      brief.includes('Sandbox blocks MCP writes'),
+      'codex constraints mention sandbox MCP write limitation',
+    );
+  });
+
+  it('does not include Constraints section for non-codex agents', () => {
+    const brief = generateDispatchBrief({
+      task: 'Implement the feature',
+      agent: 'claude-code',
+      claimId: 'clm_claude1',
+    });
+    assert.ok(!brief.includes('## Constraints'), 'claude-code brief omits Constraints section');
+    assert.ok(
+      !brief.includes('Sandbox blocks MCP writes'),
+      'claude-code brief omits codex sandbox warning',
+    );
+  });
+});
+
+// ── brief-hardening: release claim step + codex constraints ───────────────
+
+describe('dispatch-regression/brief-hardening', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestStore();
+  });
+
+  afterEach(() => {
+    cleanupTestStore(testDir);
+  });
+
+  // GAP 1a: release claim step in full-mode briefs
+
+  it('buildProtocolSection includes bclaw_release_claim with planStatus done (assignmentId path)', () => {
+    const section = buildProtocolSection({
+      claimId: 'clm_abc123',
+      assignmentId: 'asgn_xyz',
+    });
+    assert.ok(section.includes('bclaw_release_claim'), 'release claim step is present');
+    assert.ok(section.includes('planStatus: "done"'), 'planStatus done is specified');
+    assert.ok(section.includes('hard_after'), 'mentions hard_after gating');
+  });
+
+  it('buildProtocolSection includes bclaw_release_claim with planStatus done (claimId-only path)', () => {
+    const section = buildProtocolSection({
+      claimId: 'clm_def456',
+    });
+    assert.ok(section.includes('bclaw_release_claim'), 'release claim step is present');
+    assert.ok(section.includes('planStatus: "done"'), 'planStatus done is specified');
+    assert.ok(section.includes('clm_def456'), 'claim ID is embedded in the release step');
+  });
+
+  it('full-mode generateBrief includes bclaw_release_claim step', () => {
+    const plan = makePlan({ id: 'pln_hrd1', text: 'Hardened brief task' });
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [], plan_items: [plan],
+    }, testDir);
+
+    const item = { planId: 'pln_hrd1', rank: 1, hard_after: [], soft_after: [] };
+    const brief = generateBrief(plan, item, testDir, 'full', { claimId: 'clm_hrd1' });
+
+    assert.ok(brief.includes('bclaw_release_claim'), 'full-mode brief includes release claim step');
+    assert.ok(brief.includes('planStatus: "done"'), 'release step specifies planStatus done');
+  });
+
+  // GAP 7: codex constraints section
+
+  it('generateDispatchBrief includes ## Constraints section when agent=codex', () => {
+    const brief = generateDispatchBrief({
+      task: 'Implement feature X',
+      agent: 'codex',
+      claimId: 'clm_codex1',
+      scope: 'src/core/feature-x.ts',
+    });
+    assert.ok(brief.includes('## Constraints'), 'codex brief has Constraints section');
+    assert.ok(
+      brief.includes('Focus on specified files only'),
+      'codex brief warns against broad exploration',
+    );
+    assert.ok(
+      brief.includes('Sandbox blocks MCP writes'),
+      'codex brief mentions sandbox MCP limitation',
+    );
+  });
+
+  it('generateDispatchBrief does NOT include ## Constraints section for non-codex agents', () => {
+    const brief = generateDispatchBrief({
+      task: 'Implement feature Y',
+      agent: 'claude-code',
+      claimId: 'clm_claude1',
+      assignmentId: 'asgn_claude1',
+      scope: 'src/core/feature-y.ts',
+    });
+    assert.ok(
+      !brief.includes('Sandbox blocks MCP writes'),
+      'non-codex brief does not include codex sandbox constraint',
+    );
   });
 });
