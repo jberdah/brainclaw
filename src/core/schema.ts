@@ -905,6 +905,7 @@ export const RuntimeEventTypeSchema = z.enum([
   'run_timed_out',
   'run_interrupted',
   'plan_cascade_to_done',
+  'candidate_harvested',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 

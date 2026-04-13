@@ -97,6 +97,7 @@ import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
+import { runHarvestCandidates } from './commands/harvest.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
 
 const program = new Command();
@@ -905,6 +906,18 @@ program
   .option('--reason <reason>', 'Reason for rejection')
   .action((id, options) => {
     runReject(id, options.reason, options.by);
+  });
+
+// --- harvest-candidates ---
+program
+  .command('harvest-candidates')
+  .description('Harvest candidates from worktree inboxes into the main project store (codex sandbox bridge)')
+  .option('--dry-run', 'Preview what would be imported without writing anything')
+  .option('--worktree <path>', 'Explicit worktree path to scan (repeatable)', collect, [])
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    const globalOpts = program.opts();
+    runHarvestCandidates({ ...options, cwd: globalOpts.cwd });
   });
 
 // --- prune-candidates ---

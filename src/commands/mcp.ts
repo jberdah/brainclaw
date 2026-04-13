@@ -62,6 +62,7 @@ import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBr
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { createAssignment, generateAssignmentId, patchAssignmentMessageId, transitionAssignment } from '../core/assignments.js';
+import { harvestCandidates } from './harvest.js';
 
 export type ContextFormat = 'markdown' | 'json' | 'template';
 export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
@@ -1229,6 +1230,21 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['action_id', 'outcome'],
+    },
+  },
+  {
+    name: 'bclaw_harvest_candidates',
+    description: 'Harvest candidates from worktree inboxes into the main project store. Use this as the coordinator-side bridge for agents running under --sandbox workspace-write (e.g. Codex), which cannot write to the main store via MCP and instead write to their worktree .brainclaw/coordination/inbox/. Requires trusted trust level.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktreePaths: { type: 'array', items: { type: 'string' }, description: 'Explicit worktree paths to scan. Defaults to all active worktrees under ~/.brainclaw/worktrees/<project-hash>/.' },
+        dryRun: { type: 'boolean', description: 'When true, report what would be harvested without writing anything.' },
+        agent: { type: 'string', description: 'Coordinator agent name for runtime event attribution.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: [],
     },
   },
 ] as const;
@@ -4648,6 +4664,34 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         response: toolResponse({
           content: [{ type: 'text', text: summaryParts.join('\n') }],
           structuredContent: facadeResponse as unknown as Record<string, unknown>,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_harvest_candidates') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const worktreePaths = Array.isArray(args.worktreePaths) ? (args.worktreePaths as string[]) : undefined;
+      const dryRun = args.dryRun === true;
+      const harvestResult = harvestCandidates({
+        worktreePaths,
+        dryRun,
+        cwd,
+        agent: resolvedIdentity.agent_name,
+      });
+      const dryTag = dryRun ? ' (dry-run)' : '';
+      const summary = `✔ Harvest complete${dryTag}: ${harvestResult.harvested.length} imported, ${harvestResult.skipped.length} skipped, ${harvestResult.errors.length} error(s).`;
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: summary }],
+          harvested: harvestResult.harvested.length,
+          skipped: harvestResult.skipped.length,
+          errors: harvestResult.errors,
+          candidates: harvestResult.harvested.map((c) => ({ id: c.id, type: c.type })),
+          dry_run: dryRun,
         }),
       };
     }
