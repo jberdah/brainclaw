@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
 import * as path from 'path';
 import { resolveBrainclawCmd } from './board-tree';
+import { McpClient } from './mcp-client';
 
 interface ClaimInfo {
   scope: string;
@@ -16,6 +16,8 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
   private _claims: ClaimInfo[] = [];
   private _cwd: string;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
+  private _mcpClient: McpClient | undefined;
+  private _mcpResolved = false;
 
   constructor(cwd: string) {
     this._cwd = cwd;
@@ -49,24 +51,32 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
     return undefined;
   }
 
+  private async _getOrCreateClient(): Promise<McpClient | undefined> {
+    if (this._mcpResolved) return this._mcpClient;
+    this._mcpResolved = true;
+    const bclaw = await resolveBrainclawCmd(this._cwd);
+    if (!bclaw) return undefined;
+    this._mcpClient = new McpClient(this._cwd, bclaw);
+    return this._mcpClient;
+  }
+
   private async _refreshClaims(): Promise<void> {
     try {
-      const bclaw = await resolveBrainclawCmd(this._cwd);
-      if (!bclaw) {
+      const client = await this._getOrCreateClient();
+      if (!client) {
         this._claims = [];
+        this._onDidChangeFileDecorations.fire(undefined);
         return;
       }
 
-      const output = await new Promise<string>((resolve, reject) => {
-        cp.exec(`${bclaw} claim list --json`, { cwd: this._cwd, timeout: 10_000 }, (err, stdout) => {
-          if (err) reject(err);
-          else resolve(stdout);
-        });
-      });
-
-      const claims = JSON.parse(output) as Array<{ scope: string; agent: string; description?: string; status?: string }>;
+      // Use MCP (stdio-streamed, no maxBuffer limit) instead of cp.exec.
+      // Ask only for active claims with generous pagination to avoid O(n) truncation.
+      const result = await client.callTool('bclaw_list_claims', { limit: 1000 }) as {
+        structuredContent?: { claims?: Array<{ scope: string; agent: string; description?: string; status?: string }> };
+      };
+      const claims = result.structuredContent?.claims ?? [];
       this._claims = claims
-        .filter(c => c.status === 'active')
+        .filter(c => !c.status || c.status === 'active')
         .map(c => ({ scope: c.scope, agent: c.agent, description: c.description }));
     } catch {
       this._claims = [];
@@ -77,6 +87,7 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
 
   dispose(): void {
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    if (this._mcpClient) this._mcpClient.dispose();
     this._onDidChangeFileDecorations.dispose();
   }
 }
