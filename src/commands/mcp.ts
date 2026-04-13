@@ -239,6 +239,17 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    name: 'bclaw_get_agent_board_summary',
+    description: 'Get a lightweight counts-only summary of the agent board (~500 bytes). Returns attention_required, in_progress claims, plan counts by status, trap counts by severity, agent/session counts, and active sequence name. Use this for extension activation and polling — call bclaw_get_agent_board only when full detail is needed.',
+    annotations: { tier: 'standard', category: 'coordination' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Optional agent name override (defaults to current agent).' },
+      },
+    },
+  },
+  {
     name: 'bclaw_search',
     description: 'Full-text search across all memory items (decisions, constraints, traps, candidates, handoffs) using BM25 scoring.',
     annotations: { tier: 'standard', category: 'memory' },

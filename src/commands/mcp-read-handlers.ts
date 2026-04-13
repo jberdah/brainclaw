@@ -24,7 +24,8 @@ import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { listActionRequired } from '../core/actions.js';
 import { queryRuntimeEvents } from '../core/events.js';
-import { listSequences } from '../core/sequence.js';
+import { listSequences, getActiveSequence } from '../core/sequence.js';
+import { resolveCurrentHostId } from '../core/host.js';
 import {
   listAgentIdentities,
   resolveAgentScope,
@@ -374,6 +375,49 @@ export function handleMcpReadToolCall(
       }
     }
     return { content: [{ type: 'text', text }] };
+  }
+
+  if (name === 'bclaw_get_agent_board_summary') {
+    const config = loadConfig(cwd);
+    const state = loadState(cwd);
+    const agent = (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd);
+    const currentHost = resolveCurrentHostId();
+    const activeClaims = listClaims(cwd).filter((c) => c.status === 'active');
+    const pendingActions = listActionRequired(cwd).filter((a) => a.status === 'pending');
+    const agents = listAgentIdentities(cwd);
+    const sessions = loadAllSessions(cwd);
+    const activeSequence = getActiveSequence(cwd);
+    const sequenceTodoCount = activeSequence
+      ? activeSequence.items.filter((item) => {
+          const plan = state.plan_items.find((p) => p.id === item.planId || p.short_label === item.planId);
+          return !plan || plan.status === 'todo';
+        }).length
+      : 0;
+    const summary = {
+      project_id: config.project_id,
+      agent,
+      current_host: currentHost,
+      attention_required: pendingActions.length,
+      in_progress: activeClaims.length,
+      plans: {
+        in_progress: state.plan_items.filter((p) => p.status === 'in_progress').length,
+        todo: state.plan_items.filter((p) => p.status === 'todo').length,
+      },
+      traps: {
+        high: state.known_traps.filter((t) => t.severity === 'high').length,
+        total: state.known_traps.length,
+      },
+      agents: agents.length,
+      sessions: sessions.length,
+      sequences: {
+        active_name: activeSequence?.name ?? null,
+        todo_count: sequenceTodoCount,
+      },
+    };
+    return {
+      content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
+      structuredContent: summary,
+    };
   }
 
   if (name === 'bclaw_get_agent_board') {

@@ -687,4 +687,124 @@ describe('commands/mcp read tools', () => {
     assert.equal(structured.context_diff?.counts.decisions, 1);
     assert.equal(structured.context_diff?.counts.total, 1);
   });
+
+  it('returns counts-only summary via bclaw_get_agent_board_summary with correct shape and perf budget', () => {
+    const state: State = {
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [],
+      known_traps: [
+        {
+          id: 'trp_high1',
+          text: 'Auth bypass via header injection',
+          created_at: iso(30),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_mcp_read_test',
+          severity: 'high' as const,
+          status: 'active' as const,
+          visibility: 'shared' as const,
+          tags: [],
+        },
+        {
+          id: 'trp_low1',
+          text: 'Slow cold start on first auth request',
+          created_at: iso(25),
+          author: workspace.currentAgent.agent_name,
+          author_id: workspace.currentAgent.agent_id,
+          project_id: 'prj_mcp_read_test',
+          severity: 'low' as const,
+          status: 'active' as const,
+          visibility: 'shared' as const,
+          tags: [],
+        },
+      ],
+      open_handoffs: [],
+      plan_items: [
+        {
+          id: 'pln_sum1',
+          text: 'Auth rollout',
+          created_at: iso(20),
+          updated_at: iso(18),
+          author: workspace.currentAgent.agent_name,
+          status: 'in_progress' as const,
+          priority: 'high' as const,
+          depends_on: [],
+          tags: [],
+        },
+        {
+          id: 'pln_sum2',
+          text: 'Rate limiting',
+          created_at: iso(15),
+          updated_at: iso(14),
+          author: workspace.currentAgent.agent_name,
+          status: 'todo' as const,
+          priority: 'medium' as const,
+          depends_on: [],
+          tags: [],
+        },
+        {
+          id: 'pln_sum3',
+          text: 'Audit logging',
+          created_at: iso(10),
+          updated_at: iso(9),
+          author: workspace.currentAgent.agent_name,
+          status: 'todo' as const,
+          priority: 'low' as const,
+          depends_on: [],
+          tags: [],
+        },
+      ],
+    };
+    saveState(state, workspace.dir);
+    saveClaim({
+      id: 'clm_sum1',
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_mcp_read_test',
+      scope: 'src/auth/',
+      description: 'Claiming auth scope',
+      created_at: iso(5),
+      status: 'active',
+    }, workspace.dir);
+
+    const start = Date.now();
+    const result = handleMcpReadToolCall('bclaw_get_agent_board_summary', {}, { cwd: workspace.dir });
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 200, `summary handler exceeded 200ms budget: ${elapsed}ms`);
+    assert.ok(result.structuredContent, 'structured content should be present');
+
+    const summary = result.structuredContent as {
+      project_id: string;
+      agent: string;
+      current_host: string;
+      attention_required: number;
+      in_progress: number;
+      plans: { in_progress: number; todo: number };
+      traps: { high: number; total: number };
+      agents: number;
+      sessions: number;
+      sequences: { active_name: string | null; todo_count: number };
+    };
+
+    assert.ok(typeof summary.project_id === 'string', 'project_id should be a string');
+    assert.ok(typeof summary.agent === 'string', 'agent should be a string');
+    assert.ok(typeof summary.current_host === 'string', 'current_host should be a string');
+    assert.equal(summary.in_progress, 1, 'should count 1 active claim');
+    assert.equal(summary.plans.in_progress, 1, 'should count 1 in_progress plan');
+    assert.equal(summary.plans.todo, 2, 'should count 2 todo plans');
+    assert.equal(summary.traps.high, 1, 'should count 1 high-severity trap');
+    assert.equal(summary.traps.total, 2, 'should count 2 total traps');
+    assert.ok(typeof summary.agents === 'number', 'agents should be a number');
+    assert.ok(typeof summary.sessions === 'number', 'sessions should be a number');
+    assert.ok(summary.sequences.active_name === null || typeof summary.sequences.active_name === 'string', 'active_name should be string or null');
+    assert.ok(typeof summary.sequences.todo_count === 'number', 'todo_count should be a number');
+
+    // Verify text output is valid JSON matching structured content
+    const parsed = JSON.parse(result.content[0].text as string);
+    assert.equal(parsed.in_progress, summary.in_progress);
+    assert.equal(parsed.plans.todo, summary.plans.todo);
+  });
 });
