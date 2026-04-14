@@ -152,8 +152,19 @@ function openSessions(board: BoardData): number {
   return (board.other_agents ?? []).filter((agent: any) => agent.has_open_session).length;
 }
 
+function isAutoCandidate(candidate: any): boolean {
+  return candidate.source === 'auto' || String(candidate.origin ?? '').startsWith('session-end');
+}
+
 const SECTION = {
   PROJECTS: 'projects',
+  // Outcome sections (new hierarchy)
+  ATTENTION: 'attention',
+  IN_PROGRESS: 'in-progress',
+  SPRINTS: 'sprints',
+  BACKLOG: 'backlog',
+  SYSTEM: 'system',
+  // Entity sections (kept for legacy dispatch compatibility)
   AGENTS: 'agents',
   CANDIDATES: 'candidates',
   ACTIVITY: 'activity',
@@ -725,63 +736,73 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {
     const sections: BrainclawTreeItem[] = [];
 
+    // --- Attention required ---
+    const pendingActions = activeActions(board);
+    const nonAutoCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
+    const blockedAssignments = activeAssignments(board).filter((a: any) => a.status === 'blocked');
+    const staleRuns = activeRuns(board).filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
+    const attentionCount = pendingActions.length + nonAutoCandidates.length + blockedAssignments.length + staleRuns.length;
+    if (attentionCount > 0) {
+      sections.push(new BrainclawTreeItem(
+        `Attention required (${attentionCount})`,
+        vscode.TreeItemCollapsibleState.Expanded,
+        undefined,
+        new vscode.ThemeIcon('bell-dot'),
+        undefined,
+        undefined,
+        undefined,
+        projectPath,
+        SECTION.ATTENTION,
+        'section',
+        `section:${projectPath}:${SECTION.ATTENTION}`,
+      ));
+    }
+
+    // --- In progress ---
     const agents = board.other_agents ?? [];
-    sections.push(this._sectionHeader(`Agents (${agents.length})`, SECTION.AGENTS, 'pulse', agents.length, projectPath, expandWhenPopulated));
-
-    const candidates = board.pending_candidates ?? [];
-    if (candidates.length > 0) {
-      sections.push(this._sectionHeader(`Review Queue (${candidates.length})`, SECTION.CANDIDATES, 'inbox', candidates.length, projectPath, expandWhenPopulated));
-    }
-
-    const notes = board.runtime_notes ?? [];
-    if (notes.length > 0) {
-      sections.push(this._sectionHeader(`Activity (${Math.min(notes.length, 10)})`, SECTION.ACTIVITY, 'history', notes.length, projectPath, expandWhenPopulated));
-    }
-
-    const plans = activePlans(board);
-    sections.push(this._sectionHeader(`Plans (${plans.length})`, SECTION.PLANS, 'tasklist', plans.length, projectPath, expandWhenPopulated));
-
     const claims = activeClaims(board);
-    if (claims.length > 0) {
-      sections.push(this._sectionHeader(`Claims (${claims.length})`, SECTION.CLAIMS, 'lock', claims.length, projectPath, expandWhenPopulated));
+    const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
+    const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
+    const inProgressCount = agents.length + claims.length + runningAssignments.length + activeRunsList.length;
+    if (inProgressCount > 0) {
+      sections.push(this._sectionHeader(`In progress (${inProgressCount})`, SECTION.IN_PROGRESS, 'play-circle', inProgressCount, projectPath, expandWhenPopulated));
     }
 
-    const assignments = activeAssignments(board);
-    if (assignments.length > 0) {
-      sections.push(this._sectionHeader(`Assignments (${assignments.length})`, SECTION.ASSIGNMENTS, 'server-process', assignments.length, projectPath, expandWhenPopulated));
-    }
-
-    const runs = activeRuns(board);
-    if (runs.length > 0) {
-      sections.push(this._sectionHeader(`Runs (${runs.length})`, SECTION.RUNS, 'pulse', runs.length, projectPath, expandWhenPopulated));
-    }
-
-    const actions = activeActions(board);
-    if (actions.length > 0) {
-      sections.push(this._sectionHeader(`Actions (${actions.length})`, SECTION.ACTIONS, 'debug-pause', actions.length, projectPath, expandWhenPopulated));
-    }
-
-    const handoffs = visibleHandoffs(board);
-    if (handoffs.length > 0) {
-      sections.push(this._sectionHeader(`Handoffs (${handoffs.length})`, SECTION.HANDOFFS, 'arrow-swap', handoffs.length, projectPath, expandWhenPopulated));
-    }
-
+    // --- Sprints ---
     if (board.active_sequence) {
-      const total = board.active_sequence.items?.length ?? 0;
-      sections.push(this._sectionHeader(`Sprint (${board.active_sequence.name})`, SECTION.SPRINT, 'rocket', total, projectPath, expandWhenPopulated));
+      const sprintTotal = board.active_sequence.items?.length ?? 0;
+      sections.push(this._sectionHeader(`Sprints`, SECTION.SPRINTS, 'rocket', sprintTotal, projectPath, expandWhenPopulated));
     }
 
-    const traps = board.known_traps ?? [];
-    if (traps.length > 0) {
-      const highCount = traps.filter((trap: any) => trap.severity === 'high').length;
-      const label = highCount > 0 ? `Traps (${highCount} high, ${traps.length} total)` : `Traps (${traps.length})`;
-      sections.push(this._sectionHeader(label, SECTION.TRAPS, 'warning', traps.length, projectPath, expandWhenPopulated));
+    // --- Backlog ---
+    const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
+    const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
+    const backlogCount = backlogPlans.length + highTraps.length;
+    if (backlogCount > 0) {
+      sections.push(this._sectionHeader(`Backlog (${backlogCount})`, SECTION.BACKLOG, 'tasklist', backlogCount, projectPath, expandWhenPopulated));
     }
 
+    // --- System (always collapsed) ---
+    const autoCandidates = (board.pending_candidates ?? []).filter((c: any) => isAutoCandidate(c));
+    const notes = board.runtime_notes ?? [];
+    const handoffs = visibleHandoffs(board);
     const linked = board.linked_projects ?? [];
     const signals = board.incoming_signals ?? [];
-    if (linked.length > 0 || signals.length > 0) {
-      sections.push(this._sectionHeader(`Cross-Project (${linked.length})`, SECTION.CROSS_PROJECT, 'globe', linked.length + signals.length, projectPath, expandWhenPopulated));
+    const systemCount = autoCandidates.length + notes.length + handoffs.length + linked.length + signals.length;
+    if (systemCount > 0) {
+      sections.push(new BrainclawTreeItem(
+        `System`,
+        vscode.TreeItemCollapsibleState.Collapsed,
+        undefined,
+        new vscode.ThemeIcon('server'),
+        undefined,
+        undefined,
+        undefined,
+        projectPath,
+        SECTION.SYSTEM,
+        'section',
+        `section:${projectPath}:${SECTION.SYSTEM}`,
+      ));
     }
 
     return sections;
@@ -812,6 +833,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _buildSectionChildren(sectionId: string, board: BoardData, projectPath: string): BrainclawTreeItem[] {
     switch (sectionId) {
+      // Outcome sections
+      case SECTION.ATTENTION: return this._buildAttentionChildren(board, projectPath);
+      case SECTION.IN_PROGRESS: return this._buildInProgressChildren(board, projectPath);
+      case SECTION.SPRINTS: return this._buildSprint(board, projectPath);
+      case SECTION.BACKLOG: return this._buildBacklogChildren(board, projectPath);
+      case SECTION.SYSTEM: return this._buildSystemChildren(board, projectPath);
+      // Entity sections (legacy, kept for compatibility)
       case SECTION.AGENTS: return this._buildAgents(board, projectPath);
       case SECTION.CANDIDATES: return this._buildCandidates(board, projectPath);
       case SECTION.ACTIVITY: return this._buildActivity(board, projectPath);
@@ -826,6 +854,86 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       case SECTION.CROSS_PROJECT: return this._buildCrossProject(board, projectPath);
       default: return [];
     }
+  }
+
+  private _buildAttentionChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const items: BrainclawTreeItem[] = [];
+
+    if (activeActions(board).length > 0) {
+      items.push(...this._buildActions(board, projectPath));
+    }
+
+    const nonAutoCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
+    items.push(...this._buildCandidateItems(nonAutoCandidates, projectPath));
+
+    const blockedAssignments = activeAssignments(board).filter((a: any) => a.status === 'blocked');
+    if (blockedAssignments.length > 0) {
+      items.push(...this._buildAssignmentItems(blockedAssignments, projectPath));
+    }
+
+    const staleRuns = activeRuns(board).filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
+    if (staleRuns.length > 0) {
+      items.push(...this._buildRunItems(staleRuns, projectPath));
+    }
+
+    return items;
+  }
+
+  private _buildInProgressChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const items: BrainclawTreeItem[] = [];
+
+    if ((board.other_agents ?? []).length > 0) {
+      items.push(...this._buildAgents(board, projectPath));
+    }
+
+    items.push(...this._buildClaims(board, projectPath));
+
+    const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
+    if (runningAssignments.length > 0) {
+      items.push(...this._buildAssignmentItems(runningAssignments, projectPath));
+    }
+
+    const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
+    if (activeRunsList.length > 0) {
+      items.push(...this._buildRunItems(activeRunsList, projectPath));
+    }
+
+    return items;
+  }
+
+  private _buildBacklogChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const items: BrainclawTreeItem[] = [];
+
+    const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
+    items.push(...this._buildPlanItems(backlogPlans, projectPath));
+
+    const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
+    items.push(...this._buildTrapItems(highTraps, projectPath));
+
+    return items;
+  }
+
+  private _buildSystemChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const items: BrainclawTreeItem[] = [];
+
+    if ((board.runtime_notes ?? []).length > 0) {
+      items.push(...this._buildActivity(board, projectPath));
+    }
+
+    const autoCandidates = (board.pending_candidates ?? []).filter((c: any) => isAutoCandidate(c));
+    items.push(...this._buildCandidateItems(autoCandidates, projectPath));
+
+    if (visibleHandoffs(board).length > 0) {
+      items.push(...this._buildHandoffs(board, projectPath));
+    }
+
+    const linked = board.linked_projects ?? [];
+    const signals = board.incoming_signals ?? [];
+    if (linked.length > 0 || signals.length > 0) {
+      items.push(...this._buildCrossProject(board, projectPath));
+    }
+
+    return items;
   }
 
   private _buildAgents(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -860,8 +968,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     });
   }
 
-  private _buildCandidates(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const candidates = board.pending_candidates ?? [];
+  private _buildCandidateItems(candidates: any[], projectPath: string): BrainclawTreeItem[] {
     return candidates.map((candidate: any) => {
       const age = candidate.created_at ? timeAgo(candidate.created_at) : '';
       const overdue = candidate.overdue ? ' OVERDUE' : '';
@@ -876,6 +983,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         projectPath,
       );
     });
+  }
+
+  private _buildCandidates(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    return this._buildCandidateItems(board.pending_candidates ?? [], projectPath);
   }
 
   private _buildActivity(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -895,12 +1006,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     });
   }
 
-  private _buildPlans(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const plans = activePlans(board);
-    if (plans.length === 0) {
-      return [new BrainclawTreeItem('No active plans', vscode.TreeItemCollapsibleState.None)];
-    }
-
+  private _buildPlanItems(plans: any[], projectPath: string): BrainclawTreeItem[] {
     return plans.map((plan: any) => {
       const assignee = plan.assignee ? ` @${plan.assignee}` : '';
       const stepsInfo = plan.steps?.length ? ` [${plan.steps.filter((step: any) => step.status === 'done').length}/${plan.steps.length}]` : '';
@@ -916,6 +1022,14 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         projectPath,
       );
     });
+  }
+
+  private _buildPlans(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const plans = activePlans(board);
+    if (plans.length === 0) {
+      return [new BrainclawTreeItem('No active plans', vscode.TreeItemCollapsibleState.None)];
+    }
+    return this._buildPlanItems(plans, projectPath);
   }
 
   private _buildClaims(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -935,12 +1049,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     });
   }
 
-  private _buildAssignments(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const assignments = activeAssignments(board);
-    if (assignments.length === 0) {
-      return [new BrainclawTreeItem('No active assignments', vscode.TreeItemCollapsibleState.None)];
-    }
-
+  private _buildAssignmentItems(assignments: any[], projectPath: string): BrainclawTreeItem[] {
     return assignments.map((assignment: any) => {
       const heartbeatAgo = assignment.last_heartbeat_at ? timeAgo(assignment.last_heartbeat_at) : 'no heartbeat yet';
       const icon = assignment.status === 'started'
@@ -968,12 +1077,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     });
   }
 
-  private _buildRuns(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const runs = activeRuns(board);
-    if (runs.length === 0) {
-      return [new BrainclawTreeItem('No active runs', vscode.TreeItemCollapsibleState.None)];
+  private _buildAssignments(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const assignments = activeAssignments(board);
+    if (assignments.length === 0) {
+      return [new BrainclawTreeItem('No active assignments', vscode.TreeItemCollapsibleState.None)];
     }
+    return this._buildAssignmentItems(assignments, projectPath);
+  }
 
+  private _buildRunItems(runs: any[], projectPath: string): BrainclawTreeItem[] {
     return runs.map((run: any) => {
       const ago = run.last_event_at ? timeAgo(run.last_event_at) : 'no events yet';
       const icon = run.status === 'running'
@@ -997,6 +1109,14 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         projectPath,
       );
     });
+  }
+
+  private _buildRuns(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    const runs = activeRuns(board);
+    if (runs.length === 0) {
+      return [new BrainclawTreeItem('No active runs', vscode.TreeItemCollapsibleState.None)];
+    }
+    return this._buildRunItems(runs, projectPath);
   }
 
   private _buildActions(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -1091,8 +1211,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return '█'.repeat(filled) + '░'.repeat(10 - filled) + ` ${Math.round((done / total) * 100)}%`;
   }
 
-  private _buildTraps(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const traps = board.known_traps ?? [];
+  private _buildTrapItems(traps: any[], projectPath: string): BrainclawTreeItem[] {
     return traps.map((trap: any) => {
       const icon = trap.severity === 'high' ? 'error' : trap.severity === 'medium' ? 'warning' : 'info';
       return new BrainclawTreeItem(
@@ -1106,6 +1225,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         projectPath,
       );
     });
+  }
+
+  private _buildTraps(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    return this._buildTrapItems(board.known_traps ?? [], projectPath);
   }
 
   private _buildCrossProject(board: BoardData, projectPath: string): BrainclawTreeItem[] {
