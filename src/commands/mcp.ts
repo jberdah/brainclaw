@@ -4745,7 +4745,13 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
   if (!effectiveConnectionSessionId && envClaimId) {
     try {
       const claim = loadClaim(envClaimId, cwd);
-      if (!claim.session_id) {
+      if (claim.session_id) {
+        // Claim already has a session (e.g. previous connection adopted it) — reuse it.
+        // (Codex review cnd#565: reconnect without connectionSessionId should pick up
+        // the existing claim.session_id instead of leaving it undefined.)
+        effectiveConnectionSessionId = claim.session_id;
+      } else {
+        // First-ever connection for this claim — start a fresh session + adopt.
         const sessionResult = startSession({ cwd, maintenanceMode: 'fast' });
         autoSessionId = sessionResult.session_id;
         effectiveConnectionSessionId = autoSessionId;

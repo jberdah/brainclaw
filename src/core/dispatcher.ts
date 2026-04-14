@@ -360,7 +360,7 @@ export function generateBrief(
   item: SequenceItem,
   cwd: string,
   briefMode?: BriefMode,
-  options?: { claimId?: string; worktreePath?: string; assignmentId?: string },
+  options?: { claimId?: string; worktreePath?: string; assignmentId?: string; agent?: string },
 ): string {
   const mode = briefMode ?? 'full';
 
@@ -464,8 +464,10 @@ export function generateBrief(
     parts.push(buildProtocolSection(options));
   }
 
-  // Codex-specific constraints: focus and speed guidance for sandboxed runs
-  if (mode === 'compact') {
+  // Codex-specific constraints: focus and speed guidance for sandboxed runs.
+  // Gated on agent identity (not brief mode) so future non-codex compact consumers
+  // don't inherit sandbox-specific wording. (Codex review cnd#561)
+  if (options?.agent === 'codex') {
     parts.push('## Constraints');
     parts.push('- Focus on specified files only — do not explore the broader codebase');
     parts.push('- Produce output quickly; if blocked, capture as trap candidate and move on');
@@ -792,6 +794,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       claimId,
       worktreePath,
       assignmentId, // undefined if creation failed → legacy protocol in brief
+      agent: targetAgent,
     });
 
     // Step 3: Build invoke command

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { CandidateSchema, type Candidate } from '../core/schema.js';
-import { listCandidates, saveCandidate } from '../core/candidates.js';
+import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/candidates.js';
 import { createRuntimeEvent } from '../core/events.js';
 import { memoryExists } from '../core/io.js';
 
@@ -121,13 +121,27 @@ export function harvestCandidates(options: HarvestOptions = {}): HarvestResult {
     return result;
   }
 
-  // Build a set of IDs already present in the main store (all statuses)
-  const existingIds = new Set<string>(
-    listCandidates(undefined, cwd).map((c) => c.id),
-  );
+  // Build a set of IDs already present in the main store across ALL archives
+  // (pending + accepted + rejected) to prevent re-importing archived items.
+  // (Codex review cnd#564: dedup was only checking pending inbox)
+  const existingIds = new Set<string>([
+    ...listCandidates(undefined, cwd).map((c) => c.id),
+    ...listArchivedCandidates('accepted', cwd).map((c) => c.id),
+    ...listArchivedCandidates('rejected', cwd).map((c) => c.id),
+  ]);
 
   for (const worktreePath of worktreePaths) {
-    const files = collectWorktreeCandidateFiles(worktreePath);
+    // Wrap per-worktree scan so a disappeared worktree records an error
+    // instead of aborting the full harvest. (Codex review cnd#564)
+    let files: string[];
+    try {
+      files = collectWorktreeCandidateFiles(worktreePath);
+    } catch (err) {
+      result.errors.push(
+        `Failed to scan worktree ${worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
 
     for (const filePath of files) {
       let candidate: Candidate;
