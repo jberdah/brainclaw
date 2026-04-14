@@ -36,6 +36,16 @@ export class BrainclawTreeItem extends vscode.TreeItem {
   }
 }
 
+interface BoardSummaryCounts {
+  plans: number;
+  claims: number;
+  assignments: number;
+  runs: number;
+  actions: number;
+  agents: number;
+  sessions: number;
+}
+
 interface BoardData {
   active_plans: any[];
   active_claims: any[];
@@ -50,6 +60,10 @@ interface BoardData {
   pending_candidates?: any[];
   linked_projects?: any[];
   incoming_signals?: any[];
+  /** True when board was loaded via bclaw_get_agent_board_summary (Tier 1 Summary). */
+  summary?: boolean;
+  /** Pre-computed counts populated in summary mode instead of full arrays. */
+  _counts?: BoardSummaryCounts;
 }
 
 function timeAgo(isoDate: string): string {
@@ -379,8 +393,30 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       throw new Error(`No brainclaw command found for ${projectPath}`);
     }
 
-    const result = await client.callTool('bclaw_get_agent_board', {});
-    return result as unknown as BoardData;
+    // Use the lightweight summary tool for the initial project load (Tier 1 Summary, §5.1).
+    // bclaw_get_agent_board remains available as fallback for section-level expansion.
+    const raw = await client.callTool('bclaw_get_agent_board_summary', {}) as Record<string, any>;
+    const plans = (raw['plans'] as Record<string, number> | undefined) ?? {};
+    return {
+      active_plans: [],
+      active_claims: [],
+      active_assignments: [],
+      active_runs: [],
+      active_actions: [],
+      open_handoffs: [],
+      runtime_notes: [],
+      other_agents: [],
+      summary: true,
+      _counts: {
+        plans: (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0),
+        claims: (raw['in_progress'] as number | undefined) ?? 0,
+        assignments: 0,
+        runs: 0,
+        actions: (raw['attention_required'] as number | undefined) ?? 0,
+        agents: (raw['agents'] as number | undefined) ?? 0,
+        sessions: (raw['sessions'] as number | undefined) ?? 0,
+      },
+    };
   }
 
   private async _loadBoard(force = false): Promise<BoardData | null> {
@@ -459,7 +495,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return this._projectBoards.get(normalizedPath) ?? null;
   }
 
-  private _projectSummary(board: BoardData): { plans: number; claims: number; assignments: number; runs: number; actions: number; agents: number; sessions: number } {
+  private _projectSummary(board: BoardData): BoardSummaryCounts {
+    if (board.summary && board._counts) {
+      return board._counts;
+    }
     return {
       plans: activePlans(board).length,
       claims: activeClaims(board).length,
