@@ -63,6 +63,28 @@ function timeAgo(isoDate: string): string {
   return `${days}d ago`;
 }
 
+function formatRelativeAge(isoDate: string): string {
+  const diff = Date.now() - Date.parse(isoDate);
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${Math.max(mins, 0)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d`;
+  return `${days}d ago`;
+}
+
+const STALE_MS = {
+  plan: 7 * 24 * 60 * 60 * 1000,
+  claim: 4 * 60 * 60 * 1000,
+  assignment: 30 * 60 * 1000,
+  action: 60 * 60 * 1000,
+} as const;
+
+function isStale(isoDate: string | undefined, thresholdMs: number): boolean {
+  if (!isoDate) return false;
+  return Date.now() - Date.parse(isoDate) > thresholdMs;
+}
 type Freshness = 'active' | 'idle' | 'stale';
 
 function agentFreshness(agent: any): Freshness {
