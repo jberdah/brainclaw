@@ -268,15 +268,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
     // "approve-action <id>"
     if (parts[0] === 'approve-action' && parts[1]) {
-      return ['bclaw_assignment_action', { id: parts[1], action: 'approve' }];
+      return ['bclaw_assignment_action', { action_id: parts[1], outcome: 'resolved' }];
     }
     // "reject-action <id>"
     if (parts[0] === 'reject-action' && parts[1]) {
-      return ['bclaw_assignment_action', { id: parts[1], action: 'reject' }];
+      return ['bclaw_assignment_action', { action_id: parts[1], outcome: 'rejected' }];
     }
     // "dispatch-plan <id>"
     if (parts[0] === 'dispatch-plan' && parts[1]) {
-      return ['bclaw_dispatch', { plan_id: parts[1] }];
+      return ['bclaw_dispatch', {}];
     }
     throw new Error(`Unsupported command: ${command}`);
   }
