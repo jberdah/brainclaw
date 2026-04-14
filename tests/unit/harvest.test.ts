@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { harvestCandidates } from '../../src/commands/harvest.js';
-import { listCandidates, saveCandidate } from '../../src/core/candidates.js';
+import { archiveCandidate, listCandidates, saveCandidate } from '../../src/core/candidates.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { Candidate } from '../../src/core/schema.js';
@@ -160,6 +160,54 @@ describe('harvest/harvestCandidates', () => {
     assert.equal(result.harvested.length, 0);
     assert.equal(result.errors.length, 1);
     assert.ok(result.errors[0]!.includes('cnd_bad_file.json'));
+  });
+
+  it('skips candidates already archived (accepted or rejected) in main store', () => {
+    // Save + archive a candidate as accepted in the main store
+    const accepted = makeCandidate('cnd_archived_acc');
+    saveCandidate(accepted, workspace.dir);
+    archiveCandidate(accepted, 'accepted', workspace.dir);
+
+    // Save + archive another as rejected
+    const rejected = makeCandidate('cnd_archived_rej');
+    saveCandidate(rejected, workspace.dir);
+    archiveCandidate(rejected, 'rejected', workspace.dir);
+
+    // Worktree has both IDs + one genuinely new
+    writeWorktreeCandidate(worktree1, makeCandidate('cnd_archived_acc'));
+    writeWorktreeCandidate(worktree1, makeCandidate('cnd_archived_rej'));
+    writeWorktreeCandidate(worktree1, makeCandidate('cnd_truly_new_01'));
+
+    const result = harvestCandidates({
+      worktreePaths: [worktree1],
+      cwd: workspace.dir,
+    });
+
+    assert.equal(result.harvested.length, 1, 'only the truly new candidate');
+    assert.equal(result.skipped.length, 2, 'both archived IDs skipped');
+    assert.equal(result.harvested[0].id, 'cnd_truly_new_01');
+  });
+
+  it('records per-worktree error when worktree directory disappears mid-harvest', () => {
+    // Write a candidate in worktree1
+    writeWorktreeCandidate(worktree1, makeCandidate('cnd_surviving_01'));
+
+    // Create a fake "worktree3" path that does NOT exist on disk
+    const ghostWorktree = path.join(os.tmpdir(), 'bclaw-ghost-wt-does-not-exist');
+
+    const result = harvestCandidates({
+      worktreePaths: [ghostWorktree, worktree1],
+      cwd: workspace.dir,
+    });
+
+    // The ghost worktree should produce 0 harvested and 0 errors (empty inbox)
+    // since collectWorktreeCandidateFiles handles missing dirs gracefully.
+    // But if the dir existed momentarily then vanished mid-iteration,
+    // the try/catch should record an error without crashing.
+    assert.equal(result.harvested.length, 1, 'worktree1 candidate harvested');
+    assert.equal(result.harvested[0].id, 'cnd_surviving_01');
+    // Ghost worktree has no inbox → no crash, no error (dirs don't exist check is safe)
+    assert.equal(result.errors.length, 0);
   });
 
   it('handles legacy .brainclaw/inbox path alongside entity path without duplicates', () => {

@@ -212,6 +212,45 @@ describe('MCP ergonomics — auto-session (GAP 3)', () => {
     assert.notEqual(updated.session_id, 'unknown', 'assignment.session_id must not be "unknown"');
   });
 
+  it('reuses existing claim.session_id on reconnect without connectionSessionId (cnd#565 fix)', async () => {
+    const worker = ws.registerAgent('worker-reconnect');
+    const claimId = makeActiveClaim(worker.agent_name);
+    makeStartedAssignment(claimId, worker.agent_name, worker.agent_id);
+
+    process.env.BRAINCLAW_CLAIM_ID = claimId;
+
+    // First call: auto-session fires, creates and adopts a session
+    const first = await executeMcpToolCall({
+      name: 'bclaw_get_context',
+      args: {},
+      cwd: ws.dir,
+      connectionSessionId: undefined,
+    });
+    const originalSessionId = first.nextConnectionSessionId;
+    assert.ok(originalSessionId, 'first call should create a session');
+
+    // Verify claim now has the session_id
+    const claimAfterFirst = loadClaim(claimId, ws.dir);
+    assert.equal(claimAfterFirst.session_id, originalSessionId);
+
+    // Second call: simulate reconnect — no connectionSessionId provided
+    // The fix should reuse claim.session_id instead of leaving it undefined
+    const second = await executeMcpToolCall({
+      name: 'bclaw_get_context',
+      args: {},
+      cwd: ws.dir,
+      connectionSessionId: undefined,
+    });
+
+    // Should NOT create a new session — should reuse the existing one
+    // nextConnectionSessionId is only set when a NEW session is created
+    // OR when an existing one is adopted. In this case, the claim already
+    // has session_id, so the wrapper reuses it without creating a new one.
+    // The effective session passed to inner handlers should be the existing one.
+    const claim = loadClaim(claimId, ws.dir);
+    assert.equal(claim.session_id, originalSessionId, 'claim.session_id must not change on reconnect');
+  });
+
   it('does NOT create an auto-session when connectionSessionId is already provided', async () => {
     const worker = ws.registerAgent('worker-existsess');
     const claimId = makeActiveClaim(worker.agent_name);
