@@ -174,7 +174,20 @@ export function activate(context: vscode.ExtensionContext) {
       if (item.itemId) treeProvider?.exec(`reject ${item.itemId}`, item.projectPath);
     }),
     vscode.commands.registerCommand('brainclaw.releaseClaim', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`claim release ${item.itemId}`, item.projectPath);
+      if (item.itemId) treeProvider?.releaseClaim(item.itemId, item.projectPath);
+    }),
+    vscode.commands.registerCommand('brainclaw.approveAction', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.approveAction(item.itemId, item.projectPath);
+    }),
+    vscode.commands.registerCommand('brainclaw.rejectAction', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.rejectAction(item.itemId, item.projectPath);
+    }),
+    vscode.commands.registerCommand('brainclaw.dispatchPlan', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.dispatchPlan(item.itemId, item.projectPath);
+    }),
+    vscode.commands.registerCommand('brainclaw.quickCapture', async () => {
+      const text = await vscode.window.showInputBox({ prompt: 'Quick capture', placeHolder: 'What do you want to capture?' });
+      if (text) treeProvider?.quickCapture(text);
     }),
   );
 

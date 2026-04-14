@@ -266,7 +266,59 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     if (parts[0] === 'claim' && parts[1] === 'release' && parts[2]) {
       return ['bclaw_release_claim', { id: parts[2] }];
     }
+    // "approve-action <id>"
+    if (parts[0] === 'approve-action' && parts[1]) {
+      return ['bclaw_assignment_action', { id: parts[1], action: 'approve' }];
+    }
+    // "reject-action <id>"
+    if (parts[0] === 'reject-action' && parts[1]) {
+      return ['bclaw_assignment_action', { id: parts[1], action: 'reject' }];
+    }
+    // "dispatch-plan <id>"
+    if (parts[0] === 'dispatch-plan' && parts[1]) {
+      return ['bclaw_dispatch', { plan_id: parts[1] }];
+    }
     throw new Error(`Unsupported command: ${command}`);
+  }
+
+  public approveAction(actionId: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._execViaMcp('approve-action ' + actionId, cwd);
+  }
+
+  public rejectAction(actionId: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._execViaMcp('reject-action ' + actionId, cwd);
+  }
+
+  public dispatchPlan(planId: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._execViaMcp('dispatch-plan ' + planId, cwd);
+  }
+
+  public releaseClaim(claimId: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._execViaMcp('claim release ' + claimId, cwd);
+  }
+
+  public quickCapture(text: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._quickCapture(text, cwd);
+  }
+
+  private async _quickCapture(text: string, cwd: string): Promise<void> {
+    const client = await this._getMcpClient(cwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+    try {
+      await client.callTool('bclaw_quick_capture', { text });
+      this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
   }
 
   private _normalizePath(targetPath: string): string {

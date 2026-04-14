@@ -61,6 +61,26 @@
         "icon": "$(unlock)"
       },
       {
+        "command": "brainclaw.approveAction",
+        "title": "Approve",
+        "icon": "$(check)"
+      },
+      {
+        "command": "brainclaw.rejectAction",
+        "title": "Reject",
+        "icon": "$(close)"
+      },
+      {
+        "command": "brainclaw.dispatchPlan",
+        "title": "Dispatch Plan",
+        "icon": "$(run)"
+      },
+      {
+        "command": "brainclaw.quickCapture",
+        "title": "Brainclaw: Quick Capture",
+        "icon": "$(add)"
+      },
+      {
         "command": "brainclaw.claimScope",
         "title": "Brainclaw: Claim this scope"
       },
@@ -95,6 +115,21 @@
         {
           "command": "brainclaw.releaseClaim",
           "when": "viewItem == claim",
+          "group": "inline"
+        },
+        {
+          "command": "brainclaw.approveAction",
+          "when": "viewItem == action",
+          "group": "inline"
+        },
+        {
+          "command": "brainclaw.rejectAction",
+          "when": "viewItem == action",
+          "group": "inline"
+        },
+        {
+          "command": "brainclaw.dispatchPlan",
+          "when": "viewItem == plan",
           "group": "inline"
         }
       ],
