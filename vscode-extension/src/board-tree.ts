@@ -496,6 +496,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         }
         return [new BrainclawTreeItem('Loading board...', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('sync~spin'))];
       }
+      if (board.summary) {
+        if (!this._loadingProjects.has(this._normalizePath(element.projectPath))) {
+          void this._loadFullBoardForProject(element.projectPath);
+        }
+        return [new BrainclawTreeItem('Loading board details...', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('sync~spin'))];
+      }
       return this._buildSectionChildren(element.sectionId, board, element.projectPath);
     }
 
@@ -563,8 +569,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
       if (board) {
         const summary = this._projectSummary(board);
-        description = `${summary.plans} plans · ${summary.claims} claims · ${summary.assignments} assignments · ${summary.runs} runs · ${summary.actions} actions · ${summary.agents} agents · ${summary.sessions} sessions`;
-        tooltip += `\nActive plans: ${summary.plans}\nActive claims: ${summary.claims}\nActive assignments: ${summary.assignments}\nActive runs: ${summary.runs}\nPending actions: ${summary.actions}\nAgents working: ${summary.agents}\nOpen sessions: ${summary.sessions}`;
+        if (board.summary) {
+          description = `${summary.plans} plans · ${summary.claims} claims · ${summary.actions} attention · ${summary.agents} agents · ${summary.sessions} sessions`;
+          tooltip += `\nPlans: ${summary.plans}\nClaims in progress: ${summary.claims}\nAttention required: ${summary.actions}\nAgents: ${summary.agents}\nOpen sessions: ${summary.sessions}`;
+        } else {
+          description = `${summary.plans} plans · ${summary.claims} claims · ${summary.assignments} assignments · ${summary.runs} runs · ${summary.actions} actions · ${summary.agents} agents · ${summary.sessions} sessions`;
+          tooltip += `\nActive plans: ${summary.plans}\nActive claims: ${summary.claims}\nActive assignments: ${summary.assignments}\nActive runs: ${summary.runs}\nPending actions: ${summary.actions}\nAgents working: ${summary.agents}\nOpen sessions: ${summary.sessions}`;
+        }
       } else if (this._projectErrors.has(normalizedPath)) {
         description = 'Board unavailable';
         tooltip += `\nError: ${this._projectErrors.get(normalizedPath)}`;
@@ -636,6 +647,35 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       )];
     }
     return sections;
+  }
+
+  private async _loadFullBoardForProject(projectPath: string): Promise<BoardData | null> {
+    const normalizedPath = this._normalizePath(projectPath);
+    this._loadingProjects.add(normalizedPath);
+    try {
+      const client = await this._getMcpClient(normalizedPath);
+      if (!client) {
+        throw new Error(`No brainclaw command found for ${normalizedPath}`);
+      }
+      const board = await client.callTool('bclaw_get_agent_board', {}) as unknown as BoardData;
+      this._projectBoards.set(normalizedPath, board);
+      this._projectErrors.delete(normalizedPath);
+      if (normalizedPath === this._rootProjectPath) {
+        this._workspaceBoard = board;
+      }
+      return board;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this._projectBoards.delete(normalizedPath);
+      this._projectErrors.set(normalizedPath, message);
+      if (normalizedPath === this._rootProjectPath) {
+        this._workspaceBoard = null;
+      }
+      return null;
+    } finally {
+      this._loadingProjects.delete(normalizedPath);
+      this._onDidChangeTreeData.fire();
+    }
   }
 
   private _truncate(input: string, max = 200): string {
