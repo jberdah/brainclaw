@@ -91,12 +91,52 @@
       {
         "command": "brainclaw.viewMemory",
         "title": "Brainclaw: View memory for scope"
+      },
+      {
+        "command": "brainclaw.dispatch",
+        "title": "Brainclaw: Dispatch",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "brainclaw.quickCapture",
+        "title": "Brainclaw: Quick Capture",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "brainclaw.doctor",
+        "title": "Brainclaw: Doctor",
+        "icon": "$(stethoscope)"
+      },
+      {
+        "command": "brainclaw.approveAction",
+        "title": "Approve",
+        "icon": "$(check)"
+      },
+      {
+        "command": "brainclaw.rejectAction",
+        "title": "Reject",
+        "icon": "$(close)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "brainclaw.refreshBoard",
+          "when": "view == brainclaw.agentBoard",
+          "group": "navigation"
+        },
+        {
+          "command": "brainclaw.dispatch",
+          "when": "view == brainclaw.agentBoard",
+          "group": "navigation"
+        },
+        {
+          "command": "brainclaw.quickCapture",
+          "when": "view == brainclaw.agentBoard",
+          "group": "navigation"
+        },
+        {
+          "command": "brainclaw.doctor",
           "when": "view == brainclaw.agentBoard",
           "group": "navigation"
         }

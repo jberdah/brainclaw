@@ -189,6 +189,40 @@ export function activate(context: vscode.ExtensionContext) {
       const text = await vscode.window.showInputBox({ prompt: 'Quick capture', placeHolder: 'What do you want to capture?' });
       if (text) treeProvider?.quickCapture(text);
     }),
+    vscode.commands.registerCommand('brainclaw.approveAction', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.exec(`action approve ${item.itemId}`, item.projectPath);
+    }),
+    vscode.commands.registerCommand('brainclaw.rejectAction', (item: BrainclawTreeItem) => {
+      if (item.itemId) treeProvider?.exec(`action reject ${item.itemId}`, item.projectPath);
+    }),
+  );
+
+  // --- Toolbar commands ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainclaw.quickCapture', async () => {
+      const text = await vscode.window.showInputBox({
+        prompt: 'Quick capture',
+        placeHolder: 'Note, idea, or decision...',
+      });
+      if (!text || !text.trim()) return;
+      await treeProvider?.quickCapture(text.trim());
+    }),
+    vscode.commands.registerCommand('brainclaw.dispatch', async () => {
+      await treeProvider?.dispatchWithPicker();
+    }),
+    vscode.commands.registerCommand('brainclaw.doctor', async () => {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const cwd = workspaceRoot || process.cwd();
+      const { resolveBrainclawCmd } = await import('./board-tree');
+      const cmd = await resolveBrainclawCmd(cwd);
+      if (!cmd) {
+        vscode.window.showErrorMessage('Brainclaw command not found');
+        return;
+      }
+      const terminal = vscode.window.createTerminal('Brainclaw Doctor');
+      terminal.show();
+      terminal.sendText(`${cmd} doctor`);
+    }),
   );
 
   // --- Explorer context menu commands ---

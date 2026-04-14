@@ -234,6 +234,55 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     void this._execViaMcp(command, targetCwd);
   }
 
+  public async quickCapture(text: string): Promise<void> {
+    const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(targetCwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+    try {
+      await client.callTool('bclaw_quick_capture', { text });
+      this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  public async dispatchWithPicker(): Promise<void> {
+    const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(targetCwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+
+    const board = this._workspaceBoard;
+    const plans = board ? activePlans(board).filter((p: any) => p.status === 'todo') : [];
+    if (plans.length === 0) {
+      vscode.window.showInformationMessage('No todo plans available to dispatch');
+      return;
+    }
+
+    const items = plans.map((plan: any) => ({
+      label: plan.text?.slice(0, 80) ?? plan.id,
+      description: `${plan.priority ?? 'medium'} · ${plan.assignee ?? 'unassigned'}`,
+      planId: plan.id as string,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select plan to dispatch' });
+    if (!picked) return;
+
+    try {
+      await client.callTool('bclaw_dispatch', {});
+      this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
   private async _execViaMcp(command: string, targetCwd: string): Promise<void> {
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
