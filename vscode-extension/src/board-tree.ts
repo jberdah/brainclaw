@@ -755,6 +755,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       board = await this._loadBoardForProject(normalizedPath, false, true);
     }
 
+    // Summary-mode boards have counts but no arrays — fetch the full board
+    // on expansion so _buildBoardSections has real data to render.
+    if (board && (board as any).summary && !this._loadingProjects.has(normalizedPath)) {
+      board = await this._loadFullBoardForProject(normalizedPath);
+    }
+
     if (!board) {
       const error = this._projectErrors.get(normalizedPath);
       if (error) {
