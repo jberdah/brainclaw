@@ -98,24 +98,9 @@
         "icon": "$(run-all)"
       },
       {
-        "command": "brainclaw.quickCapture",
-        "title": "Brainclaw: Quick Capture",
-        "icon": "$(comment)"
-      },
-      {
         "command": "brainclaw.doctor",
         "title": "Brainclaw: Doctor",
         "icon": "$(stethoscope)"
-      },
-      {
-        "command": "brainclaw.approveAction",
-        "title": "Approve",
-        "icon": "$(check)"
-      },
-      {
-        "command": "brainclaw.rejectAction",
-        "title": "Reject",
-        "icon": "$(close)"
       }
     ],
     "menus": {

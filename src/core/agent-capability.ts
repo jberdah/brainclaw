@@ -243,9 +243,9 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     max_concurrent_tasks: 5,
     prompt_delivery: { methods: ['stdin_pipe', 'temp_file'], preferred: 'stdin_pipe' },
     execution_env: { surface: 'cli' },
-    invoke_template: 'codex exec --sandbox workspace-write "{prompt}"',
+    invoke_template: 'codex exec --sandbox workspace-write -a never "{prompt}"',
     invoke_binary: 'codex',
-    invoke_review_template: 'codex exec --sandbox read-only "{prompt}"',
+    invoke_review_template: 'codex exec --sandbox read-only -a never "{prompt}"',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',

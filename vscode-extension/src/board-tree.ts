@@ -269,13 +269,18 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       label: plan.text?.slice(0, 80) ?? plan.id,
       description: `${plan.priority ?? 'medium'} · ${plan.assignee ?? 'unassigned'}`,
       planId: plan.id as string,
+      lane: plan.lane,
     }));
 
     const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select plan to dispatch' });
     if (!picked) return;
+    if (!picked.lane) {
+      vscode.window.showErrorMessage(`Brainclaw: Could not determine lane for plan ${picked.planId}`);
+      return;
+    }
 
     try {
-      await client.callTool('bclaw_dispatch', {});
+      await client.callTool('bclaw_dispatch', { lanes: [picked.lane] });
       this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -323,10 +328,6 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     if (parts[0] === 'reject-action' && parts[1]) {
       return ['bclaw_assignment_action', { action_id: parts[1], outcome: 'rejected' }];
     }
-    // "dispatch-plan <id>"
-    if (parts[0] === 'dispatch-plan' && parts[1]) {
-      return ['bclaw_dispatch', {}];
-    }
     throw new Error(`Unsupported command: ${command}`);
   }
 
@@ -340,34 +341,32 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     void this._execViaMcp('reject-action ' + actionId, cwd);
   }
 
-  public dispatchPlan(planId: string, projectPath?: string): void {
+  public async dispatchPlan(planId: string, projectPath?: string): Promise<void> {
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp('dispatch-plan ' + planId, cwd);
-  }
-
-  public releaseClaim(claimId: string, projectPath?: string): void {
-    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp('claim release ' + claimId, cwd);
-  }
-
-  public quickCapture(text: string, projectPath?: string): void {
-    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._quickCapture(text, cwd);
-  }
-
-  private async _quickCapture(text: string, cwd: string): Promise<void> {
     const client = await this._getMcpClient(cwd);
     if (!client) {
       vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
       return;
     }
+    const board = this._workspaceBoard;
+    const plans = board ? activePlans(board) : [];
+    const plan = plans.find((p: any) => p.id === planId);
+    if (!plan || !plan.lane) {
+      vscode.window.showErrorMessage(`Brainclaw: Could not determine lane for plan ${planId}`);
+      return;
+    }
     try {
-      await client.callTool('bclaw_quick_capture', { text });
+      await client.callTool('bclaw_dispatch', { lanes: [plan.lane] });
       this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
     }
+  }
+
+  public releaseClaim(claimId: string, projectPath?: string): void {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    void this._execViaMcp('claim release ' + claimId, cwd);
   }
 
   private _normalizePath(targetPath: string): string {

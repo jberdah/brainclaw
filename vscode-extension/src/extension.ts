@@ -185,16 +185,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('brainclaw.dispatchPlan', (item: BrainclawTreeItem) => {
       if (item.itemId) treeProvider?.dispatchPlan(item.itemId, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.quickCapture', async () => {
-      const text = await vscode.window.showInputBox({ prompt: 'Quick capture', placeHolder: 'What do you want to capture?' });
-      if (text) treeProvider?.quickCapture(text);
-    }),
-    vscode.commands.registerCommand('brainclaw.approveAction', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`action approve ${item.itemId}`, item.projectPath);
-    }),
-    vscode.commands.registerCommand('brainclaw.rejectAction', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`action reject ${item.itemId}`, item.projectPath);
-    }),
   );
 
   // --- Toolbar commands ---
