@@ -153,7 +153,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_context',
     description: 'Get project memory context for a specific file or path.',
-    annotations: { tier: 'standard', category: 'context' },
+    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -179,7 +179,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_bootstrap',
     description: 'Derive brownfield bootstrap signals, adaptive interview prompts for CLI or IDE chat agents, and an import proposal from repository docs, manifests, native agent files, and git history.',
-    annotations: { tier: 'standard', category: 'context' },
+    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -200,7 +200,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_execution_context',
     description: 'Inspect the local execution environment, installable Brainclaw update channel, and optionally agent tooling signals.',
-    annotations: { tier: 'standard', category: 'context' },
+    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,7 +211,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_release_notes',
     description: 'Return the agent-first release notes for the latest installable Brainclaw version from the configured update source. Returns structured highlights, breaking risk, and action recommendation when available.',
-    annotations: { tier: 'standard', category: 'context' },
+    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {},
@@ -220,7 +220,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_read_handoff',
     description: 'Read an open handoff ticket with its captured git diff and state snapshot.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -232,7 +232,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_agent_board',
     description: 'Get an agent collaboration board with active plans, claims, handoffs, and resolved instructions.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,7 +249,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_agent_board_summary',
     description: 'Get a lightweight counts-only summary of the agent board (~500 bytes). Returns attention_required, in_progress claims, plan counts by status, trap counts by severity, agent/session counts, and active sequence name. Use this for extension activation and polling — call bclaw_get_agent_board only when full detail is needed.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -260,7 +260,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_search',
     description: 'Full-text search across all memory items (decisions, constraints, traps, candidates, handoffs) using BM25 scoring.',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,7 +277,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_estimation_report',
     description: 'Show estimation accuracy report for completed plans. Returns ratio of estimated vs actual effort per agent.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -288,7 +288,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_plans',
     description: 'List plan items with optional filters on status, type, assignee, and project.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -308,7 +308,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_sequences',
     description: 'List coordination sequences with optional filters on status and id.',
-    annotations: { tier: 'advanced', category: 'coordination' },
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -323,7 +323,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_claims',
     description: 'List work claims with optional filters on project, plan, and agent.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -339,7 +339,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_assignments',
     description: 'List assignment runtime records with optional filters on status, agent, claim, plan, sequence, or id.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,7 +358,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_runs',
     description: 'List AgentRun execution attempts with optional filters on status, transport, agent, assignment, claim, plan, sequence, or id.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -379,7 +379,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_assignment_events',
     description: 'List correlated runtime events for assignments and runs with filters on assignment, run, claim, session, agent, or event type.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -399,7 +399,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_actions',
     description: 'List pending or resolved ActionRequired items for runtime approvals, questions, and clarifications.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -419,7 +419,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_agents',
     description: 'List registered agent identities and optionally include bounded reputation summaries.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -430,7 +430,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_instructions',
     description: 'List raw or resolved shared instructions with the same filters exposed by the CLI.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -448,7 +448,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_candidates',
     description: 'List review candidates across pending, accepted, rejected, or all queues.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -466,7 +466,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_capabilities',
     description: 'List all registered project capabilities with full metadata.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -478,7 +478,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_tools',
     description: 'List all registered project tools with metadata.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -490,7 +490,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_search_tools',
     description: 'Search tools by query and tags.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -504,7 +504,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_doctor',
     description: 'Run health checks on the brainclaw memory store. Returns structured check results with ok/warn/error status and metrics.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -515,7 +515,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_history',
     description: 'Show full mutation history of a memory item from the audit log.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -527,7 +527,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_audit',
     description: 'View the audit log or generate a governance posture report. Use governance=true for an aggregated view of claims, constraints, traps, instructions and recommendations.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -543,7 +543,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_discovery',
     description: 'Scan workspace for MCP configs, instruction files, skills, hooks, and agent integrations. Returns a structured discovery profile. Saves result to .brainclaw/discovery/ by default.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -555,7 +555,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_conflict_check',
     description: 'Check for claim conflicts between the current agent and other agents. Returns overlapping scopes.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -567,7 +567,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_who',
     description: 'List all active agent sessions on this workspace. Shows user, agent, active project, claims, and last activity for each session.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -579,7 +579,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_switch',
     description: 'Switch active project in a multi-project workspace. Session-scoped by default: only this agent sees the switch, other agents are unaffected. Use list=true to see available projects.',
-    annotations: { tier: 'standard', category: 'session' },
+    annotations: { tier: 'standard', category: 'session' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -592,7 +592,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_check_policy',
     description: 'Pre-execution policy check. Verifies claims, constraints, traps and governance instructions for a given scope. Returns blocks (hard stops) and warnings (context to consider). Call before editing to ensure compliance.',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -607,7 +607,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_check_security',
     description: 'Check supply chain security scores for packages via Socket.dev. Returns pass/warn/block verdict per package. Requires security.preinstall.enabled in config. Uses the free public Socket MCP endpoint (no auth needed).',
-    annotations: { tier: 'advanced', category: 'governance' },
+    annotations: { tier: 'advanced', category: 'governance' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -620,7 +620,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_read_inbox',
     description: 'Read messages from an agent inbox. Returns pending messages by default. Use markAsRead to auto-mark pending messages as read. Supports filtering by status, type, and thread_id.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -638,7 +638,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_get_thread',
     description: 'Get all messages in a thread across all agent inboxes. Useful for following RFC discussions or review rounds.',
-    annotations: { tier: 'advanced', category: 'coordination' },
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -650,7 +650,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_dispatch_analysis',
     description: 'Analyze the active sequence and show lane status: which items are ready (all hard deps met), active (claimed by an agent), blocked (waiting on deps), or done. Shows available agents. Use this before bclaw_dispatch to preview assignments.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -664,7 +664,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
     description: 'Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to target agents. Returns ready-to-run bash commands per agent — the coordinator should execute them (e.g. via run_in_background). Use dryRun to preview. Requires trusted or curator trust level.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -681,7 +681,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch_review',
     description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox. Requires trusted trust level.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -696,7 +696,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_send_message',
     description: 'Send a message to another agent\'s inbox. Used for work assignment (type: assign), review requests (type: review), RFC discussions (type: rfc), notifications (type: info), and threaded replies (type: reply). Requires contributor trust.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -718,7 +718,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_ack_message',
     description: 'Acknowledge a message in your inbox. Use after processing an assignment or review request.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -732,7 +732,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_setup',
     description: 'Interactive onboarding wizard. Two modes: (1) Quick mode (default): probes the current repo and asks project type + topology, then inits. (2) Batch mode: scan root directories and init multiple repos. Call without step to start — brainclaw auto-detects the best mode.',
-    annotations: { tier: 'facade', category: 'session' },
+    annotations: { tier: 'facade', category: 'session' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -749,7 +749,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_write_note',
     description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a runtime-note signal to a linked project (requires role: publisher in cross_project_links config).',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -769,7 +769,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_quick_capture',
     description: 'Capture free-form text and classify it locally into a decision, trap, or fallback runtime note. Uses keyword heuristics only, never an LLM.',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -784,7 +784,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create_candidate',
     description: 'Create a memory candidate for review. Trusted/curator agents write through directly. Use targetProject to push a candidate signal to a linked project.',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -808,7 +808,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_accept',
     description: 'Accept a pending candidate into canonical memory. Requires trusted or curator trust level.',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -822,7 +822,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_reject',
     description: 'Reject a pending candidate. Requires trusted or curator trust level.',
-    annotations: { tier: 'standard', category: 'memory' },
+    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -837,7 +837,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_claim',
     description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -857,7 +857,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_release_claim',
     description: 'Release a work claim.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -870,7 +870,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_session_start',
     description: 'Start a session and capture initial context. Pass includeContext and/or includeBoard to get full context + agent board in a single call, eliminating the need for separate bclaw_get_context and bclaw_get_agent_board calls.',
-    annotations: { tier: 'standard', category: 'session' },
+    annotations: { tier: 'standard', category: 'session' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -888,7 +888,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_session_end',
     description: 'End a session and optionally auto-reflect observations as candidates.',
-    annotations: { tier: 'standard', category: 'session' },
+    annotations: { tier: 'standard', category: 'session' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -909,7 +909,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create_plan',
     description: 'Create a new plan item. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -928,7 +928,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create_sequence',
     description: 'Create a coordination sequence shared by agents.',
-    annotations: { tier: 'advanced', category: 'coordination' },
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -947,7 +947,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update_sequence',
     description: 'Update a coordination sequence status, metadata, or items.',
-    annotations: { tier: 'advanced', category: 'coordination' },
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -967,7 +967,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update_plan',
     description: 'Update the status, effort, or other fields of a plan item. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -985,7 +985,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_add_step',
     description: 'Add a sub-step to a plan item. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1001,7 +1001,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_complete_step',
     description: 'Mark a plan sub-step as done. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1016,7 +1016,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_delete_memory',
     description: 'Delete a memory item (constraint, decision, or trap) by ID. Requires trusted or curator trust level.',
-    annotations: { tier: 'advanced', category: 'memory' },
+    annotations: { tier: 'advanced', category: 'memory' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1031,7 +1031,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update_memory',
     description: 'Update text, tags, or trap status of a constraint, decision, or trap by ID. Optionally move it to a different store level. Requires trusted or curator trust level.',
-    annotations: { tier: 'advanced', category: 'memory' },
+    annotations: { tier: 'advanced', category: 'memory' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1050,7 +1050,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_add_capability',
     description: 'Register a new project capability. Requires contributor trust level or above.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1066,7 +1066,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_add_tool',
     description: 'Register a new project tool. Requires contributor trust level or above.',
-    annotations: { tier: 'advanced', category: 'discovery' },
+    annotations: { tier: 'advanced', category: 'discovery' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1083,7 +1083,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update_handoff',
     description: 'Update the status, recipient, contract, or review state of an open handoff. Requires contributor trust level or above. Use targetProject to push the resulting handoff state to a linked project.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1113,7 +1113,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_compact',
     description: 'LLM-driven semantic memory compaction (two-phase). Phase 1 (no args or assess=true): returns pressure assessment and compaction template listing eligible items. Phase 2 (archiveIds + optional newItems): archives specified items and creates new durable memory entries. Safety: creates a backup before archiving.',
-    annotations: { tier: 'advanced', category: 'memory' },
+    annotations: { tier: 'advanced', category: 'memory' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1142,7 +1142,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_work',
     description: 'Facade entry point: start a session, load context, and optionally claim a scope in a single call. intent=execute creates a claim; intent=consult/resume/review skips it. Eliminates the need for separate bclaw_session_start + bclaw_get_context + bclaw_claim calls.',
-    annotations: { tier: 'facade', category: 'session' },
+    annotations: { tier: 'facade', category: 'session' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1161,7 +1161,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_coordinate',
     description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, and side_effects.',
-    annotations: { tier: 'facade', category: 'coordination' },
+    annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1181,7 +1181,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_assignment_update',
     description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1225,7 +1225,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_assignment_action',
     description: 'Resolve or reject a pending ActionRequired item and update the linked Assignment/AgentRun state.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1242,7 +1242,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_harvest_candidates',
     description: 'Harvest candidates from worktree inboxes into the main project store. Use this as the coordinator-side bridge for agents running under --sandbox workspace-write (e.g. Codex), which cannot write to the main store via MCP and instead write to their worktree .brainclaw/coordination/inbox/. Requires trusted trust level.',
-    annotations: { tier: 'standard', category: 'coordination' },
+    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1267,6 +1267,16 @@ const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
  * propagates here — no manual catalog sync required.
  */
 export const MCP_TOOL_NAMES: string[] = ALL_TOOLS.map((tool) => tool.name);
+
+/**
+ * Subset of MCP_TOOL_NAMES for tools that are safe for headless auto-approval.
+ * Excludes dispatch, architectural gates (accept/reject), plan creation, setup,
+ * switch, bootstrap, memory deletes, and other operations that warrant human review.
+ * Consumed by agent-files writers (Cline autoApprove, Roo alwaysAllow, Codex approval_mode).
+ */
+export const MCP_HEADLESS_AUTO_TOOL_NAMES: string[] = ALL_TOOLS
+  .filter((tool) => (tool as { annotations?: { headlessApproval?: string } }).annotations?.headlessApproval === 'auto')
+  .map((tool) => tool.name);
 
 type McpToolTier = 'facade' | 'standard' | 'advanced';
 
