@@ -36,6 +36,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
       { kind: 'hook',         location: 'workspace', path: '.github/copilot-instructions.md' },
       { kind: 'mcp',          location: 'workspace', path: '.vscode/settings.json' },
       { kind: 'skill',        location: 'workspace', path: '.github/skills/brainclaw-context/SKILL.md' },
+      { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
     'claude-code': [
       { kind: 'instructions', location: 'workspace', path: 'CLAUDE.md' },
@@ -48,6 +49,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
       { kind: 'rule',         location: 'workspace', path: '.cursor/rules/brainclaw-mcp-shim.mdc' },
       { kind: 'hook',         location: 'workspace', path: '.cursor/rules/brainclaw-session.mdc' },
       { kind: 'mcp',          location: 'machine',   path: '.cursor/mcp.json' },
+      { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
     'windsurf': [
       { kind: 'instructions', location: 'workspace', path: '.windsurfrules' },
@@ -63,10 +65,12 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
       { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
       { kind: 'hook',         location: 'workspace', path: 'AGENTS.md' },
       { kind: 'mcp',          location: 'machine',   path: '.codex/config.toml' },
+      { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
     'opencode': [
       { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
       { kind: 'mcp',          location: 'workspace', path: 'opencode.json' },
+      { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
   'antigravity': [
     { kind: 'instructions', location: 'workspace', path: 'GEMINI.md' },
@@ -79,6 +83,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   'roo': [
     { kind: 'instructions', location: 'workspace', path: '.roo/rules/brainclaw.md' },
     { kind: 'mcp',          location: 'workspace', path: '.roo/mcp.json' },
+    { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
   ],
   'openclaw': [
     { kind: 'skill', location: 'machine', path: '.openclaw/workspace/skills/brainclaw/SKILL.md' },

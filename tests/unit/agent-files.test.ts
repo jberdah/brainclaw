@@ -30,6 +30,7 @@ import {
   ensureOpenCodeMcpConfig,
   ensureAntigravityMcpConfig,
   ensureCodexMcpConfig,
+  ensureUniversalBrainclawSkill,
   patchAllMcpConfigs,
   resetMcpCommandCache,
   writeDetectedAgentAutoConfig,
@@ -446,15 +447,17 @@ describe('core/agent-files — auto-config writers', () => {
   it('writes only the relevant detected auto-config companion files', () => {
     const dir = tmpDir();
     try {
-      // cursor without homeDir → only MDC
+      // cursor without homeDir → MDC + universal skill
       const cursorResults = writeDetectedAgentAutoConfig('cursor', dir, {});
-      assert.equal(cursorResults.length, 1);
-      assert.equal(cursorResults[0]?.relativePath, '.cursor/rules/brainclaw-mcp-shim.mdc');
+      assert.equal(cursorResults.length, 2);
+      assert.ok(cursorResults.some(r => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
+      assert.ok(cursorResults.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
 
       const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
-      assert.equal(copilotResults.length, 3);
+      assert.equal(copilotResults.length, 4);
       assert.ok(copilotResults.some(r => r.relativePath === '.vscode/settings.json'));
       assert.ok(copilotResults.some(r => r.relativePath === '.github/skills/brainclaw-context/SKILL.md'));
+      assert.ok(copilotResults.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
       assert.ok(copilotResults.some(r => r.relativePath === '.vscode/extensions.json'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -706,26 +709,28 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig cursor with homeDir returns 2 results', () => {
+  it('writeDetectedAgentAutoConfig cursor with homeDir returns 3 results', () => {
     const dir = tmpDir();
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('cursor', dir, { HOME: homeDir });
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 3);
       assert.ok(results.some((r) => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
       assert.ok(results.some((r) => r.relativePath === '.cursor/mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
-  it('writeDetectedAgentAutoConfig roo returns 1 result', () => {
+  it('writeDetectedAgentAutoConfig roo returns 2 results including universal skill', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('roo', dir);
-      assert.equal(results.length, 1);
-      assert.equal(results[0]?.relativePath, '.roo/mcp.json');
+      assert.equal(results.length, 2);
+      assert.ok(results.some((r) => r.relativePath === '.roo/mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -799,12 +804,13 @@ describe('core/agent-files — auto-config writers', () => {
     assert.equal(result, undefined);
   });
 
-  it('writeDetectedAgentAutoConfig opencode returns 1 result', () => {
+  it('writeDetectedAgentAutoConfig opencode returns 2 results including universal skill', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('opencode', dir);
-      assert.equal(results.length, 1);
-      assert.equal(results[0]?.relativePath, 'opencode.json');
+      assert.equal(results.length, 2);
+      assert.ok(results.some((r) => r.relativePath === 'opencode.json'));
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1110,6 +1116,176 @@ describe('ensureCodexMcpConfig — idempotence and safety', () => {
       (process.stdout as NodeJS.WriteStream).write = originalWrite as typeof process.stdout.write;
       resetMcpCommandCache();
       fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ensureUniversalBrainclawSkill', () => {
+  it('creates .agents/skills/brainclaw/SKILL.md with expected frontmatter', () => {
+    const dir = tmpDir();
+    try {
+      const result = ensureUniversalBrainclawSkill(dir);
+      assert.equal(result.kind, 'skill');
+      assert.equal(result.created, true);
+      assert.equal(result.updated, false);
+      assert.equal(result.relativePath, '.agents/skills/brainclaw/SKILL.md');
+
+      const filePath = path.join(dir, '.agents', 'skills', 'brainclaw', 'SKILL.md');
+      assert.ok(fs.existsSync(filePath), 'SKILL.md should exist');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.includes('name: brainclaw'), 'should have name frontmatter');
+      assert.ok(content.includes('allowed-tools:'), 'should have allowed-tools frontmatter');
+      assert.ok(content.includes('Bash(npx brainclaw:*)'), 'should allow brainclaw bash commands');
+      assert.ok(content.startsWith('---\n'), 'should start with frontmatter delimiter');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is idempotent — second call returns created=false, updated=false', () => {
+    const dir = tmpDir();
+    try {
+      ensureUniversalBrainclawSkill(dir);
+      const second = ensureUniversalBrainclawSkill(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig codex without homeDir returns 1 result (universal skill)', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('codex', dir, {});
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.relativePath, '.agents/skills/brainclaw/SKILL.md');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig codex with homeDir returns 2 results including MCP config', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('codex', dir, { HOME: homeDir });
+      assert.equal(results.length, 2);
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
+      assert.ok(results.some((r) => r.filePath.includes('.codex') && r.filePath.includes('config.toml')));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ensureUniversalBrainclawSkill', () => {
+  it('creates .agents/skills/brainclaw/SKILL.md with expected frontmatter fields', () => {
+    const dir = tmpDir();
+    try {
+      const result = ensureUniversalBrainclawSkill(dir);
+      assert.equal(result.kind, 'skill');
+      assert.equal(result.created, true);
+      assert.equal(result.updated, false);
+      assert.equal(result.relativePath, '.agents/skills/brainclaw/SKILL.md');
+
+      const filePath = path.join(dir, '.agents', 'skills', 'brainclaw', 'SKILL.md');
+      assert.ok(fs.existsSync(filePath), 'SKILL.md should exist');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.startsWith('---\n'), 'should start with YAML frontmatter');
+      assert.ok(content.includes('name: brainclaw'), 'frontmatter should have name: brainclaw');
+      assert.ok(content.includes('description:'), 'frontmatter should have description field');
+      assert.ok(content.includes('allowed-tools:'), 'frontmatter should have allowed-tools field');
+      assert.ok(content.includes('brainclaw context --json'), 'body should mention brainclaw context --json');
+      assert.ok(content.includes('brainclaw session-end'), 'body should mention session-end');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is idempotent: repeated calls return created=false updated=false when content unchanged', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureUniversalBrainclawSkill(dir);
+      assert.equal(first.created, true);
+
+      const second = ensureUniversalBrainclawSkill(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+
+      const third = ensureUniversalBrainclawSkill(dir);
+      assert.equal(third.created, false);
+      assert.equal(third.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('writeDetectedAgentAutoConfig — universal skill inclusion', () => {
+  it('github-copilot includes .agents/skills/brainclaw/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('github-copilot', dir);
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'github-copilot should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cursor includes .agents/skills/brainclaw/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('cursor', dir, {});
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'cursor should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('roo includes .agents/skills/brainclaw/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('roo', dir);
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'roo should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('opencode includes .agents/skills/brainclaw/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('opencode', dir);
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'opencode should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('codex includes .agents/skills/brainclaw/SKILL.md (no homeDir)', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('codex', dir, {});
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'codex should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

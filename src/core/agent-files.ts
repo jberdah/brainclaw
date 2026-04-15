@@ -495,6 +495,7 @@ const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
 const VSCODE_EXTENSIONS_RELATIVE_PATH = '.vscode/extensions.json';
+const UNIVERSAL_SKILL_RELATIVE_PATH = '.agents/skills/brainclaw/SKILL.md';
 
 /**
  * Directories exclusively managed by brainclaw — safe to gitignore as a whole.
@@ -746,6 +747,45 @@ Use this skill to fetch live project memory before significant edits or when ask
     updated,
     filePath,
     relativePath: COPILOT_SKILL_RELATIVE_PATH,
+  };
+}
+
+/**
+ * Write .agents/skills/brainclaw/SKILL.md — universal cross-agent skill.
+ * Auto-discovered by Cursor, Copilot, Roo, OpenCode, Codex, Kilo, and Mistral
+ * via their shared .agents/skills/ path convention. Single writer, 7 agents,
+ * zero per-agent branching.
+ *
+ * Ref: surfaces_audit_2026_04_15.md (feedback_cross_agent_patterns rule #3).
+ */
+export function ensureUniversalBrainclawSkill(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, UNIVERSAL_SKILL_RELATIVE_PATH);
+  const content = `---
+name: brainclaw
+description: 'Load and act on Brainclaw project memory, active claims, plans, traps, and handoffs before code changes. Trigger: refresh brainclaw context, check active claims, load coordination state.'
+allowed-tools: 'Read Bash(npx brainclaw:*)'
+---
+
+# Brainclaw
+
+Use this skill to load the shared coordination state before any significant code change.
+
+## Steps
+
+1. Run \`brainclaw context --json\` (or \`npx brainclaw context --json\`) to load memory, constraints, decisions, traps, plans, and handoffs.
+2. Run \`brainclaw claim list\` — respect active claims from other agents; do not edit a claimed scope.
+3. Before editing, claim your scope: \`brainclaw claim create "<description>" --scope <path>\`.
+4. When done, run \`brainclaw session-end --auto-release\` to release claims and close the session.
+`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'skill',
+    label: 'Universal Brainclaw skill (.agents/skills/brainclaw/SKILL.md)',
+    created,
+    updated,
+    filePath,
+    relativePath: UNIVERSAL_SKILL_RELATIVE_PATH,
   };
 }
 
@@ -1551,18 +1591,20 @@ export function writeDetectedAgentAutoConfig(
       return result ? [result] : [];
     }
     case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureUniversalBrainclawSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
     case 'cursor': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureUniversalBrainclawSkill(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
       if (mcp) results.push(mcp);
       return results;
     }
     case 'roo':
-      return [ensureRooMcpConfig(cwd)];
+      return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'codex': {
+      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
-      return result ? [result] : [];
+      if (result) results.push(result);
+      return results;
     }
     case 'continue': {
       const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
@@ -1571,7 +1613,7 @@ export function writeDetectedAgentAutoConfig(
       return results;
     }
     case 'opencode':
-      return [ensureOpenCodeMcpConfig(cwd)];
+      return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'antigravity': {
       const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
       return result ? [result] : [];
