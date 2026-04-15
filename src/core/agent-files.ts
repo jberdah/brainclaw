@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { MCP_TOOL_NAMES } from '../commands/mcp.js';
 
 /**
  * Resolve the brainclaw command for MCP configs.
@@ -449,14 +450,28 @@ export interface AutoConfigWriteResult {
 
 type JsonObject = Record<string, unknown>;
 
-const ALL_BCLAW_TOOLS = [
-  'bclaw_get_context', 'bclaw_bootstrap', 'bclaw_get_execution_context',
-  'bclaw_read_handoff', 'bclaw_get_agent_board', 'bclaw_search', 'bclaw_estimation_report',
-  'bclaw_list_plans', 'bclaw_list_sequences', 'bclaw_list_claims', 'bclaw_list_agents', 'bclaw_list_instructions', 'bclaw_list_candidates',
-  'bclaw_write_note', 'bclaw_create_candidate', 'bclaw_accept', 'bclaw_reject',
-  'bclaw_claim', 'bclaw_release_claim', 'bclaw_session_start', 'bclaw_session_end',
-  'bclaw_create_plan', 'bclaw_create_sequence', 'bclaw_update_plan', 'bclaw_update_sequence', 'bclaw_add_step', 'bclaw_complete_step',
-];
+/**
+ * Returns the canonical list of all brainclaw MCP tool names. Sourced from
+ * the MCP server's ALL_TOOLS registry via MCP_TOOL_NAMES, so the list
+ * auto-updates when tools are added/removed in src/commands/mcp.ts — no
+ * manual sync required.
+ *
+ * IMPORTANT: Accessed lazily (not at module init) to avoid a circular-import
+ * TDZ error — this module ← commands/session-start ← commands/mcp cycles back
+ * into commands/mcp for MCP_TOOL_NAMES. Calling at runtime (inside writer
+ * functions) is always safe because by then all modules are fully initialized.
+ *
+ * Consumed by:
+ *  - Cline `autoApprove` (.vscode/cline_mcp_settings.json)
+ *  - Roo `alwaysAllow` (.roo/mcp.json)
+ *  - Codex `[mcp_servers.brainclaw.tools.<name>] approval_mode = "approve"`
+ *    (~/.codex/config.toml) — required for headless codex exec (non-interactive
+ *    approval mode cancels MCP writes by default; explicit per-tool
+ *    `approval_mode = "approve"` bypasses this).
+ */
+function getAllBclawToolNames(): string[] {
+  return MCP_TOOL_NAMES;
+}
 
 const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
 const CURSOR_MDC_RELATIVE_PATH = '.cursor/rules/brainclaw-mcp-shim.mdc';
@@ -657,7 +672,7 @@ export function ensureClineMcpConfig(cwd: string): AutoConfigWriteResult {
   mcpServers.brainclaw = {
     ...brainclawMcpEntry('cline', mcpServers.brainclaw, cwd),
     disabled: false,
-    autoApprove: ALL_BCLAW_TOOLS,
+    autoApprove: getAllBclawToolNames(),
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1141,7 +1156,7 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
   mcpServers.brainclaw = {
     ...brainclawMcpEntry('roo', mcpServers.brainclaw, cwd),
-    alwaysAllow: ALL_BCLAW_TOOLS,
+    alwaysAllow: getAllBclawToolNames(),
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1182,6 +1197,14 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     '# BRAINCLAW_CWD is set per-workspace via brainclaw init; override here if needed',
   ].join('\n');
 
+  // Per-tool approval_mode blocks — required so codex exec in headless mode
+  // auto-approves brainclaw MCP writes (e.g. bclaw_assignment_update). Without
+  // these, codex falls back to the default "prompt" approval and cancels the
+  // call because no human can answer in non-interactive mode.
+  const toolsBlock = '\n' + getAllBclawToolNames().map((tool) =>
+    `[mcp_servers.brainclaw.tools.${tool}]\napproval_mode = "approve"`,
+  ).join('\n\n') + '\n';
+
   let existing = '';
   let fileExisted = false;
   if (fs.existsSync(filePath)) {
@@ -1189,32 +1212,50 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     fileExisted = true;
   }
 
-  if (existing.includes('[mcp_servers.brainclaw]')) {
-    if (!_forceResolve) {
-      return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
+  let content = existing;
+  let changed = false;
+
+  // Main brainclaw block: create if missing, update only when force-resolving
+  // (to preserve user customizations like `cwd` on the main section).
+  if (!content.includes('[mcp_servers.brainclaw]')) {
+    content = content + brainclawBlock + '\n';
+    changed = true;
+  } else if (_forceResolve) {
+    const replaced = replaceTomlSection(content, 'mcp_servers.brainclaw', brainclawBlock.slice(1) + '\n');
+    if (replaced !== content) {
+      content = replaced;
+      changed = true;
     }
-    // Force-resolve: replace the existing brainclaw block with updated paths.
-    // Use a line-based section splitter so that `[` characters inside TOML
-    // values (e.g. the args array) don't prematurely end the match.
-    const replaced = replaceTomlSection(existing, 'mcp_servers.brainclaw', brainclawBlock.slice(1) + '\n');
-    if (replaced !== existing) {
-      fs.writeFileSync(filePath, replaced, 'utf-8');
-      return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: true, filePath };
-    }
-    return { kind: 'mcp', label: 'Codex MCP config', created: false, updated: false, filePath };
   }
 
-  const newContent = existing + brainclawBlock + '\n';
-  if (!fs.existsSync(path.dirname(filePath))) {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  // Per-tool approval blocks: ALWAYS sync to the current catalog, regardless
+  // of _forceResolve. These sections are purely machine-managed (no user edits
+  // expected) and must match the MCP tool catalog so new tools don't
+  // silently fall back to the default prompt approval.
+  const hasToolSections = /^\[mcp_servers\.brainclaw\.tools\./m.test(content);
+  if (hasToolSections) {
+    const replaced = replaceTomlSection(content, 'mcp_servers.brainclaw.tools', toolsBlock.slice(1));
+    if (replaced !== content) {
+      content = replaced;
+      changed = true;
+    }
+  } else {
+    content = content + toolsBlock;
+    changed = true;
   }
-  fs.writeFileSync(filePath, newContent, 'utf-8');
+
+  if (changed) {
+    if (!fs.existsSync(path.dirname(filePath))) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    }
+    fs.writeFileSync(filePath, content, 'utf-8');
+  }
 
   return {
     kind: 'mcp',
     label: 'Codex MCP config',
     created: !fileExisted,
-    updated: fileExisted,
+    updated: fileExisted && changed,
     filePath,
   };
 }

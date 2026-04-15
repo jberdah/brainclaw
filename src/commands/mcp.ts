@@ -1258,6 +1258,16 @@ const MCP_WRITE_TOOLS = [
 
 const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
 
+/**
+ * Canonical list of all brainclaw MCP tool names, derived from ALL_TOOLS.
+ * Source-of-truth consumed by agent integration writers (agent-files.ts)
+ * to emit per-tool approval entries for each agent surface: Cline
+ * `autoApprove`, Roo `alwaysAllow`, Codex `approval_mode`, etc. When a new
+ * tool is registered in MCP_READ_TOOLS or MCP_WRITE_TOOLS it automatically
+ * propagates here — no manual catalog sync required.
+ */
+export const MCP_TOOL_NAMES: string[] = ALL_TOOLS.map((tool) => tool.name);
+
 type McpToolTier = 'facade' | 'standard' | 'advanced';
 
 /** Tools with tier facade or standard — returned by default. Advanced tools require catalog=all. */
