@@ -21,6 +21,7 @@ import {
   collectExportGitignoreEntries,
   auditLocalAgentWorkspaceFiles,
   ensureWindsurfMcpConfig,
+  ensureWindsurfModernRules,
   ensureClaudeCodeMcpConfig,
   ensureClaudeCodeCommand,
   ensureClaudeCodeSettings,
@@ -441,6 +442,50 @@ describe('core/agent-files — auto-config writers', () => {
       assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP config should be present');
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureWindsurfMcpConfig writes alwaysAllow array matching MCP_HEADLESS_AUTO_TOOL_NAMES', () => {
+    const homeDir = tmpDir();
+    try {
+      const result = ensureWindsurfMcpConfig(homeDir);
+      assert.ok(result, 'result should be defined');
+      const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcpServers?: { brainclaw?: { alwaysAllow?: unknown } };
+      };
+      const alwaysAllow = content.mcpServers?.brainclaw?.alwaysAllow;
+      assert.ok(Array.isArray(alwaysAllow), 'alwaysAllow should be an array');
+      assert.equal(
+        (alwaysAllow as unknown[]).length,
+        MCP_HEADLESS_AUTO_TOOL_NAMES.length,
+        'alwaysAllow length should match MCP_HEADLESS_AUTO_TOOL_NAMES',
+      );
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureWindsurfModernRules creates .windsurf/rules/brainclaw.md and is idempotent', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureWindsurfModernRules(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.updated, false);
+      assert.equal(first.kind, 'rule');
+      assert.equal(first.relativePath, '.windsurf/rules/brainclaw.md');
+
+      const filePath = path.join(dir, '.windsurf', 'rules', 'brainclaw.md');
+      assert.ok(fs.existsSync(filePath), 'file should exist');
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(raw.includes('brainclaw'), 'file should contain brainclaw reference');
+      assert.ok(raw.includes('brainclaw context'), 'file should mention brainclaw context command');
+
+      const second = ensureWindsurfModernRules(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false, 'second call should be idempotent');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

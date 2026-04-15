@@ -484,6 +484,7 @@ const COPILOT_SKILL_RELATIVE_PATH = '.github/skills/brainclaw-context/SKILL.md';
 const COPILOT_MCP_RELATIVE_PATH = '.vscode/settings.json';
 const VSCODE_MCP_RELATIVE_PATH = '.vscode/mcp.json';
 const WINDSURF_MCP_RELATIVE_PATH = '.codeium/windsurf/mcp_config.json';
+const WINDSURF_MODERN_RULES_RELATIVE_PATH = '.windsurf/rules/brainclaw.md';
 const CLAUDE_CODE_MCP_RELATIVE_PATH = '.mcp.json';
 const CLAUDE_CODE_COMMAND_RELATIVE_PATH = '.claude/commands/brainclaw.md';
 const CLAUDE_CODE_SETTINGS_RELATIVE_PATH = '.claude/settings.local.json';
@@ -524,6 +525,7 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
   WINDSURF_MCP_RELATIVE_PATH,
+  WINDSURF_MODERN_RULES_RELATIVE_PATH,
   ANTIGRAVITY_MCP_RELATIVE_PATH,
 ] as const;
 
@@ -704,7 +706,10 @@ export function ensureWindsurfMcpConfig(homeDir: string | undefined): AutoConfig
   const filePath = path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json');
   const existing = readJsonObject(filePath);
   const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
-  mcpServers.brainclaw = brainclawMcpEntry('windsurf', mcpServers.brainclaw);
+  mcpServers.brainclaw = {
+    ...brainclawMcpEntry('windsurf', mcpServers.brainclaw),
+    alwaysAllow: getHeadlessAutoApprovedToolNames(),
+  };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -718,6 +723,49 @@ export function ensureWindsurfMcpConfig(homeDir: string | undefined): AutoConfig
     updated,
     filePath,
     relativePath: WINDSURF_MCP_RELATIVE_PATH,
+  };
+}
+
+/**
+ * Writes `.windsurf/rules/brainclaw.md` — the modern Windsurf rules format
+ * (Wave 8+). Instructs Windsurf's Cascade to load brainclaw context and follow
+ * the coordination protocol before any significant code change.
+ *
+ * Unlike `.windsurfrules` (legacy), this file is workspace-scoped and supports
+ * the per-file rule activation model. Kept alongside `.windsurfrules` for
+ * backward compatibility.
+ */
+export function ensureWindsurfModernRules(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, WINDSURF_MODERN_RULES_RELATIVE_PATH);
+  const content = `# Brainclaw coordination rules
+
+Load brainclaw project memory and follow the coordination protocol before making code changes.
+
+## Session start
+
+1. Run \`brainclaw context --json\` (or \`npx brainclaw context --json\`) to load memory, constraints, decisions, traps, plans, and handoffs.
+2. Run \`brainclaw claim list\` — respect active claims from other agents; do not edit a claimed scope.
+3. Before editing any file, claim your scope: \`brainclaw claim create "<description>" --scope <path>\`.
+
+## During work
+
+- Mark steps done as you go: \`brainclaw complete-step <planId> <stepId>\`.
+- Check the inbox for new assignments: \`brainclaw inbox list\`.
+
+## Before finishing
+
+- Release your claims: \`brainclaw session-end --auto-release\`.
+- Update the plan with your progress: \`brainclaw update-plan <id> --status in-progress\`.
+`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'rule',
+    label: 'Windsurf modern rules (.windsurf/rules/brainclaw.md)',
+    created,
+    updated,
+    filePath,
+    relativePath: WINDSURF_MODERN_RULES_RELATIVE_PATH,
   };
 }
 
@@ -1587,8 +1635,10 @@ export function writeDetectedAgentAutoConfig(
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
     case 'windsurf': {
-      const result = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
+      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
+      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
+      if (mcp) results.push(mcp);
+      return results;
     }
     case 'github-copilot':
       return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureUniversalBrainclawSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
@@ -1650,8 +1700,10 @@ export function writeExportCompanionFiles(
     case 'cline':
       return [ensureClineMcpConfig(cwd)];
     case 'windsurf': {
-      const result = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
+      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
+      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
+      if (mcp) results.push(mcp);
+      return results;
     }
     case 'copilot-instructions':
       return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];

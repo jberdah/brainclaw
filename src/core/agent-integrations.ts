@@ -55,6 +55,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
       { kind: 'instructions', location: 'workspace', path: '.windsurfrules' },
       { kind: 'hook',         location: 'workspace', path: '.windsurfrules' },
       { kind: 'mcp',          location: 'machine',   path: '.codeium/windsurf/mcp_config.json' },
+      { kind: 'rule',         location: 'workspace', path: '.windsurf/rules/brainclaw.md' },
     ],
     'cline': [
       { kind: 'instructions', location: 'workspace', path: '.clinerules/brainclaw.md' },
