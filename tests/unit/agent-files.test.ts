@@ -34,6 +34,7 @@ import {
   resetMcpCommandCache,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../../src/commands/mcp.js';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-files-'));
@@ -901,6 +902,212 @@ describe('core/agent-files — auto-config writers', () => {
       assert.equal(occurrences, 1, 'patching should leave exactly one [mcp_servers.brainclaw] section');
       assert.ok(!fixed.includes('\\\\'), 'no double-backslash escape sequences should remain');
     } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ensureCodexMcpConfig — idempotence and safety', () => {
+  it('is idempotent: multiple calls produce exactly one main section and no duplicate tool entries', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const filePath = path.join(codexHome, 'config.toml');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const sectionOccurrences = (content.match(/\[mcp_servers\.brainclaw\]/g) ?? []).length;
+      assert.equal(sectionOccurrences, 1, 'exactly one [mcp_servers.brainclaw] section');
+
+      // Each tool should appear at most once — no duplicate tool entries
+      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+        const toolOccurrences = (content.match(new RegExp(`\\[mcp_servers\\.brainclaw\\.tools\\.${tool}\\]`, 'g')) ?? []).length;
+        assert.equal(toolOccurrences, 1, `tool ${tool} must appear exactly once`);
+      }
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('purges legacy tool sections absent from the headless-auto catalog', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      const existing = [
+        '[mcp_servers.brainclaw]',
+        'command = "node"',
+        'args = ["brainclaw", "mcp"]',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_AGENT = "codex"',
+        '',
+        '[mcp_servers.brainclaw.tools.bclaw_dispatch]',
+        'approval_mode = "approve"',
+      ].join('\n') + '\n';
+
+      const filePath = path.join(codexHome, 'config.toml');
+      fs.writeFileSync(filePath, existing, 'utf-8');
+
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(
+        !content.includes('[mcp_servers.brainclaw.tools.bclaw_dispatch]'),
+        'bclaw_dispatch should be purged from tool sections',
+      );
+      assert.ok(
+        content.includes('[mcp_servers.brainclaw.tools.'),
+        'headless-auto tool sections should be present',
+      );
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves main block cwd customization while syncing tool subsections', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      const existing = [
+        '[mcp_servers.brainclaw]',
+        'command = "node"',
+        'args = ["brainclaw", "mcp"]',
+        'cwd = "/my/custom/project"',
+        'startup_timeout_ms = 20000',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_AGENT = "codex"',
+      ].join('\n') + '\n';
+
+      const filePath = path.join(codexHome, 'config.toml');
+      fs.writeFileSync(filePath, existing, 'utf-8');
+
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const content = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(content.includes('cwd = "/my/custom/project"'), 'cwd customization should be preserved');
+      assert.ok(content.includes('[mcp_servers.brainclaw.tools.'), 'tool subsections should be added');
+      assert.ok(content.includes('MACHINE-MANAGED'), 'machine-managed header should be written');
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('handles CRLF line endings without duplicating sections', () => {
+    const homeDir = tmpDir();
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      const filePath = path.join(codexHome, 'config.toml');
+      fs.writeFileSync(filePath, '[some_other_section]\r\nkey = "value"\r\n', 'utf-8');
+
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const sectionOccurrences = (content.match(/\[mcp_servers\.brainclaw\]/g) ?? []).length;
+      assert.equal(sectionOccurrences, 1, 'exactly one [mcp_servers.brainclaw] section with CRLF input');
+      const headerOccurrences = (content.match(/MACHINE-MANAGED/g) ?? []).length;
+      assert.equal(headerOccurrences, 1, 'exactly one MACHINE-MANAGED tools block header');
+    } finally {
+      resetMcpCommandCache();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('F1 scope lock: sensitive tools absent, coordination tools present in MCP_HEADLESS_AUTO_TOOL_NAMES', () => {
+    const sensitive = [
+      'bclaw_dispatch',
+      'bclaw_accept',
+      'bclaw_reject',
+      'bclaw_create_plan',
+      'bclaw_setup',
+      'bclaw_switch',
+      'bclaw_bootstrap',
+    ];
+    const safeExpected = [
+      'bclaw_work',
+      'bclaw_coordinate',
+      'bclaw_claim',
+      'bclaw_session_start',
+      'bclaw_assignment_update',
+      'bclaw_read_inbox',
+    ];
+
+    for (const tool of sensitive) {
+      assert.ok(
+        !MCP_HEADLESS_AUTO_TOOL_NAMES.includes(tool),
+        `${tool} must NOT be in MCP_HEADLESS_AUTO_TOOL_NAMES (sensitive tool)`,
+      );
+    }
+    for (const tool of safeExpected) {
+      assert.ok(
+        MCP_HEADLESS_AUTO_TOOL_NAMES.includes(tool),
+        `${tool} must be in MCP_HEADLESS_AUTO_TOOL_NAMES (safe coordination tool)`,
+      );
+    }
+  });
+
+  it('emits a customization warning on stdout when approval_mode != "approve"', () => {
+    const homeDir = tmpDir();
+    const captured: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    (process.stdout as NodeJS.WriteStream).write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+      if (typeof chunk === 'string') captured.push(chunk);
+      return (originalWrite as (...args: unknown[]) => boolean)(chunk, ...rest);
+    };
+
+    try {
+      resetMcpCommandCache();
+      const codexHome = path.join(homeDir, '.codex');
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      const existing = [
+        '[mcp_servers.brainclaw]',
+        'command = "node"',
+        'args = ["brainclaw", "mcp"]',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_AGENT = "codex"',
+        '',
+        '[mcp_servers.brainclaw.tools.bclaw_claim]',
+        'approval_mode = "suggest"',
+      ].join('\n') + '\n';
+
+      const filePath = path.join(codexHome, 'config.toml');
+      fs.writeFileSync(filePath, existing, 'utf-8');
+
+      ensureCodexMcpConfig(homeDir, { CODEX_HOME: codexHome });
+
+      const output = captured.join('');
+      assert.ok(
+        output.includes('[brainclaw] Warning'),
+        'should emit a [brainclaw] Warning to stdout',
+      );
+      assert.ok(
+        output.includes('bclaw_claim'),
+        'warning should mention the tool with the non-approve mode',
+      );
+      assert.ok(
+        output.includes('"suggest"'),
+        'warning should include the actual approval_mode value',
+      );
+    } finally {
+      (process.stdout as NodeJS.WriteStream).write = originalWrite as typeof process.stdout.write;
       resetMcpCommandCache();
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
