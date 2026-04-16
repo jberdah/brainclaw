@@ -875,6 +875,38 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
+  it('ensureContinueUserPermissions preserves existing top-level and per-tool settings', () => {
+    const homeDir = tmpDir();
+    try {
+      const filePath = path.join(homeDir, '.continue', 'permissions.yaml');
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, yaml.stringify({
+        profiles: { strict: true },
+        tools: {
+          custom_tool: { ask: true },
+          bclaw_work: { ask: true, note: 'keep' },
+        },
+      }), 'utf-8');
+
+      const result = ensureContinueUserPermissions(homeDir);
+      assert.ok(result, 'result should be defined when a home dir is provided');
+      assert.equal(result?.created, false);
+      assert.equal(result?.updated, true);
+
+      const parsed = yaml.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        profiles?: { strict?: boolean };
+        tools?: Record<string, { allow?: boolean; ask?: boolean; note?: string }>;
+      };
+      assert.equal(parsed.profiles?.strict, true, 'top-level keys should be preserved');
+      assert.equal(parsed.tools?.custom_tool?.ask, true, 'unrelated tool entries should be preserved');
+      assert.equal(parsed.tools?.bclaw_work?.ask, true, 'existing per-tool fields should be preserved');
+      assert.equal(parsed.tools?.bclaw_work?.note, 'keep', 'existing metadata should be preserved');
+      assert.equal(parsed.tools?.bclaw_work?.allow, true, 'brainclaw tool should be forced to allow');
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('ensureContinueUserPermissions returns undefined when no homeDir', () => {
     const result = ensureContinueUserPermissions(undefined);
     assert.equal(result, undefined);

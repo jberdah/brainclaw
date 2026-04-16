@@ -14,6 +14,7 @@ import {
   ensureWindsurfMcpConfig,
   ensureAntigravityMcpConfig,
   ensureContinueUserMcpConfig,
+  ensureContinueUserPermissions,
   ensureCodexMcpConfig,
   writeDetectedAgentAutoConfig,
   describeAutoConfigWrite,
@@ -270,6 +271,8 @@ export function runGlobalInstall(
   if (selectedAgents.includes('continue')) {
     const r = ensureContinueUserMcpConfig(home);
     if (r && (r.created || r.updated)) written.push(r.filePath);
+    const perms = ensureContinueUserPermissions(home);
+    if (perms && (perms.created || perms.updated)) written.push(perms.filePath);
   }
   if (selectedAgents.includes('codex')) {
     const r = ensureCodexMcpConfig(home, env);

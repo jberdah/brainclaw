@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import yaml from 'yaml';
 import { scanGitRepos } from '../../src/commands/setup.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
@@ -139,5 +140,20 @@ describe('setup/init guardrails', () => {
     assert.match(gitignore, /\.vscode\/cline_mcp_settings\.json/);
     assert.match(gitignore, /opencode\.json/);
     assert.doesNotMatch(gitignore, /package\.json/);
+  });
+
+  it('setup writes Continue global permissions.yaml when continue is selected', () => {
+    const setupResult = run(['setup', '--yes', '--roots', dir, '--agents', 'continue'], dir, {
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '0',
+    });
+    assert.equal(setupResult.exitCode, 0, setupResult.stderr);
+
+    const permissionsPath = path.join(testHomeDir, '.continue', 'permissions.yaml');
+    assert.ok(fs.existsSync(permissionsPath), 'setup should create ~/.continue/permissions.yaml');
+
+    const parsed = yaml.parse(fs.readFileSync(permissionsPath, 'utf-8')) as {
+      tools?: Record<string, { allow?: boolean }>;
+    };
+    assert.equal(parsed.tools?.bclaw_work?.allow, true);
   });
 });

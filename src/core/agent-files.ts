@@ -1555,12 +1555,29 @@ export function ensureContinueUserPermissions(homeDir: string | undefined): Auto
   if (!homeDir) return undefined;
 
   const filePath = path.join(homeDir, CONTINUE_PERMISSIONS_RELATIVE_PATH);
-  const toolsObj: Record<string, { allow: boolean }> = {};
-  for (const name of getHeadlessAutoApprovedToolNames()) {
-    toolsObj[name] = { allow: true };
+  let existing: JsonObject = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      const parsed = yaml.parse(fs.readFileSync(filePath, 'utf-8'));
+      existing = isJsonObject(parsed) ? { ...parsed } : {};
+    } catch {
+      existing = {};
+    }
   }
 
-  const content = `# Managed by brainclaw — do not edit manually\n${yaml.stringify({ tools: toolsObj })}`;
+  const toolsObj = isJsonObject(existing.tools) ? { ...existing.tools } : {};
+  for (const name of getHeadlessAutoApprovedToolNames()) {
+    const current = isJsonObject(toolsObj[name]) ? { ...toolsObj[name] } : {};
+    toolsObj[name] = {
+      ...current,
+      allow: true,
+    };
+  }
+
+  const content = `# Managed by brainclaw — do not edit manually\n${yaml.stringify({
+    ...existing,
+    tools: toolsObj,
+  })}`;
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
   return {
