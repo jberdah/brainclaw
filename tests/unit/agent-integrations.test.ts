@@ -78,6 +78,8 @@ describe('core/agent-integrations', () => {
 
       fs.mkdirSync(path.join(homeDir, '.codeium', 'windsurf'), { recursive: true });
       fs.writeFileSync(path.join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'), JSON.stringify({ mcpServers: { brainclaw: { command: 'brainclaw', args: ['mcp'] } } }), 'utf-8');
+      fs.mkdirSync(path.join(dir, '.windsurf', 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.windsurf', 'rules', 'brainclaw.md'), '# managed rule', 'utf-8');
       const readinessAfter = assessAgentIntegrationReadiness(config, dir, { ...process.env, HOME: homeDir, USERPROFILE: homeDir });
       assert.equal(readinessAfter[0]?.ready, true);
     } finally {
