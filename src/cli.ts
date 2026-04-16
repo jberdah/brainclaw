@@ -40,6 +40,7 @@ import { runUseCandidate } from './commands/use-candidate.js';
 import { runAccept } from './commands/accept.js';
 import { runReject } from './commands/reject.js';
 import { runPruneCandidates } from './commands/prune-candidates.js';
+import { cleanupStaleCandidates } from './core/candidates.js';
 import { runListClaims } from './commands/list-claims.js';
 import { runReleaseClaim } from './commands/release-claim.js';
 import { runClaimResource } from './commands/claim-resource.js';
@@ -928,6 +929,40 @@ program
   .option('--dry-run', 'Preview without deleting')
   .action((options) => {
     runPruneCandidates(options);
+  });
+
+// --- cleanup-candidates ---
+program
+  .command('cleanup-candidates')
+  .description('Remove stale auto-generated pending candidates')
+  .option('--max-age <days>', 'Max age in days before cleanup', parseInt)
+  .option('--dry-run', 'Preview without deleting')
+  .action((options) => {
+    if (!memoryExists()) {
+      console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+      process.exit(1);
+    }
+
+    const maxAgeDays = options.maxAge ?? 30;
+    const result = cleanupStaleCandidates({
+      maxAgeDays,
+      dryRun: options.dryRun,
+    });
+
+    if (result.matched === 0) {
+      console.log(`No stale auto-generated candidates older than ${maxAgeDays} days found.`);
+      return;
+    }
+
+    if (options.dryRun) {
+      console.log(`Would remove ${result.matched} stale auto-generated candidate(s):`);
+      for (const candidate of result.candidates) {
+        console.log(`  [${candidate.id}] ${candidate.text}`);
+      }
+      return;
+    }
+
+    console.log(`✔ Removed ${result.deleted} stale auto-generated candidate(s) older than ${maxAgeDays} days.`);
   });
 
 // --- claim ---

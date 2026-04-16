@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { archiveCandidate, saveCandidate } from '../../src/core/candidates.js';
+import { archiveCandidate, listCandidates, saveCandidate } from '../../src/core/candidates.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { loadConfig } from '../../src/core/config.js';
 import { writeContextMarker } from '../../src/core/freshness.js';
@@ -255,6 +255,60 @@ describe('commands/doctor', () => {
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'claim_collisions' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'context_freshness' && check.status === 'warn'));
     assert.ok(parsed.checks.some((check: { name: string; status: string }) => check.name === 'runtime_sessions' && check.status === 'warn'));
+  });
+
+  it('reports stale auto-generated candidates and cleans them up with --fix', () => {
+    saveCandidate({
+      id: 'cnd_stale_auto',
+      type: 'handoff',
+      text: 'Old auto-generated doctor candidate',
+      created_at: new Date(Date.now() - 35 * 86_400_000).toISOString(),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_doctor_test',
+      tags: ['doctor'],
+      status: 'pending',
+      source: 'auto',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    }, workspace.dir);
+    saveCandidate({
+      id: 'cnd_stale_human',
+      type: 'decision',
+      text: 'Old human doctor candidate',
+      created_at: new Date(Date.now() - 35 * 86_400_000).toISOString(),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_doctor_test',
+      tags: ['doctor'],
+      status: 'pending',
+      source: 'human',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    }, workspace.dir);
+
+    const beforeFix = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir });
+    });
+    const beforeParsed = JSON.parse(beforeFix.logs.at(-1) as string);
+    const beforeCheck = beforeParsed.checks.find((entry: { name: string }) => entry.name === 'stale_auto_candidates');
+    assert.equal(beforeCheck?.status, 'warn');
+    assert.equal(beforeParsed.metrics.stale_auto_candidates, 1);
+    assert.equal(listCandidates('pending', workspace.dir).length, 2);
+
+    const afterFix = captureConsole(() => {
+      runDoctor({ json: true, cwd: workspace.dir, fix: true });
+    });
+    const afterParsed = JSON.parse(afterFix.logs.at(-1) as string);
+    const afterCheck = afterParsed.checks.find((entry: { name: string }) => entry.name === 'stale_auto_candidates');
+    assert.equal(afterCheck?.status, 'ok');
+    assert.equal(afterParsed.metrics.stale_auto_candidates, 1);
+    assert.equal(afterParsed.metrics.stale_auto_candidates_deleted, 1);
+    assert.deepEqual(listCandidates('pending', workspace.dir).map((candidate) => candidate.id), ['cnd_stale_human']);
   });
 
   it('ignores agent-runtime protocol events in incomplete runtime session warnings', () => {

@@ -14,7 +14,7 @@ import { loadProjectIdentity, projectIdentityExists } from '../core/project-regi
 import { findInstructionConflicts, loadInstructions } from '../core/instructions.js';
 import { memoryExists, memoryPath, readFileSync, resolveEntityDir } from '../core/io.js';
 import { logger } from '../core/logger.js';
-import { listCandidates, listArchivedCandidates } from '../core/candidates.js';
+import { cleanupStaleCandidates, listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { listClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
@@ -841,7 +841,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
   }
 
   // --- Reflective memory checks ---
-  const pending = listCandidates('pending', options.cwd);
+  let pending = listCandidates('pending', options.cwd);
   const accepted = listArchivedCandidates('accepted', options.cwd);
   const rejected = listArchivedCandidates('rejected', options.cwd);
   if (!options.json) {
@@ -864,8 +864,8 @@ export function runDoctor(options: DoctorOptions = {}): void {
   const promotionStarsThreshold = config.reflective_memory?.promotion_stars_threshold ?? 3;
   const promotionUsesThreshold = config.reflective_memory?.promotion_uses_threshold ?? 2;
   const reviewSlaHours = config.governance?.review_sla_hours ?? 24;
-  const promotionReady = pending.filter((c) => (c.star_count ?? 0) >= promotionStarsThreshold || (c.usage_count ?? 0) >= promotionUsesThreshold);
-  const pendingOverdue = pending.filter((c) => {
+  let promotionReady = pending.filter((c) => (c.star_count ?? 0) >= promotionStarsThreshold || (c.usage_count ?? 0) >= promotionUsesThreshold);
+  let pendingOverdue = pending.filter((c) => {
     const ageHours = Math.floor((Date.now() - Date.parse(c.created_at)) / (1000 * 60 * 60));
     return ageHours > reviewSlaHours;
   });
@@ -884,6 +884,56 @@ export function runDoctor(options: DoctorOptions = {}): void {
   if (!options.json) {
     console.log(`Governance review KPI: pending_overdue=${pendingOverdue.length}, avg_review_hours=${avgReviewHours.toFixed(1)}, review_sla_hours=${reviewSlaHours}`);
     console.log(`Promotion signal: ${promotionReady.length} candidate(s) reached ${promotionStarsThreshold} star(s) or ${promotionUsesThreshold} use(s)`);
+  }
+
+  const staleAutoCandidates = cleanupStaleCandidates({
+    cwd: options.cwd,
+    source: 'auto',
+    maxAgeDays: 30,
+    dryRun: !options.fix,
+  });
+  if (staleAutoCandidates.matched > 0) {
+    const actionMessage = options.fix
+      ? `Removed ${staleAutoCandidates.deleted} stale auto-generated candidate(s) older than 30 days.`
+      : `${staleAutoCandidates.matched} stale auto-generated candidate(s) older than 30 days. Run \`brainclaw cleanup-candidates --max-age 30\` or \`brainclaw doctor --fix\`.`;
+    checks.push({
+      name: 'stale_auto_candidates',
+      status: options.fix ? 'ok' : 'warn',
+      message: actionMessage,
+      details: staleAutoCandidates.candidates.map((candidate) => ({
+        id: candidate.id,
+        type: candidate.type,
+        created_at: candidate.created_at,
+        text: truncateDoctorSnippet(candidate.text),
+      })),
+    });
+    if (!options.json) {
+      if (options.fix) {
+        console.log(`✔ ${actionMessage}`);
+      } else {
+        console.warn(`⚠ ${actionMessage}`);
+      }
+    }
+    if (!options.fix) {
+      hasIssues = true;
+    }
+  } else {
+    checks.push({
+      name: 'stale_auto_candidates',
+      status: 'ok',
+      message: 'No stale auto-generated candidates found',
+    });
+    if (!options.json) {
+      console.log('✔ No stale auto-generated candidates found');
+    }
+  }
+  if (options.fix && staleAutoCandidates.deleted > 0) {
+    pending = listCandidates('pending', options.cwd);
+    promotionReady = pending.filter((c) => (c.star_count ?? 0) >= promotionStarsThreshold || (c.usage_count ?? 0) >= promotionUsesThreshold);
+    pendingOverdue = pending.filter((c) => {
+      const ageHours = Math.floor((Date.now() - Date.parse(c.created_at)) / (1000 * 60 * 60));
+      return ageHours > reviewSlaHours;
+    });
   }
 
   if (promotionReady.length > 0) {
@@ -1268,6 +1318,8 @@ export function runDoctor(options: DoctorOptions = {}): void {
     active_plan_items: activePlans.length,
     blocked_plan_items: blockedPlans.length,
     promotion_ready_candidates: promotionReady.length,
+    stale_auto_candidates: staleAutoCandidates.matched,
+    stale_auto_candidates_deleted: staleAutoCandidates.deleted,
     pending_candidates: pending.length,
     accepted_candidates: accepted.length,
     rejected_candidates: rejected.length,

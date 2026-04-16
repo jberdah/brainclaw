@@ -19,6 +19,19 @@ export interface ListCandidatesFilter {
   auto_generated?: boolean;
 }
 
+export interface CleanupStaleCandidatesOptions {
+  maxAgeDays?: number;
+  source?: CandidateSource;
+  dryRun?: boolean;
+  cwd?: string;
+}
+
+export interface CleanupStaleCandidatesResult {
+  matched: number;
+  deleted: number;
+  candidates: Candidate[];
+}
+
 /**
  * Return the effective source for a candidate.
  *
@@ -140,6 +153,38 @@ export function deleteArchivedCandidate(id: string, dest: 'accepted' | 'rejected
     return true;
   }
   return false;
+}
+
+export function cleanupStaleCandidates(options: CleanupStaleCandidatesOptions = {}): CleanupStaleCandidatesResult {
+  const maxAgeDays = options.maxAgeDays ?? 30;
+  const source = options.source ?? 'auto';
+  const cutoffMs = Date.now() - maxAgeDays * 86_400_000;
+  const candidates = listCandidates('pending', options.cwd).filter((candidate) => {
+    if (resolvedSource(candidate) !== source) return false;
+    return Date.parse(candidate.created_at) <= cutoffMs;
+  });
+
+  if (options.dryRun || candidates.length === 0) {
+    return {
+      matched: candidates.length,
+      deleted: 0,
+      candidates,
+    };
+  }
+
+  mutate({ cwd: options.cwd }, () => {
+    const store = candidateStore('pending', options.cwd);
+    for (const candidate of candidates) {
+      store.delete(candidate.id);
+    }
+    try { refreshLiveCompanions(options.cwd); } catch { /* best-effort */ }
+  });
+
+  return {
+    matched: candidates.length,
+    deleted: candidates.length,
+    candidates,
+  };
 }
 
 export function addCandidateStar(id: string, by: string, cwd?: string): { candidate: Candidate; added: boolean } {

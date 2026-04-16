@@ -4,6 +4,7 @@ import {
   addCandidateStar,
   addCandidateUse,
   archiveCandidate,
+  cleanupStaleCandidates,
   listArchivedCandidates,
   listCandidates,
   loadCandidate,
@@ -228,5 +229,57 @@ describe('core/candidates', () => {
 
     assert.deepEqual(listArchivedCandidates('accepted', workspace.dir).map((item) => item.id), ['cnd_accept']);
     assert.deepEqual(listArchivedCandidates('rejected', workspace.dir).map((item) => item.id), ['cnd_reject']);
+  });
+
+  it('cleans up only stale auto-generated pending candidates and respects dry-run', () => {
+    const staleAuto: Candidate = {
+      id: 'cnd_auto_stale',
+      type: 'handoff',
+      text: 'Old auto-generated handoff candidate',
+      created_at: new Date(Date.now() - 35 * 86_400_000).toISOString(),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_candidates_test',
+      tags: [],
+      status: 'pending',
+      source: 'auto',
+      star_count: 0,
+      starred_by: [],
+      usage_count: 0,
+      usage_events: [],
+    };
+    const freshAuto: Candidate = {
+      ...staleAuto,
+      id: 'cnd_auto_fresh',
+      text: 'Fresh auto-generated handoff candidate',
+      created_at: new Date(Date.now() - 5 * 86_400_000).toISOString(),
+    };
+    const staleHuman: Candidate = {
+      ...staleAuto,
+      id: 'cnd_human_stale',
+      type: 'decision',
+      text: 'Old human candidate',
+      source: 'human',
+    };
+    saveCandidate(staleAuto, workspace.dir);
+    saveCandidate(freshAuto, workspace.dir);
+    saveCandidate(staleHuman, workspace.dir);
+
+    const dryRun = cleanupStaleCandidates({ cwd: workspace.dir, dryRun: true, maxAgeDays: 30 });
+    assert.equal(dryRun.matched, 1);
+    assert.equal(dryRun.deleted, 0);
+    assert.deepEqual(dryRun.candidates.map((candidate) => candidate.id), ['cnd_auto_stale']);
+    assert.deepEqual(
+      listCandidates('pending', workspace.dir).map((candidate) => candidate.id).sort(),
+      ['cnd_auto_fresh', 'cnd_auto_stale', 'cnd_human_stale'],
+    );
+
+    const result = cleanupStaleCandidates({ cwd: workspace.dir, maxAgeDays: 30 });
+    assert.equal(result.matched, 1);
+    assert.equal(result.deleted, 1);
+    assert.deepEqual(
+      listCandidates('pending', workspace.dir).map((candidate) => candidate.id).sort(),
+      ['cnd_auto_fresh', 'cnd_human_stale'],
+    );
   });
 });

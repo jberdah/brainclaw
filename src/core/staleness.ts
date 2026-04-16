@@ -7,6 +7,7 @@
 
 import type { Candidate, PlanItem, Trap } from './schema.js';
 import type { Handoff } from './schema.js';
+import { resolvedSource } from './candidates.js';
 
 export type StalenessEntity = 'plan' | 'trap' | 'handoff' | 'candidate';
 
@@ -42,6 +43,8 @@ export const STALENESS_THRESHOLDS = {
   handoff_open_days: 14,
   /** pending candidate older than N days */
   candidate_pending_days: 21,
+  /** auto-generated pending candidate older than N days */
+  candidate_auto_pending_days: 30,
 } as const;
 
 function ageDays(isoDate: string, nowMs: number): number {
@@ -178,13 +181,18 @@ export function detectStaleCandidates(
     if (candidate.status !== 'pending') continue;
 
     const age = ageDays(candidate.created_at, nowMs);
-    if (age >= thresholds.candidate_pending_days) {
+    const source = resolvedSource(candidate);
+    const threshold = source === 'auto'
+      ? thresholds.candidate_auto_pending_days
+      : thresholds.candidate_pending_days;
+    if (age >= threshold) {
+      const sourceLabel = source === 'auto' ? 'Auto-generated' : 'Pending';
       warnings.push({
         id: candidate.id,
         entity: 'candidate',
         text: truncate(candidate.text),
         age_days: age,
-        reason: `Pending ${candidate.type} candidate for ${age} day${age === 1 ? '' : 's'} — no accept/reject decision`,
+        reason: `${sourceLabel} ${candidate.type} candidate for ${age} day${age === 1 ? '' : 's'} — no accept/reject decision`,
         suggested_action: `brainclaw accept ${candidate.short_label ?? candidate.id}  # or: brainclaw reject ${candidate.short_label ?? candidate.id}`,
       });
     }

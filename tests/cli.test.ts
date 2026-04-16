@@ -558,6 +558,49 @@ describe('brainclaw CLI', () => {
     });
   });
 
+  describe('cleanup-candidates', () => {
+    it('removes only stale auto-generated candidates', () => {
+      run(['init', '-y'], dir);
+      const staleAuto = run(['reflect', 'Old auto candidate', '--type', 'decision'], dir);
+      const staleHuman = run(['reflect', 'Old human candidate', '--type', 'decision'], dir);
+
+      const staleAutoId = extractId(staleAuto.stdout);
+      const staleHumanId = extractId(staleHuman.stdout);
+      const staleAutoPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${staleAutoId}.json`);
+      const staleHumanPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${staleHumanId}.json`);
+      const autoCandidate = JSON.parse(fs.readFileSync(staleAutoPath, 'utf-8'));
+      const humanCandidate = JSON.parse(fs.readFileSync(staleHumanPath, 'utf-8'));
+      autoCandidate.source = 'auto';
+      autoCandidate.created_at = '2025-01-01T00:00:00Z';
+      humanCandidate.source = 'human';
+      humanCandidate.created_at = '2025-01-01T00:00:00Z';
+      fs.writeFileSync(staleAutoPath, JSON.stringify(autoCandidate, null, 2), 'utf-8');
+      fs.writeFileSync(staleHumanPath, JSON.stringify(humanCandidate, null, 2), 'utf-8');
+
+      const res = run(['cleanup-candidates', '--max-age', '30'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('Removed 1'));
+      assert.ok(!fs.existsSync(staleAutoPath));
+      assert.ok(fs.existsSync(staleHumanPath));
+    });
+
+    it('supports dry-run', () => {
+      run(['init', '-y'], dir);
+      const staleAuto = run(['reflect', 'Old auto candidate', '--type', 'decision'], dir);
+      const staleAutoId = extractId(staleAuto.stdout);
+      const staleAutoPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${staleAutoId}.json`);
+      const autoCandidate = JSON.parse(fs.readFileSync(staleAutoPath, 'utf-8'));
+      autoCandidate.source = 'auto';
+      autoCandidate.created_at = '2025-01-01T00:00:00Z';
+      fs.writeFileSync(staleAutoPath, JSON.stringify(autoCandidate, null, 2), 'utf-8');
+
+      const res = run(['cleanup-candidates', '--max-age', '30', '--dry-run'], dir);
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('Would remove 1'));
+      assert.ok(fs.existsSync(staleAutoPath));
+    });
+  });
+
   describe('bootstrap', () => {
     it('derives brownfield seeds as JSON and reuses the profile on subsequent runs', () => {
       run(['init', '-y'], dir);

@@ -207,6 +207,24 @@ describe('core/staleness', () => {
       assert.ok(warnings[0]!.suggested_action.includes('brainclaw accept'));
     });
 
+    it('uses a longer threshold for auto-generated candidates', () => {
+      const autoCandidate: Candidate = {
+        ...baseCandidate,
+        id: 'cnd_auto',
+        source: 'auto',
+        created_at: daysAgo(STALENESS_THRESHOLDS.candidate_pending_days + 5),
+      };
+      assert.deepEqual(detectStaleCandidates([autoCandidate]), []);
+
+      const staleAutoCandidate: Candidate = {
+        ...autoCandidate,
+        created_at: daysAgo(STALENESS_THRESHOLDS.candidate_auto_pending_days + 1),
+      };
+      const warnings = detectStaleCandidates([staleAutoCandidate]);
+      assert.equal(warnings.length, 1);
+      assert.ok(warnings[0]!.reason.includes('Auto-generated'));
+    });
+
     it('skips accepted and rejected candidates', () => {
       const accepted: Candidate = { ...baseCandidate, status: 'accepted', created_at: daysAgo(60) };
       const rejected: Candidate = { ...baseCandidate, id: 'cnd_2', status: 'rejected', created_at: daysAgo(60) };
