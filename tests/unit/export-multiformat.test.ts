@@ -148,7 +148,9 @@ describe('export command formats', () => {
 
       if (format === 'copilot-instructions') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'skills', 'brainclaw-context', 'SKILL.md')));
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.github', 'copilot', 'hooks.json')));
         assert.ok(gitignore.includes('.github/skills/brainclaw-context/SKILL.md'));
+        assert.ok(gitignore.includes('.github/copilot/hooks.json'));
       }
       if (format === 'claude-md') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.mcp.json')), '.mcp.json should be created for claude-md');
@@ -159,7 +161,9 @@ describe('export command formats', () => {
       }
       if (format === 'cursor-rules') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc')));
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.cursor', 'hooks.json')));
         assert.ok(gitignore.includes('.cursor/rules/brainclaw-mcp-shim.mdc'));
+        assert.ok(gitignore.includes('.cursor/hooks.json'));
       }
       if (format === 'cline') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.vscode', 'cline_mcp_settings.json')));

@@ -38,6 +38,7 @@ import {
   ensureUniversalBrainclawSkill,
   patchAllMcpConfigs,
   resetMcpCommandCache,
+  writeExportCompanionFiles,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../../src/commands/mcp.js';
@@ -959,6 +960,13 @@ describe('core/agent-files — auto-config writers', () => {
       assert.ok(content.hooks?.beforeSubmitPrompt?.[0]?.command?.includes('context-diff'), 'beforeSubmitPrompt hook present');
       assert.ok(content.hooks?.stop?.[0]?.command?.includes('session-end'), 'stop hook present');
       assert.equal(content.hooks?.sessionStart?.[0]?.type, 'command');
+      assert.ok(content.hooks?.sessionStart?.[0]?.command?.includes('cli.js'), 'resolved CLI path should be present');
+      if (process.platform === 'win32') {
+        assert.ok(content.hooks?.sessionStart?.[0]?.command?.includes('2>$null'), 'Windows should use PowerShell stderr redirection');
+        assert.ok(!content.hooks?.sessionStart?.[0]?.command?.includes('/dev/null'), 'Windows should not use POSIX stderr redirection');
+      } else {
+        assert.ok(content.hooks?.sessionStart?.[0]?.command?.includes('2>/dev/null'), 'POSIX shells should use /dev/null redirection');
+      }
 
       const second = ensureCursorHooks(dir);
       assert.equal(second.created, false);
@@ -985,6 +993,11 @@ describe('core/agent-files — auto-config writers', () => {
       assert.ok(content.SessionStart?.[0]?.command?.includes('session-start'), 'SessionStart hook present');
       assert.ok(content.UserPromptSubmit?.[0]?.command?.includes('context-diff'), 'UserPromptSubmit hook present');
       assert.ok(content.Stop?.[0]?.command?.includes('session-end'), 'Stop hook present');
+      assert.ok(content.SessionStart?.[0]?.command?.includes('cli.js'), 'resolved CLI path should be present');
+      if (process.platform === 'win32') {
+        assert.ok(content.SessionStart?.[0]?.command?.includes('2>$null'), 'Windows should use PowerShell stderr redirection');
+        assert.ok(!content.SessionStart?.[0]?.command?.includes('/dev/null'), 'Windows should not use POSIX stderr redirection');
+      }
 
       const second = ensureAntigravityHooks(homeDir);
       assert.equal(second?.created, false);
@@ -1008,12 +1021,16 @@ describe('core/agent-files — auto-config writers', () => {
       const filePath = path.join(dir, '.github', 'copilot', 'hooks.json');
       const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
         version?: number;
-        hooks?: Record<string, Array<{ bash?: string; type?: string; timeoutSec?: number }>>;
+        hooks?: Record<string, Array<{ bash?: string; powershell?: string; type?: string; timeoutSec?: number }>>;
       };
       assert.equal(content.version, 1);
       assert.ok(content.hooks?.sessionStart?.[0]?.bash?.includes('session-start'), 'sessionStart hook present');
       assert.ok(content.hooks?.userPromptSubmitted?.[0]?.bash?.includes('context-diff'), 'userPromptSubmitted hook present');
       assert.ok(content.hooks?.sessionEnd?.[0]?.bash?.includes('session-end'), 'sessionEnd hook present');
+      assert.ok(content.hooks?.sessionStart?.[0]?.bash?.includes('cli.js'), 'bash command should target the CLI entrypoint');
+      assert.ok(content.hooks?.sessionStart?.[0]?.bash?.includes('2>/dev/null'), 'bash command should use POSIX stderr redirection');
+      assert.ok(content.hooks?.sessionStart?.[0]?.powershell?.includes('cli.js'), 'powershell command should target the CLI entrypoint');
+      assert.ok(content.hooks?.sessionStart?.[0]?.powershell?.includes('2>$null'), 'powershell command should use Windows stderr redirection');
       assert.equal(content.hooks?.sessionStart?.[0]?.type, 'command');
       assert.equal(content.hooks?.sessionStart?.[0]?.timeoutSec, 30);
 
@@ -1045,6 +1062,25 @@ describe('core/agent-files — auto-config writers', () => {
       assert.equal(results.length, 2);
       assert.ok(results.some(r => r.relativePath === '.gemini/antigravity/mcp_config.json'));
       assert.ok(results.some(r => r.relativePath === '.gemini/antigravity/hooks.json'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeExportCompanionFiles includes hooks for copilot, cursor, and antigravity exports', () => {
+    const dir = tmpDir();
+    const homeDir = tmpDir();
+    try {
+      const copilot = writeExportCompanionFiles('copilot-instructions', dir, { HOME: homeDir });
+      assert.ok(copilot.some((r) => r.relativePath === '.github/copilot/hooks.json'));
+
+      const cursor = writeExportCompanionFiles('cursor-rules', dir, { HOME: homeDir });
+      assert.ok(cursor.some((r) => r.relativePath === '.cursor/hooks.json'));
+
+      const antigravity = writeExportCompanionFiles('gemini-md', dir, { HOME: homeDir });
+      assert.ok(antigravity.some((r) => r.relativePath === '.gemini/antigravity/mcp_config.json'));
+      assert.ok(antigravity.some((r) => r.relativePath === '.gemini/antigravity/hooks.json'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });

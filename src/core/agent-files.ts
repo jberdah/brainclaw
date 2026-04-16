@@ -1644,14 +1644,41 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   };
 }
 
+function quoteShellArg(arg: string): string {
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '\\"')}"`;
+}
+
 /**
- * Resolve the brainclaw shell command prefix for hook configs.
- * Returns a string like `"<node>" "<cli.js>"` or `npx brainclaw`.
+ * Resolve the brainclaw CLI invocation for hook configs.
+ * Returns shell-safe parts like `["<node>", "<cli.js>"]` or `["npx", "brainclaw"]`.
  */
-function getBclawBin(): string {
+function getBclawCliParts(): string[] {
   const mcpCmd = getBrainclawMcpCommand();
-  if (mcpCmd.command === 'npx') return 'npx brainclaw';
-  return `"${mcpCmd.command.replace(/\\/g, '/')}"`;
+  if (mcpCmd.command === 'npx') return ['npx', 'brainclaw'];
+
+  const argsWithoutMcp = [...mcpCmd.args];
+  if (argsWithoutMcp[argsWithoutMcp.length - 1] === 'mcp') {
+    argsWithoutMcp.pop();
+  }
+
+  return [
+    mcpCmd.command.replace(/\\/g, '/'),
+    ...argsWithoutMcp.map((arg) => arg.replace(/\\/g, '/')),
+  ];
+}
+
+type HookShell = 'bash' | 'powershell';
+
+function buildHookCommand(
+  args: string[],
+  shell: HookShell = os.platform() === 'win32' ? 'powershell' : 'bash',
+): string {
+  const rendered = [...getBclawCliParts(), ...args].map(quoteShellArg).join(' ');
+  if (shell === 'powershell') {
+    return `& ${rendered} 2>$null`;
+  }
+  return `${rendered} 2>/dev/null`;
 }
 
 /**
@@ -1663,11 +1690,10 @@ export function ensureCursorHooks(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, CURSOR_HOOKS_RELATIVE_PATH);
   const existing = readJsonObject(filePath);
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-  const bclawBin = getBclawBin();
 
-  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
-  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
-  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
+  const sessionStartCmd = buildHookCommand(['session-start', '--include-context']);
+  const contextDiffCmd = buildHookCommand(['context-diff']);
+  const sessionEndCmd = buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review']);
 
   hooks.sessionStart = [{ type: 'command', command: sessionStartCmd }];
   hooks.beforeSubmitPrompt = [{ type: 'command', command: contextDiffCmd }];
@@ -1698,11 +1724,10 @@ export function ensureAntigravityHooks(homeDir: string | undefined): AutoConfigW
 
   const filePath = path.join(homeDir, ANTIGRAVITY_HOOKS_RELATIVE_PATH);
   const existing = readJsonObject(filePath);
-  const bclawBin = getBclawBin();
 
-  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
-  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
-  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
+  const sessionStartCmd = buildHookCommand(['session-start', '--include-context']);
+  const contextDiffCmd = buildHookCommand(['context-diff']);
+  const sessionEndCmd = buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review']);
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -1731,15 +1756,25 @@ export function ensureCopilotHooks(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, COPILOT_HOOKS_RELATIVE_PATH);
   const existing = readJsonObject(filePath);
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
-  const bclawBin = getBclawBin();
 
-  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
-  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
-  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
-
-  hooks.sessionStart = [{ type: 'command', bash: sessionStartCmd, timeoutSec: 30 }];
-  hooks.userPromptSubmitted = [{ type: 'command', bash: contextDiffCmd, timeoutSec: 10 }];
-  hooks.sessionEnd = [{ type: 'command', bash: sessionEndCmd, timeoutSec: 30 }];
+  hooks.sessionStart = [{
+    type: 'command',
+    bash: buildHookCommand(['session-start', '--include-context'], 'bash'),
+    powershell: buildHookCommand(['session-start', '--include-context'], 'powershell'),
+    timeoutSec: 30,
+  }];
+  hooks.userPromptSubmitted = [{
+    type: 'command',
+    bash: buildHookCommand(['context-diff'], 'bash'),
+    powershell: buildHookCommand(['context-diff'], 'powershell'),
+    timeoutSec: 10,
+  }];
+  hooks.sessionEnd = [{
+    type: 'command',
+    bash: buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review'], 'bash'),
+    powershell: buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review'], 'powershell'),
+    timeoutSec: 30,
+  }];
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
@@ -1885,9 +1920,9 @@ export function writeExportCompanionFiles(
       return results;
     }
     case 'copilot-instructions':
-      return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd)];
+      return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd)];
     case 'cursor-rules': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
       if (mcp) results.push(mcp);
       return results;
@@ -1904,8 +1939,13 @@ export function writeExportCompanionFiles(
       return results;
     }
     case 'gemini-md': {
-      const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
+      const homeDir = resolveHomeDir(env);
+      const results: AutoConfigWriteResult[] = [];
+      const mcp = ensureAntigravityMcpConfig(homeDir);
+      if (mcp) results.push(mcp);
+      const hooks = ensureAntigravityHooks(homeDir);
+      if (hooks) results.push(hooks);
+      return results;
     }
     default:
       return [];
