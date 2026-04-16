@@ -125,6 +125,8 @@ function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: numbe
 // --- Activation ---
 
 let statusBarItem: vscode.StatusBarItem;
+let doctorOutput: vscode.OutputChannel;
+let searchOutput: vscode.OutputChannel;
 let eventWatchers: fs.FSWatcher[] = [];
 let unseenCount = 0;
 
@@ -138,9 +140,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Board Tree Provider — always register to avoid "no data provider" error
   const treeProvider = cwd ? new BrainclawBoardProvider(cwd, projects) : undefined;
+  doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
+  searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
   );
+  context.subscriptions.push(doctorOutput, searchOutput);
   if (treeProvider) {
     context.subscriptions.push({ dispose: () => treeProvider.dispose() });
   }
@@ -200,18 +205,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('brainclaw.dispatch', async () => {
       await treeProvider?.dispatchWithPicker();
     }),
+    vscode.commands.registerCommand('brainclaw.search', async () => {
+      await treeProvider?.searchWithPicker(searchOutput);
+    }),
     vscode.commands.registerCommand('brainclaw.doctor', async () => {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const cwd = workspaceRoot || process.cwd();
-      const { resolveBrainclawCmd } = await import('./board-tree');
-      const cmd = await resolveBrainclawCmd(cwd);
-      if (!cmd) {
-        vscode.window.showErrorMessage('Brainclaw command not found');
-        return;
-      }
-      const terminal = vscode.window.createTerminal('Brainclaw Doctor');
-      terminal.show();
-      terminal.sendText(`${cmd} doctor`);
+      await treeProvider?.runDoctor(doctorOutput);
     }),
   );
 

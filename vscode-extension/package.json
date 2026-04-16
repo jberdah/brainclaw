@@ -98,6 +98,11 @@
         "icon": "$(run-all)"
       },
       {
+        "command": "brainclaw.search",
+        "title": "Brainclaw: Search",
+        "icon": "$(search)"
+      },
+      {
         "command": "brainclaw.doctor",
         "title": "Brainclaw: Doctor",
         "icon": "$(stethoscope)"
@@ -117,6 +122,11 @@
         },
         {
           "command": "brainclaw.quickCapture",
+          "when": "view == brainclaw.agentBoard",
+          "group": "navigation"
+        },
+        {
+          "command": "brainclaw.search",
           "when": "view == brainclaw.agentBoard",
           "group": "navigation"
         },
@@ -175,7 +185,24 @@
           "group": "brainclaw@3"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "brainclaw.dispatch",
+        "key": "ctrl+alt+d",
+        "when": "brainclaw.active"
+      },
+      {
+        "command": "brainclaw.search",
+        "key": "ctrl+alt+f",
+        "when": "brainclaw.active"
+      },
+      {
+        "command": "brainclaw.doctor",
+        "key": "ctrl+alt+h",
+        "when": "brainclaw.active"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./tsconfig.json",

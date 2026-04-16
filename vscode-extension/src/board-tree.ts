@@ -46,6 +46,12 @@ interface BoardSummaryCounts {
   sessions: number;
 }
 
+interface SectionCacheEntry {
+  board: BoardData | null;
+  expiresAt: number;
+  error?: string;
+}
+
 interface BoardData {
   active_plans: any[];
   active_claims: any[];
@@ -64,6 +70,28 @@ interface BoardData {
   summary?: boolean;
   /** Pre-computed counts populated in summary mode instead of full arrays. */
   _counts?: BoardSummaryCounts;
+}
+
+interface ListedPlan {
+  id: string;
+  text?: string;
+  priority?: string;
+  assignee?: string;
+  tags?: string[];
+}
+
+interface RegisteredAgent {
+  agent_name: string;
+  agent_id?: string;
+  kind?: string;
+}
+
+interface SearchResultItem {
+  id: string;
+  section?: string;
+  type?: string;
+  text: string;
+  score?: number;
 }
 
 function timeAgo(isoDate: string): string {
@@ -94,6 +122,8 @@ const STALE_MS = {
   assignment: 30 * 60 * 1000,
   action: 60 * 60 * 1000,
 } as const;
+
+const SECTION_CACHE_TTL_MS = 30_000;
 
 function isStale(isoDate: string | undefined, thresholdMs: number): boolean {
   if (!isoDate) return false;
@@ -196,6 +226,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _projectBoards = new Map<string, BoardData | null>();
   private readonly _projectErrors = new Map<string, string>();
   private readonly _loadPromises = new Map<string, Promise<BoardData | null>>();
+  private readonly _sectionBoards = new Map<string, SectionCacheEntry>();
+  private readonly _sectionLoadPromises = new Map<string, Promise<BoardData | null>>();
   private readonly _loadingProjects = new Set<string>();
   private readonly _mcpClients = new Map<string, McpClient>();
   private readonly _resolvedCmds = new Map<string, string | null>();
@@ -258,18 +290,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       return;
     }
 
-    const board = this._workspaceBoard;
-    const plans = board ? activePlans(board).filter((p: any) => p.status === 'todo') : [];
+    const planResponse = await client.callTool('bclaw_list_plans', { status: 'todo', compact: true, limit: 50 });
+    const plans = Array.isArray(planResponse.plans) ? planResponse.plans as ListedPlan[] : [];
     if (plans.length === 0) {
       vscode.window.showInformationMessage('No todo plans available to dispatch');
       return;
     }
 
-    const items = plans.map((plan: any) => ({
+    const items = plans.map((plan) => ({
       label: plan.text?.slice(0, 80) ?? plan.id,
       description: `${plan.priority ?? 'medium'} · ${plan.assignee ?? 'unassigned'}`,
-      planId: plan.id as string,
-      lane: plan.lane,
+      detail: plan.id,
+      planId: plan.id,
+      lane: this._extractLane(plan.tags),
     }));
 
     const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select plan to dispatch' });
@@ -280,8 +313,101 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     try {
-      await client.callTool('bclaw_dispatch', { lanes: [picked.lane] });
+      const analysis = await client.callTool('bclaw_dispatch_analysis', { lanes: [picked.lane] });
+      const availableAgents = Array.isArray(analysis.available_agents) ? analysis.available_agents as string[] : [];
+      if (availableAgents.length === 0) {
+        vscode.window.showWarningMessage(`Brainclaw: no available agents for lane ${picked.lane}`);
+        return;
+      }
+
+      const selectedAgent = await vscode.window.showQuickPick(
+        availableAgents.map((agent) => ({ label: agent })),
+        { placeHolder: `Dispatch ${picked.planId} to which agent?` },
+      );
+      if (!selectedAgent) return;
+
+      await client.callTool('bclaw_dispatch', { lanes: [picked.lane], agents: [selectedAgent.label], maxAssignments: 1 });
+      vscode.window.showInformationMessage(`Brainclaw: dispatched ${picked.planId} to ${selectedAgent.label}`);
       this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  public async searchWithPicker(output: vscode.OutputChannel): Promise<void> {
+    const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(targetCwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+
+    const query = await vscode.window.showInputBox({
+      prompt: 'Search Brainclaw memory',
+      placeHolder: 'plan, claim, trap, decision...',
+    });
+    if (!query || !query.trim()) return;
+
+    try {
+      const result = await client.callTool('bclaw_search', { query: query.trim(), limit: 20 });
+      const results = Array.isArray(result.results) ? result.results as SearchResultItem[] : [];
+      if (results.length === 0) {
+        vscode.window.showInformationMessage(`Brainclaw: no results for "${query.trim()}"`);
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        results.map((entry) => ({
+          label: entry.text.slice(0, 80),
+          description: `${entry.section ?? entry.type ?? 'memory'} · ${entry.id}`,
+          detail: `score ${(entry.score ?? 0).toFixed(2)}`,
+          result: entry,
+        })),
+        { placeHolder: `Search results for "${query.trim()}"` },
+      );
+      if (!picked) return;
+
+      output.clear();
+      output.appendLine(`Brainclaw Search: ${query.trim()}`);
+      output.appendLine('');
+      output.appendLine(`[${picked.result.id}] ${picked.result.section ?? picked.result.type ?? 'memory'}`);
+      output.appendLine(picked.result.text);
+      output.show(true);
+      void vscode.commands.executeCommand('brainclaw.showBoard');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  public async runDoctor(output: vscode.OutputChannel): Promise<void> {
+    const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(targetCwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+
+    try {
+      const result = await client.callTool('bclaw_doctor', {});
+      const checks = Array.isArray(result.checks) ? result.checks as Array<Record<string, unknown>> : [];
+      output.clear();
+      output.appendLine('Brainclaw Doctor');
+      output.appendLine('');
+      output.appendLine(typeof result.ok === 'boolean'
+        ? (result.ok ? 'Status: OK' : 'Status: issues detected')
+        : 'Status: unknown');
+      if (typeof result.summary === 'string' && result.summary.trim()) {
+        output.appendLine(result.summary);
+      }
+      if (checks.length > 0) {
+        output.appendLine('');
+        for (const check of checks) {
+          output.appendLine(`[${String(check.name ?? 'check')}] ${String(check.status ?? 'unknown')}: ${String(check.message ?? '')}`);
+        }
+      }
+      output.show(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -569,6 +695,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       .then((board) => {
         this._projectBoards.set(normalizedPath, board);
         this._projectErrors.delete(normalizedPath);
+        this._clearSectionCache(normalizedPath);
         if (normalizedPath === this._rootProjectPath) {
           this._workspaceBoard = board;
         }
@@ -578,6 +705,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         const message = error instanceof Error ? error.message : String(error);
         this._projectBoards.delete(normalizedPath);
         this._projectErrors.set(normalizedPath, message);
+        this._clearSectionCache(normalizedPath);
         if (normalizedPath === this._rootProjectPath) {
           this._workspaceBoard = null;
         }
@@ -640,19 +768,32 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     if (element.nodeType === 'section' && element.sectionId && element.projectPath) {
       const board = this._getBoardForPath(element.projectPath);
+      const normalizedPath = this._normalizePath(element.projectPath);
+      const cachedSectionEntry = this._getSectionCacheEntry(normalizedPath, element.sectionId);
+      if (cachedSectionEntry?.board) {
+        return this._buildSectionChildren(element.sectionId, cachedSectionEntry.board, normalizedPath);
+      }
+      if (cachedSectionEntry?.error) {
+        return [new BrainclawTreeItem(
+          'Section unavailable',
+          vscode.TreeItemCollapsibleState.None,
+          this._truncate(cachedSectionEntry.error, 120),
+          new vscode.ThemeIcon('error'),
+        )];
+      }
+
+      const sectionKey = this._sectionCacheKey(normalizedPath, element.sectionId);
+      if (!this._sectionLoadPromises.has(sectionKey)) {
+        void this._loadSectionBoard(normalizedPath, element.sectionId);
+      }
+
       if (!board) {
-        if (!this._loadingProjects.has(this._normalizePath(element.projectPath))) {
+        if (!this._loadingProjects.has(normalizedPath)) {
           void this._loadBoardForProject(element.projectPath, false, true);
         }
-        return [new BrainclawTreeItem('Loading board...', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('sync~spin'))];
       }
-      if (board.summary) {
-        if (!this._loadingProjects.has(this._normalizePath(element.projectPath))) {
-          void this._loadFullBoardForProject(element.projectPath);
-        }
-        return [new BrainclawTreeItem('Loading board details...', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('sync~spin'))];
-      }
-      return this._buildSectionChildren(element.sectionId, board, element.projectPath);
+
+      return [this._loadingItem('Loading...')];
     }
 
     return [];
@@ -755,12 +896,6 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       board = await this._loadBoardForProject(normalizedPath, false, true);
     }
 
-    // Summary-mode boards have counts but no arrays — fetch the full board
-    // on expansion so _buildBoardSections has real data to render.
-    if (board && (board as any).summary && !this._loadingProjects.has(normalizedPath)) {
-      board = await this._loadFullBoardForProject(normalizedPath);
-    }
-
     if (!board) {
       const error = this._projectErrors.get(normalizedPath);
       if (error) {
@@ -816,6 +951,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const board = await client.callTool('bclaw_get_agent_board', {}) as unknown as BoardData;
       this._projectBoards.set(normalizedPath, board);
       this._projectErrors.delete(normalizedPath);
+      this._clearSectionCache(normalizedPath);
       if (normalizedPath === this._rootProjectPath) {
         this._workspaceBoard = board;
       }
@@ -824,6 +960,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const message = error instanceof Error ? error.message : String(error);
       this._projectBoards.delete(normalizedPath);
       this._projectErrors.set(normalizedPath, message);
+      this._clearSectionCache(normalizedPath);
       if (normalizedPath === this._rootProjectPath) {
         this._workspaceBoard = null;
       }
@@ -837,6 +974,238 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _truncate(input: string, max = 200): string {
     if (input.length <= max) return input;
     return `${input.slice(0, max - 3)}...`;
+  }
+
+  private _extractLane(tags?: string[]): string | undefined {
+    const laneTag = tags?.find((tag) => tag.startsWith('lane:'));
+    return laneTag ? laneTag.slice('lane:'.length) : undefined;
+  }
+
+  private _sectionCacheKey(projectPath: string, sectionId: string): string {
+    return `${this._normalizePath(projectPath)}::${sectionId}`;
+  }
+
+  private _clearSectionCache(projectPath: string): void {
+    const normalizedPath = this._normalizePath(projectPath);
+    const prefix = `${normalizedPath}::`;
+    for (const key of [...this._sectionBoards.keys()]) {
+      if (key.startsWith(prefix)) {
+        this._sectionBoards.delete(key);
+      }
+    }
+  }
+
+  private _emptyBoard(): BoardData {
+    return {
+      active_plans: [],
+      active_claims: [],
+      active_assignments: [],
+      active_runs: [],
+      active_actions: [],
+      open_handoffs: [],
+      runtime_notes: [],
+      other_agents: [],
+    };
+  }
+
+  private _cloneBoard(board?: BoardData | null): BoardData {
+    if (!board) {
+      return this._emptyBoard();
+    }
+
+    return {
+      ...this._emptyBoard(),
+      ...board,
+    };
+  }
+
+  private _getSectionBoard(projectPath: string, sectionId: string): BoardData | null | undefined {
+    return this._getSectionCacheEntry(projectPath, sectionId)?.board;
+  }
+
+  private _getSectionCacheEntry(projectPath: string, sectionId: string): SectionCacheEntry | undefined {
+    const key = this._sectionCacheKey(projectPath, sectionId);
+    const cached = this._sectionBoards.get(key);
+    if (!cached) return undefined;
+    if (cached.expiresAt <= Date.now()) {
+      this._sectionBoards.delete(key);
+      return undefined;
+    }
+    return cached;
+  }
+
+  private _setSectionBoard(projectPath: string, sectionId: string, board: BoardData | null, error?: string): void {
+    const key = this._sectionCacheKey(projectPath, sectionId);
+    this._sectionBoards.set(key, {
+      board,
+      error,
+      expiresAt: Date.now() + SECTION_CACHE_TTL_MS,
+    });
+  }
+
+  private _loadingItem(label: string): BrainclawTreeItem {
+    return new BrainclawTreeItem(
+      label,
+      vscode.TreeItemCollapsibleState.None,
+      undefined,
+      new vscode.ThemeIcon('sync~spin'),
+    );
+  }
+
+  private async _loadSectionBoard(projectPath: string, sectionId: string): Promise<BoardData | null> {
+    const normalizedPath = this._normalizePath(projectPath);
+    const key = this._sectionCacheKey(normalizedPath, sectionId);
+    const existing = this._getSectionCacheEntry(normalizedPath, sectionId);
+    if (existing && existing.expiresAt > Date.now()) {
+      return existing.board;
+    }
+
+    const pending = this._sectionLoadPromises.get(key);
+    if (pending) return pending;
+
+    const load = this._runSectionBoardLoad(normalizedPath, sectionId)
+      .then((board) => {
+        this._setSectionBoard(normalizedPath, sectionId, board);
+        return board;
+      })
+      .catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const fallback = await this._loadFullBoardForProject(normalizedPath);
+        if (fallback) {
+          this._setSectionBoard(normalizedPath, sectionId, fallback);
+          return fallback;
+        }
+        this._setSectionBoard(normalizedPath, sectionId, null, message);
+        return null;
+      })
+      .finally(() => {
+        this._sectionLoadPromises.delete(key);
+        this._onDidChangeTreeData.fire();
+      });
+
+    this._sectionLoadPromises.set(key, load);
+    return load;
+  }
+
+  private async _runSectionBoardLoad(projectPath: string, sectionId: string): Promise<BoardData> {
+    const client = await this._getMcpClient(projectPath);
+    if (!client) {
+      throw new Error(`No brainclaw command found for ${projectPath}`);
+    }
+
+    const board = this._cloneBoard(this._getBoardForPath(projectPath));
+
+    switch (sectionId) {
+      case SECTION.ATTENTION: {
+        const [actions, assignments, candidates, runs] = await Promise.all([
+          client.callTool('bclaw_list_actions', { status: 'pending', limit: 100 }),
+          client.callTool('bclaw_list_assignments', { status: 'blocked', limit: 100 }),
+          client.callTool('bclaw_list_candidates', { status: 'pending', auto_generated: false, limit: 100 }),
+          client.callTool('bclaw_list_runs', { limit: 100 }),
+        ]);
+        board.active_actions = (actions.actions as any[] | undefined) ?? [];
+        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
+        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
+        board.active_runs = ((runs.runs as any[] | undefined) ?? []).filter((run: any) =>
+          run.status === 'blocked' || run.status === 'waiting_input' || run.status === 'failed');
+        return board;
+      }
+      case SECTION.IN_PROGRESS: {
+        const [claims, assignments, runs] = await Promise.all([
+          client.callTool('bclaw_list_claims', { limit: 100 }),
+          client.callTool('bclaw_list_assignments', { limit: 100 }),
+          client.callTool('bclaw_list_runs', { limit: 100 }),
+        ]);
+        board.active_claims = (claims.claims as any[] | undefined) ?? [];
+        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
+        board.active_runs = ((runs.runs as any[] | undefined) ?? []).filter((run: any) =>
+          run.status !== 'blocked' && run.status !== 'waiting_input' && run.status !== 'failed');
+        return board;
+      }
+      case SECTION.SPRINTS:
+      case SECTION.SPRINT: {
+        const sequences = await client.callTool('bclaw_list_sequences', { status: 'active', limit: 20 });
+        const activeSequences = (sequences.sequences as any[] | undefined) ?? [];
+        board.active_sequence = activeSequences[0];
+        return board;
+      }
+      case SECTION.BACKLOG: {
+        const plans = await client.callTool('bclaw_list_plans', { limit: 100 });
+        board.active_plans = (plans.plans as any[] | undefined) ?? [];
+        const fallback = this._getBoardForPath(projectPath);
+        if (fallback && !fallback.summary && (fallback.known_traps?.length ?? 0) > 0) {
+          board.known_traps = fallback.known_traps;
+        } else {
+          const fullBoard = await this._loadFullBoardForProject(projectPath);
+          if (fullBoard) {
+            board.known_traps = fullBoard.known_traps;
+          }
+        }
+        return board;
+      }
+      case SECTION.SYSTEM: {
+        const candidates = await client.callTool('bclaw_list_candidates', { status: 'pending', auto_generated: true, limit: 100 });
+        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
+        const fullBoard = this._getBoardForPath(projectPath)?.summary ? null : this._getBoardForPath(projectPath);
+        if (fullBoard) {
+          board.runtime_notes = fullBoard.runtime_notes ?? [];
+          board.open_handoffs = fullBoard.open_handoffs ?? [];
+          board.linked_projects = fullBoard.linked_projects ?? [];
+          board.incoming_signals = fullBoard.incoming_signals ?? [];
+        } else {
+          const loadedBoard = await this._loadFullBoardForProject(projectPath);
+          if (loadedBoard) {
+            board.runtime_notes = loadedBoard.runtime_notes ?? [];
+            board.open_handoffs = loadedBoard.open_handoffs ?? [];
+            board.linked_projects = loadedBoard.linked_projects ?? [];
+            board.incoming_signals = loadedBoard.incoming_signals ?? [];
+          }
+        }
+        return board;
+      }
+      case SECTION.PLANS: {
+        const plans = await client.callTool('bclaw_list_plans', { limit: 100 });
+        board.active_plans = (plans.plans as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.CLAIMS: {
+        const claims = await client.callTool('bclaw_list_claims', { limit: 100 });
+        board.active_claims = (claims.claims as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.ASSIGNMENTS: {
+        const assignments = await client.callTool('bclaw_list_assignments', { limit: 100 });
+        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.RUNS: {
+        const runs = await client.callTool('bclaw_list_runs', { limit: 100 });
+        board.active_runs = (runs.runs as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.ACTIONS: {
+        const actions = await client.callTool('bclaw_list_actions', { status: 'pending', limit: 100 });
+        board.active_actions = (actions.actions as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.CANDIDATES: {
+        const candidates = await client.callTool('bclaw_list_candidates', { status: 'pending', limit: 100 });
+        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
+        return board;
+      }
+      case SECTION.AGENTS:
+      case SECTION.ACTIVITY:
+      case SECTION.HANDOFFS:
+      case SECTION.TRAPS:
+      case SECTION.CROSS_PROJECT:
+      default: {
+        const fullBoard = await this._loadFullBoardForProject(projectPath);
+        if (!fullBoard) {
+          return board;
+        }
+        return fullBoard;
+      }
+    }
   }
 
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {
