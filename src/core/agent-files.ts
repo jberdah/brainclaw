@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import yaml from 'yaml';
 import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../commands/mcp.js';
 
 /**
@@ -440,7 +441,7 @@ export function writeExportFile(
 }
 
 export interface AutoConfigWriteResult {
-  kind: 'mcp' | 'skill' | 'rule' | 'recommendation';
+  kind: 'mcp' | 'skill' | 'rule' | 'recommendation' | 'permissions';
   label: string;
   created: boolean;
   updated: boolean;
@@ -492,6 +493,7 @@ const CLAUDE_CODE_SESSION_MARKER_RELATIVE_PATH = '.claude/.bclaw-session';
 const CURSOR_MCP_RELATIVE_PATH = '.cursor/mcp.json';
 const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
+const CONTINUE_PERMISSIONS_RELATIVE_PATH = '.continue/permissions.yaml';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
@@ -1535,6 +1537,41 @@ export function ensureContinueUserMcpConfig(homeDir: string | undefined): AutoCo
   };
 }
 
+/**
+ * Writes `~/.continue/permissions.yaml` with per-tool allow rules for
+ * headless-auto-approved brainclaw MCP tools. Continue reads this file
+ * to auto-approve tool calls without user confirmation.
+ *
+ * Format (best-effort per Continue docs):
+ * ```yaml
+ * # Managed by brainclaw — do not edit manually
+ * tools:
+ *   bclaw_work:
+ *     allow: true
+ *   ...
+ * ```
+ */
+export function ensureContinueUserPermissions(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, CONTINUE_PERMISSIONS_RELATIVE_PATH);
+  const toolsObj: Record<string, { allow: boolean }> = {};
+  for (const name of getHeadlessAutoApprovedToolNames()) {
+    toolsObj[name] = { allow: true };
+  }
+
+  const content = `# Managed by brainclaw — do not edit manually\n${yaml.stringify({ tools: toolsObj })}`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'permissions',
+    label: 'Continue tool permissions',
+    created,
+    updated,
+    filePath,
+  };
+}
+
 export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, 'opencode.json');
   const existing = readJsonObject(filePath);
@@ -1544,6 +1581,7 @@ export function ensureOpenCodeMcpConfig(cwd: string): AutoConfigWriteResult {
     type: 'local',
     command: [mcpCmd.command, ...mcpCmd.args],
     env: { BRAINCLAW_AGENT: 'opencode', BRAINCLAW_CWD: cwd },
+    permission: Object.fromEntries(getHeadlessAutoApprovedToolNames().map(t => [t, 'allow'])),
   };
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
@@ -1658,8 +1696,11 @@ export function writeDetectedAgentAutoConfig(
     }
     case 'continue': {
       const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const userMcp = ensureContinueUserMcpConfig(resolveHomeDir(env));
+      const homeDir = resolveHomeDir(env);
+      const userMcp = ensureContinueUserMcpConfig(homeDir);
       if (userMcp) results.push(userMcp);
+      const perms = ensureContinueUserPermissions(homeDir);
+      if (perms) results.push(perms);
       return results;
     }
     case 'opencode':
@@ -1717,8 +1758,11 @@ export function writeExportCompanionFiles(
       return [ensureRooMcpConfig(cwd)];
     case 'continue': {
       const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const userMcp = ensureContinueUserMcpConfig(resolveHomeDir(env));
+      const homeDir = resolveHomeDir(env);
+      const userMcp = ensureContinueUserMcpConfig(homeDir);
       if (userMcp) results.push(userMcp);
+      const perms = ensureContinueUserPermissions(homeDir);
+      if (perms) results.push(perms);
       return results;
     }
     case 'gemini-md': {
@@ -1769,6 +1813,7 @@ export function patchAllMcpConfigs(
       ensureCursorMcpConfig(homeDir),
       ensureWindsurfMcpConfig(homeDir),
       ensureContinueUserMcpConfig(homeDir),
+      ensureContinueUserPermissions(homeDir),
       ensureAntigravityMcpConfig(homeDir),
       ensureOpenClawMcpConfig(homeDir),
       ensureCodexMcpConfig(homeDir, env),

@@ -80,6 +80,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   'continue': [
     { kind: 'instructions', location: 'workspace', path: '.continue/rules/brainclaw.md' },
     { kind: 'mcp',          location: 'workspace', path: '.continue/config.json' },
+    { kind: 'permissions',  location: 'machine',   path: '.continue/permissions.yaml' },
   ],
   'roo': [
     { kind: 'instructions', location: 'workspace', path: '.roo/rules/brainclaw.md' },

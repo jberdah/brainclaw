@@ -1293,7 +1293,7 @@ export const AgentIntegrationNameSchema = z.enum([
 ]);
 export type AgentIntegrationName = z.infer<typeof AgentIntegrationNameSchema>;
 
-export const AgentIntegrationSurfaceKindSchema = z.enum(['instructions', 'mcp', 'skill', 'rule', 'hook']);
+export const AgentIntegrationSurfaceKindSchema = z.enum(['instructions', 'mcp', 'skill', 'rule', 'hook', 'permissions']);
 export type AgentIntegrationSurfaceKind = z.infer<typeof AgentIntegrationSurfaceKindSchema>;
 
 export const AgentIntegrationLocationSchema = z.enum(['workspace', 'machine']);

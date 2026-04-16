@@ -29,6 +29,7 @@ import {
   ensureRooMcpConfig,
   ensureContinueMcpConfig,
   ensureOpenCodeMcpConfig,
+  ensureContinueUserPermissions,
   ensureAntigravityMcpConfig,
   ensureCodexMcpConfig,
   ensureUniversalBrainclawSkill,
@@ -37,6 +38,7 @@ import {
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
 import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../../src/commands/mcp.js';
+import yaml from 'yaml';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-files-'));
@@ -792,14 +794,15 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig continue with homeDir returns 2 results including global', () => {
+  it('writeDetectedAgentAutoConfig continue with homeDir returns 3 results including global MCP + permissions', () => {
     const dir = tmpDir();
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('continue', dir, { HOME: homeDir });
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 3);
       assert.ok(results.some((r) => r.relativePath === '.continue/config.json'));
       assert.ok(results.some((r) => r.filePath.includes('.continue') && r.filePath.includes('config.json') && !r.filePath.startsWith(dir)));
+      assert.ok(results.some((r) => r.kind === 'permissions' && r.filePath.includes('permissions.yaml')));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });
@@ -823,6 +826,58 @@ describe('core/agent-files — auto-config writers', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('ensureOpenCodeMcpConfig writes permission map with headless-auto tools', () => {
+    const dir = tmpDir();
+    try {
+      ensureOpenCodeMcpConfig(dir);
+      const filePath = path.join(dir, 'opencode.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcp?: Record<string, { permission?: Record<string, string> }>;
+      };
+      const permission = content.mcp?.brainclaw?.permission;
+      assert.ok(permission, 'brainclaw MCP entry should have a permission map');
+      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+        assert.equal(permission[tool], 'allow', `tool ${tool} should be mapped to "allow"`);
+      }
+      // No extra keys beyond the headless-auto set
+      assert.equal(Object.keys(permission).length, MCP_HEADLESS_AUTO_TOOL_NAMES.length);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureContinueUserPermissions writes permissions.yaml with headless-auto tools', () => {
+    const homeDir = tmpDir();
+    try {
+      const result = ensureContinueUserPermissions(homeDir);
+      assert.ok(result, 'result should be defined when a home dir is provided');
+      assert.equal(result?.created, true);
+      assert.equal(result?.kind, 'permissions');
+
+      const filePath = path.join(homeDir, '.continue', 'permissions.yaml');
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      assert.ok(raw.startsWith('# Managed by brainclaw'), 'should have managed-by header');
+
+      const parsed = yaml.parse(raw) as { tools?: Record<string, { allow?: boolean }> };
+      assert.ok(parsed.tools, 'parsed YAML should have a tools key');
+      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+        assert.equal(parsed.tools[tool]?.allow, true, `tool ${tool} should have allow: true`);
+      }
+
+      // Idempotent
+      const second = ensureContinueUserPermissions(homeDir);
+      assert.equal(second?.created, false);
+      assert.equal(second?.updated, false);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureContinueUserPermissions returns undefined when no homeDir', () => {
+    const result = ensureContinueUserPermissions(undefined);
+    assert.equal(result, undefined);
   });
 
   it('creates Antigravity MCP config under the provided home directory', () => {
