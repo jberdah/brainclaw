@@ -241,11 +241,13 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
     max_concurrent_tasks: 5,
-    prompt_delivery: { methods: ['stdin_pipe', 'temp_file'], preferred: 'stdin_pipe' },
+    // Spawned codex workers are more reliable when the compact brief is passed as
+    // a direct prompt argument than via stdin piping, especially on Windows.
+    prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg' },
     execution_env: { surface: 'cli' },
-    invoke_template: 'codex exec --sandbox workspace-write -a never "{prompt}"',
+    invoke_template: 'codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"',
     invoke_binary: 'codex',
-    invoke_review_template: 'codex exec --sandbox read-only -a never "{prompt}"',
+    invoke_review_template: 'codex exec -c approval_policy="never" --sandbox read-only "{prompt}"',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',

@@ -9,20 +9,30 @@ import { nowISO } from './ids.js';
  * On Windows, `spawn({shell:true})` always succeeds (launches cmd.exe),
  * masking ENOENT for missing binaries. This pre-check catches that.
  */
-function isBinaryOnPath(binary: string): boolean {
+function resolveBinaryOnPath(binary: string): string | undefined {
   // Absolute or relative path — check directly
   if (binary.includes('/') || binary.includes('\\')) {
-    return fs.existsSync(binary);
+    return fs.existsSync(binary) ? binary : undefined;
   }
   try {
     if (process.platform === 'win32') {
-      execFileSync('where', [binary], { stdio: 'ignore', timeout: 5000 });
+      const output = execFileSync('where', [binary], { encoding: 'utf-8', timeout: 5000 });
+      const matches = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (matches.length === 0) return undefined;
+      return (
+        matches.find((candidate) => /\.(exe|com)$/i.test(candidate)) ??
+        matches.find((candidate) => /\.(cmd|bat)$/i.test(candidate)) ??
+        matches[0]
+      );
     } else {
-      execFileSync('which', [binary], { stdio: 'ignore', timeout: 5000 });
+      const output = execFileSync('which', [binary], { encoding: 'utf-8', timeout: 5000 }).trim();
+      return output || undefined;
     }
-    return true;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -113,20 +123,27 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     }
 
     // Pre-check: on Windows shell:true masks ENOENT (cmd.exe spawns OK, exits 1 silently)
-    if (isWin32 && !isBinaryOnPath(invoke.executable)) {
+    const resolvedExecutable = isWin32
+      ? resolveBinaryOnPath(invoke.executable)
+      : invoke.executable;
+
+    if (isWin32 && !resolvedExecutable) {
       throw new Error(
         `Cannot spawn agent ${options.agent}: binary '${invoke.executable}' not found on PATH`,
       );
     }
 
+    const spawnExecutable = resolvedExecutable ?? invoke.executable;
+    const useShell = isWin32 && /\.(cmd|bat)$/i.test(spawnExecutable);
+
     const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
     const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
 
-    const child = spawn(invoke.executable, invoke.args, {
+    const child = spawn(spawnExecutable, invoke.args, {
       // Windows: detached is unreliable with shell:true — child stays in parent's process group.
       // POSIX: detached lets the child survive parent exit.
       detached: !isWin32,
-      shell: isWin32,
+      shell: useShell,
       stdio,
       cwd: options.worktreePath,
       env,

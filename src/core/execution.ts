@@ -11,6 +11,7 @@ import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js'
 import { appendAuditEntry } from './audit.js';
 import { loadAllSessions } from './identity.js';
 import { loadConfig } from './config.js';
+import { loadAssignment } from './assignments.js';
 import {
   defaultExecutionAdapter,
   type ExecutionAdapter,
@@ -27,6 +28,28 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForAssignmentHandshake(
+  assignmentId: string,
+  cwd: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const assignment = loadAssignment(assignmentId, cwd);
+    if (!assignment) return false;
+    if (assignment.status !== 'created' && assignment.status !== 'offered') {
+      return true;
+    }
+    await sleep(100);
+  }
+  const finalAssignment = loadAssignment(assignmentId, cwd);
+  return !!finalAssignment && finalAssignment.status !== 'created' && finalAssignment.status !== 'offered';
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -144,9 +167,11 @@ export async function attemptExecution(
     autoExecute: boolean;
     worktreePath?: string;
     claimId?: string;
+    assignmentId?: string;
     dispatcherAgent: string;
     dispatcherAgentId?: string;
     cwd?: string;
+    handshakeTimeoutMs?: number;
     adapter?: ExecutionAdapter;
   },
 ): Promise<ExecutionResult> {
@@ -197,6 +222,30 @@ export async function attemptExecution(
   // Attempt spawn (await handles both sync and async adapters)
   try {
     const result = await adapter.start(invoke, options);
+
+    if (options.assignmentId && options.cwd) {
+      const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
+      const handshakeOk = await waitForAssignmentHandshake(options.assignmentId, options.cwd, handshakeTimeoutMs);
+      if (!handshakeOk) {
+        appendAuditEntry({
+          actor: options.dispatcherAgent,
+          actor_id: options.dispatcherAgentId,
+          action: 'spawn_failed',
+          item_id: options.claimId,
+          item_type: 'claim',
+          scope: options.agent,
+          after: { reason: `No assignment handshake within ${handshakeTimeoutMs}ms`, pid: result.pid, command: invoke.bashCommand },
+        }, options.cwd);
+
+        const manual = adapter.prepareManualCommand(invoke, options);
+        return {
+          execution_status: 'command_ready_manual',
+          command: manual.command,
+          shell: manual.shell,
+          error: `Spawn launched (pid ${result.pid}) but assignment ${options.assignmentId} did not acknowledge within ${handshakeTimeoutMs}ms`,
+        };
+      }
+    }
 
     // Audit success
     appendAuditEntry({

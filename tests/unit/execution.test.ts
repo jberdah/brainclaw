@@ -5,10 +5,30 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { canSpawnAgent, attemptExecution, type ExecutionResult } from '../../src/core/execution.js';
 import { buildInvokeCommand, type InvokeCommand } from '../../src/core/agent-capability.js';
 import { defaultExecutionAdapter } from '../../src/core/execution-adapters.js';
 import { CoordinateRequestSchema, ExecutionStatusSchema } from '../../src/core/facade-schema.js';
+import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
+
+function createTestStore(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-execution-test-'));
+  const bc = path.join(dir, '.brainclaw');
+  for (const sub of [
+    'coordination/assignments',
+    'coordination/runs',
+    'coordination/claims',
+    'coordination/sessions',
+    'coordination/inbox',
+  ]) {
+    fs.mkdirSync(path.join(bc, sub), { recursive: true });
+  }
+  fs.writeFileSync(path.join(bc, 'config.yaml'), 'project_id: prj_execution\n');
+  return dir;
+}
 
 function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
   const original = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -93,6 +113,13 @@ describe('defaultExecutionAdapter', () => {
       }));
       assert.ok(win.command.startsWith('set BRAINCLAW_CLAIM_ID=clm_win && '));
     }
+  });
+
+  it('builds codex invoke commands with inline prompt delivery', () => {
+    const invoke = buildInvokeCommand('codex', 'compact worker brief');
+    assert.ok(invoke, 'codex should produce an invoke command');
+    assert.equal(invoke.promptDelivery, 'inline_arg');
+    assert.ok(invoke.args.includes('compact worker brief'));
   });
 });
 
@@ -304,5 +331,85 @@ describe('attemptExecution with mock adapter', () => {
     });
     assert.equal(result.execution_status, 'command_ready_manual');
     assert.equal(result.command, 'manual-only');
+  });
+
+  it('falls back when spawned process never handshakes the assignment', async () => {
+    const testDir = createTestStore();
+    try {
+      createAssignment({
+        id: 'asgn_no_handshake',
+        short_label: 'asgn#nh',
+        claim_id: 'clm_no_handshake',
+        agent: 'claude-code',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/no-handshake.ts',
+        description: 'No handshake test',
+      }, testDir);
+
+      const mockAdapter: import('../../src/core/execution-adapters.js').ExecutionAdapter = {
+        id: 'mock-no-handshake',
+        canSpawn: () => ({ canSpawn: true, reason: 'mock' }),
+        prepareManualCommand: () => ({ command: 'fallback-cmd', shell: 'bash' }),
+        start: () => ({ pid: 1234, started_at: '2026-04-14T00:00:00Z', status: 'started' }),
+      };
+
+      const result = await attemptExecution(invoke, {
+        agent: 'claude-code',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        assignmentId: 'asgn_no_handshake',
+        cwd: testDir,
+        handshakeTimeoutMs: 50,
+        adapter: mockAdapter,
+      });
+
+      assert.equal(result.execution_status, 'command_ready_manual');
+      assert.equal(result.command, 'fallback-cmd');
+      assert.ok(result.error?.includes('did not acknowledge'));
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps delivered_and_started when assignment handshake arrives in time', async () => {
+    const testDir = createTestStore();
+    try {
+      createAssignment({
+        id: 'asgn_handshake',
+        short_label: 'asgn#ok',
+        claim_id: 'clm_handshake',
+        agent: 'claude-code',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/handshake.ts',
+        description: 'Handshake test',
+      }, testDir);
+
+      const mockAdapter: import('../../src/core/execution-adapters.js').ExecutionAdapter = {
+        id: 'mock-handshake',
+        canSpawn: () => ({ canSpawn: true, reason: 'mock' }),
+        prepareManualCommand: () => ({ command: 'fallback-cmd', shell: 'bash' }),
+        start: async () => ({ pid: 5678, started_at: '2026-04-14T00:00:00Z', status: 'started' as const }),
+      };
+
+      setTimeout(() => {
+        transitionAssignment('asgn_handshake', 'offered', { actor: 'coordinator' }, testDir);
+        transitionAssignment('asgn_handshake', 'accepted', { actor: 'claude-code' }, testDir);
+      }, 10);
+
+      const result = await attemptExecution(invoke, {
+        agent: 'claude-code',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        assignmentId: 'asgn_handshake',
+        cwd: testDir,
+        handshakeTimeoutMs: 200,
+        adapter: mockAdapter,
+      });
+
+      assert.equal(result.execution_status, 'delivered_and_started');
+      assert.equal(result.pid, 5678);
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });

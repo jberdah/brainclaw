@@ -900,6 +900,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         autoExecute,
         worktreePath: prepared.worktreePath,
         claimId: entry.claim_id,
+        assignmentId: entry.assignment_id,
         dispatcherAgent: options.dispatcherAgent,
         dispatcherAgentId: options.dispatcherAgentId,
         cwd,

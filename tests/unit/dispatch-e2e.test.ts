@@ -171,7 +171,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(resolveBriefMode('claude-code'), 'full');
   });
 
-  it('codex: full cycle — dispatch creates claim, sends inbox, generates stdin_pipe invoke', async () => {
+  it('codex: full cycle — dispatch creates claim, sends inbox, generates inline_arg invoke', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -211,7 +211,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     const invokeCmd = buildInvokeCommand('codex', 'test brief');
     assert.ok(invokeCmd, 'codex is invokable');
     assert.equal(invokeCmd.executable, 'codex');
-    assert.equal(invokeCmd.promptDelivery, 'stdin_pipe', 'codex uses stdin_pipe delivery');
+    assert.equal(invokeCmd.promptDelivery, 'inline_arg', 'codex uses inline_arg delivery');
 
     // Verify brief mode
     assert.equal(resolveBriefMode('codex'), 'compact');
