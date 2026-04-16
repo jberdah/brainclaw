@@ -33,7 +33,7 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set<AgentIntegrationName>([
 const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> = {
   'github-copilot': [
     { kind: 'instructions', location: 'workspace', path: '.github/copilot-instructions.md' },
-      { kind: 'hook',         location: 'workspace', path: '.github/copilot-instructions.md' },
+      { kind: 'hook',         location: 'workspace', path: '.github/copilot/hooks.json' },
       { kind: 'mcp',          location: 'workspace', path: '.vscode/settings.json' },
       { kind: 'skill',        location: 'workspace', path: '.github/skills/brainclaw-context/SKILL.md' },
       { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
@@ -47,7 +47,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
     'cursor': [
       { kind: 'instructions', location: 'workspace', path: '.cursor/rules/brainclaw.md' },
       { kind: 'rule',         location: 'workspace', path: '.cursor/rules/brainclaw-mcp-shim.mdc' },
-      { kind: 'hook',         location: 'workspace', path: '.cursor/rules/brainclaw-session.mdc' },
+      { kind: 'hook',         location: 'workspace', path: '.cursor/hooks.json' },
       { kind: 'mcp',          location: 'machine',   path: '.cursor/mcp.json' },
       { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
@@ -76,6 +76,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   'antigravity': [
     { kind: 'instructions', location: 'workspace', path: 'GEMINI.md' },
     { kind: 'mcp',          location: 'machine',   path: '.gemini/antigravity/mcp_config.json' },
+    { kind: 'hook',         location: 'machine',   path: '.gemini/antigravity/hooks.json' },
   ],
   'continue': [
     { kind: 'instructions', location: 'workspace', path: '.continue/rules/brainclaw.md' },

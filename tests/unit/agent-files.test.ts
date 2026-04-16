@@ -31,6 +31,9 @@ import {
   ensureOpenCodeMcpConfig,
   ensureContinueUserPermissions,
   ensureAntigravityMcpConfig,
+  ensureAntigravityHooks,
+  ensureCursorHooks,
+  ensureCopilotHooks,
   ensureCodexMcpConfig,
   ensureUniversalBrainclawSkill,
   patchAllMcpConfigs,
@@ -494,16 +497,18 @@ describe('core/agent-files — auto-config writers', () => {
   it('writes only the relevant detected auto-config companion files', () => {
     const dir = tmpDir();
     try {
-      // cursor without homeDir → MDC + universal skill
+      // cursor without homeDir → MDC + hooks + universal skill
       const cursorResults = writeDetectedAgentAutoConfig('cursor', dir, {});
-      assert.equal(cursorResults.length, 2);
+      assert.equal(cursorResults.length, 3);
       assert.ok(cursorResults.some(r => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
+      assert.ok(cursorResults.some(r => r.relativePath === '.cursor/hooks.json'));
       assert.ok(cursorResults.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
 
       const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
-      assert.equal(copilotResults.length, 4);
+      assert.equal(copilotResults.length, 5);
       assert.ok(copilotResults.some(r => r.relativePath === '.vscode/settings.json'));
       assert.ok(copilotResults.some(r => r.relativePath === '.github/skills/brainclaw-context/SKILL.md'));
+      assert.ok(copilotResults.some(r => r.relativePath === '.github/copilot/hooks.json'));
       assert.ok(copilotResults.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
       assert.ok(copilotResults.some(r => r.relativePath === '.vscode/extensions.json'));
     } finally {
@@ -756,13 +761,14 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig cursor with homeDir returns 3 results', () => {
+  it('writeDetectedAgentAutoConfig cursor with homeDir returns 4 results (mdc + hooks + skill + MCP)', () => {
     const dir = tmpDir();
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('cursor', dir, { HOME: homeDir });
-      assert.equal(results.length, 3);
+      assert.equal(results.length, 4);
       assert.ok(results.some((r) => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
+      assert.ok(results.some((r) => r.relativePath === '.cursor/hooks.json'));
       assert.ok(results.some((r) => r.relativePath === '.cursor/mcp.json'));
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
@@ -936,6 +942,89 @@ describe('core/agent-files — auto-config writers', () => {
     assert.equal(result, undefined);
   });
 
+  it('ensureCursorHooks writes .cursor/hooks.json with session events + idempotence', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureCursorHooks(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.cursor/hooks.json');
+
+      const filePath = path.join(dir, '.cursor', 'hooks.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        version?: number;
+        hooks?: Record<string, Array<{ command?: string; type?: string }>>;
+      };
+      assert.equal(content.version, 1);
+      assert.ok(content.hooks?.sessionStart?.[0]?.command?.includes('session-start'), 'sessionStart hook present');
+      assert.ok(content.hooks?.beforeSubmitPrompt?.[0]?.command?.includes('context-diff'), 'beforeSubmitPrompt hook present');
+      assert.ok(content.hooks?.stop?.[0]?.command?.includes('session-end'), 'stop hook present');
+      assert.equal(content.hooks?.sessionStart?.[0]?.type, 'command');
+
+      const second = ensureCursorHooks(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureAntigravityHooks writes hooks.json with PascalCase events + idempotence', () => {
+    const homeDir = tmpDir();
+    try {
+      const first = ensureAntigravityHooks(homeDir);
+      assert.ok(first, 'result should be defined');
+      assert.equal(first?.created, true);
+      assert.equal(first?.relativePath, '.gemini/antigravity/hooks.json');
+
+      const filePath = path.join(homeDir, '.gemini', 'antigravity', 'hooks.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        SessionStart?: Array<{ command?: string }>;
+        UserPromptSubmit?: Array<{ command?: string }>;
+        Stop?: Array<{ command?: string }>;
+      };
+      assert.ok(content.SessionStart?.[0]?.command?.includes('session-start'), 'SessionStart hook present');
+      assert.ok(content.UserPromptSubmit?.[0]?.command?.includes('context-diff'), 'UserPromptSubmit hook present');
+      assert.ok(content.Stop?.[0]?.command?.includes('session-end'), 'Stop hook present');
+
+      const second = ensureAntigravityHooks(homeDir);
+      assert.equal(second?.created, false);
+      assert.equal(second?.updated, false);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureAntigravityHooks returns undefined when no homeDir', () => {
+    assert.equal(ensureAntigravityHooks(undefined), undefined);
+  });
+
+  it('ensureCopilotHooks writes .github/copilot/hooks.json with Copilot format + idempotence', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureCopilotHooks(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.github/copilot/hooks.json');
+
+      const filePath = path.join(dir, '.github', 'copilot', 'hooks.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        version?: number;
+        hooks?: Record<string, Array<{ bash?: string; type?: string; timeoutSec?: number }>>;
+      };
+      assert.equal(content.version, 1);
+      assert.ok(content.hooks?.sessionStart?.[0]?.bash?.includes('session-start'), 'sessionStart hook present');
+      assert.ok(content.hooks?.userPromptSubmitted?.[0]?.bash?.includes('context-diff'), 'userPromptSubmitted hook present');
+      assert.ok(content.hooks?.sessionEnd?.[0]?.bash?.includes('session-end'), 'sessionEnd hook present');
+      assert.equal(content.hooks?.sessionStart?.[0]?.type, 'command');
+      assert.equal(content.hooks?.sessionStart?.[0]?.timeoutSec, 30);
+
+      const second = ensureCopilotHooks(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('writeDetectedAgentAutoConfig opencode returns 2 results including universal skill', () => {
     const dir = tmpDir();
     try {
@@ -948,13 +1037,14 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig antigravity with homeDir returns 1 result', () => {
+  it('writeDetectedAgentAutoConfig antigravity with homeDir returns 2 results (MCP + hooks)', () => {
     const dir = tmpDir();
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('antigravity', dir, { HOME: homeDir });
-      assert.equal(results.length, 1);
-      assert.equal(results[0]?.relativePath, '.gemini/antigravity/mcp_config.json');
+      assert.equal(results.length, 2);
+      assert.ok(results.some(r => r.relativePath === '.gemini/antigravity/mcp_config.json'));
+      assert.ok(results.some(r => r.relativePath === '.gemini/antigravity/hooks.json'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });

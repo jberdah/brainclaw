@@ -496,6 +496,9 @@ const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const CONTINUE_PERMISSIONS_RELATIVE_PATH = '.continue/permissions.yaml';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
 const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
+const ANTIGRAVITY_HOOKS_RELATIVE_PATH = '.gemini/antigravity/hooks.json';
+const CURSOR_HOOKS_RELATIVE_PATH = '.cursor/hooks.json';
+const COPILOT_HOOKS_RELATIVE_PATH = '.github/copilot/hooks.json';
 const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
 const VSCODE_EXTENSIONS_RELATIVE_PATH = '.vscode/extensions.json';
 const UNIVERSAL_SKILL_RELATIVE_PATH = '.agents/skills/brainclaw/SKILL.md';
@@ -1641,6 +1644,119 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   };
 }
 
+/**
+ * Resolve the brainclaw shell command prefix for hook configs.
+ * Returns a string like `"<node>" "<cli.js>"` or `npx brainclaw`.
+ */
+function getBclawBin(): string {
+  const mcpCmd = getBrainclawMcpCommand();
+  if (mcpCmd.command === 'npx') return 'npx brainclaw';
+  return `"${mcpCmd.command.replace(/\\/g, '/')}"`;
+}
+
+/**
+ * Writes `.cursor/hooks.json` — Cursor's native hooks config.
+ * Events: sessionStart, beforeSubmitPrompt, stop (Cursor uses camelCase).
+ * Format per https://cursor.com/docs/hooks: version 1, type "command".
+ */
+export function ensureCursorHooks(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, CURSOR_HOOKS_RELATIVE_PATH);
+  const existing = readJsonObject(filePath);
+  const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
+  const bclawBin = getBclawBin();
+
+  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
+  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
+  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
+
+  hooks.sessionStart = [{ type: 'command', command: sessionStartCmd }];
+  hooks.beforeSubmitPrompt = [{ type: 'command', command: contextDiffCmd }];
+  hooks.stop = [{ type: 'command', command: sessionEndCmd }];
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    version: 1,
+    hooks,
+  });
+
+  return {
+    kind: 'rule',
+    label: 'Cursor session hooks',
+    created,
+    updated,
+    filePath,
+    relativePath: CURSOR_HOOKS_RELATIVE_PATH,
+  };
+}
+
+/**
+ * Writes `~/.gemini/antigravity/hooks.json` — Antigravity's native hooks config.
+ * Events: SessionStart, UserPromptSubmit, Stop (PascalCase, top-level keys).
+ */
+export function ensureAntigravityHooks(homeDir: string | undefined): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, ANTIGRAVITY_HOOKS_RELATIVE_PATH);
+  const existing = readJsonObject(filePath);
+  const bclawBin = getBclawBin();
+
+  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
+  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
+  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    SessionStart: [{ command: sessionStartCmd }],
+    UserPromptSubmit: [{ command: contextDiffCmd }],
+    Stop: [{ command: sessionEndCmd }],
+  });
+
+  return {
+    kind: 'rule',
+    label: 'Antigravity session hooks',
+    created,
+    updated,
+    filePath,
+    relativePath: ANTIGRAVITY_HOOKS_RELATIVE_PATH,
+  };
+}
+
+/**
+ * Writes `.github/copilot/hooks.json` — GitHub Copilot's native hooks config.
+ * Events: sessionStart, userPromptSubmitted, sessionEnd (camelCase).
+ * Format per code.visualstudio.com/docs/copilot/customization/hooks:
+ * version 1, type "command", uses bash/powershell fields, timeoutSec.
+ */
+export function ensureCopilotHooks(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, COPILOT_HOOKS_RELATIVE_PATH);
+  const existing = readJsonObject(filePath);
+  const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
+  const bclawBin = getBclawBin();
+
+  const sessionStartCmd = `${bclawBin} session-start --include-context 2>/dev/null`;
+  const contextDiffCmd = `${bclawBin} context-diff 2>/dev/null`;
+  const sessionEndCmd = `${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
+
+  hooks.sessionStart = [{ type: 'command', bash: sessionStartCmd, timeoutSec: 30 }];
+  hooks.userPromptSubmitted = [{ type: 'command', bash: contextDiffCmd, timeoutSec: 10 }];
+  hooks.sessionEnd = [{ type: 'command', bash: sessionEndCmd, timeoutSec: 30 }];
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    version: 1,
+    hooks,
+  });
+
+  return {
+    kind: 'rule',
+    label: 'Copilot session hooks',
+    created,
+    updated,
+    filePath,
+    relativePath: COPILOT_HOOKS_RELATIVE_PATH,
+  };
+}
+
 export function ensureOpenClawMcpConfig(homeDir: string | undefined): AutoConfigWriteResult | undefined {
   if (!homeDir) {
     return undefined;
@@ -1696,9 +1812,9 @@ export function writeDetectedAgentAutoConfig(
       return results;
     }
     case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureUniversalBrainclawSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd), ensureUniversalBrainclawSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
     case 'cursor': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureUniversalBrainclawSkill(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd), ensureUniversalBrainclawSkill(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
       if (mcp) results.push(mcp);
       return results;
@@ -1723,8 +1839,13 @@ export function writeDetectedAgentAutoConfig(
     case 'opencode':
       return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'antigravity': {
-      const result = ensureAntigravityMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
+      const homeDir = resolveHomeDir(env);
+      const results: AutoConfigWriteResult[] = [];
+      const mcp = ensureAntigravityMcpConfig(homeDir);
+      if (mcp) results.push(mcp);
+      const hooks = ensureAntigravityHooks(homeDir);
+      if (hooks) results.push(hooks);
+      return results;
     }
     case 'openclaw': {
       const result = ensureOpenClawMcpConfig(resolveHomeDir(env));
