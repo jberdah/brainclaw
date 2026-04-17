@@ -223,6 +223,32 @@ describe('withLoopLock — idempotency + CAS', () => {
     assert.equal(minted, 1, 'open retries must not mint twice');
     assert.equal(first.loop_id, second.loop_id);
   });
+
+  it('open_idempotency rejects the same key with a different payload hash', () => {
+    withLoopLock({
+      cwd,
+      intent: 'open',
+      agentId: 'agt_a',
+      scope: { kind: 'open_idempotency', clientRequestId: 'req_open_2' },
+      clientRequestId: 'req_open_2',
+      requestPayload: { kind: 'review', title: 'first', nested: { a: 1, b: 2 } },
+      work: () => ({ loop_id: 'lop_first' }),
+    });
+
+    assert.throws(
+      () =>
+        withLoopLock({
+          cwd,
+          intent: 'open',
+          agentId: 'agt_a',
+          scope: { kind: 'open_idempotency', clientRequestId: 'req_open_2' },
+          clientRequestId: 'req_open_2',
+          requestPayload: { kind: 'review', title: 'first', nested: { b: 9, a: 1 } },
+          work: () => ({ loop_id: 'lop_second' }),
+        }),
+      (err) => err instanceof IdempotencyKeyReusedError,
+    );
+  });
 });
 
 describe('recordConflict + hashRequest', () => {
@@ -237,6 +263,18 @@ describe('recordConflict + hashRequest', () => {
   it('hashRequest is stable across key orderings', () => {
     const a = hashRequest({ a: 1, b: 2 });
     const b = hashRequest({ b: 2, a: 1 });
+    assert.equal(a, b);
+  });
+
+  it('hashRequest is stable across nested object key orderings', () => {
+    const a = hashRequest({
+      kind: 'review',
+      payload: { nested: { a: 1, b: 2 }, items: [{ z: 1, a: 2 }] },
+    });
+    const b = hashRequest({
+      payload: { items: [{ a: 2, z: 1 }], nested: { b: 2, a: 1 } },
+      kind: 'review',
+    });
     assert.equal(a, b);
   });
 

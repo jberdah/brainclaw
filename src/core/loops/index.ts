@@ -1,6 +1,5 @@
 export * from './types.js';
 export {
-  appendEvent,
   closeLoop,
   ensureLoopsDir,
   generateLoopId,
@@ -10,7 +9,6 @@ export {
   listLoopEvents,
   listLoops,
   openLoop,
-  writeThreadFile,
   type CloseLoopInput,
   type OpenLoopInput,
 } from './store.js';

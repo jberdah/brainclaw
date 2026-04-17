@@ -39,8 +39,8 @@ function loadLoopOrThrow(id: string, cwd?: string): LoopThread {
 
 function isVerdictAccepted(artifact: LoopArtifact): boolean {
   if (artifact.type !== 'verdict') return false;
-  const body = (artifact.body ?? '').toLowerCase();
-  return body.includes('accepted') || body.includes('approved') || body.includes('ready_to_lock');
+  const body = (artifact.body ?? '').trim().toLowerCase();
+  return /^accepted(?:\b|[:\s])/.test(body);
 }
 
 export function evaluateStopCondition(thread: LoopThread, condition?: StopCondition): boolean {
@@ -339,7 +339,7 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
 
   // Slot-bound auth. Only enforced when caller_agent_id is supplied (MCP entry path).
   if (input.caller_agent_id !== undefined && !input.admin_override) {
-    const ownerMatches = slot.agent_id ? slot.agent_id === input.caller_agent_id : true;
+    const ownerMatches = slot.agent_id !== undefined && slot.agent_id === input.caller_agent_id;
     const creatorMatches = current.created_by === input.caller_agent_id;
     if (!ownerMatches && !creatorMatches) {
       throw new Error('unauthorized_slot_write');

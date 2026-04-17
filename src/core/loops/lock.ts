@@ -151,8 +151,23 @@ export interface IdempotencyRecord<R = unknown> {
   stored_at: string;
 }
 
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJson(item));
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const canonical: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      canonical[key] = canonicalizeJson(record[key]);
+    }
+    return canonical;
+  }
+  return value;
+}
+
 export function hashRequest(payload: unknown): string {
-  const canonical = JSON.stringify(payload, Object.keys(payload as Record<string, unknown>).sort());
+  const canonical = JSON.stringify(canonicalizeJson(payload));
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 

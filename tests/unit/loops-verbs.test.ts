@@ -195,6 +195,46 @@ describe('loops verbs — turn / complete_turn', () => {
       ),
     );
   });
+
+  it('complete_turn still rejects non-creator callers when the slot has no agent_id', () => {
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'ownerless-slot',
+        created_by: 'agt_test',
+        slots: [{ role: 'reviewer', agent: 'codex' }],
+      },
+      cwd,
+    );
+    const reviewerSlotId = loop.slots[0].slot_id;
+    turn({ id: loop.id, slot_id: reviewerSlotId, actor: 'agt_test' }, cwd);
+
+    assert.throws(
+      () =>
+        complete_turn(
+          {
+            id: loop.id,
+            slot_id: reviewerSlotId,
+            actor: 'agt_other',
+            caller_agent_id: 'agt_other',
+          },
+          cwd,
+        ),
+      /unauthorized_slot_write/,
+    );
+
+    assert.doesNotThrow(() =>
+      complete_turn(
+        {
+          id: loop.id,
+          slot_id: reviewerSlotId,
+          actor: 'agt_test',
+          caller_agent_id: 'agt_test',
+        },
+        cwd,
+      ),
+    );
+  });
 });
 
 describe('loops verbs — add_artifact / pause / resume', () => {
@@ -284,6 +324,22 @@ describe('loops — evaluateStopCondition', () => {
       ],
     };
     assert.equal(evaluateStopCondition(withVerdict, { kind: 'reviewer_green' }), true);
+  });
+
+  it('reviewer_green does not fire for non-accepted verdict text', () => {
+    const withVerdict = {
+      ...base,
+      artifacts: [
+        {
+          artifact_id: 'art_1',
+          phase: 'verdict',
+          type: 'verdict',
+          body: 'approved',
+          produced_at: new Date().toISOString(),
+        },
+      ],
+    };
+    assert.equal(evaluateStopCondition(withVerdict, { kind: 'reviewer_green' }), false);
   });
 
   it('any / all compose correctly', () => {
