@@ -24,6 +24,10 @@ function payload(result: unknown): LoopPayload {
   return result as LoopPayload;
 }
 
+function stableJson<T>(value: T): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
 describe('bclaw_loop facade — open / get / list', () => {
   let cwd: string;
   before(() => {
@@ -60,6 +64,71 @@ describe('bclaw_loop facade — open / get / list', () => {
       ),
     );
     assert.match(r.summary, /opened lop_/);
+  });
+
+  it('open with the same client_request_id returns the same loop without double-creation', () => {
+    const before = handleBclawLoop({ args: { intent: 'list' }, cwd });
+    const beforeTotal = (before.response.result as { total: number }).total;
+
+    const first = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'idem-open',
+        agentId: 'agt_a',
+        client_request_id: 'req_open_same',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const second = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'idem-open',
+        agentId: 'agt_a',
+        client_request_id: 'req_open_same',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const after = handleBclawLoop({ args: { intent: 'list' }, cwd });
+    const afterTotal = (after.response.result as { total: number }).total;
+
+    assert.equal(first.response.status, 'ok');
+    assert.equal(second.response.status, 'ok');
+    assert.equal(payload(first.response.result).loop.id, payload(second.response.result).loop.id);
+    assert.deepEqual(stableJson(second.response.result), stableJson(first.response.result));
+    assert.equal(afterTotal, beforeTotal + 1);
+  });
+
+  it('open rejects reuse of the same client_request_id with a different payload', () => {
+    handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'idem-mismatch-a',
+        agentId: 'agt_a',
+        client_request_id: 'req_open_diff',
+      },
+      cwd,
+    });
+
+    const r = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'idem-mismatch-b',
+        agentId: 'agt_a',
+        client_request_id: 'req_open_diff',
+      },
+      cwd,
+    });
+
+    assert.equal(r.response.status, 'error');
+    assert.match(r.response.error ?? '', /^idempotency_key_reused_with_different_body:/);
+    assert.ok((r.response.result as { stored_hash?: string }).stored_hash);
+    assert.ok((r.response.result as { submitted_hash?: string }).submitted_hash);
   });
 
   it('rejects an invalid payload with a structured validation_error', () => {
@@ -280,6 +349,89 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const loopEvents = r.response.artifacts.filter((a) => a.type === 'loop_event');
     assert.ok(loopEvents.length >= 1, 'closed event must be surfaced on auto-close');
   });
+
+  it('advance succeeds when expected_version matches', () => {
+    const opened = handleBclawLoop({
+      args: { intent: 'open', kind: 'research', title: 'advance-cas-pass', agentId: 'agt_a' },
+      cwd,
+    });
+    const openedPayload = payload(opened.response.result);
+
+    const r = handleBclawLoop({
+      args: {
+        intent: 'advance',
+        loop_id: openedPayload.loop.id,
+        agentId: 'agt_a',
+        expected_version: openedPayload.loop.version,
+      },
+      cwd,
+    });
+
+    assert.equal(r.response.status, 'ok');
+    assert.equal(payload(r.response.result).loop.version, openedPayload.loop.version + 1);
+  });
+
+  it('advance returns version_conflict with actual_version when expected_version mismatches', () => {
+    const opened = handleBclawLoop({
+      args: { intent: 'open', kind: 'research', title: 'advance-cas-fail', agentId: 'agt_a' },
+      cwd,
+    });
+    const openedPayload = payload(opened.response.result);
+
+    const r = handleBclawLoop({
+      args: {
+        intent: 'advance',
+        loop_id: openedPayload.loop.id,
+        agentId: 'agt_a',
+        expected_version: openedPayload.loop.version + 10,
+      },
+      cwd,
+    });
+
+    assert.equal(r.response.status, 'error');
+    assert.match(r.response.error ?? '', /^version_conflict: expected=/);
+    assert.equal((r.response.result as { actual_version?: number }).actual_version, openedPayload.loop.version);
+  });
+
+  it('complete_turn idempotent retry returns the cached response', () => {
+    const opened = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'complete-idem',
+        agentId: 'agt_author',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const openedPayload = payload(opened.response.result);
+    const loopId = openedPayload.loop.id;
+    const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
+
+    handleBclawLoop({
+      args: { intent: 'turn', loop_id: loopId, slot_id: reviewerSlotId, agentId: 'agt_author' },
+      cwd,
+    });
+
+    const request = {
+      intent: 'complete_turn' as const,
+      loop_id: loopId,
+      slot_id: reviewerSlotId,
+      outcome: 'done' as const,
+      artifact: { phase: 'findings', type: 'finding', body: 'cached' },
+      agentId: 'agt_reviewer',
+      client_request_id: 'req_complete_same',
+    };
+
+    const first = handleBclawLoop({ args: request, cwd });
+    const second = handleBclawLoop({ args: request, cwd });
+
+    assert.equal(first.response.status, 'ok');
+    assert.equal(second.response.status, 'ok');
+    assert.deepEqual(stableJson(second.response.result), stableJson(first.response.result));
+    assert.deepEqual(stableJson(second.response.artifacts), stableJson(first.response.artifacts));
+    assert.deepEqual(stableJson(second.response.side_effects), stableJson(first.response.side_effects));
+  });
 });
 
 describe('bclaw_loop facade — pause / resume / close', () => {
@@ -312,8 +464,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     assert.equal(paused.response.status, 'ok');
     assert.equal(payload(paused.response.result).loop.status, 'paused');
     assert.equal(paused.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
-    assert.match((paused.response.warnings ?? []).join('\n'), /expected_version/);
-    assert.match((paused.response.warnings ?? []).join('\n'), /client_request_id/);
+    assert.deepEqual(paused.response.warnings, []);
 
     const resumed = handleBclawLoop({
       args: { intent: 'resume', loop_id: loopId, agentId: 'agt_a' },
