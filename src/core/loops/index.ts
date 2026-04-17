@@ -37,6 +37,7 @@ export {
   LEASE_GRACE_MS,
   LEASE_WINDOW_MS,
   IdempotencyKeyReusedError,
+  IdempotencyOwnerMismatchError,
   LockLostError,
   LockTimeoutError,
   VersionConflictError,

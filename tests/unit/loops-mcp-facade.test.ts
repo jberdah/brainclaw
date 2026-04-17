@@ -432,6 +432,235 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     assert.deepEqual(stableJson(second.response.artifacts), stableJson(first.response.artifacts));
     assert.deepEqual(stableJson(second.response.side_effects), stableJson(first.response.side_effects));
   });
+
+  it('complete_turn cached response is NOT returned to a different caller (slot-bound auth)', () => {
+    const opened = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'owner-match',
+        agentId: 'agt_author',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const openedPayload = payload(opened.response.result);
+    const loopId = openedPayload.loop.id;
+    const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
+    handleBclawLoop({
+      args: { intent: 'turn', loop_id: loopId, slot_id: reviewerSlotId, agentId: 'agt_author' },
+      cwd,
+    });
+
+    const payloadBody = {
+      intent: 'complete_turn' as const,
+      loop_id: loopId,
+      slot_id: reviewerSlotId,
+      outcome: 'done' as const,
+      artifact: { phase: 'findings', type: 'finding', body: 'LGTM' },
+      client_request_id: 'req_owner_match',
+    };
+
+    const legitimate = handleBclawLoop({
+      args: { ...payloadBody, agentId: 'agt_reviewer' },
+      cwd,
+    });
+    assert.equal(legitimate.response.status, 'ok');
+
+    // Impersonator reuses the same client_request_id + identical payload body.
+    // Without caller-match enforcement they'd get back the cached success
+    // response. With requireCallerMatch=true the facade must reject.
+    const impersonator = handleBclawLoop({
+      args: { ...payloadBody, agentId: 'agt_impersonator' },
+      cwd,
+    });
+    assert.equal(impersonator.response.status, 'error');
+    assert.match(impersonator.response.error ?? '', /^idempotency_owner_mismatch/);
+  });
+
+  it('turn with client_request_id is idempotent across retries', () => {
+    const opened = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'turn-idem',
+        agentId: 'agt_author',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const p = payload(opened.response.result);
+    const reviewerSlotId = p.loop.slots[0].slot_id;
+
+    const req = {
+      intent: 'turn' as const,
+      loop_id: p.loop.id,
+      slot_id: reviewerSlotId,
+      assignment_id: 'asgn_once',
+      agentId: 'agt_author',
+      client_request_id: 'req_turn_1',
+    };
+    const first = handleBclawLoop({ args: req, cwd });
+    const second = handleBclawLoop({ args: req, cwd });
+    assert.equal(first.response.status, 'ok');
+    assert.equal(second.response.status, 'ok');
+    assert.deepEqual(stableJson(first.response.result), stableJson(second.response.result));
+  });
+
+  it('close supports expected_version CAS', () => {
+    const opened = handleBclawLoop({
+      args: { intent: 'open', kind: 'research', title: 'close-cas', agentId: 'agt_a' },
+      cwd,
+    });
+    const loopId = payload(opened.response.result).loop.id;
+    const v = payload(opened.response.result).loop.version;
+
+    const stale = handleBclawLoop({
+      args: { intent: 'close', loop_id: loopId, status: 'completed', expected_version: v + 99, agentId: 'agt_a' },
+      cwd,
+    });
+    assert.equal(stale.response.status, 'error');
+    assert.match(stale.response.error ?? '', /^version_conflict/);
+
+    const ok = handleBclawLoop({
+      args: { intent: 'close', loop_id: loopId, status: 'completed', expected_version: v, agentId: 'agt_a' },
+      cwd,
+    });
+    assert.equal(ok.response.status, 'ok');
+    assert.equal(payload(ok.response.result).loop.status, 'completed');
+  });
+
+  it('failed mutation does NOT poison the idempotency cache; retry after fixing succeeds', () => {
+    const opened = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'no-poison',
+        agentId: 'agt_author',
+        slots: [{ role: 'reviewer', agent_id: 'agt_reviewer' }],
+      },
+      cwd,
+    });
+    const openedPayload = payload(opened.response.result);
+    const reviewerSlotId = openedPayload.loop.slots[0].slot_id;
+    handleBclawLoop({
+      args: { intent: 'turn', loop_id: openedPayload.loop.id, slot_id: reviewerSlotId, agentId: 'agt_author' },
+      cwd,
+    });
+
+    // First call: impersonator tries complete_turn. Rejected by slot-bound
+    // auth inside the verb → error, NOT cached (cache writes only on success).
+    const rejected = handleBclawLoop({
+      args: {
+        intent: 'complete_turn',
+        loop_id: openedPayload.loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        agentId: 'agt_impersonator',
+        client_request_id: 'req_first_fails',
+      },
+      cwd,
+    });
+    assert.equal(rejected.response.status, 'error');
+
+    // Second call with the SAME client_request_id but the right caller must
+    // succeed — the cache is empty because the first call errored before
+    // withLoopLock persisted anything.
+    const ok = handleBclawLoop({
+      args: {
+        intent: 'complete_turn',
+        loop_id: openedPayload.loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        artifact: { phase: 'findings', type: 'finding', body: 'retry ok' },
+        agentId: 'agt_reviewer',
+        client_request_id: 'req_first_fails',
+      },
+      cwd,
+    });
+    assert.equal(ok.response.status, 'ok');
+    assert.equal(payload(ok.response.result).loop.artifacts.length, 1);
+  });
+
+  it('add_artifact supports CAS via expected_version', () => {
+    const opened = handleBclawLoop({
+      args: { intent: 'open', kind: 'research', title: 'artifact-cas', agentId: 'agt_a' },
+      cwd,
+    });
+    const loopId = payload(opened.response.result).loop.id;
+    const v = payload(opened.response.result).loop.version;
+
+    const stale = handleBclawLoop({
+      args: {
+        intent: 'add_artifact',
+        loop_id: loopId,
+        artifact: { phase: 'investigate', type: 'note', body: 'first' },
+        expected_version: v + 50,
+        agentId: 'agt_a',
+      },
+      cwd,
+    });
+    assert.equal(stale.response.status, 'error');
+    assert.match(stale.response.error ?? '', /^version_conflict/);
+
+    const ok = handleBclawLoop({
+      args: {
+        intent: 'add_artifact',
+        loop_id: loopId,
+        artifact: { phase: 'investigate', type: 'note', body: 'first' },
+        expected_version: v,
+        agentId: 'agt_a',
+      },
+      cwd,
+    });
+    assert.equal(ok.response.status, 'ok');
+  });
+});
+
+describe('bclaw_loop facade — lock_timeout', () => {
+  let cwd: string;
+  before(() => {
+    cwd = makeWorkspace();
+  });
+  after(() => {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('returns lock_timeout when a concurrent lock is already held past the backoff window', () => {
+    const opened = handleBclawLoop({
+      args: { intent: 'open', kind: 'research', title: 'lock-timeout', agentId: 'agt_a' },
+      cwd,
+    });
+    const loopId = payload(opened.response.result).loop.id;
+
+    // Simulate another live writer holding the per-loop lock by dropping a
+    // valid lock blob at the expected path with a lease well into the future
+    // and a live pid (this process's own).
+    const lockPath = path.join(cwd, '.brainclaw', 'loops', 'locks', `${loopId}.lock`);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const now = new Date();
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        host_id: os.hostname(),
+        agent_id: 'agt_phantom',
+        acquired_at: now.toISOString(),
+        lease_until: new Date(now.getTime() + 60_000).toISOString(),
+        hard_deadline: new Date(now.getTime() + 300_000).toISOString(),
+        mutation_id: 'mut_phantom',
+      }),
+    );
+
+    const r = handleBclawLoop({
+      args: { intent: 'advance', loop_id: loopId, agentId: 'agt_b' },
+      cwd,
+    });
+    assert.equal(r.response.status, 'error');
+    assert.match(r.response.error ?? '', /^lock_timeout/);
+
+    fs.unlinkSync(lockPath);
+  });
 });
 
 describe('bclaw_loop facade — pause / resume / close', () => {
