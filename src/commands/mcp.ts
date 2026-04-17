@@ -1179,6 +1179,50 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
+    name: 'bclaw_loop',
+    description: 'Loop engine facade: open/turn/complete_turn/advance/add_artifact/pause/resume/close/get/list multi-turn work loops (review, ideation, implementation, research, debug). Returns a FacadeResponse with the loop thread, the newly-appended event, and a next_expected hint describing the natural next intent. Experimental — schema may evolve; gate production callers behind MCP versioning (pln#392).',
+    annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: {
+          type: 'string',
+          enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close'],
+          description: 'Loop lifecycle intent. See docs/concepts/loop-engine.md for semantics.',
+        },
+        loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
+        kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
+        title: { type: 'string', description: 'Human-readable title (open).' },
+        goal: { type: 'string', description: 'Optional goal statement (open).' },
+        phases: { type: 'array', description: 'Optional phase list override (open). Each item is { name, advance_when? }.' },
+        slots: { type: 'array', description: 'Optional initial slot specs (open). Each item carries at least { role }.' },
+        linked: { type: 'object', description: 'Optional top-level plan/sequence refs (open).' },
+        stop_condition: { type: 'object', description: 'Optional stop_condition override (open). Composite any/all supported.' },
+        mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review mode selector for open (review kind only).' },
+        status: { type: 'string', description: 'Filter value for list, or target final_status for close.' },
+        include_events: { type: 'boolean', description: 'get: include the event journal in the response.' },
+        limit: { type: 'number', description: 'list: max loops returned.' },
+        offset: { type: 'number', description: 'list: pagination offset.' },
+        slot_id: { type: 'string', description: 'Slot id for turn / complete_turn.' },
+        role: { type: 'string', description: 'Slot role for turn (resolves the first non-done slot with that role).' },
+        input: { type: 'string', description: 'turn: free-form input passed to the slot.' },
+        assignment_id: { type: 'string', description: 'turn: assignment id produced by the dispatcher to be recorded on the slot.' },
+        dispatch: { type: 'boolean', description: 'turn: whether the caller has already dispatched the downstream work (recorded for auditability; no spawn happens here).' },
+        outcome: { type: 'string', enum: ['done', 'failed', 'cancelled'], description: 'complete_turn outcome (default done).' },
+        failure_reason: { type: 'string', description: 'complete_turn: optional failure/cancel reason.' },
+        artifact: { type: 'object', description: 'complete_turn / add_artifact payload: { phase, type, body?, produced_by?, ref? }.' },
+        to_phase: { type: 'string', description: 'advance: explicit target phase (otherwise the next phase).' },
+        force: { type: 'boolean', description: 'advance: allow going backwards (increments iteration_count).' },
+        reason: { type: 'string', description: 'advance / pause / close: optional reason string.' },
+        expected_version: { type: 'number', description: 'Optimistic concurrency: mutation fails with version_conflict if thread.version differs.' },
+        client_request_id: { type: 'string', description: 'Caller-minted ULID/UUIDv7 for idempotent retries (mutating intents only).' },
+        agent: { type: 'string', description: 'Caller agent name.' },
+        agentId: { type: 'string', description: 'Caller registered agent id (enforced for slot-bound auth in complete_turn).' },
+      },
+      required: ['intent'],
+    },
+  },
+  {
     name: 'bclaw_assignment_update',
     description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief.',
     annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
@@ -4691,6 +4735,17 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         response: toolResponse({
           content: [{ type: 'text', text: summaryParts.join('\n') }],
           structuredContent: facadeResponse as unknown as Record<string, unknown>,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_loop') {
+      const { handleBclawLoop } = await import('./loops-handlers.js');
+      const result = handleBclawLoop({ args: args as unknown, cwd });
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: result.summary }],
+          structuredContent: result.response as unknown as Record<string, unknown>,
         }),
       };
     }
