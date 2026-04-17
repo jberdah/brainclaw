@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import type { FacadeResponse } from '../core/facade-schema.js';
 import {
   add_artifact,
@@ -15,10 +16,11 @@ import {
   type LoopPhase,
   type LoopSlot,
   type LoopThread,
-  type LoopRef,
 } from '../core/loops/index.js';
 import {
   BclawLoopRequestSchema,
+  BCLAW_LOOP_INTENTS,
+  type BclawLoopIntent,
   type BclawLoopRequest,
 } from '../core/loops/facade-schema.js';
 
@@ -38,6 +40,18 @@ export interface HandleBclawLoopResult {
 }
 
 type ValidRequest = BclawLoopRequest;
+type LoopEventSnapshot = Set<string>;
+type NextExpectedHint = {
+  action: 'turn' | 'complete_turn' | 'advance' | 'close';
+  intent: string;
+  reason?: string;
+  phase?: string;
+  slot_id?: string;
+  role?: string;
+  from_phase?: string;
+  to_phase?: string;
+  blocking_on: string[];
+};
 
 function resolveActor(
   req: { agent?: string; agentId?: string },
@@ -92,6 +106,15 @@ function errorResponse(
   };
 }
 
+function inferIntent(args: unknown): BclawLoopIntent | 'unknown' {
+  if (!args || typeof args !== 'object') return 'unknown';
+  const candidate = (args as { intent?: unknown }).intent;
+  if (typeof candidate !== 'string') return 'unknown';
+  return (BCLAW_LOOP_INTENTS as readonly string[]).includes(candidate)
+    ? (candidate as BclawLoopIntent)
+    : 'unknown';
+}
+
 function loopArtifactEntry(id: string): FacadeResponse['artifacts'][number] {
   return { type: 'loop', id };
 }
@@ -108,18 +131,41 @@ function sideEffectUpdate(entity: 'loop' | 'loop_event', id: string): FacadeResp
   return { action: 'update', entity, id };
 }
 
-function latestEventSideEffect(loop: LoopThread, cwd?: string): FacadeResponse['side_effects'][number] | null {
-  const events = listLoopEvents(loop.id, cwd);
-  const last = events[events.length - 1];
-  if (!last) return null;
-  return sideEffectCreate('loop_event', last.event_id);
+function snapshotLoopEvents(loopId: string, cwd?: string): LoopEventSnapshot {
+  return new Set(listLoopEvents(loopId, cwd).map((event) => event.event_id));
 }
 
-function latestEventArtifact(loop: LoopThread, cwd?: string): FacadeResponse['artifacts'][number] | null {
-  const events = listLoopEvents(loop.id, cwd);
-  const last = events[events.length - 1];
-  if (!last) return null;
-  return loopEventArtifactEntry(last.event_id);
+function findNewLoopEvents(loopId: string, before: LoopEventSnapshot | undefined, cwd?: string): LoopEvent[] {
+  const events = listLoopEvents(loopId, cwd);
+  if (!before) return events;
+  return events.filter((event) => !before.has(event.event_id));
+}
+
+function loopEventArtifacts(events: LoopEvent[]): FacadeResponse['artifacts'] {
+  return events.map((event) => loopEventArtifactEntry(event.event_id));
+}
+
+function loopEventSideEffects(events: LoopEvent[]): FacadeResponse['side_effects'] {
+  return events.map((event) => sideEffectCreate('loop_event', event.event_id));
+}
+
+function getDeferredFieldWarnings(req: ValidRequest): string[] {
+  if (req.intent === 'get' || req.intent === 'list') return [];
+  const warnings: string[] = [];
+  if ('expected_version' in req && typeof req.expected_version === 'number') {
+    warnings.push('expected_version is accepted for RFC compatibility but not enforced until lock/CAS wiring lands.');
+  }
+  if (typeof req.client_request_id === 'string' && req.client_request_id.length > 0) {
+    warnings.push('client_request_id is accepted for RFC compatibility but not enforced until lock/idempotency wiring lands.');
+  }
+  return warnings;
+}
+
+function validateSemanticRequest(req: ValidRequest): string | null {
+  if (req.intent === 'turn' && !req.slot_id && !req.role) {
+    return 'turn requires slot_id or role';
+  }
+  return null;
 }
 
 /**
@@ -128,7 +174,7 @@ function latestEventArtifact(loop: LoopThread, cwd?: string): FacadeResponse['ar
  * status + slot states and pick the smallest correct action.
  */
 function computeNextExpected(loop: LoopThread): {
-  action: 'turn' | 'advance' | 'close';
+  action: NextExpectedHint['action'];
   intent: string;
   reason?: string;
   phase?: string;
@@ -166,7 +212,7 @@ function computeNextExpected(loop: LoopThread): {
   );
   if (assignedOrWorking.length > 0) {
     return {
-      action: 'turn',
+      action: 'complete_turn',
       intent: 'bclaw_loop.complete_turn',
       phase: loop.current_phase,
       slot_id: assignedOrWorking[0].slot_id,
@@ -203,12 +249,18 @@ function summarizeLoop(loop: LoopThread, autoClosed?: boolean): string {
 export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoopResult {
   const startMs = Date.now();
   const defaultActor = options.defaultActor ?? 'bclaw_loop';
+  const inferredIntent = inferIntent(options.args);
   const parseResult = BclawLoopRequestSchema.safeParse(options.args);
   if (!parseResult.success) {
-    return errorResponse('unknown', 'validation_error', parseResult.error.message, Date.now() - startMs);
+    return errorResponse(inferredIntent, 'validation_error', parseResult.error.message, Date.now() - startMs);
   }
   const req: ValidRequest = parseResult.data;
+  const semanticError = validateSemanticRequest(req);
+  if (semanticError) {
+    return errorResponse(req.intent, 'validation_error', semanticError, Date.now() - startMs);
+  }
   const { actor, agentId } = resolveActor(req, defaultActor);
+  const deferredFieldWarnings = getDeferredFieldWarnings(req);
 
   try {
     switch (req.intent) {
@@ -227,14 +279,13 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
           },
           options.cwd,
         );
-        const eventSE = latestEventSideEffect(loop, options.cwd);
-        const eventArt = latestEventArtifact(loop, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, undefined, options.cwd);
         return successResponse(
           'open',
           { loop, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id), ...(eventArt ? [eventArt] : [])],
-          [sideEffectCreate('loop', loop.id), ...(eventSE ? [eventSE] : [])],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectCreate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           `✔ opened ${loop.id} [${loop.kind}] phase=${loop.current_phase}`,
         );
@@ -274,6 +325,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
       }
 
       case 'turn': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = turn(
           {
             id: req.loop_id,
@@ -286,19 +338,20 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
           },
           options.cwd,
         );
-        const eventSE = latestEventSideEffect(loop, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'turn',
           { loop, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id), ...(eventSE ? [eventSE] : [])],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
 
       case 'complete_turn': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = complete_turn(
           {
             id: req.loop_id,
@@ -310,7 +363,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
                   phase: req.artifact.phase,
                   type: req.artifact.type,
                   body: req.artifact.body,
-                  ref: req.artifact.ref as LoopRef | undefined,
+                  ref: req.artifact.ref,
                 }
               : undefined,
             actor,
@@ -318,19 +371,20 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
           },
           options.cwd,
         );
-        const eventSE = latestEventSideEffect(loop, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'complete_turn',
           { loop, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id), ...(eventSE ? [eventSE] : [])],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
 
       case 'advance': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const result = advance(
           {
             id: req.loop_id,
@@ -341,19 +395,20 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
           },
           options.cwd,
         );
-        const eventSE = latestEventSideEffect(result.loop, options.cwd);
+        const newEvents = findNewLoopEvents(result.loop.id, beforeEvents, options.cwd);
         return successResponse(
           'advance',
           { loop: result.loop, auto_closed: result.auto_closed, next_expected: computeNextExpected(result.loop) },
-          [loopArtifactEntry(result.loop.id)],
-          [sideEffectUpdate('loop', result.loop.id), ...(eventSE ? [eventSE] : [])],
-          [],
+          [loopArtifactEntry(result.loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', result.loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(result.loop, result.auto_closed),
         );
       }
 
       case 'add_artifact': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = add_artifact(
           {
             id: req.loop_id,
@@ -362,67 +417,76 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
               type: req.artifact.type,
               body: req.artifact.body,
               produced_by: req.artifact.produced_by,
-              ref: req.artifact.ref as LoopRef | undefined,
+              ref: req.artifact.ref,
             },
             actor,
           },
           options.cwd,
         );
-        const eventSE = latestEventSideEffect(loop, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'add_artifact',
           { loop, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id), ...(eventSE ? [eventSE] : [])],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
 
       case 'pause': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = pause({ id: req.loop_id, reason: req.reason, actor }, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'pause',
           { loop, next_expected: null },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id)],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
 
       case 'resume': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = resume({ id: req.loop_id, actor }, options.cwd);
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'resume',
           { loop, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id)],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
 
       case 'close': {
+        const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
         const loop = closeLoop(
           { id: req.loop_id, final_status: req.status, reason: req.reason, actor },
           options.cwd,
         );
+        const newEvents = findNewLoopEvents(loop.id, beforeEvents, options.cwd);
         return successResponse(
           'close',
           { loop, next_expected: null },
-          [loopArtifactEntry(loop.id)],
-          [sideEffectUpdate('loop', loop.id)],
-          [],
+          [loopArtifactEntry(loop.id), ...loopEventArtifacts(newEvents)],
+          [sideEffectUpdate('loop', loop.id), ...loopEventSideEffects(newEvents)],
+          deferredFieldWarnings,
           Date.now() - startMs,
           summarizeLoop(loop),
         );
       }
     }
   } catch (err: unknown) {
+    if (err instanceof ZodError) {
+      return errorResponse(req.intent, 'validation_error', err.message, Date.now() - startMs);
+    }
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('unauthorized_slot_write')) {
       return errorResponse(req.intent, 'unauthorized_slot_write', message, Date.now() - startMs);

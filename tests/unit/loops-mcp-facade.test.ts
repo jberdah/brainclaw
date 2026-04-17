@@ -65,6 +65,7 @@ describe('bclaw_loop facade — open / get / list', () => {
   it('rejects an invalid payload with a structured validation_error', () => {
     const r = handleBclawLoop({ args: { intent: 'open' }, cwd });
     assert.equal(r.response.status, 'error');
+    assert.equal(r.response.intent, 'bclaw_loop.open');
     assert.match(r.response.error ?? '', /validation_error/);
   });
 
@@ -170,6 +171,21 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const slot = p.loop.slots.find((s) => s.slot_id === reviewerSlotId)!;
     assert.equal(slot.status, 'assigned');
     assert.equal(slot.assignment_id, 'asgn_x');
+    assert.equal(r.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
+  });
+
+  it('turn without slot_id or role fails as validation_error with the turn intent preserved', () => {
+    const r = handleBclawLoop({
+      args: {
+        intent: 'turn',
+        loop_id: 'lop_abcdef',
+        agentId: 'agt_a',
+      },
+      cwd,
+    });
+    assert.equal(r.response.status, 'error');
+    assert.equal(r.response.intent, 'bclaw_loop.turn');
+    assert.match(r.response.error ?? '', /validation_error/);
   });
 
   it('complete_turn enforces slot-bound auth via caller_agent_id', () => {
@@ -221,6 +237,9 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const p = payload(ok.response.result);
     assert.equal(p.loop.slots[0].status, 'done');
     assert.equal(p.loop.artifacts.length, 1);
+    assert.deepEqual((p.next_expected as { action: string }).action, 'advance');
+    assert.equal(ok.response.artifacts.filter((a) => a.type === 'loop_event').length, 2);
+    assert.equal(ok.response.side_effects.filter((s) => s.entity === 'loop_event').length, 2);
   });
 
   it('advance reports auto_closed=true when reviewer_green stop fires', () => {
@@ -253,6 +272,13 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
     const p = payload(r.response.result);
     assert.equal(p.auto_closed, true);
     assert.equal(p.loop.status, 'completed');
+    // `advance` detects reviewer_green before the phase transition, so the verb
+    // short-circuits and emits only the `closed` event (no intermediate
+    // phase_advanced). Auto-close with a post-transition stop_condition would
+    // surface 2 events; that path is covered in loops-verbs.test.ts.
+    assert.equal(r.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
+    const loopEvents = r.response.artifacts.filter((a) => a.type === 'loop_event');
+    assert.ok(loopEvents.length >= 1, 'closed event must be surfaced on auto-close');
   });
 });
 
@@ -273,17 +299,28 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     const loopId = payload(opened.response.result).loop.id;
 
     const paused = handleBclawLoop({
-      args: { intent: 'pause', loop_id: loopId, reason: 'afk', agentId: 'agt_a' },
+      args: {
+        intent: 'pause',
+        loop_id: loopId,
+        reason: 'afk',
+        agentId: 'agt_a',
+        expected_version: 1,
+        client_request_id: 'req_123',
+      },
       cwd,
     });
     assert.equal(paused.response.status, 'ok');
     assert.equal(payload(paused.response.result).loop.status, 'paused');
+    assert.equal(paused.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
+    assert.match((paused.response.warnings ?? []).join('\n'), /expected_version/);
+    assert.match((paused.response.warnings ?? []).join('\n'), /client_request_id/);
 
     const resumed = handleBclawLoop({
       args: { intent: 'resume', loop_id: loopId, agentId: 'agt_a' },
       cwd,
     });
     assert.equal(payload(resumed.response.result).loop.status, 'open');
+    assert.equal(resumed.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
   });
 
   it('close transitions to the requested final_status', () => {
@@ -306,6 +343,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
     assert.equal(closed.response.status, 'ok');
     assert.equal(payload(closed.response.result).loop.status, 'cancelled');
     assert.ok(payload(closed.response.result).loop.closed_at);
+    assert.equal(closed.response.artifacts.filter((a) => a.type === 'loop_event').length, 1);
 
     // Any subsequent advance returns a verb_error / not_found-adjacent code.
     const err = handleBclawLoop({
