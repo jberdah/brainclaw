@@ -23,6 +23,21 @@ export const CoordinateRequestSchema = z.object({
   constraints: z.record(z.string(), z.unknown()).optional(),
   threadId: z.string().optional(),
   autoExecute: z.boolean().optional(),
+  /**
+   * When intent=review and open_loop=true, a review Loop is opened on top of
+   * the review candidate: author slot = caller, reviewer slots = targetAgents.
+   * The candidate is linked as a change_summary artifact and the loop is
+   * advanced to `findings`, emitting a `turn_assigned` event for each
+   * reviewer slot. Default false for strict backward compatibility with
+   * existing `review` callers. See docs/concepts/loop-engine.md §Automation.
+   */
+  open_loop: z.boolean().optional(),
+  /**
+   * Optional override: asymmetric (classical author→reviewer handoff) or
+   * symmetric (each reviewer turn may apply fixes, halving round-trips).
+   * Ignored when open_loop is false. Defaults to asymmetric.
+   */
+  review_mode: z.enum(['asymmetric', 'symmetric']).optional(),
 });
 
 export const FacadeArtifactSchema = z.object({
