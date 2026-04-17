@@ -106,13 +106,13 @@ function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
   };
 }
 
-function appendEvent(loopId: string, event: LoopEvent, cwd?: string): void {
+export function appendEvent(loopId: string, event: LoopEvent, cwd?: string): void {
   const parsed = LoopEventSchema.parse(event);
   ensureLoopsDir(cwd);
   fs.appendFileSync(eventsPath(loopId, cwd), `${JSON.stringify(parsed)}\n`);
 }
 
-function writeThread(thread: LoopThread, cwd?: string): void {
+export function writeThreadFile(thread: LoopThread, cwd?: string): void {
   const parsed = LoopThreadSchema.parse(thread);
   ensureLoopsDir(cwd);
   writeAtomic(threadPath(parsed.id, cwd), `${JSON.stringify(parsed, null, 2)}\n`);
@@ -172,7 +172,7 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
     },
     cwd,
   );
-  writeThread(thread, cwd);
+  writeThreadFile(thread, cwd);
 
   return thread;
 }
@@ -259,7 +259,7 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     },
     cwd,
   );
-  writeThread(next, cwd);
+  writeThreadFile(next, cwd);
 
   return next;
 }
