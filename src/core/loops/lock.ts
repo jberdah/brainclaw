@@ -83,6 +83,16 @@ export class IdempotencyKeyReusedError extends Error {
   }
 }
 
+export class IdempotencyOwnerMismatchError extends Error {
+  constructor(
+    public readonly storedOwner: string | undefined,
+    public readonly submittedOwner: string,
+  ) {
+    super('idempotency_owner_mismatch');
+    this.name = 'IdempotencyOwnerMismatchError';
+  }
+}
+
 /* ============================ path resolution ============================= */
 
 function loopsRoot(cwd?: string): string {
@@ -149,6 +159,14 @@ export interface IdempotencyRecord<R = unknown> {
   response: R;
   request_hash: string;
   stored_at: string;
+  /**
+   * agentId of the caller who first committed this idempotent mutation.
+   * For slot-bound intents (e.g. complete_turn), future retries with a
+   * different agentId must be rejected with IdempotencyOwnerMismatchError
+   * so the cache cannot become an auth-bypass channel. Optional because
+   * older records written before this field was introduced have no owner.
+   */
+  owner_agent_id?: string;
 }
 
 function canonicalizeJson(value: unknown): unknown {
@@ -357,6 +375,16 @@ export interface WithLoopLockOptions<R> {
   /** Extract the current version of a loop for CAS check. */
   currentVersion?: () => number;
   loopIdForIdempotency?: string;
+  /**
+   * For slot-bound intents whose cached response must not leak to another caller
+   * (e.g. complete_turn): when true, store the caller agentId alongside the
+   * idempotency record and reject retries from a different agent with
+   * IdempotencyOwnerMismatchError — even if the request payload hash matches.
+   * Without this, any caller who learns a client_request_id could re-read a
+   * cached success response and bypass slot-bound auth.
+   * Defaults to false.
+   */
+  requireCallerMatch?: boolean;
 }
 
 export function withLoopLock<R>(options: WithLoopLockOptions<R>): R {
@@ -390,6 +418,9 @@ export function withLoopLock<R>(options: WithLoopLockOptions<R>): R {
         if (record.request_hash !== submittedHash) {
           throw new IdempotencyKeyReusedError(record.request_hash, submittedHash);
         }
+        if (options.requireCallerMatch && record.owner_agent_id !== options.agentId) {
+          throw new IdempotencyOwnerMismatchError(record.owner_agent_id, options.agentId);
+        }
         return record.response;
       }
 
@@ -415,6 +446,7 @@ export function withLoopLock<R>(options: WithLoopLockOptions<R>): R {
         response: result,
         request_hash: submittedHash,
         stored_at: nowISO(),
+        owner_agent_id: options.agentId,
       };
       writeJsonAtomic(idPath, storeRecord);
       return result;

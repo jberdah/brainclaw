@@ -7,6 +7,7 @@ import {
   complete_turn,
   getLoop,
   IdempotencyKeyReusedError,
+  IdempotencyOwnerMismatchError,
   listLoopEvents,
   listLoops,
   LockLostError,
@@ -173,6 +174,33 @@ function currentLoopVersion(loopId: string, cwd?: string): number {
 
 type LoopMutationRequest = Exclude<ValidRequest, { intent: 'open' | 'get' | 'list' }>;
 
+/**
+ * Slot-bound intents must not let a cached idempotent response leak to a
+ * different caller. `complete_turn` is the obvious case: it carries auth
+ * semantics (caller_agent_id must match the slot owner or loop.created_by).
+ * Without caller-match enforcement on the idempotency cache, a second caller
+ * who learned the client_request_id could replay it and receive the cached
+ * success payload — bypassing slot-bound auth from an information-disclosure
+ * perspective even though the state change already happened. Intents listed
+ * here get `requireCallerMatch: true` on their withLoopLock invocation.
+ */
+const SLOT_BOUND_INTENTS = new Set<BclawLoopIntent>(['complete_turn']);
+
+/**
+ * Fence-check discipline for mutations.
+ *
+ * The `work` callback calls `fenceCheck()` at entry before invoking the verb.
+ * This closes the "lock acquired, then reaped mid-wait, then foreign writer
+ * took over" window — the verb will not proceed if the lock's mutation_id
+ * changed between `acquireLock` and `work` dispatch. It does NOT cover mid-verb
+ * fs operations: the verbs themselves (`openLoop`, `advance`, …) perform their
+ * atomic-rename + JSONL append without consulting the fence. That gap is
+ * intentional for the MVP because the verbs are synchronous and complete in
+ * single-digit milliseconds, much shorter than any reasonable hard_deadline
+ * (default 30_000 ms). If a future slice adds async dispatch inside a
+ * mutation, thread `fenceCheck` down into the verb and call it before each
+ * committing write.
+ */
 function withLockedLoopMutation(
   req: LoopMutationRequest,
   agentId: string,
@@ -188,9 +216,10 @@ function withLockedLoopMutation(
     clientRequestId: req.client_request_id,
     requestPayload: requestPayload(req),
     currentVersion: () => currentLoopVersion(req.loop_id, cwd),
+    requireCallerMatch: SLOT_BOUND_INTENTS.has(req.intent),
     work: ({ fenceCheck }) => {
-      // Best-effort fence: verbs write synchronously via atomic rename + JSONL append,
-      // so we guard the entry to the verb but do not yet re-check mid-verb.
+      // Best-effort fence at entry; see SLOT_BOUND_INTENTS / fence-check
+      // discipline comment above for why mid-verb re-checks are deferred.
       fenceCheck();
       return work();
     },
@@ -560,6 +589,15 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
         `stored_hash=${err.storedHash} submitted_hash=${err.submittedHash}`,
         Date.now() - startMs,
         { stored_hash: err.storedHash, submitted_hash: err.submittedHash },
+      );
+    }
+    if (err instanceof IdempotencyOwnerMismatchError) {
+      return errorResponse(
+        req.intent,
+        'idempotency_owner_mismatch',
+        `stored_owner=${err.storedOwner ?? 'unknown'} submitted_owner=${err.submittedOwner}`,
+        Date.now() - startMs,
+        { stored_owner: err.storedOwner, submitted_owner: err.submittedOwner },
       );
     }
     if (err instanceof LockTimeoutError) {
