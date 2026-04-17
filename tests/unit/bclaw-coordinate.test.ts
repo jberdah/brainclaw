@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CoordinateRequestSchema } from '../../src/core/facade-schema.js';
@@ -151,12 +153,26 @@ async function coordinate(
   return outcome.response.structuredContent as unknown as CoordinateResult;
 }
 
+async function loopTool(
+  workspace: TestWorkspace,
+  args: Record<string, unknown>,
+): Promise<CoordinateResult> {
+  const outcome = await executeMcpToolCall({
+    name: 'bclaw_loop',
+    args,
+    cwd: workspace.dir,
+  });
+  assert.equal(outcome.response.isError, false, `Tool error: ${JSON.stringify(outcome.response)}`);
+  return outcome.response.structuredContent as unknown as CoordinateResult;
+}
+
 describe('bclaw_coordinate — side effects', () => {
   let workspace: TestWorkspace;
   let previousTestMode: string | undefined;
   let restoreCwd: (() => void) | undefined;
 
   let previousNoSpawn: string | undefined;
+  let codexAgentId: string;
 
   beforeEach(() => {
     previousTestMode = process.env.BRAINCLAW_TEST_MODE;
@@ -167,7 +183,7 @@ describe('bclaw_coordinate — side effects', () => {
       prefix: 'bclaw-coordinate-fx-',
       currentAgent: 'claude-code',
     });
-    workspace.registerAgent('codex');
+    codexAgentId = workspace.registerAgent('codex').agent_id;
     workspace.registerAgent('github-copilot');
     restoreCwd = workspace.useCwd();
   });
@@ -406,6 +422,174 @@ describe('bclaw_coordinate — side effects', () => {
       const messageEffects = response.side_effects.filter(e => e.entity === 'message');
       assert.ok(claimEffects.length >= 1, 'Expected claim side effect');
       assert.ok(messageEffects.length >= 1, 'Expected message side effect');
+    });
+  });
+
+  // ── intent=review with open_loop (pln#395 step 4) ────────────
+
+  describe('intent=review + open_loop', () => {
+    it('defaults to open_loop=false → no loop is opened (backward-compat)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Please review the delivery refactor',
+        scope: 'src/core/delivery.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+      });
+
+      assert.equal(response.status, 'ok');
+      const candidateEffects = response.side_effects.filter((e) => e.entity === 'candidate');
+      const loopEffects = response.side_effects.filter((e) => e.entity === 'loop');
+      assert.ok(candidateEffects.length >= 1, 'candidate must still be created');
+      assert.equal(loopEffects.length, 0, 'no loop when open_loop omitted');
+      assert.equal((response.result as Record<string, unknown>).loop_id, undefined);
+    });
+
+    it('open_loop=true opens a review loop with author + reviewer slots and dispatches a turn', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Review the new MCP facade',
+        scope: 'src/commands/loops-handlers.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+      });
+
+      assert.equal(response.status, 'ok');
+      const loopEffects = response.side_effects.filter((e) => e.entity === 'loop');
+      assert.equal(loopEffects.length, 1, 'exactly one loop must be created');
+      const loopId = loopEffects[0].id;
+      assert.match(loopId, /^lop_[0-9a-z]+$/);
+      assert.equal((response.result as Record<string, unknown>).loop_id, loopId);
+
+      const loopArtifacts = response.artifacts.filter((a) => a.type === 'loop');
+      assert.equal(loopArtifacts.length, 1);
+
+      // Verify the loop actually exists on disk with the right shape.
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loop = loopsModule.getLoop(loopId, workspace.dir);
+      assert.ok(loop, 'review loop must be persisted');
+      assert.equal(loop.kind, 'review');
+      assert.equal(loop.status, 'open');
+      // After advance() + turn() the current phase is `findings`.
+      assert.equal(loop.current_phase, 'findings');
+      const authorSlot = loop.slots.find((s) => s.role === 'author');
+      const reviewerSlot = loop.slots.find((s) => s.role === 'reviewer');
+      assert.ok(authorSlot, 'author slot present');
+      assert.ok(reviewerSlot, 'reviewer slot present');
+      assert.equal(authorSlot.agent_id, workspace.currentAgent.agent_id);
+      assert.equal(reviewerSlot.agent_id, codexAgentId);
+      assert.equal(reviewerSlot.status, 'assigned', 'reviewer must be flipped to assigned by turn()');
+
+      // Candidate is linked as a change_summary artifact.
+      const changeSummary = loop.artifacts.find((a) => a.phase === 'change_summary');
+      assert.ok(changeSummary, 'change_summary artifact present');
+      assert.equal(changeSummary.type, 'change_summary');
+      assert.equal(changeSummary.ref?.kind, 'candidate');
+
+      // Event journal covers open → artifact_added → phase_advanced → turn_assigned.
+      const events = loopsModule.listLoopEvents(loopId, workspace.dir);
+      const kinds = events.map((e) => e.kind);
+      assert.ok(kinds.includes('opened'));
+      assert.ok(kinds.includes('artifact_added'));
+      assert.ok(kinds.includes('phase_advanced'));
+      assert.ok(kinds.includes('turn_assigned'));
+    });
+
+    it('open_loop with review_mode=symmetric persists protocol.review_mode on the loop', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Symmetric review of the spec draft',
+        scope: 'docs/concepts/loop-engine.md',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+        review_mode: 'symmetric',
+      });
+      assert.equal(response.status, 'ok');
+      const loopId = (response.result as Record<string, unknown>).loop_id as string;
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loop = loopsModule.getLoop(loopId, workspace.dir);
+      assert.ok(loop);
+      assert.equal(loop.protocol?.review_mode, 'symmetric');
+    });
+
+    it('reviewer can complete the dispatched turn through bclaw_loop using slot-bound agent_id auth', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Review the slot auth wiring',
+        scope: 'src/core/loops/verbs.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+      });
+
+      const loopId = (response.result as Record<string, unknown>).loop_id as string;
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loopBefore = loopsModule.getLoop(loopId, workspace.dir);
+      assert.ok(loopBefore);
+      const reviewerSlot = loopBefore.slots.find((s) => s.role === 'reviewer');
+      assert.ok(reviewerSlot);
+      assert.equal(reviewerSlot.agent_id, codexAgentId);
+
+      const completion = await loopTool(workspace, {
+        intent: 'complete_turn',
+        loop_id: loopId,
+        slot_id: reviewerSlot.slot_id,
+        agent: 'codex',
+        agentId: codexAgentId,
+        artifact: {
+          phase: 'findings',
+          type: 'review_findings',
+          body: 'No blocking issues found.',
+        },
+      });
+
+      assert.equal(completion.status, 'ok');
+      const loopAfter = loopsModule.getLoop(loopId, workspace.dir);
+      const completedReviewer = loopAfter?.slots.find((s) => s.slot_id === reviewerSlot.slot_id);
+      assert.equal(completedReviewer?.status, 'done');
+      assert.ok(loopAfter?.artifacts.some((a) => a.type === 'review_findings'));
+    });
+
+    it('review_mode is silently ignored when open_loop is false', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Mode without open_loop',
+        scope: 'src/core/facade-schema.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        review_mode: 'symmetric',
+      });
+      assert.equal(response.status, 'ok');
+      assert.equal(response.side_effects.filter((e) => e.entity === 'loop').length, 0);
+      assert.equal((response.result as Record<string, unknown>).loop_id, undefined);
+    });
+
+    it('returns partial and keeps the candidate when open_loop creation fails', async () => {
+      const loopsDir = path.join(workspace.dir, '.brainclaw', 'loops');
+      fs.mkdirSync(loopsDir, { recursive: true });
+      fs.writeFileSync(path.join(loopsDir, 'threads'), 'block loop thread dir creation');
+
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Review with a broken loops store',
+        scope: 'src/core/facade-schema.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+      });
+
+      assert.equal(response.status, 'partial');
+      const candidateEffects = response.side_effects.filter((e) => e.entity === 'candidate');
+      const loopEffects = response.side_effects.filter((e) => e.entity === 'loop');
+      assert.ok(candidateEffects.length >= 1, 'candidate must still be created');
+      assert.equal(loopEffects.length, 0, 'loop creation should fail cleanly');
+      assert.equal((response.result as Record<string, unknown>).loop_id, undefined);
+      assert.ok(
+        response.warnings.some((warning) => warning.includes('open_loop: failed to open review loop')),
+        `Expected open_loop warning, got: ${response.warnings.join(' | ')}`,
+      );
     });
   });
 });
