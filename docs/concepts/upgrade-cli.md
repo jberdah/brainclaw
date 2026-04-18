@@ -1,8 +1,28 @@
-# `brainclaw migrate` — v1.0 schema migration CLI
+# `brainclaw upgrade` — store schema upgrade CLI
 
-Design for the CLI command that upgrades a `.brainclaw/` store to the
-v1.0 schema (MCP schema 0.8.0 final step). Hard prerequisite before
-the Phase 3 grammar refactor (`pln_c6472192`) can start.
+Design for the CLI command that upgrades a `.brainclaw/` store to a
+newer schema version (first target: 1.0 = MCP schema 0.8.0 final
+step). Hard prerequisite before the Phase 3 grammar refactor
+(`pln_c6472192`) can start.
+
+**Extension, not new command.** `brainclaw upgrade` already exists
+for store housekeeping (entity-dir migration, Zod schema doc
+migration on load, managed agent-file refresh, optional
+`--self-update` of the binary). The v1.0 work extends this command
+with three additions:
+
+1. `--to <version>` — run the one-shot v1.0 patches (candidate
+   archive, handoff review-strip, provenance rollout) on top of the
+   housekeeping work. Idempotent — re-running after success is a
+   no-op.
+2. `--backup` — create a timestamped backup before any write
+   (safety net reusable for *any* upgrade run, not only v1.0).
+3. `--rollback` — restore the most recent backup, park the current
+   live store for inspection.
+
+**Distinct from `brainclaw migrate`.** `migrate` remains recurring
+memory housekeeping (moves misplaced items between stores). It is
+orthogonal to schema progression and stays untouched.
 
 Tracked under `pln_bc6e88cc` / step `stp_3a866463`.
 
@@ -22,10 +42,10 @@ Tracked under `pln_bc6e88cc` / step `stp_3a866463`.
 ## Command surface
 
 ```
-brainclaw migrate [options]
+brainclaw upgrade [options]
 
 Options:
-  --to-schema <version>    Target schema (default: 1.0). Must match a
+  --to <version>           Target schema (default: 1.0). Must match a
                            known migration path from current schema.
   --dry-run                Simulate all stages, print diff summary,
                            perform no writes. Exits non-zero if issues
@@ -97,14 +117,14 @@ then rollback is the recovery path).
    ```
 10. **Health check.** Run `brainclaw doctor --after-migration` as a
     subprocess. If it exits non-zero, print the doctor output, leave
-    the backup in place, suggest `brainclaw migrate --rollback`. Do
+    the backup in place, suggest `brainclaw upgrade --rollback`. Do
     not attempt auto-rollback — the operator decides.
 11. **Summary.** Lines changed, backup path, next suggested command
     (`brainclaw doctor`, or if dogfood phase, the Phase 3 plan id).
 
 ## Rollback path
 
-`brainclaw migrate --rollback` resolves the most recent backup for
+`brainclaw upgrade --rollback` resolves the most recent backup for
 the store, validates its manifest, then does an atomic swap:
 
 1. Rename `.brainclaw/` → `.brainclaw.rollback-<ts>/` (kept for
@@ -119,7 +139,7 @@ rollback would mask migration bugs we need to see.
 
 ## Idempotency
 
-Running `brainclaw migrate` on a store already at the target schema:
+Running `brainclaw upgrade` on a store already at the target schema:
 
 - Pre-flight detects current == target.
 - Plan stage produces zero patches.

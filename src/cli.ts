@@ -237,11 +237,20 @@ program
   .option('--json', 'Output as JSON')
   .option('--dry-run', 'Show what would be done without making changes')
   .option('--self-update', 'Check for a newer brainclaw package version and install it before upgrading memory')
+  .option('--to <version>', 'One-shot target schema version (e.g. --to=1.0). Implies --backup unless --no-backup.')
+  .option('--backup', 'Create a timestamped backup of .brainclaw/ before any write (default when --to is set)')
+  .option('--no-backup', 'Disable the automatic backup (only meaningful with --to)')
+  .option('--rollback', 'Restore the most recent backup, park the current live store, exit')
+  .option('--yes', 'Skip interactive confirmations (reserved for later prompt additions)')
   .action((options) => {
     runUpgrade({
       json: options.json,
       dryRun: options.dryRun,
       selfUpdate: options.selfUpdate,
+      to: options.to,
+      backup: options.backup,
+      rollback: options.rollback,
+      yes: options.yes,
     });
   });
 

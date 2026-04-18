@@ -16,8 +16,20 @@ import {
 } from '../core/agent-files.js';
 import { loadConfig } from '../core/config.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
+import { resolvePrimaryStore } from '../core/store-resolution.js';
+import {
+  BackupError,
+  createBackup,
+  listBackups,
+  restoreBackup,
+  type BackupHandle,
+} from '../core/upgrades/backup.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
+
+/** Schema target versions supported by `brainclaw upgrade --to=<version>`. */
+export const SUPPORTED_SCHEMA_TARGETS = ['1.0'] as const;
+export type SchemaTarget = typeof SUPPORTED_SCHEMA_TARGETS[number];
 
 export interface UpgradeOptions {
   cwd?: string;
@@ -25,6 +37,20 @@ export interface UpgradeOptions {
   dryRun?: boolean;
   /** If true, detect a newer brainclaw package version and install it before upgrading memory. */
   selfUpdate?: boolean;
+  /**
+   * Target schema version for the one-shot v1.0 upgrade path. Enables
+   * the candidate archive / handoff strip / provenance rollout patches
+   * (implemented in later steps of pln_bc6e88cc). Presence of `to`
+   * also implies `backup: true` unless explicitly disabled via
+   * `backup: false`.
+   */
+  to?: SchemaTarget;
+  /** Create a timestamped backup before any write. Default: true when `to` is set. */
+  backup?: boolean;
+  /** Restore the most recent backup and park the current live store. Early-exits, skips other phases. */
+  rollback?: boolean;
+  /** Skip interactive confirmations. Currently no-op (prompts not yet added). */
+  yes?: boolean;
 }
 
 interface MigrationAction {
@@ -68,6 +94,40 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   if (!memoryExists(cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  // Rollback short-circuit: restore the most recent backup, park the
+  // current live store, and exit. Runs before any other upgrade work.
+  if (options.rollback) {
+    runRollback(cwd, options);
+    return;
+  }
+
+  // Validate --to target before touching anything.
+  if (options.to && !SUPPORTED_SCHEMA_TARGETS.includes(options.to)) {
+    console.error(`Error: unsupported schema target "${options.to}". Supported: ${SUPPORTED_SCHEMA_TARGETS.join(', ')}`);
+    process.exit(1);
+  }
+
+  // Backup pass: create a timestamped backup before any modification.
+  // Explicit --backup always triggers it; --to implies --backup unless
+  // the caller explicitly passed backup:false.
+  const backupRequested = options.backup ?? (options.to !== undefined);
+  let backupHandle: BackupHandle | undefined;
+  if (backupRequested && !options.dryRun) {
+    try {
+      backupHandle = createUpgradeBackup(cwd, options);
+    } catch (error: unknown) {
+      const message = error instanceof BackupError ? error.message : (error as Error).message;
+      console.error(`Error: backup failed — ${message}`);
+      console.error('Aborting upgrade. No changes made.');
+      process.exit(1);
+    }
+    if (!options.json) {
+      console.log(`✔ Backup created at ${backupHandle.backupPath}`);
+    }
+  } else if (backupRequested && options.dryRun && !options.json) {
+    console.log('(dry run — would create backup before upgrade)');
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
@@ -490,4 +550,67 @@ function outputJson(actions: MigrationAction[], dryRun: boolean): void {
     actions_count: actions.length,
     actions,
   }, null, 2));
+}
+
+function createUpgradeBackup(cwd: string, options: UpgradeOptions): BackupHandle {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    throw new BackupError('no_store', `No .brainclaw/ store resolved from ${cwd}`);
+  }
+  const note = options.to
+    ? `brainclaw upgrade --to=${options.to}`
+    : 'brainclaw upgrade';
+  return createBackup({ storePath: store.storePath, note });
+}
+
+function runRollback(cwd: string, options: UpgradeOptions): void {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const backups = listBackups(store.storePath);
+  if (backups.length === 0) {
+    if (options.json) {
+      console.log(JSON.stringify({ status: 'noop', reason: 'no_backups', store_path: store.storePath }, null, 2));
+    } else {
+      console.error(`Error: no backups found next to ${store.storePath}. Nothing to roll back.`);
+    }
+    process.exit(1);
+  }
+
+  const target = backups[0]!;
+  if (options.dryRun) {
+    if (options.json) {
+      console.log(JSON.stringify({
+        status: 'dry_run',
+        backup_path: target.backupPath,
+        created_at: target.manifest.created_at,
+      }, null, 2));
+    } else {
+      console.log(`(dry run — would restore ${target.backupPath} created ${target.manifest.created_at})`);
+    }
+    return;
+  }
+
+  try {
+    const result = restoreBackup({ storePath: store.storePath, backupPath: target.backupPath });
+    if (options.json) {
+      console.log(JSON.stringify({
+        status: 'rolled_back',
+        store_path: store.storePath,
+        backup_path: target.backupPath,
+        parked_path: result.parkedPath,
+        created_at: target.manifest.created_at,
+      }, null, 2));
+    } else {
+      console.log(`✔ Rolled back to ${target.backupPath} (created ${target.manifest.created_at})`);
+      console.log(`  Previous live store parked at ${result.parkedPath}`);
+    }
+  } catch (error: unknown) {
+    const message = error instanceof BackupError ? error.message : (error as Error).message;
+    console.error(`Error: rollback failed — ${message}`);
+    process.exit(1);
+  }
 }
