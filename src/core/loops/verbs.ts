@@ -364,8 +364,11 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
     nextArtifacts = [...nextArtifacts, newArtifact];
   }
 
+  // Map outcome → terminal slot.status so observers reading the thread can
+  // distinguish done/failed/cancelled without replaying the event journal.
+  const terminalStatus: 'done' | 'failed' | 'cancelled' = outcome;
   const updatedSlots = current.slots.map((s) =>
-    s.slot_id === slot.slot_id ? { ...s, status: 'done' as const } : s,
+    s.slot_id === slot.slot_id ? { ...s, status: terminalStatus } : s,
   );
 
   const next: LoopThread = {

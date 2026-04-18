@@ -11,8 +11,15 @@ export type LoopStatus = (typeof LOOP_STATUSES)[number];
 export const REVIEW_MODES = ['asymmetric', 'symmetric'] as const;
 export type ReviewMode = (typeof REVIEW_MODES)[number];
 
-export const SLOT_STATUSES = ['open', 'assigned', 'working', 'done'] as const;
+/**
+ * Slot lifecycle states. `done` / `failed` / `cancelled` are terminal and
+ * mirror the `complete_turn` outcome so a caller reading the thread can
+ * observe the per-slot outcome without replaying the event journal.
+ */
+export const SLOT_STATUSES = ['open', 'assigned', 'working', 'done', 'failed', 'cancelled'] as const;
 export type SlotStatus = (typeof SLOT_STATUSES)[number];
+
+export const TERMINAL_SLOT_STATUSES: readonly SlotStatus[] = ['done', 'failed', 'cancelled'] as const;
 
 export const LOOP_REF_KINDS = ['plan', 'sequence', 'claim', 'handoff', 'candidate', 'message'] as const;
 

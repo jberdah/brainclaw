@@ -38,6 +38,14 @@ export const CoordinateRequestSchema = z.object({
    * Ignored when open_loop is false. Defaults to asymmetric.
    */
   review_mode: z.enum(['asymmetric', 'symmetric']).optional(),
+  /**
+   * Caller-minted ULID/UUIDv7 for idempotent retries. Today this is observed
+   * on intent='review' + open_loop=true: a retry with the same
+   * client_request_id returns the cached {candidate_id, loop_id} response
+   * without creating a duplicate candidate + loop. Safe to pass on other
+   * intents — silently ignored.
+   */
+  client_request_id: z.string().min(1).optional(),
 });
 
 export const FacadeArtifactSchema = z.object({
