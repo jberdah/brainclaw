@@ -24,6 +24,10 @@ import {
   restoreBackup,
   type BackupHandle,
 } from '../core/upgrades/backup.js';
+import {
+  archivePendingCandidates,
+  type CandidateArchiveResult,
+} from '../core/upgrades/patches/candidate-archive.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
 
@@ -128,6 +132,13 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     }
   } else if (backupRequested && options.dryRun && !options.json) {
     console.log('(dry run — would create backup before upgrade)');
+  }
+
+  // One-shot v1.0 schema patches. Runs only when --to=<version> is set.
+  // Each patch is idempotent — re-running after success is a no-op.
+  const schemaPatchResults: SchemaPatchResults = {};
+  if (options.to === '1.0') {
+    schemaPatchResults.candidateArchive = runCandidateArchivePatch(cwd, options);
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
@@ -550,6 +561,35 @@ function outputJson(actions: MigrationAction[], dryRun: boolean): void {
     actions_count: actions.length,
     actions,
   }, null, 2));
+}
+
+interface SchemaPatchResults {
+  candidateArchive?: CandidateArchiveResult;
+}
+
+function runCandidateArchivePatch(cwd: string, options: UpgradeOptions): CandidateArchiveResult {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const result = archivePendingCandidates({
+    storePath: store.storePath,
+    dryRun: options.dryRun ?? false,
+  });
+
+  if (!options.json) {
+    if (result.status === 'noop') {
+      console.log('✔ Candidate archive (P6.6): no pending candidates to archive.');
+    } else if (result.status === 'planned') {
+      console.log(`(dry run — would archive ${result.moved.length} pending candidate(s) to ${result.archiveDir})`);
+    } else {
+      console.log(`✔ Candidate archive (P6.6): ${result.moved.length} pending candidate(s) archived to ${result.archiveDir}`);
+    }
+  }
+
+  return result;
 }
 
 function createUpgradeBackup(cwd: string, options: UpgradeOptions): BackupHandle {
