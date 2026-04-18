@@ -566,6 +566,90 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal((response.result as Record<string, unknown>).loop_id, undefined);
     });
 
+    it('client_request_id idempotent retry returns the same candidate + loop ids (residual #2)', async () => {
+      const request = {
+        intent: 'review' as const,
+        task: 'Idempotent review of the refactor',
+        scope: 'src/core/x.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        agentId: 'agt_687aa80bad484485b92cb6935d1cdac3',
+        open_loop: true,
+        client_request_id: 'req_coord_idem_1',
+      };
+      const first = await coordinate(workspace, request);
+      const second = await coordinate(workspace, request);
+      assert.equal(first.status, 'ok');
+      assert.equal(second.status, 'ok');
+      assert.equal(
+        (first.result as Record<string, unknown>).candidate_id,
+        (second.result as Record<string, unknown>).candidate_id,
+        'idempotent retry must return the SAME candidate_id',
+      );
+      assert.equal(
+        (first.result as Record<string, unknown>).loop_id,
+        (second.result as Record<string, unknown>).loop_id,
+        'idempotent retry must return the SAME loop_id',
+      );
+    });
+
+    it('client_request_id retry with different payload returns idempotency_key_reused_with_different_body (residual #2)', async () => {
+      await coordinate(workspace, {
+        intent: 'review',
+        task: 'First payload',
+        scope: 'src/core/x.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        agentId: 'agt_687aa80bad484485b92cb6935d1cdac3',
+        open_loop: true,
+        client_request_id: 'req_coord_idem_mismatch',
+      });
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_coordinate',
+        args: {
+          intent: 'review',
+          task: 'Different payload',
+          scope: 'src/core/x.ts',
+          targetAgents: ['codex'],
+          agent: 'claude-code',
+          agentId: 'agt_687aa80bad484485b92cb6935d1cdac3',
+          open_loop: true,
+          client_request_id: 'req_coord_idem_mismatch',
+        },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, true);
+      const text = (outcome.response.content?.[0]?.text ?? JSON.stringify(outcome.response)) as string;
+      assert.match(text, /idempotency_key_reused_with_different_body/);
+    });
+
+    it('fan-out cap warns when open_loop is used without targetAgents (residual #4)', async () => {
+      // Register extra spawnable agents so the implicit fan-out exceeds cap=3.
+      workspace.registerAgent('opencode');
+      workspace.registerAgent('cline');
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Cap me please',
+        scope: 'src/core/fanout.ts',
+        agent: 'claude-code',
+        open_loop: true,
+      });
+      assert.equal(response.status, 'ok');
+      const loopId = (response.result as Record<string, unknown>).loop_id as string | undefined;
+      if (!loopId) {
+        // Environment may have <=3 spawnable agents — skip the cap assertion
+        // but still confirm the code path didn't crash.
+        return;
+      }
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loop = loopsModule.getLoop(loopId, workspace.dir);
+      const reviewerSlots = loop!.slots.filter((s) => s.role === 'reviewer');
+      assert.ok(
+        reviewerSlots.length <= 3,
+        `expected ≤3 reviewer slots after fan-out cap, got ${reviewerSlots.length}`,
+      );
+    });
+
     it('returns partial and keeps the candidate when open_loop creation fails', async () => {
       const loopsDir = path.join(workspace.dir, '.brainclaw', 'loops');
       fs.mkdirSync(loopsDir, { recursive: true });

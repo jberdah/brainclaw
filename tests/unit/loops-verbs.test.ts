@@ -163,6 +163,39 @@ describe('loops verbs — turn / complete_turn', () => {
     assert.equal(next.artifacts[0].type, 'finding');
   });
 
+  it('complete_turn maps outcome=failed to slot.status=failed (residual #3)', () => {
+    const loop = openReview(cwd);
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+    turn({ id: loop.id, slot_id: reviewerSlotId, actor: 'agt_test' }, cwd);
+    const next = complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'failed',
+        failure_reason: 'tool error',
+        actor: 'agt_reviewer',
+      },
+      cwd,
+    );
+    assert.equal(next.slots.find((s) => s.slot_id === reviewerSlotId)!.status, 'failed');
+  });
+
+  it('complete_turn maps outcome=cancelled to slot.status=cancelled (residual #3)', () => {
+    const loop = openReview(cwd);
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+    turn({ id: loop.id, slot_id: reviewerSlotId, actor: 'agt_test' }, cwd);
+    const next = complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'cancelled',
+        actor: 'agt_reviewer',
+      },
+      cwd,
+    );
+    assert.equal(next.slots.find((s) => s.slot_id === reviewerSlotId)!.status, 'cancelled');
+  });
+
   it('complete_turn rejects caller that does not match slot owner (unless admin override)', () => {
     const loop = openReview(cwd);
     const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;

@@ -682,7 +682,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_dispatch_review',
-    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox. Requires trusted trust level.',
+    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox AND opens a review Loop (author + reviewer slots, handoff linked as change_summary, advance to findings) unless openLoop=false. Requires trusted trust level.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -690,6 +690,8 @@ const MCP_WRITE_TOOLS = [
         handoffId: { type: 'string', description: 'Specific handoff ID to review. Default: auto-detect all reviewable handoffs.' },
         reviewer: { type: 'string', description: 'Specific reviewer agent. Default: any available agent that is not the author.' },
         dryRun: { type: 'boolean', description: 'Preview without sending.' },
+        openLoop: { type: 'boolean', description: 'Open a review Loop alongside the inbox message (default true). Pass false for legacy inbox-only dispatch.' },
+        reviewMode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review Loop mode when openLoop is true. Default asymmetric.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -3453,6 +3455,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           handoffId: args.handoffId as string | undefined,
           reviewer: args.reviewer as string | undefined,
           dryRun: args.dryRun as boolean | undefined,
+          openLoop: args.openLoop as boolean | undefined,
+          reviewMode: args.reviewMode as 'asymmetric' | 'symmetric' | undefined,
           dispatcherAgent: resolved.identity!.agent_name,
           dispatcherAgentId: resolved.identity!.agent_id,
           sessionId: connectionSessionId,
@@ -4551,37 +4555,75 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         };
 
       } else if (req.intent === 'review') {
-        const candId = generateCandidateIdWithLabel(cwd);
-        saveCandidate({
-          id: candId.id,
-          short_label: candId.short_label,
-          type: 'handoff',
-          text: req.task,
-          created_at: nowISO(),
-          author: senderAgent,
-          author_id: senderAgentId,
-          tags: ['review'],
-          status: 'pending',
-          star_count: 0,
-          starred_by: [],
-          usage_count: 0,
-          usage_events: [],
-          ...(req.scope ? { related_paths: [req.scope] } : {}),
-        }, cwd);
-        artifacts.push({ type: 'candidate', id: candId.id });
-        side_effects.push({ action: 'create', entity: 'candidate', id: candId.id });
+        // Cap the implicit fan-out so that omitting `targetAgents` on an
+        // open_loop review doesn't mint a loop with a reviewer slot per
+        // spawnable agent. The cap only applies to the implicit case —
+        // callers who explicitly list targetAgents get the full list.
+        const REVIEW_OPEN_LOOP_FANOUT_CAP = 3;
+        const implicitFanout = !(req.targetAgents && req.targetAgents.length > 0);
+        let loopReviewerAgents = resolvedAgents;
+        const preReviewWarnings: string[] = [];
+        if (req.open_loop === true && implicitFanout && resolvedAgents.length > REVIEW_OPEN_LOOP_FANOUT_CAP) {
+          loopReviewerAgents = resolvedAgents.slice(0, REVIEW_OPEN_LOOP_FANOUT_CAP);
+          preReviewWarnings.push(
+            `open_loop: implicit reviewer fan-out capped at ${REVIEW_OPEN_LOOP_FANOUT_CAP} of ${resolvedAgents.length} spawnable agents; pass targetAgents to override`,
+          );
+        }
 
-        let loopId: string | undefined;
-        if (req.open_loop === true && resolvedAgents.length === 0) {
-          // Open-loop without reviewers would mint an author-only loop stuck
-          // in `findings` with no turn_assigned events — useless for review
-          // automation. Surface a warning and skip the loop path while
-          // keeping the candidate (already persisted above).
-          warnings.push('open_loop: no reviewer targets resolved; skipped loop creation — candidate preserved');
-        } else if (req.open_loop === true) {
+        type ReviewOutput = {
+          candidateId: string;
+          loopId?: string;
+          artifacts: Array<{ type: string; id: string; path?: string }>;
+          sideEffects: Array<{ action: string; entity: string; id: string }>;
+          warnings: string[];
+          partial: boolean;
+        };
+
+        // Lazy-import the loops module once before defining performReview so
+        // the synchronous withLoopLock work callback can use it without
+        // re-importing inside the callback.
+        const loopsModuleRef = await import('../core/loops/index.js');
+
+        const performReview = (): ReviewOutput => {
+          const out: ReviewOutput = {
+            candidateId: '',
+            artifacts: [],
+            sideEffects: [],
+            warnings: [...preReviewWarnings],
+            partial: false,
+          };
+
+          const candId = generateCandidateIdWithLabel(cwd);
+          saveCandidate({
+            id: candId.id,
+            short_label: candId.short_label,
+            type: 'handoff',
+            text: req.task,
+            created_at: nowISO(),
+            author: senderAgent,
+            author_id: senderAgentId,
+            tags: ['review'],
+            status: 'pending',
+            star_count: 0,
+            starred_by: [],
+            usage_count: 0,
+            usage_events: [],
+            ...(req.scope ? { related_paths: [req.scope] } : {}),
+          }, cwd);
+          out.candidateId = candId.id;
+          out.artifacts.push({ type: 'candidate', id: candId.id });
+          out.sideEffects.push({ action: 'create', entity: 'candidate', id: candId.id });
+
+          if (req.open_loop === true && loopReviewerAgents.length === 0) {
+            out.warnings.push('open_loop: no reviewer targets resolved; skipped loop creation — candidate preserved');
+            return out;
+          }
+          if (req.open_loop !== true) {
+            return out;
+          }
+
           try {
-            const loopsModule = await import('../core/loops/index.js');
-            const { openLoop, add_artifact, advance, turn } = loopsModule;
+            const { openLoop, add_artifact, advance, turn } = loopsModuleRef;
             const senderIdentity = (
               (senderAgentId ? findAgentIdentityById(senderAgentId, cwd) : undefined)
               ?? findAgentIdentityByName(senderAgent, cwd)
@@ -4595,7 +4637,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 agent: senderAgent,
                 ...(authorAgentId ? { agent_id: authorAgentId } : {}),
               },
-              ...resolvedAgents.map((agent) => {
+              ...loopReviewerAgents.map((agent) => {
                 const reviewerIdentity = findAgentIdentityByName(agent, cwd) ?? ensureAgentRegisteredForDispatch(agent, cwd);
                 return {
                   role: 'reviewer',
@@ -4614,13 +4656,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               },
               cwd,
             );
-            loopId = loop.id;
-            artifacts.push({ type: 'loop', id: loop.id });
-            side_effects.push({ action: 'create', entity: 'loop', id: loop.id });
+            out.loopId = loop.id;
+            out.artifacts.push({ type: 'loop', id: loop.id });
+            out.sideEffects.push({ action: 'create', entity: 'loop', id: loop.id });
 
-            // Link the freshly-created review candidate to the loop as a
-            // change_summary artifact. We use add_artifact (the loop is in
-            // `change_summary` at this point) with a ref to the candidate.
             add_artifact(
               {
                 id: loop.id,
@@ -4634,17 +4673,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               cwd,
             );
 
-            // Advance from change_summary to findings so the review loop is
-            // visibly in the right phase when reviewers pick it up. This
-            // matches the Automation section of the v8 RFC.
             const advanced = advance(
               { id: loop.id, actor: creatorActor },
               cwd,
             );
-            // Dispatch a turn for each reviewer slot so their status flips to
-            // 'assigned' and the downstream dispatcher (inbox delivery +
-            // optional CLI spawn, already done earlier in this coordinate
-            // flow) has an assignment_id to attach later if needed.
             const reviewerSlots = advanced.loop.slots.filter((s) => s.role === 'reviewer');
             for (const slot of reviewerSlots) {
               turn(
@@ -4658,20 +4690,51 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               );
             }
           } catch (loopErr: unknown) {
-            // open_loop is additive — if the loop engine rejects (e.g. no
-            // reviewer target resolved), the candidate still stands as the
-            // v0 review artifact. Surface the failure as a warning instead of
-            // failing the whole coordinate call.
-            facadeStatus = 'partial';
+            out.partial = true;
             const loopErrMsg = loopErr instanceof Error ? loopErr.message : String(loopErr);
-            warnings.push(`open_loop: failed to open review loop (${loopErrMsg}); candidate ${candId.id} still created`);
+            out.warnings.push(`open_loop: failed to open review loop (${loopErrMsg}); candidate ${out.candidateId} still created`);
           }
+          return out;
+        };
+
+        const useIdempotency = Boolean(req.client_request_id && senderAgentId && req.open_loop === true);
+        let output: ReviewOutput;
+        try {
+          if (useIdempotency) {
+            const { client_request_id: _crid, ...hashablePayload } = req;
+            output = loopsModuleRef.withLoopLock<ReviewOutput>({
+              cwd,
+              intent: 'coordinate_review',
+              agentId: senderAgentId!,
+              scope: { kind: 'open_idempotency', clientRequestId: req.client_request_id! },
+              clientRequestId: req.client_request_id!,
+              requestPayload: hashablePayload,
+              work: () => performReview(),
+            });
+          } else {
+            output = performReview();
+          }
+        } catch (err: unknown) {
+          if (err instanceof loopsModuleRef.IdempotencyKeyReusedError) {
+            return {
+              response: createToolErrorResponse(
+                'idempotency_key_reused_with_different_body',
+                err.message,
+                { stored_hash: err.storedHash, submitted_hash: err.submittedHash },
+              ),
+            };
+          }
+          throw err;
         }
 
+        artifacts.push(...output.artifacts);
+        side_effects.push(...output.sideEffects);
+        warnings.push(...output.warnings);
+        if (output.partial) facadeStatus = 'partial';
         result = {
-          candidate_id: candId.id,
+          candidate_id: output.candidateId,
           selected_targets: resolvedAgents,
-          ...(loopId ? { loop_id: loopId } : {}),
+          ...(output.loopId ? { loop_id: output.loopId } : {}),
         };
 
       } else if (req.intent === 'reroute') {

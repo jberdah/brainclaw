@@ -46,6 +46,7 @@ import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefM
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
+import * as loopsModule from './loops/index.js';
 import { sweepAssignments } from './assignment-sweeper.js';
 import { InboxMessageSchema, type InboxMessage, type Sequence, type SequenceItem, type PlanItem, type Handoff, type Claim } from './schema.js';
 import { generateId, nowISO } from './ids.js';
@@ -1157,6 +1158,16 @@ export interface DispatchReviewOptions {
   dispatcherAgent: string;
   dispatcherAgentId?: string;
   sessionId?: string;
+  /**
+   * When true (default), each reviewable handoff also gets a review Loop
+   * opened via the Loop engine: author slot = handoff.from, reviewer slot =
+   * resolved reviewer, handoff linked as change_summary artifact, advance to
+   * `findings` + turn dispatched. Pass false to keep the legacy inbox-only
+   * behavior. See pln#395 §Automation.
+   */
+  openLoop?: boolean;
+  /** Review mode when openLoop is true. Default 'asymmetric'. */
+  reviewMode?: 'asymmetric' | 'symmetric';
 }
 
 export interface DispatchReviewResult {
@@ -1167,6 +1178,7 @@ export interface DispatchReviewResult {
     message_id: string;
     thread_id?: string;
     channel: 'inbox';
+    loop_id?: string;
   }>;
   skipped: Array<{
     handoff_id: string;
@@ -1290,6 +1302,71 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
     });
     persistState(state, cwd);
 
+    // Open a review Loop on top of the handoff unless the caller opts out.
+    // Best-effort: a loop failure must not break the legacy review dispatch
+    // (inbox message already sent, handoff updates already persisted).
+    let loopId: string | undefined;
+    if (options.openLoop !== false) {
+      try {
+        const authorIdentity = listAgentIdentities(cwd).find((a) => a.agent_name === handoff.from);
+        const reviewerIdentity = listAgentIdentities(cwd).find((a) => a.agent_name === reviewer)
+          ?? ensureAgentRegisteredForDispatch(reviewer, cwd);
+        const creatorActor = options.dispatcherAgentId ?? options.dispatcherAgent;
+        const loop = loopsModule.openLoop(
+          {
+            kind: 'review',
+            title: `Review of ${handoff.short_label ?? handoff.id}`,
+            created_by: creatorActor,
+            mode: options.reviewMode ?? 'asymmetric',
+            linked: plan?.id ? { plan_ids: [plan.id] } : undefined,
+            slots: [
+              {
+                role: 'author',
+                agent: handoff.from,
+                ...(authorIdentity?.agent_id ? { agent_id: authorIdentity.agent_id } : {}),
+              },
+              {
+                role: 'reviewer',
+                agent: reviewer,
+                ...(reviewerIdentity?.agent_id ? { agent_id: reviewerIdentity.agent_id } : {}),
+              },
+            ],
+          },
+          cwd,
+        );
+        loopId = loop.id;
+        loopsModule.add_artifact(
+          {
+            id: loop.id,
+            actor: creatorActor,
+            artifact: {
+              phase: 'change_summary',
+              type: 'change_summary',
+              ref: { kind: 'handoff', id: handoff.id },
+            },
+          },
+          cwd,
+        );
+        const advanced = loopsModule.advance({ id: loop.id, actor: creatorActor }, cwd);
+        const reviewerSlot = advanced.loop.slots.find((s) => s.role === 'reviewer');
+        if (reviewerSlot) {
+          loopsModule.turn(
+            {
+              id: loop.id,
+              slot_id: reviewerSlot.slot_id,
+              actor: creatorActor,
+              assignment_id: msgResult.id,
+            },
+            cwd,
+          );
+        }
+      } catch {
+        // Loop failure doesn't break legacy review dispatch. The handoff +
+        // inbox message stand on their own as the v0 review artifact.
+        loopId = undefined;
+      }
+    }
+
     result.reviews_sent.push({
       handoff_id: handoff.id,
       plan_id: plan?.id,
@@ -1297,6 +1374,7 @@ export function dispatchReview(options: DispatchReviewOptions, cwd: string): Dis
       message_id: msgResult.id,
       thread_id: reviewThreadId,
       channel: 'inbox',
+      ...(loopId ? { loop_id: loopId } : {}),
     });
   }
 

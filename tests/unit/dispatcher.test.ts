@@ -741,6 +741,60 @@ describe('core/dispatcher', () => {
       const updated = loadState(testDir);
       assert.equal(updated.open_handoffs[0]?.review, undefined);
     });
+
+    it('opens a review Loop alongside the inbox message by default (pln#395 residual #1)', async () => {
+      const handoff = makeHandoff({ id: 'hnd_loop', status: 'open', plan_id: 'pln_loop', narrative: 'Shipped the thing' });
+      const plan = makePlan({ id: 'pln_loop', text: 'Ship the thing', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        dispatcherAgent: 'coordinator',
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 1);
+      assert.ok(result.reviews_sent[0]!.loop_id, 'loop_id must be surfaced');
+      assert.match(result.reviews_sent[0]!.loop_id!, /^lop_/);
+
+      // Verify the loop is actually persisted with the right shape:
+      // author slot = handoff.from, reviewer slot = dispatched reviewer,
+      // current_phase = findings after the automatic advance, handoff linked
+      // as change_summary artifact.
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loop = loopsModule.getLoop(result.reviews_sent[0]!.loop_id!, testDir);
+      assert.ok(loop, 'loop must exist on disk');
+      assert.equal(loop!.kind, 'review');
+      assert.equal(loop!.current_phase, 'findings');
+      assert.deepEqual(loop!.linked?.plan_ids, ['pln_loop']);
+      const reviewerSlot = loop!.slots.find((s) => s.role === 'reviewer');
+      assert.ok(reviewerSlot);
+      assert.equal(reviewerSlot!.status, 'assigned');
+      const changeSummary = loop!.artifacts.find((a) => a.phase === 'change_summary');
+      assert.ok(changeSummary, 'handoff linked as change_summary');
+      assert.equal(changeSummary!.ref?.kind, 'handoff');
+      assert.equal(changeSummary!.ref?.id, 'hnd_loop');
+    });
+
+    it('openLoop=false falls back to legacy inbox-only dispatch (pln#395 residual #1 opt-out)', () => {
+      const handoff = makeHandoff({ id: 'hnd_noloop', status: 'open', plan_id: 'pln_noloop' });
+      const plan = makePlan({ id: 'pln_noloop', text: 'Task', status: 'done' });
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [handoff], plan_items: [plan],
+      }, testDir);
+
+      const result = dispatchReview({
+        dispatcherAgent: 'coordinator',
+        openLoop: false,
+      }, testDir);
+
+      assert.equal(result.reviews_sent.length, 1);
+      assert.equal(result.reviews_sent[0]!.loop_id, undefined, 'no loop when openLoop=false');
+    });
   });
 
   describe('generateReviewBrief', () => {
