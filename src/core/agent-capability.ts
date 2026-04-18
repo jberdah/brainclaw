@@ -247,7 +247,13 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     execution_env: { surface: 'cli' },
     invoke_template: 'codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"',
     invoke_binary: 'codex',
-    invoke_review_template: 'codex exec -c approval_policy="never" --sandbox read-only "{prompt}"',
+    // Review runs need shell access for git/grep/rg and filesystem reads of
+    // the whole repo. Older templates forced --sandbox read-only on reviews,
+    // but that blocks PowerShell exec on Windows and forced reviewers to
+    // fall back to GitHub connectors — which fail for local-only commits.
+    // Aligning with the regular spawn template (workspace-write) is the
+    // accepted pattern per agent_spawn_inventory memory.
+    invoke_review_template: 'codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
