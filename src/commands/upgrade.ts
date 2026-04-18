@@ -36,6 +36,11 @@ import {
   rolloutProvenance,
   type ProvenanceRolloutResult,
 } from '../core/upgrades/patches/provenance-rollout.js';
+import {
+  V1_TARGET_SCHEMA_VERSION,
+  bumpSchemaVersion,
+  type BumpSchemaVersionResult,
+} from '../core/upgrades/schema-version.js';
 import { withLock } from '../core/lock.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
@@ -167,6 +172,10 @@ function runUpgradeInner(cwd: string, options: UpgradeOptions): void {
     schemaPatchResults.candidateArchive = runCandidateArchivePatch(cwd, options);
     schemaPatchResults.handoffReviewStrip = runHandoffReviewStripPatch(cwd, options);
     schemaPatchResults.provenanceRollout = runProvenanceRolloutPatch(cwd, options);
+    // Schema-version bump runs last, only after every patch succeeded.
+    // If an earlier patch threw, we never reach here — the store keeps
+    // its prior version and the backup remains the recovery path.
+    schemaPatchResults.schemaVersionBump = runSchemaVersionBump(cwd, options);
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
@@ -599,6 +608,35 @@ interface SchemaPatchResults {
   candidateArchive?: CandidateArchiveResult;
   handoffReviewStrip?: HandoffReviewStripResult;
   provenanceRollout?: ProvenanceRolloutResult;
+  schemaVersionBump?: BumpSchemaVersionResult;
+}
+
+function runSchemaVersionBump(cwd: string, options: UpgradeOptions): BumpSchemaVersionResult {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const result = bumpSchemaVersion({
+    storePath: store.storePath,
+    to: V1_TARGET_SCHEMA_VERSION,
+    patches: ['candidate_archive', 'handoff_review_strip', 'provenance_rollout'],
+    reason: 'brainclaw upgrade --to=1.0 migration complete',
+    dryRun: options.dryRun ?? false,
+  });
+
+  if (!options.json) {
+    if (result.status === 'noop') {
+      console.log(`✔ Schema version: already at ${result.to} (no bump needed).`);
+    } else if (result.status === 'planned') {
+      console.log(`(dry run — would bump schema ${result.from} → ${result.to})`);
+    } else {
+      console.log(`✔ Schema version: bumped ${result.from} → ${result.to}. Marker at ${result.filePath}`);
+    }
+  }
+
+  return result;
 }
 
 function runProvenanceRolloutPatch(cwd: string, options: UpgradeOptions): ProvenanceRolloutResult {
