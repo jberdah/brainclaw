@@ -28,6 +28,10 @@ import {
   archivePendingCandidates,
   type CandidateArchiveResult,
 } from '../core/upgrades/patches/candidate-archive.js';
+import {
+  stripHandoffReview,
+  type HandoffReviewStripResult,
+} from '../core/upgrades/patches/handoff-review-strip.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
 
@@ -139,6 +143,7 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   const schemaPatchResults: SchemaPatchResults = {};
   if (options.to === '1.0') {
     schemaPatchResults.candidateArchive = runCandidateArchivePatch(cwd, options);
+    schemaPatchResults.handoffReviewStrip = runHandoffReviewStripPatch(cwd, options);
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
@@ -565,6 +570,32 @@ function outputJson(actions: MigrationAction[], dryRun: boolean): void {
 
 interface SchemaPatchResults {
   candidateArchive?: CandidateArchiveResult;
+  handoffReviewStrip?: HandoffReviewStripResult;
+}
+
+function runHandoffReviewStripPatch(cwd: string, options: UpgradeOptions): HandoffReviewStripResult {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const result = stripHandoffReview({
+    storePath: store.storePath,
+    dryRun: options.dryRun ?? false,
+  });
+
+  if (!options.json) {
+    if (result.status === 'noop') {
+      console.log(`✔ Handoff review-strip (P6.1): ${result.scanned} handoff(s) scanned, none carry a review block.`);
+    } else if (result.status === 'planned') {
+      console.log(`(dry run — would strip review from ${result.stripped.length} handoff(s) out of ${result.scanned} scanned)`);
+    } else {
+      console.log(`✔ Handoff review-strip (P6.1): ${result.stripped.length} of ${result.scanned} handoff(s) rewritten. Log at ${result.logPath}`);
+    }
+  }
+
+  return result;
 }
 
 function runCandidateArchivePatch(cwd: string, options: UpgradeOptions): CandidateArchiveResult {
