@@ -36,6 +36,7 @@ import {
   rolloutProvenance,
   type ProvenanceRolloutResult,
 } from '../core/upgrades/patches/provenance-rollout.js';
+import { withLock } from '../core/lock.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
 
@@ -108,6 +109,23 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
     process.exit(1);
   }
 
+  // Take an exclusive transaction lock for the whole upgrade/rollback
+  // cycle. Two concurrent upgrades can otherwise race on park/swap
+  // and leave orphan staging dirs, especially on Windows.
+  const lockPath = path.join(memoryDir(cwd), 'upgrade');
+  try {
+    withLock(lockPath, () => runUpgradeInner(cwd, options));
+  } catch (error: unknown) {
+    const message = (error as Error).message;
+    if (message.startsWith('Could not acquire lock')) {
+      console.error('Error: another brainclaw upgrade is in progress. Retry once it completes.');
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+function runUpgradeInner(cwd: string, options: UpgradeOptions): void {
   // Rollback short-circuit: restore the most recent backup, park the
   // current live store, and exit. Runs before any other upgrade work.
   if (options.rollback) {
@@ -197,8 +215,12 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   const actions: MigrationAction[] = [];
   let movedFiles = 0;
 
-  // Phase 1: Ensure entity-aligned directories exist
-  ensureMemoryDir(cwd);
+  // Phase 1: Ensure entity-aligned directories exist. Skipped in
+  // dry-run so the command is truly side-effect free — without this
+  // gate, ensureMemoryDir creates entity subdirs on first pass.
+  if (!options.dryRun) {
+    ensureMemoryDir(cwd);
+  }
 
   // Phase 2: Detect and plan file migrations (legacy → entity)
   for (const { legacy, entity } of ENTITY_DIRS) {

@@ -6,6 +6,7 @@ import { getInstalledBrainclawVersion } from '../brainclaw-version.js';
 export const BACKUP_DIR_PREFIX = '.brainclaw.bak-';
 export const BACKUP_MANIFEST_FILENAME = 'backup.json';
 export const ROLLBACK_PARKED_PREFIX = '.brainclaw.rollback-';
+export const ROLLBACK_STAGING_PREFIX = '.brainclaw.restoring-';
 
 export const BackupManifestSchema = z.object({
   schema_version: z.literal(1),
@@ -161,9 +162,19 @@ export interface RestoreResult {
 }
 
 /**
- * Restore a backup by atomically swapping the live store with the
- * backup contents. The current live store is renamed (parked) instead
- * of deleted — inspectable after rollback, reclaim space manually.
+ * Restore a backup by staging the new live contents into a sibling
+ * directory, then doing a single rename swap. Failure-atomic:
+ *
+ *   1. Copy backup → staging (slow phase, can be interrupted safely —
+ *      the live store is still untouched).
+ *   2. Strip the manifest from the staging dir (so the restored store
+ *      does not masquerade as a backup).
+ *   3. Park live → parked (atomic rename).
+ *   4. Swap staging → live (atomic rename).
+ *
+ * If step 4 fails after step 3, we un-park so the store is never left
+ * missing, and we wipe the staging dir to avoid orphans. If any step
+ * before 3 fails, the live store is unchanged.
  */
 export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   const { storePath, backupPath } = options;
@@ -186,34 +197,56 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   }
 
   const now = (options.now ?? (() => new Date()))();
+  const stamp = isoTimestamp(now);
   const parent = parentOf(storePath);
-  const parkedPath = path.join(parent, `${ROLLBACK_PARKED_PREFIX}${isoTimestamp(now)}`);
+  const stagingPath = path.join(parent, `${ROLLBACK_STAGING_PREFIX}${stamp}.pid-${process.pid}`);
+  const parkedPath = path.join(parent, `${ROLLBACK_PARKED_PREFIX}${stamp}`);
 
-  // Park the current live store if present.
-  if (fs.existsSync(storePath)) {
-    fs.renameSync(storePath, parkedPath);
+  if (fs.existsSync(stagingPath)) {
+    fs.rmSync(stagingPath, { recursive: true, force: true });
   }
 
-  // Copy backup into the live path. Copy rather than rename so the
-  // backup itself remains available for a second rollback if needed.
+  // Step 1: populate staging. Live store untouched on failure.
   try {
-    fs.cpSync(backupPath, storePath, { recursive: true, errorOnExist: true });
+    fs.cpSync(backupPath, stagingPath, { recursive: true, errorOnExist: true });
   } catch (error: unknown) {
-    // Try to un-park on failure so the store is not left missing.
+    try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
+    throw new BackupError('restore_copy_failed', `Could not stage backup for restore: ${(error as Error).message}`);
+  }
+
+  // Step 2: remove manifest from the staged copy so the restored live
+  // store does not look like a backup.
+  const stagedManifest = path.join(stagingPath, BACKUP_MANIFEST_FILENAME);
+  if (fs.existsSync(stagedManifest)) {
+    fs.unlinkSync(stagedManifest);
+  }
+
+  // Step 3: park the current live store (if any). From here on we
+  // MUST end with a live store in place, either via swap or un-park.
+  let parked = false;
+  if (fs.existsSync(storePath)) {
     try {
-      if (!fs.existsSync(storePath) && fs.existsSync(parkedPath)) {
+      fs.renameSync(storePath, parkedPath);
+      parked = true;
+    } catch (error: unknown) {
+      try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
+      throw new BackupError('park_failed', `Could not park live store: ${(error as Error).message}`);
+    }
+  }
+
+  // Step 4: swap staging → live. On failure, un-park so the store
+  // is never left missing; staging dir is cleaned.
+  try {
+    fs.renameSync(stagingPath, storePath);
+  } catch (error: unknown) {
+    try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
+    if (parked) {
+      try {
         fs.renameSync(parkedPath, storePath);
-      }
-    } catch { /* best effort */ }
-    throw new BackupError('restore_copy_failed', `Could not restore backup: ${(error as Error).message}`);
+      } catch { /* Catastrophic — both swaps failed. Leave parked for manual recovery. */ }
+    }
+    throw new BackupError('restore_swap_failed', `Could not swap staging into live path: ${(error as Error).message}`);
   }
 
-  // Remove the manifest from the restored live store so it does not
-  // masquerade as a backup itself.
-  const restoredManifest = path.join(storePath, BACKUP_MANIFEST_FILENAME);
-  if (fs.existsSync(restoredManifest)) {
-    fs.unlinkSync(restoredManifest);
-  }
-
-  return { parkedPath, restoredFrom: backupPath, manifest };
+  return { parkedPath: parked ? parkedPath : '', restoredFrom: backupPath, manifest };
 }

@@ -95,9 +95,17 @@ export function rolloutProvenance(options: ProvenanceRolloutOptions): Provenance
     scanned += files.length;
     for (const file of files) {
       const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error(`provenance-rollout: ${file} is not a JSON object`);
+      }
       const obj = raw as Record<string, unknown>;
-      if (obj.provenance !== undefined) continue;
+      if (obj.provenance !== undefined) {
+        if (isValidV1Provenance(obj.provenance)) continue;
+        throw new Error(
+          `provenance-rollout: ${file} has a malformed \`provenance\` field; ` +
+          `expected an object with a known kind, got ${JSON.stringify(obj.provenance)}`,
+        );
+      }
 
       const entry: ProvenanceRolloutEntry = {
         kind: layout.kind,
@@ -137,6 +145,16 @@ export function rolloutProvenance(options: ProvenanceRolloutOptions): Provenance
   fs.writeFileSync(logPath, JSON.stringify(log, null, 2), 'utf-8');
 
   return { status: 'stamped', scanned, stamped: entries, countsByKind, logPath };
+}
+
+const V1_PROVENANCE_KINDS = new Set([
+  'agent', 'auto_reflect', 'user', 'loop_artifact', 'federation', 'correction', 'legacy',
+]);
+
+function isValidV1Provenance(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const kind = (value as Record<string, unknown>).kind;
+  return typeof kind === 'string' && V1_PROVENANCE_KINDS.has(kind);
 }
 
 function listJsonFiles(dir: string, recursive: boolean): string[] {

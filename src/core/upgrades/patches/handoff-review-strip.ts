@@ -77,7 +77,9 @@ export function stripHandoffReview(options: HandoffReviewStripOptions): HandoffR
 
   for (const file of files) {
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    if (!raw || typeof raw !== 'object') continue;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`handoff-review-strip: ${file} is not a JSON object`);
+    }
     const obj = raw as Record<string, unknown>;
     const review = obj.review;
     if (review === undefined) continue;
