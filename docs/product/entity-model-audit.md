@@ -259,10 +259,204 @@ Option (a) is cleaner but less battle-tested before public launch;
 (b) is slower but lets us dogfood the new grammar before removing the
 old.
 
+## §6 — Patches integrated post-consult
+
+Three external reviewers (codex, a second claude-code instance,
+github-copilot) returned verdict `proceed_with_patches` on the audit.
+Their convergent recommendations are integrated below. Each patch is
+load-bearing for Phase 3 and must land either before or during the
+grammar refactor.
+
+### P6.1 — Tombstone pattern for handoff corrections
+
+**What.** Handoffs stay immutable session-end artefacts. Post-session
+corrections (a teammate spotted a mistake, a follow-up clarified
+something) do not mutate the original handoff — they create a *new
+correction handoff* that carries a `superseded_by` pointer back to the
+original.
+
+**Why.** Preserves the "passive artefact" property while keeping an
+audit trail of who revised what. Federation remains safe (each record
+is whole, no partial merges).
+
+**How to apply.** Reject all `bclaw_update(entity='handoff', …)`
+outside the narrative override at creation. Expose instead a
+`bclaw_correct_handoff(original_id, correction_data)` helper that
+writes a new handoff and patches `original.superseded_by`.
+
+### P6.2 — Declarative transition matrix + imperative side effects
+
+**What.** Valid status transitions per entity live in the
+EntityRegistry as a declarative matrix (`{ from: [to1, to2] }`). Side
+effects (close linked claims, write audit entry, emit event) stay
+imperative in `bclaw_transition` for MVP.
+
+**Why.** Hybrid lets us test the declarative matrix (grammar
+consistency tests, static analysis) without over-engineering a rules
+engine we do not need yet. Migration to declarative side effects later
+is a drop-in without breaking callers.
+
+**How to apply.** `EntityRegistry[entity].transitions` is the
+authoritative matrix; `bclaw_transition` rejects moves not in the
+matrix, then runs a hardcoded side-effect dispatch per (entity, to)
+pair.
+
+### P6.3 — Provenance as a typed discriminated union
+
+**What.** Replace the single `source: 'auto' | 'user' | …` string with
+a typed discriminated union:
+
+```ts
+type Provenance =
+  | { kind: 'agent';         agent_id: string; session_id: string }
+  | { kind: 'auto_reflect';  source_session: string; confidence: number }
+  | { kind: 'user';          author: string }
+  | { kind: 'loop_artifact'; loop_id: string; slot: string; turn: number }
+  | { kind: 'federation';    source_project: string; remote_id: string }
+  | { kind: 'correction';    supersedes: string }
+  | { kind: 'legacy' };
+```
+
+**Why.** Each origin has different downstream implications (retention,
+confidence, federation behavior, audit narrative). A single string
+field cannot carry the metadata cleanly; a union keeps type-safety and
+makes queries like `bclaw_find(provenance.kind='auto_reflect',
+confidence_gte:0.8)` natural.
+
+**How to apply.** Add `provenance` field to
+decision/constraint/trap/handoff/runtime_note schemas. On v1.0
+migration, existing records receive `{ kind: 'legacy' }`. Default
+filter on memory reads: exclude `legacy` + auto below threshold,
+configurable via the query.
+
+### P6.4 — Delta context via bclaw_context(kind='delta')
+
+**What.** `bclaw_context` currently returns full state every call. Add
+a `kind: 'delta', since: <handoff_id | timestamp | event_seq>`
+parameter that returns only what changed since the reference point.
+
+**Why.** At scale (long sessions, cross-agent resumption, federation
+sync) returning full state is a token tax. Resumption needs the delta,
+not the world.
+
+**How to apply.** Implement as a filter over the events.jsonl stream +
+a diff against the referenced snapshot. Falls back to full context if
+the reference point is too old (compacted out).
+
+### P6.5 — MCP schema version strategy: 0.6 → 0.7 → 0.8 → 1.0
+
+**What.** The MCP schema version (`SCHEMA_VERSION` in
+`src/commands/mcp.ts`, currently `0.6.0`) is distinct from the app
+version (`package.json`, currently `0.62.0`). Progression:
+
+| Step | MCP schema | App version | Scope |
+|---|---|---|---|
+| Now | 0.6.0 | 0.62.x | baseline |
+| Patches | 0.7.0 | 0.63.x | P6.1–P6.4 + provenance rollout |
+| Migration | 0.8.0 | 0.64.x | `brainclaw migrate` + candidate archive |
+| Phase 3 | 1.0.0 | 1.0.0 | canonical 6 verbs + legacy removal |
+
+**Why.** App version tracks code changes; schema version tracks the
+contract MCP clients bind to. Agents that cache tool catalogs need to
+know when verbs changed shape.
+
+**How to apply.** Bump `SCHEMA_VERSION` at each step. Tool catalog
+response always includes schema_version so clients can invalidate.
+
+### P6.6 — Pending candidates archived on migration
+
+**What.** On v1.0 migration, existing candidates are not promoted or
+rejected — they are archived to `.brainclaw/archive/candidates/` with a
+manifest listing their original paths. The runtime stops reading them.
+
+**Why.** No information loss (archive stays on disk for later
+inspection), no forced triage on the operator, clean cutover.
+
+**How to apply.** `brainclaw migrate --to-schema=1.0` copies
+`.brainclaw/memory/candidates/` to `.brainclaw/archive/candidates/<date>/`,
+writes an index, removes the live directory.
+
+### P6.7 — Schema migration as a hard pre-Phase-3 step
+
+**What.** Do not start Phase 3 (the grammar refactor) until
+`brainclaw migrate` command exists and has been dogfooded on both live
+installations (this machine + the monorepo test server).
+
+**Why.** Phase 3 ships the canonical grammar. Existing stores must
+upgrade cleanly to v1.0 schema before any tool rewrites remove the
+legacy paths. Migration first = safety net; grammar refactor second =
+execute with confidence.
+
+**How to apply.** Migration plan (`feat/v1-schema-migration`, see §7)
+is a hard blocker on the Phase 3 plan (`feat/phase-3-canonical-grammar`).
+
+### P6.8 — Keep runtime_note / instruction / capability/tool distinct
+
+**What.** Reviewers recommended leaving runtime_note, instruction
+layers, and capability/tool as distinct entities for v1.0. They were
+flagged as "examine further" in §5 — verdict is *keep as-is*.
+
+**Why.** Instructions carry lifecycle triggers (`post-claim`,
+`pre-session-end`) that constraints do not. Capability vs tool has a
+semantic distinction (what the project *can do* vs what it *uses*)
+that matters for discoverability. Runtime notes remain a natural
+slot for low-confidence, scoped observations that do not yet deserve
+promotion to decision/trap. Premature merger would lose information.
+
+**How to apply.** No change for v1.0. Flag for a dedicated audit pass
+post-v1.0 once usage data confirms or contradicts the distinctions.
+
+## §7 — Consolidated Phase 3 checklist
+
+Hard prerequisite before any item below: **`feat/v1-schema-migration`
+plan must be executed and dogfooded** (see P6.7).
+
+Phase 3 itself is sliced into nine sub-items; each is independently
+mergeable behind a feature flag or catalog filter:
+
+- **3a — EntityRegistry core.** New `src/core/entity-registry.ts`:
+  short-label prefixes, updatable-field Zod schemas, transition
+  matrices, side-effect map. Grammar consistency tests.
+- **3b — Six canonical CRUD verbs.** Implement `bclaw_find`,
+  `bclaw_get`, `bclaw_create`, `bclaw_update`, `bclaw_remove`,
+  `bclaw_transition` consuming EntityRegistry. Behind `catalog: "all"`
+  filter first, public in `catalog: "default"` at v1.0.
+- **3c — `bclaw_context(kind)` unified.** Consolidates
+  `bclaw_get_context`, `bclaw_get_execution_context`,
+  `bclaw_get_agent_board`, `bclaw_get_agent_board_summary` under one
+  intent with a `kind` discriminator. Includes `kind='delta'` from
+  P6.4.
+- **3d — `bclaw_dispatch(intent)` unified.** Consolidates
+  `bclaw_dispatch_analysis`, `bclaw_dispatch_review`, and the raw
+  `bclaw_dispatch`. Review sub-intent carries `openLoop` flag for the
+  review_loop escalation path.
+- **3e — Handoff downscale.** Strip the review sub-object, remove
+  `bclaw_update_handoff`, expose `bclaw_correct_handoff` for tombstone
+  corrections (P6.1). Federation push/pull preserved end-to-end.
+- **3f — Provenance rollout.** Apply discriminated-union provenance
+  (P6.3) to decision/constraint/trap/handoff/runtime_note. Default
+  memory reads filter on confidence + non-legacy.
+- **3g — Legacy deprecation warnings.** Keep old tool names in
+  `catalog: "all"` with `LEGACY_MCP_TOOL_WARNINGS` entries pointing to
+  the new verb. Warnings fire server-side on every call during 0.9.x.
+- **3h — Docs sync.** Update `docs/integrations/mcp.md`,
+  `CLAUDE.md`, release notes, and agent profile exports. Canonical
+  grammar example galleries.
+- **3i — Legacy removal + v1.0 cut.** Remove deprecated tool names
+  from the MCP surface entirely. Bump schema to 1.0.0 and app to
+  1.0.0. Public launch candidate.
+
+Slices 3a–3b are the architecture core; 3c–3e are the intent
+consolidations; 3f is cross-cutting; 3g–3i are the soft→hard cutover.
+
 ## Sources
 
 - `docs/product/agent-first-model.md` — engine/cockpit two-layer model
 - `docs/concepts/loop-engine.md` — v8 RFC for the loop primitive
-- Session transcript 2026-04-18 (strategic round 2)
+- Session transcript 2026-04-18 (strategic round 2) — post-consult
+  integration pass
 - Memory decisions `cnd#587` (product model) and `cnd#588` (loop
   protocols roadmap)
+- External consult verdicts 2026-04-18 (codex / claude-code /
+  github-copilot) — all `proceed_with_patches`, patches integrated in
+  §6
