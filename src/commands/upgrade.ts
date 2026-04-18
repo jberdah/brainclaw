@@ -32,6 +32,10 @@ import {
   stripHandoffReview,
   type HandoffReviewStripResult,
 } from '../core/upgrades/patches/handoff-review-strip.js';
+import {
+  rolloutProvenance,
+  type ProvenanceRolloutResult,
+} from '../core/upgrades/patches/provenance-rollout.js';
 import { renderAgentExportForAgent, writeAgentExportForAgent } from './export.js';
 import { generateCursorHook, writeHook } from './hooks.js';
 
@@ -144,6 +148,7 @@ export function runUpgrade(options: UpgradeOptions = {}): void {
   if (options.to === '1.0') {
     schemaPatchResults.candidateArchive = runCandidateArchivePatch(cwd, options);
     schemaPatchResults.handoffReviewStrip = runHandoffReviewStripPatch(cwd, options);
+    schemaPatchResults.provenanceRollout = runProvenanceRolloutPatch(cwd, options);
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
@@ -571,6 +576,35 @@ function outputJson(actions: MigrationAction[], dryRun: boolean): void {
 interface SchemaPatchResults {
   candidateArchive?: CandidateArchiveResult;
   handoffReviewStrip?: HandoffReviewStripResult;
+  provenanceRollout?: ProvenanceRolloutResult;
+}
+
+function runProvenanceRolloutPatch(cwd: string, options: UpgradeOptions): ProvenanceRolloutResult {
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const result = rolloutProvenance({
+    storePath: store.storePath,
+    dryRun: options.dryRun ?? false,
+  });
+
+  if (!options.json) {
+    if (result.status === 'noop') {
+      console.log(`✔ Provenance rollout (P6.3): ${result.scanned} record(s) scanned, all already carry provenance.`);
+    } else if (result.status === 'planned') {
+      console.log(`(dry run — would stamp legacy provenance on ${result.stamped.length} of ${result.scanned} record(s))`);
+    } else {
+      const breakdown = Object.entries(result.countsByKind)
+        .map(([k, c]) => `${k}:${c}`)
+        .join(', ');
+      console.log(`✔ Provenance rollout (P6.3): ${result.stamped.length} of ${result.scanned} record(s) stamped legacy (${breakdown}). Log at ${result.logPath}`);
+    }
+  }
+
+  return result;
 }
 
 function runHandoffReviewStripPatch(cwd: string, options: UpgradeOptions): HandoffReviewStripResult {
