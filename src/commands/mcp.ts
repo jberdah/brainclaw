@@ -1550,8 +1550,41 @@ export const MCP_HEADLESS_AUTO_TOOL_NAMES: string[] = ALL_TOOLS
 
 type McpToolTier = 'facade' | 'standard' | 'advanced';
 
+/**
+ * Tools removed from the MCP surface at the v1.0 cut (Phase 3 slice 3i).
+ * Handlers remain in place defensively, but these names are hidden from
+ * every `tools/list` response — including `catalog: "all"`. Callers
+ * should migrate to the canonical grammar (see
+ * `docs/mcp-schema-changelog.md` 1.0.0 block for the full replacement
+ * map).
+ */
+export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
+  'bclaw_list_plans',
+  'bclaw_list_candidates',
+  'bclaw_list_claims',
+  'bclaw_list_actions',
+  'bclaw_list_assignments',
+  'bclaw_list_runs',
+  'bclaw_read_handoff',
+  'bclaw_create_plan',
+  'bclaw_update_plan',
+  'bclaw_create_candidate',
+  'bclaw_accept',
+  'bclaw_reject',
+  'bclaw_get_execution_context',
+  'bclaw_get_agent_board',
+  'bclaw_get_agent_board_summary',
+  'bclaw_dispatch_analysis',
+  'bclaw_dispatch_review',
+  'bclaw_update_handoff',
+  'bclaw_get_context',
+]);
+
+/** All tools minus the v1.0 removal set. Used by every tools/list branch. */
+const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool.name));
+
 /** Tools with tier facade or standard — returned by default. Advanced tools require catalog=all. */
-const DEFAULT_PUBLISHED_TOOLS = ALL_TOOLS.filter(
+const DEFAULT_PUBLISHED_TOOLS = PUBLISHED_TOOLS.filter(
   (tool) => {
     const tier = (tool as { annotations?: { tier?: string } }).annotations?.tier;
     return tier === 'facade' || tier === 'standard';
@@ -1626,38 +1659,52 @@ function toolResponse(
 }
 
 const LEGACY_MCP_TOOL_WARNINGS: Record<string, string> = {
-  // Facade-era deprecations (pre-Phase 3)
+  // Facade-era primitives. Kept discoverable for callers that need the
+  // granular tools alongside the facades; warning points at the facade
+  // replacement when applicable.
   bclaw_session_start: 'Deprecated: use bclaw_work(intent: execute) which handles session start automatically.',
   bclaw_claim: 'Deprecated: use bclaw_work(intent: execute, scope: ...) which creates claims automatically.',
-  bclaw_get_context: 'Deprecated: use bclaw_context(kind: "memory") or bclaw_work(intent: consult) for the facade shape.',
   bclaw_check_policy: 'Deprecated: policy checks are now implicit; use bclaw_work which surfaces them at claim time.',
 
-  // Phase 3 slice 3e — handoff downscale
-  bclaw_update_handoff: 'Deprecated (P6.1 tombstone): handoffs are immutable session-end artefacts. Use bclaw_correct_handoff(originalId, ...) to write a new handoff that supersedes the original.',
-
-  // Phase 3 slice 3g — canonical CRUD grammar superseding per-entity tools
-  bclaw_list_plans: 'Deprecated: use bclaw_find(entity: "plan", filter).',
-  bclaw_list_candidates: 'Deprecated: use bclaw_find(entity: "candidate", filter).',
-  bclaw_list_claims: 'Deprecated: use bclaw_find(entity: "claim", filter).',
-  bclaw_list_actions: 'Deprecated: use bclaw_find(entity: "action", filter).',
-  bclaw_list_assignments: 'Deprecated: use bclaw_find(entity: "assignment", filter).',
-  bclaw_list_runs: 'Deprecated: use bclaw_find(entity: "agent_run", filter).',
-  bclaw_read_handoff: 'Deprecated: use bclaw_get(entity: "handoff", id).',
-  bclaw_create_plan: 'Deprecated: use bclaw_create(entity: "plan", data).',
-  bclaw_update_plan: 'Deprecated: use bclaw_update(entity: "plan", id, patch) for fields, bclaw_transition(entity: "plan", id, to) for status changes.',
-  bclaw_create_candidate: 'Deprecated: use bclaw_create(entity: "candidate", data).',
-  bclaw_accept: 'Deprecated: use bclaw_transition(entity: "candidate", id, to: "accepted").',
-  bclaw_reject: 'Deprecated: use bclaw_transition(entity: "candidate", id, to: "rejected").',
-
-  // Phase 3 slice 3c — context consolidation
-  bclaw_get_execution_context: 'Deprecated: use bclaw_context(kind: "execution").',
-  bclaw_get_agent_board: 'Deprecated: use bclaw_context(kind: "board").',
-  bclaw_get_agent_board_summary: 'Deprecated: use bclaw_context(kind: "board_summary").',
-
-  // Phase 3 slice 3d — dispatch consolidation
-  bclaw_dispatch_analysis: 'Deprecated: use bclaw_dispatch(intent: "analysis").',
-  bclaw_dispatch_review: 'Deprecated: use bclaw_dispatch(intent: "review", openLoop, reviewMode).',
+  // Every tool replaced by the canonical grammar at v1.0 is now
+  // listed in REMOVED_IN_V1_TOOLS and no longer returned by
+  // tools/list. Direct `tools/call` by name still works as a
+  // migration escape hatch — the warning wrapper surfaces below,
+  // driven by the canonical-grammar redirect map.
 };
+
+/**
+ * Redirects emitted when a direct `tools/call` hits a tool that was
+ * removed from the catalog at v1.0. The warning points at the
+ * canonical replacement.
+ */
+const REMOVED_TOOL_REDIRECTS: Record<string, string> = {
+  bclaw_list_plans: 'Removed in v1.0: use bclaw_find(entity: "plan", filter).',
+  bclaw_list_candidates: 'Removed in v1.0: use bclaw_find(entity: "candidate", filter).',
+  bclaw_list_claims: 'Removed in v1.0: use bclaw_find(entity: "claim", filter).',
+  bclaw_list_actions: 'Removed in v1.0: use bclaw_find(entity: "action", filter).',
+  bclaw_list_assignments: 'Removed in v1.0: use bclaw_find(entity: "assignment", filter).',
+  bclaw_list_runs: 'Removed in v1.0: use bclaw_find(entity: "agent_run", filter).',
+  bclaw_read_handoff: 'Removed in v1.0: use bclaw_get(entity: "handoff", id).',
+  bclaw_create_plan: 'Removed in v1.0: use bclaw_create(entity: "plan", data).',
+  bclaw_update_plan: 'Removed in v1.0: use bclaw_update(entity: "plan", id, patch) for fields, bclaw_transition(entity: "plan", id, to) for status changes.',
+  bclaw_create_candidate: 'Removed in v1.0: use bclaw_create(entity: "candidate", data).',
+  bclaw_accept: 'Removed in v1.0: use bclaw_transition(entity: "candidate", id, to: "accepted").',
+  bclaw_reject: 'Removed in v1.0: use bclaw_transition(entity: "candidate", id, to: "rejected").',
+  bclaw_get_execution_context: 'Removed in v1.0: use bclaw_context(kind: "execution").',
+  bclaw_get_agent_board: 'Removed in v1.0: use bclaw_context(kind: "board").',
+  bclaw_get_agent_board_summary: 'Removed in v1.0: use bclaw_context(kind: "board_summary").',
+  bclaw_dispatch_analysis: 'Removed in v1.0: use bclaw_dispatch(intent: "analysis").',
+  bclaw_dispatch_review: 'Removed in v1.0: use bclaw_dispatch(intent: "review", openLoop, reviewMode).',
+  bclaw_update_handoff: 'Removed in v1.0 (P6.1 tombstone): use bclaw_correct_handoff(originalId, ...).',
+  bclaw_get_context: 'Removed in v1.0: use bclaw_context(kind: "memory") or bclaw_work(intent: consult).',
+};
+
+// Inject removed-tool warnings into the legacy warning map so the
+// executeMcpToolCall exit wrapper surfaces them on direct calls.
+for (const [name, msg] of Object.entries(REMOVED_TOOL_REDIRECTS)) {
+  LEGACY_MCP_TOOL_WARNINGS[name] = msg;
+}
 
 function isLegacyMcpToolFacadeDisabled(name: string): boolean {
   return process.env.BRAINCLAW_FACADE_ONLY === '1' && Object.hasOwn(LEGACY_MCP_TOOL_WARNINGS, name);
@@ -2206,9 +2253,9 @@ export class McpServerConnection {
           const tier = typeof params.tier === 'string' ? params.tier as McpToolTier : undefined;
           let tools;
           if (catalog === 'all' || include === 'all' || params.advanced === true) {
-            tools = ALL_TOOLS;
+            tools = PUBLISHED_TOOLS;
           } else if (tier) {
-            tools = ALL_TOOLS.filter((t) => (t as { annotations?: { tier?: string } }).annotations?.tier === tier);
+            tools = PUBLISHED_TOOLS.filter((t) => (t as { annotations?: { tier?: string } }).annotations?.tier === tier);
           } else {
             tools = DEFAULT_PUBLISHED_TOOLS;
           }

@@ -42,26 +42,24 @@ describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
     'bclaw_dispatch_review',
   ];
 
-  it('every deprecated tool has a warning entry', () => {
+  it('every deprecated tool has a warning entry (Deprecated: or Removed in v1.0:)', () => {
     const missing: string[] = [];
     for (const name of EXPECTED_DEPRECATED) {
-      const pattern = new RegExp(`\\b${name}:\\s*'Deprecated`, 'm');
+      const pattern = new RegExp(`\\b${name}:\\s*'(Deprecated|Removed in v1\\.0)`, 'm');
       if (!pattern.test(source)) missing.push(name);
     }
     assert.equal(
       missing.length,
       0,
-      `Missing LEGACY_MCP_TOOL_WARNINGS entries: ${missing.join(', ')}`,
+      `Missing LEGACY_MCP_TOOL_WARNINGS/REMOVED_TOOL_REDIRECTS entries: ${missing.join(', ')}`,
     );
   });
 
   it('every warning points at a concrete replacement (bclaw_X(...) or "use Y")', () => {
-    // Extract all `name: 'Deprecated...' lines inside the map.
     const entries = [...source.matchAll(/^\s*(bclaw_\w+):\s*'([^']+)'/gm)];
     for (const match of entries) {
       const [, name, msg] = match;
-      if (!msg!.startsWith('Deprecated')) continue;
-      // Must mention either another bclaw_ tool or the word "use".
+      if (!msg!.startsWith('Deprecated') && !msg!.startsWith('Removed in v1.0')) continue;
       const hasReplacement = /\buse\b/i.test(msg!) && /bclaw_\w+/.test(msg!);
       assert.ok(
         hasReplacement,
