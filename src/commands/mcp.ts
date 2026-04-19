@@ -1628,11 +1628,37 @@ function toolResponse(
 }
 
 const LEGACY_MCP_TOOL_WARNINGS: Record<string, string> = {
+  // Facade-era deprecations (pre-Phase 3)
   bclaw_session_start: 'Deprecated: use bclaw_work(intent: execute) which handles session start automatically.',
   bclaw_claim: 'Deprecated: use bclaw_work(intent: execute, scope: ...) which creates claims automatically.',
-  bclaw_get_context: 'Deprecated: use bclaw_work(intent: consult) which returns context directly.',
-  bclaw_check_policy: 'Deprecated: policy checks are now implicit in bclaw_work.',
-  bclaw_update_handoff: 'Deprecated (P6.1 tombstone): handoffs are immutable session-end artefacts. Use bclaw_correct_handoff(original_id, correction_data) to write a new handoff that supersedes the original.',
+  bclaw_get_context: 'Deprecated: use bclaw_context(kind: "memory") or bclaw_work(intent: consult) for the facade shape.',
+  bclaw_check_policy: 'Deprecated: policy checks are now implicit; use bclaw_work which surfaces them at claim time.',
+
+  // Phase 3 slice 3e — handoff downscale
+  bclaw_update_handoff: 'Deprecated (P6.1 tombstone): handoffs are immutable session-end artefacts. Use bclaw_correct_handoff(originalId, ...) to write a new handoff that supersedes the original.',
+
+  // Phase 3 slice 3g — canonical CRUD grammar superseding per-entity tools
+  bclaw_list_plans: 'Deprecated: use bclaw_find(entity: "plan", filter).',
+  bclaw_list_candidates: 'Deprecated: use bclaw_find(entity: "candidate", filter).',
+  bclaw_list_claims: 'Deprecated: use bclaw_find(entity: "claim", filter).',
+  bclaw_list_actions: 'Deprecated: use bclaw_find(entity: "action", filter).',
+  bclaw_list_assignments: 'Deprecated: use bclaw_find(entity: "assignment", filter).',
+  bclaw_list_runs: 'Deprecated: use bclaw_find(entity: "agent_run", filter).',
+  bclaw_read_handoff: 'Deprecated: use bclaw_get(entity: "handoff", id).',
+  bclaw_create_plan: 'Deprecated: use bclaw_create(entity: "plan", data).',
+  bclaw_update_plan: 'Deprecated: use bclaw_update(entity: "plan", id, patch) for fields, bclaw_transition(entity: "plan", id, to) for status changes.',
+  bclaw_create_candidate: 'Deprecated: use bclaw_create(entity: "candidate", data).',
+  bclaw_accept: 'Deprecated: use bclaw_transition(entity: "candidate", id, to: "accepted").',
+  bclaw_reject: 'Deprecated: use bclaw_transition(entity: "candidate", id, to: "rejected").',
+
+  // Phase 3 slice 3c — context consolidation
+  bclaw_get_execution_context: 'Deprecated: use bclaw_context(kind: "execution").',
+  bclaw_get_agent_board: 'Deprecated: use bclaw_context(kind: "board").',
+  bclaw_get_agent_board_summary: 'Deprecated: use bclaw_context(kind: "board_summary").',
+
+  // Phase 3 slice 3d — dispatch consolidation
+  bclaw_dispatch_analysis: 'Deprecated: use bclaw_dispatch(intent: "analysis").',
+  bclaw_dispatch_review: 'Deprecated: use bclaw_dispatch(intent: "review", openLoop, reviewMode).',
 };
 
 function isLegacyMcpToolFacadeDisabled(name: string): boolean {
@@ -5602,8 +5628,17 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     connectionSessionId: effectiveConnectionSessionId,
   });
 
-  if (autoSessionId && !outcome.nextConnectionSessionId) {
-    return { ...outcome, nextConnectionSessionId: autoSessionId };
+  // Apply legacy deprecation warning uniformly (Phase 3 slice 3g). Read tools
+  // already get it at line 2560; write tools historically did not. This
+  // wrapper ensures every call through a deprecated name surfaces the
+  // pointer at the canonical replacement.
+  const withLegacyWarning = {
+    ...outcome,
+    response: appendLegacyMcpToolWarning(outcome.response, payload.name),
+  };
+
+  if (autoSessionId && !withLegacyWarning.nextConnectionSessionId) {
+    return { ...withLegacyWarning, nextConnectionSessionId: autoSessionId };
   }
-  return outcome;
+  return withLegacyWarning;
 }
