@@ -8,7 +8,63 @@ guarantees this changelog follows.
 
 ---
 
-## 0.7.0 (current)
+## 0.8.0 (current)
+
+Phase 3 canonical grammar slices shipped under `pln_c6472192` (slices
+3a–3g). Every addition is behind `catalog: "all"` until the v1.0 cut
+(slice 3i) promotes the new verbs to the default catalog and removes
+the deprecated surface.
+
+**Added (canonical CRUD verbs)**
+- `bclaw_find(entity, filter?)` — list query with default provenance
+  filter (excludes `legacy` + `auto_reflect < 0.6`; override via
+  `filter.includeLegacy` / `filter.minAutoReflectConfidence`).
+- `bclaw_get(entity, id)` — fetch by id or short_label.
+- `bclaw_create(entity, data)` — auto-stamps provenance (kind: user
+  by default).
+- `bclaw_update(entity, id, patch)` — rejects non-updatable fields
+  per EntityRegistry.
+- `bclaw_remove(entity, id, purge?)` — archive (default) or purge.
+- `bclaw_transition(entity, id, to, reason?)` — validated against
+  declarative transition matrix; returns side-effect tags.
+
+**Added (unified intent dispatchers)**
+- `bclaw_context(kind)` — unifies `bclaw_get_context` /
+  `_execution_context` / `_agent_board` / `_agent_board_summary`.
+  Adds `kind: "delta", since: <session_id>` for memory diffs (P6.4).
+- `bclaw_dispatch(intent)` — intent discriminator over the existing
+  bclaw_dispatch tool. `analysis` / `execute` (default, legacy) /
+  `review` (with openLoop + reviewMode).
+- `bclaw_correct_handoff(originalId, ...)` — P6.1 tombstone pattern.
+  Writes a correction handoff with `supersedes` / `superseded_by`
+  pointers; refuses to supersede already-superseded or closed
+  handoffs.
+
+**Added (schema)**
+- `Provenance` discriminated union: agent / auto_reflect / user /
+  loop_artifact / federation / correction / legacy. Exported from
+  `src/core/schema.ts`. Stamped on creates; federation-safe.
+- `Handoff.superseded_by` and `Handoff.supersedes` — P6.1 tombstone
+  pointers, optional passthrough.
+
+**Deprecated (19 tools)**
+All redirects are non-breaking (old tools still work until slice 3i
+removal). Warnings surface on every call through the
+`executeMcpToolCall` exit wrapper:
+- `bclaw_list_plans/candidates/claims/actions/assignments/runs` →
+  `bclaw_find(entity, filter)`
+- `bclaw_read_handoff` → `bclaw_get(entity: "handoff", id)`
+- `bclaw_create_plan/candidate` → `bclaw_create`
+- `bclaw_update_plan` → `bclaw_update` / `bclaw_transition`
+- `bclaw_accept/reject` → `bclaw_transition(entity: "candidate")`
+- `bclaw_get_execution_context/_agent_board/_agent_board_summary` →
+  `bclaw_context(kind)`
+- `bclaw_dispatch_analysis/_review` → `bclaw_dispatch(intent)`
+- `bclaw_update_handoff` → `bclaw_correct_handoff` (P6.1)
+
+---
+
+## 0.7.0
 
 Shipped in brainclaw app `0.63.0`. Consolidates the surface listed
 below — previously accumulating under an inaccurate `SCHEMA_VERSION = '0.6.0'`

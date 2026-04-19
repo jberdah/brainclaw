@@ -15,6 +15,12 @@ import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js
  * Schema-level routing (intent=execute / review with full MCP
  * plumbing, trust enforcement, audit entries) is covered by the
  * existing dispatch E2E tests under tests/unit/dispatch-e2e*.
+ *
+ * Verified 2026-04-19 (Sonnet 4.6 pre-v1 review): the intent='review'
+ * branch at src/commands/mcp.ts `intent === 'review'` block delegates
+ * to the same `dispatchReview()` function consumed by the legacy
+ * bclaw_dispatch_review handler. Not a divergence — same code path,
+ * different entry point.
  */
 describe('commands — bclaw_dispatch(intent) read delegate', () => {
   let workspace: TestWorkspace;

@@ -20,6 +20,10 @@ import {
   loadCandidate,
   saveCandidate,
 } from './candidates.js';
+import { listClaims } from './claims.js';
+import { listActionRequired } from './actions.js';
+import { listAssignments } from './assignments.js';
+import { listAgentRuns } from './agentruns.js';
 import {
   deleteRuntimeNote,
   listRuntimeNotes,
@@ -187,8 +191,13 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'decision':     return loadState(cwd).recent_decisions;
     case 'constraint':   return loadState(cwd).active_constraints;
     case 'trap':         return loadState(cwd).known_traps;
+    case 'handoff':      return loadState(cwd).open_handoffs;
     case 'candidate':    return listCandidates(undefined, cwd);
     case 'runtime_note': return listRuntimeNotes(undefined, cwd);
+    case 'claim':        return listClaims(cwd);
+    case 'action':       return listActionRequired(cwd);
+    case 'assignment':   return listAssignments(cwd);
+    case 'agent_run':    return listAgentRuns(cwd);
     default:
       throw new EntityOperationUnsupportedError(name, 'find');
   }
@@ -315,12 +324,9 @@ export function createEntity(
         starred_by: [],
         usage_count: 0,
         usage_events: [],
+        provenance: defaultProvenance(data),
       };
       saveCandidate(candidate, cwd);
-      // Stamp provenance post-save through the state path — candidates have
-      // their own store so we can rewrite the file directly.
-      const stamped = { ...candidate, provenance: defaultProvenance(data) } as Candidate;
-      saveCandidate(stamped, cwd);
       return { entity: name, id };
     }
     default:

@@ -608,6 +608,7 @@ export const CandidateSchema = z.preprocess(candidatePreprocess, z.object({
   resolved_at: z.string().optional(),
   resolved_by: z.string().optional(),
   resolution_reason: z.string().optional(),
+  provenance: ProvenancePassthroughSchema,
 }));
 export type Candidate = z.infer<typeof CandidateSchema>;
 

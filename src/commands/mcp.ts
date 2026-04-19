@@ -21,7 +21,7 @@ import {
   updateEntity,
   type EntityFilter,
 } from '../core/entity-operations.js';
-import type { EntityName } from '../core/entity-registry.js';
+import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
@@ -89,7 +89,7 @@ export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
 export type McpConnectionState = 'pre_init' | 'awaiting_initialized' | 'ready' | 'closed';
 export type JsonRpcId = string | number | null;
 
-export const SCHEMA_VERSION = '0.7.0';
+export const SCHEMA_VERSION = '0.8.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
 
@@ -1446,13 +1446,13 @@ const MCP_WRITE_TOOLS = [
   // `standard` at the v1.0 cut (slice 3i).
   {
     name: 'bclaw_find',
-    description: 'Canonical list query over a brainclaw entity. Accepts a filter object (status, tag, author, plan_id, limit, offset) and returns matching items.',
+    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence.',
     annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | runtime_note | candidate (MVP). Others: handoff, claim, sequence, etc. not yet wired.' },
-        filter: { type: 'object', description: 'Filter: { status?, tag?, author?, plan_id?, limit?, offset? }.' },
+        entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run. Others not yet wired.' },
+        filter: { type: 'object', description: 'Filter keys: status, tag, author, plan_id, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6).' },
       },
       required: ['entity'],
     },
@@ -4455,6 +4455,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       if (original.superseded_by) {
         return { response: createToolErrorResponse('validation_error', `Handoff ${originalId} was already superseded by ${original.superseded_by}. Correct the current tip instead.`) };
+      }
+      // Phase 3 slice 3e fixup (Sonnet review #3): refuse to supersede a
+      // handoff in a terminal status per EntityRegistry. A closed handoff
+      // is immutable history — corrections would logically dangle.
+      if (original.status && ENTITY_REGISTRY.handoff.terminal.includes(original.status)) {
+        return { response: createToolErrorResponse('validation_error', `Handoff ${originalId} is in terminal status '${original.status}'. Cannot supersede a closed handoff.`) };
       }
       const { id: newId, short_label } = generateIdWithLabel('open_handoffs', cwd);
       const reason = typeof args.reason === 'string' && args.reason ? args.reason : undefined;
