@@ -5,11 +5,11 @@
  * Users choose to dismiss, resolve, or archive via explicit commands.
  */
 
-import type { Candidate, PlanItem, Trap } from './schema.js';
+import type { Candidate, PlanItem, RuntimeNote, Trap } from './schema.js';
 import type { Handoff } from './schema.js';
 import { resolvedSource } from './candidates.js';
 
-export type StalenessEntity = 'plan' | 'trap' | 'handoff' | 'candidate';
+export type StalenessEntity = 'plan' | 'trap' | 'handoff' | 'candidate' | 'runtime_note';
 
 export interface StalenessWarning {
   /** Entity ID */
@@ -31,6 +31,7 @@ export interface StalenessReport {
   trap_count: number;
   handoff_count: number;
   candidate_count: number;
+  runtime_note_count: number;
 }
 
 /** Thresholds in days. Adjust via config in the future. */
@@ -45,6 +46,12 @@ export const STALENESS_THRESHOLDS = {
   candidate_pending_days: 21,
   /** auto-generated pending candidate older than N days */
   candidate_auto_pending_days: 30,
+  /**
+   * Observation runtime_note older than N days without explicit
+   * expiry. Session start/end notes are transient by nature and
+   * never flagged regardless of age.
+   */
+  runtime_note_observation_days: 30,
 } as const;
 
 function ageDays(isoDate: string, nowMs: number): number {
@@ -202,6 +209,57 @@ export function detectStaleCandidates(
 }
 
 /**
+ * Detect observation runtime_notes older than the threshold that
+ * lack an explicit `expires_at`. Session start/end notes are
+ * transient markers and never flagged.
+ *
+ * Notes with `expires_at` in the future are treated as operator-managed
+ * and skipped. Notes that have already expired are flagged separately
+ * with a short age relative to the expiry (matches the trap pattern).
+ */
+export function detectStaleRuntimeNotes(
+  notes: RuntimeNote[],
+  nowMs = Date.now(),
+  thresholds = STALENESS_THRESHOLDS,
+): StalenessWarning[] {
+  const warnings: StalenessWarning[] = [];
+  const nowIso = new Date(nowMs).toISOString();
+
+  for (const note of notes) {
+    if (note.note_type !== 'observation') continue;
+
+    // Honour operator-set expiries: expired → flag with the expiry age.
+    if (note.expires_at) {
+      if (note.expires_at > nowIso) continue; // not yet expired
+      const age = ageDays(note.expires_at, nowMs);
+      warnings.push({
+        id: note.id,
+        entity: 'runtime_note',
+        text: truncate(note.text),
+        age_days: age,
+        reason: `Runtime note expired ${age} day${age === 1 ? '' : 's'} ago (expires_at: ${note.expires_at.slice(0, 10)})`,
+        suggested_action: `bclaw_remove(entity: "runtime_note", id: "${note.id}")`,
+      });
+      continue;
+    }
+
+    const age = ageDays(note.created_at, nowMs);
+    if (age >= thresholds.runtime_note_observation_days) {
+      warnings.push({
+        id: note.id,
+        entity: 'runtime_note',
+        text: truncate(note.text),
+        age_days: age,
+        reason: `Observation runtime note from ${note.agent} is ${age} day${age === 1 ? '' : 's'} old with no expiry set`,
+        suggested_action: `bclaw_remove(entity: "runtime_note", id: "${note.id}")  # or bclaw_update to set expires_at`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
+/**
  * Run all staleness detectors and return a combined report.
  * Warnings are sorted by age (oldest first) so the most urgent surface first.
  *
@@ -217,6 +275,7 @@ export function detectStaleness(
   handoffs: Handoff[],
   candidates: Candidate[],
   nowMs = Date.now(),
+  runtimeNotes: RuntimeNote[] = [],
 ): StalenessReport {
   const nowIso = new Date(nowMs).toISOString();
 
@@ -224,12 +283,14 @@ export function detectStaleness(
   const trapWarnings = detectExpiredTraps(traps, nowIso, nowMs);
   const handoffWarnings = detectStaleHandoffs(handoffs, nowMs);
   const candidateWarnings = detectStaleCandidates(candidates, nowMs);
+  const noteWarnings = detectStaleRuntimeNotes(runtimeNotes, nowMs);
 
   const warnings = [
     ...planWarnings,
     ...trapWarnings,
     ...handoffWarnings,
     ...candidateWarnings,
+    ...noteWarnings,
   ].sort((a, b) => b.age_days - a.age_days);
 
   return {
@@ -238,6 +299,7 @@ export function detectStaleness(
     trap_count: trapWarnings.length,
     handoff_count: handoffWarnings.length,
     candidate_count: candidateWarnings.length,
+    runtime_note_count: noteWarnings.length,
   };
 }
 
@@ -250,5 +312,6 @@ export function staleSummary(report: StalenessReport): string {
   if (report.trap_count > 0) parts.push(`${report.trap_count} expired trap${report.trap_count > 1 ? 's' : ''}`);
   if (report.handoff_count > 0) parts.push(`${report.handoff_count} open handoff${report.handoff_count > 1 ? 's' : ''}`);
   if (report.candidate_count > 0) parts.push(`${report.candidate_count} pending candidate${report.candidate_count > 1 ? 's' : ''}`);
+  if (report.runtime_note_count > 0) parts.push(`${report.runtime_note_count} stale runtime note${report.runtime_note_count > 1 ? 's' : ''}`);
   return parts.join(', ');
 }

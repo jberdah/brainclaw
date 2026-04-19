@@ -6,10 +6,11 @@ import {
   detectExpiredTraps,
   detectStaleHandoffs,
   detectStaleCandidates,
+  detectStaleRuntimeNotes,
   staleSummary,
   STALENESS_THRESHOLDS,
 } from '../../src/core/staleness.js';
-import type { PlanItem, Trap, Handoff, Candidate } from '../../src/core/schema.js';
+import type { PlanItem, RuntimeNote, Trap, Handoff, Candidate } from '../../src/core/schema.js';
 
 function daysAgo(n: number): string {
   return new Date(Date.now() - n * 86_400_000).toISOString();
@@ -301,6 +302,69 @@ describe('core/staleness', () => {
       const report = detectStaleness([stalePlan], [], [], []);
       const summary = staleSummary(report);
       assert.ok(summary.includes('plan'));
+    });
+  });
+
+  describe('detectStaleRuntimeNotes (Phase 4 slice 3f / pln#390)', () => {
+    const baseNote: RuntimeNote = {
+      id: 'rtn_test',
+      agent: 'test-agent',
+      text: 'Observation',
+      created_at: daysAgo(5),
+      tags: [],
+      visibility: 'shared',
+      note_type: 'observation',
+    };
+
+    it('flags observation notes older than the threshold with no expiry set', () => {
+      const old = { ...baseNote, id: 'rtn_old', created_at: daysAgo(STALENESS_THRESHOLDS.runtime_note_observation_days + 2) };
+      const warnings = detectStaleRuntimeNotes([old]);
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0]!.entity, 'runtime_note');
+      assert.match(warnings[0]!.reason, /old with no expiry/);
+    });
+
+    it('ignores fresh observation notes', () => {
+      const fresh = { ...baseNote, id: 'rtn_fresh', created_at: daysAgo(5) };
+      const warnings = detectStaleRuntimeNotes([fresh]);
+      assert.equal(warnings.length, 0);
+    });
+
+    it('ignores notes with a future expiry even if old', () => {
+      const future = {
+        ...baseNote,
+        id: 'rtn_ttl_ok',
+        created_at: daysAgo(STALENESS_THRESHOLDS.runtime_note_observation_days + 10),
+        expires_at: daysFromNow(7),
+      };
+      const warnings = detectStaleRuntimeNotes([future]);
+      assert.equal(warnings.length, 0);
+    });
+
+    it('flags notes whose expiry has already passed with an expired reason', () => {
+      const expired = {
+        ...baseNote,
+        id: 'rtn_expired',
+        created_at: daysAgo(40),
+        expires_at: daysAgo(3),
+      };
+      const warnings = detectStaleRuntimeNotes([expired]);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!.reason, /expired 3 days ago/);
+    });
+
+    it('never flags session_start or session_end markers', () => {
+      const marker = { ...baseNote, id: 'rtn_marker', created_at: daysAgo(90), note_type: 'session_start' as const };
+      const marker2 = { ...baseNote, id: 'rtn_marker2', created_at: daysAgo(90), note_type: 'session_end' as const };
+      const warnings = detectStaleRuntimeNotes([marker, marker2]);
+      assert.equal(warnings.length, 0);
+    });
+
+    it('detectStaleness wires runtime_note into report + summary', () => {
+      const old = { ...baseNote, id: 'rtn_wired', created_at: daysAgo(STALENESS_THRESHOLDS.runtime_note_observation_days + 1) };
+      const report = detectStaleness([], [], [], [], Date.now(), [old]);
+      assert.equal(report.runtime_note_count, 1);
+      assert.ok(staleSummary(report).includes('runtime note'));
     });
   });
 });
