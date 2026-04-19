@@ -4,8 +4,9 @@ trust_level: trusted
 trigger: manual
 prompt: >-
   Review pending candidates in this project. For each, give a structured
-  opinion (approve/reject with reasons). Use bclaw_list_candidates and
-  bclaw_accept/bclaw_reject.
+  opinion (approve/reject with reasons). Use
+  bclaw_find(entity: "candidate", filter: {status: "pending"}) and
+  bclaw_transition(entity: "candidate", id, to: "accepted" | "rejected").
 invoke: claude -p "{prompt}" --allowedTools "Edit,Write,Bash,Read,Glob,Grep"
 tags:
   - review

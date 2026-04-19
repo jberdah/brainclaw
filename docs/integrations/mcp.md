@@ -131,6 +131,88 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_update_memory` | memory | Update a memory item's text or metadata |
 | `bclaw_compact` | memory | LLM-driven semantic memory compaction (two-phase) |
 
+### Canonical grammar (v0.8.0+)
+
+Phase 3 introduces a unified grammar that will replace many of the
+per-entity tools above at the v1.0 cut. Available **today** under the
+`advanced` tier. At v1.0 they move to `standard` and the legacy tools
+below become removal candidates.
+
+See [docs/concepts/mcp-governance.md](../concepts/mcp-governance.md)
+for the stability contract and [docs/mcp-schema-changelog.md](../mcp-schema-changelog.md)
+for the full 0.8.0 changelog.
+
+#### Six CRUD verbs
+
+| Verb | Purpose | Replaces |
+|---|---|---|
+| `bclaw_find(entity, filter?)` | List query (default: hides `legacy` + `auto_reflect<0.6`) | `bclaw_list_plans/candidates/claims/actions/assignments/runs` |
+| `bclaw_get(entity, id)` | Fetch one by id or short_label | `bclaw_read_handoff` |
+| `bclaw_create(entity, data)` | Create with auto-stamped provenance | `bclaw_create_plan/candidate` |
+| `bclaw_update(entity, id, patch)` | Partial merge (updatable fields only) | `bclaw_update_plan`, `bclaw_update_memory` |
+| `bclaw_remove(entity, id, purge?)` | Archive (default) or hard-delete | `bclaw_delete_memory`, `bclaw_delete_plan` |
+| `bclaw_transition(entity, id, to, reason?)` | State machine transition with side-effect tags | `bclaw_accept`, `bclaw_reject`, status-update flows |
+
+Supported entities: plan, decision, constraint, trap, handoff,
+runtime_note, candidate, claim, action, assignment, agent_run
+(read-only for the latter four). Declarative transition matrix +
+updatable field list live in [src/core/entity-registry.ts](../../src/core/entity-registry.ts).
+
+#### Unified intent dispatchers
+
+| Tool | Consolidates | Example |
+|---|---|---|
+| `bclaw_context(kind, since?)` | `bclaw_get_context` / `bclaw_get_execution_context` / `bclaw_get_agent_board` / `bclaw_get_agent_board_summary` + new `kind='delta'` (P6.4) | `bclaw_context({ kind: 'delta', since: 'sess_abc' })` |
+| `bclaw_dispatch(intent, …)` | `bclaw_dispatch_analysis` / `bclaw_dispatch` / `bclaw_dispatch_review` | `bclaw_dispatch({ intent: 'review', openLoop: true })` |
+
+#### Handoff correction (tombstone)
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_correct_handoff(originalId, text?, narrative?, tags?, reason?)` | Write a new handoff that supersedes an earlier, incorrect one. Original becomes immutable with `superseded_by` back at the correction; correction carries `supersedes`. Federation-safe (both records stay on disk). |
+
+Use `bclaw_correct_handoff` instead of `bclaw_update_handoff` — the
+latter is deprecated and disappears at the v1.0 cut.
+
+#### Example gallery
+
+```jsonc
+// List all recent high-priority plans (legacy provenance hidden by default)
+bclaw_find({ entity: 'plan', filter: { status: 'in_progress', limit: 10 } })
+
+// Include legacy records + lower auto_reflect confidence threshold
+bclaw_find({ entity: 'decision', filter: { includeLegacy: true, minAutoReflectConfidence: 0.3 } })
+
+// Fetch a specific handoff by short_label
+bclaw_get({ entity: 'handoff', id: 'hnd#42' })
+
+// Create a decision (provenance auto-stamped as kind:user)
+bclaw_create({ entity: 'decision', data: { text: 'switch to postgres', author: 'jberdah' } })
+
+// Transition a candidate (validated against transition matrix)
+bclaw_transition({ entity: 'candidate', id: 'cnd_abc', to: 'accepted' })
+
+// Get memory delta since a previous session
+bclaw_context({ kind: 'delta', since: 'sess_07c...' })
+
+// Compact board summary (replaces bclaw_get_agent_board_summary)
+bclaw_context({ kind: 'board_summary' })
+
+// Review dispatch with structured loop
+bclaw_dispatch({ intent: 'review', openLoop: true, reviewMode: 'symmetric' })
+
+// Correct a handoff instead of mutating it
+bclaw_correct_handoff({ originalId: 'hnd_xyz', reason: 'wrong contract', text: '...' })
+```
+
+#### Deprecation status
+
+Every legacy tool replaced above emits a deprecation warning
+server-side on each call. The warning names the canonical replacement.
+Warnings fire during the 0.8.x window; the tools themselves are
+removed at v1.0. Catalog filter `{ catalog: "all" }` keeps surfacing
+them until then.
+
 ## When To Use MCP Versus Other Surfaces
 
 | Need | Best surface |

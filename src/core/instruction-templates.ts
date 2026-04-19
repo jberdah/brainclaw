@@ -287,15 +287,15 @@ function renderAvailableTools(): string {
   return [
     '## brainclaw — available tools',
     '',
-    'The default MCP catalog is intentionally small. Start with the facades, then use the everyday tools below when you need a lower-level read or write.',
+    'The default MCP catalog is intentionally small. Start with the facades, then use the canonical grammar for reads/writes on any entity.',
     '',
-    '**Facades:** `bclaw_work`, `bclaw_coordinate`',
-    '**Execution lifecycle:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
-    '**Everyday reads:** `bclaw_get_context`, `bclaw_get_execution_context`, `bclaw_get_agent_board`, `bclaw_read_inbox`, `bclaw_read_handoff`',
-    '**Planning and review:** `bclaw_list_plans`, `bclaw_list_claims`, `bclaw_list_candidates`, `bclaw_create_candidate`, `bclaw_accept`, `bclaw_reject`, `bclaw_ack_message`',
+    '**Facades:** `bclaw_work`, `bclaw_coordinate`, `bclaw_loop`, `bclaw_dispatch(intent)`, `bclaw_context(kind)`',
+    '**Execution lifecycle:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_release_claim`',
+    '**Canonical CRUD (v0.8.0+):** `bclaw_find(entity, filter?)`, `bclaw_get(entity, id)`, `bclaw_create(entity, data)`, `bclaw_update(entity, id, patch)`, `bclaw_remove(entity, id, purge?)`, `bclaw_transition(entity, id, to)` — works on plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run.',
+    '**Inbox + handoff:** `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_correct_handoff` (use this instead of `bclaw_update_handoff`).',
     '**Capture, setup, and navigation:** `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_bootstrap`, `bclaw_release_notes`, `bclaw_switch`, `bclaw_setup`',
     '',
-    'Advanced and legacy tools still exist. See `docs/integrations/mcp.md` for the broader catalog; raw MCP clients can request it with `tools/list` params `{ catalog: "all" }`.',
+    'Legacy per-entity tools (`bclaw_list_plans`, `bclaw_accept`, `bclaw_get_context`, `bclaw_dispatch_review`, …) still work during the 0.8.x window but emit a deprecation warning pointing at the canonical replacement. See `docs/integrations/mcp.md` + `docs/concepts/mcp-governance.md` for the full catalog and stability contract; raw MCP clients can request advanced + legacy tools with `tools/list` params `{ catalog: "all" }`.',
   ].join('\n');
 }
 

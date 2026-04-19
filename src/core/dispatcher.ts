@@ -341,8 +341,8 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
   if (!options?.claimId) {
     parts.push('- bclaw_claim, bclaw_release_claim (scope ownership)');
   }
-  parts.push('- bclaw_get_context (project memory)');
-  parts.push('- bclaw_check_policy (pre-edit verification)');
+  parts.push('- bclaw_context(kind: "memory") — or bclaw_work(intent: "consult") for the facade shape (project memory)');
+  parts.push('- bclaw_find/get/create/update/transition — canonical CRUD on any brainclaw entity');
   parts.push('- bclaw_write_note, bclaw_quick_capture (capture decisions/traps)');
   parts.push('');
 
