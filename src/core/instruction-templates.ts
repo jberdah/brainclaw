@@ -291,11 +291,11 @@ function renderAvailableTools(): string {
     '',
     '**Facades:** `bclaw_work`, `bclaw_coordinate`, `bclaw_loop`, `bclaw_dispatch(intent)`, `bclaw_context(kind)`',
     '**Execution lifecycle:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_release_claim`',
-    '**Canonical CRUD (v0.8.0+):** `bclaw_find(entity, filter?)`, `bclaw_get(entity, id)`, `bclaw_create(entity, data)`, `bclaw_update(entity, id, patch)`, `bclaw_remove(entity, id, purge?)`, `bclaw_transition(entity, id, to)` — works on plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run.',
+    '**Canonical CRUD (standard tier):** `bclaw_find(entity, filter?)`, `bclaw_get(entity, id)`, `bclaw_create(entity, data)`, `bclaw_update(entity, id, patch)`, `bclaw_remove(entity, id, purge?)`, `bclaw_transition(entity, id, to)` — works on plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run.',
     '**Inbox + handoff:** `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_correct_handoff` (use this instead of `bclaw_update_handoff`).',
     '**Capture, setup, and navigation:** `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_bootstrap`, `bclaw_release_notes`, `bclaw_switch`, `bclaw_setup`',
     '',
-    'Legacy per-entity tools (`bclaw_list_plans`, `bclaw_accept`, `bclaw_get_context`, `bclaw_dispatch_review`, …) still work during the 0.8.x window but emit a deprecation warning pointing at the canonical replacement. See `docs/integrations/mcp.md` + `docs/concepts/mcp-governance.md` for the full catalog and stability contract; raw MCP clients can request advanced + legacy tools with `tools/list` params `{ catalog: "all" }`.',
+    'Legacy per-entity tools (`bclaw_list_plans`, `bclaw_accept`, `bclaw_get_context`, `bclaw_dispatch_review`, …) were removed from the catalog at v1.0 — direct calls still succeed as a migration escape hatch but emit a redirect warning. See `docs/integrations/mcp.md` + `docs/concepts/mcp-governance.md` for the full catalog and stability contract; raw MCP clients can request advanced tools with `tools/list` params `{ catalog: "all" }`.',
   ].join('\n');
 }
 

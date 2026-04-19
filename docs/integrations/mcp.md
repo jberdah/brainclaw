@@ -131,16 +131,17 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_update_memory` | memory | Update a memory item's text or metadata |
 | `bclaw_compact` | memory | LLM-driven semantic memory compaction (two-phase) |
 
-### Canonical grammar (v0.8.0+)
+### Canonical grammar (standard tier, v1.0+)
 
-Phase 3 introduces a unified grammar that will replace many of the
-per-entity tools above at the v1.0 cut. Available **today** under the
-`advanced` tier. At v1.0 they move to `standard` and the legacy tools
-below become removal candidates.
+Phase 3 shipped a unified grammar that replaces the per-entity tools
+listed above. All canonical verbs are in the default `standard` tier
+as of v1.0. The legacy per-entity tools have been removed from the
+catalog (still callable as a migration escape hatch — see the redirect
+warnings they emit).
 
 See [docs/concepts/mcp-governance.md](../concepts/mcp-governance.md)
 for the stability contract and [docs/mcp-schema-changelog.md](../mcp-schema-changelog.md)
-for the full 0.8.0 changelog.
+for the full 1.0.0 changelog.
 
 #### Six CRUD verbs
 
@@ -172,7 +173,8 @@ updatable field list live in [src/core/entity-registry.ts](../../src/core/entity
 | `bclaw_correct_handoff(originalId, text?, narrative?, tags?, reason?)` | Write a new handoff that supersedes an earlier, incorrect one. Original becomes immutable with `superseded_by` back at the correction; correction carries `supersedes`. Federation-safe (both records stay on disk). |
 
 Use `bclaw_correct_handoff` instead of `bclaw_update_handoff` — the
-latter is deprecated and disappears at the v1.0 cut.
+latter was removed from the catalog at v1.0 (direct calls still succeed
+as a migration escape hatch but emit a redirect warning).
 
 #### Example gallery
 

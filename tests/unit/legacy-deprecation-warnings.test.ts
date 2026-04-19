@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { REMOVED_IN_V1_TOOLS } from '../../src/commands/mcp.js';
 
 /**
  * Phase 3 slice 3g — verify every tool deprecated by the canonical
@@ -75,6 +76,74 @@ describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
       source,
       /appendLegacyMcpToolWarning\(outcome\.response, payload\.name\)/,
       'Legacy warning wrapper missing from executeMcpToolCall outcome path.',
+    );
+  });
+});
+
+/**
+ * v1.0 catalog integrity — regression guard.
+ * Verifies that tools/list (default and catalog=all) excludes the 19
+ * tools removed at v1.0, and that canonical verbs appear in the default
+ * catalog. Guards against accidental re-introduction of removed tools.
+ */
+describe('commands/mcp — v1.0 catalog integrity', () => {
+  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8');
+
+  const CANONICAL_VERBS = [
+    'bclaw_find',
+    'bclaw_get',
+    'bclaw_create',
+    'bclaw_update',
+    'bclaw_remove',
+    'bclaw_transition',
+    'bclaw_context',
+    'bclaw_correct_handoff',
+  ];
+
+  it('REMOVED_IN_V1_TOOLS contains exactly 19 entries (v1.0 catalog snapshot)', () => {
+    assert.equal(
+      REMOVED_IN_V1_TOOLS.size,
+      19,
+      `Expected 19 removed tools, got ${REMOVED_IN_V1_TOOLS.size}: ${[...REMOVED_IN_V1_TOOLS].join(', ')}`,
+    );
+  });
+
+  it('PUBLISHED_TOOLS filter excludes every entry in REMOVED_IN_V1_TOOLS', () => {
+    // Verify the filter is applied: PUBLISHED_TOOLS = ALL_TOOLS.filter(!REMOVED_IN_V1_TOOLS)
+    assert.match(
+      source,
+      /PUBLISHED_TOOLS\s*=\s*ALL_TOOLS\.filter[\s\S]{1,120}REMOVED_IN_V1_TOOLS/m,
+      'PUBLISHED_TOOLS must be built by filtering ALL_TOOLS against REMOVED_IN_V1_TOOLS.',
+    );
+  });
+
+  it('catalog=all and default tools/list both return PUBLISHED_TOOLS (not ALL_TOOLS)', () => {
+    // Verify that every tools/list branch (default, catalog=all, tier filter) uses
+    // PUBLISHED_TOOLS — not ALL_TOOLS — so removed tools can never leak through.
+    const allToolsLeaks = source.match(
+      /tools\s*=\s*ALL_TOOLS(?!\s*\.filter)/g,
+    );
+    assert.equal(
+      allToolsLeaks ?? null,
+      null,
+      `tools/list assigns ALL_TOOLS directly (removed tools would leak): ${JSON.stringify(allToolsLeaks)}`,
+    );
+  });
+
+  it('canonical verbs are annotated tier:standard (appear in default catalog)', () => {
+    const missing: string[] = [];
+    for (const verb of CANONICAL_VERBS) {
+      // Match: name: 'bclaw_find', ... annotations: { tier: 'standard', ...
+      const toolBlock = new RegExp(
+        `name:\\s*'${verb}'[\\s\\S]{1,400}?tier:\\s*'standard'`,
+        'm',
+      );
+      if (!toolBlock.test(source)) missing.push(verb);
+    }
+    assert.equal(
+      missing.length,
+      0,
+      `Canonical verbs missing tier:standard: ${missing.join(', ')}`,
     );
   });
 });
