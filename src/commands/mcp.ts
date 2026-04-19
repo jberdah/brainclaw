@@ -4644,13 +4644,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         warnings.push(`Agent '${sessionResult.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${sessionResult.agent}\` to set capabilities and trust level.`);
       }
 
-      // Step 2: build context for requested scope
+      // Step 2: build context for requested scope. When intent='resume',
+      // auto-surface the memory delta since the previous session for the
+      // same agent — matches session-start.ts:85 pattern. Phase 4
+      // Sprint 1 Lane A step 5 (pln#390). Without this the resume intent
+      // was functionally identical to consult, defeating its purpose.
       let contextResult: ReturnType<typeof buildContext> | undefined;
       try {
+        let sinceSession: string | undefined;
+        if (workReq.intent === 'resume') {
+          const previousSession = loadAllSessions(cwd)
+            .find((s) => s.agent === sessionResult.agent && s.session_id !== sessionResult.session_id);
+          sinceSession = previousSession?.session_id;
+        }
         contextResult = buildContext({
           target: workReq.contextTarget ?? workReq.scope,
           agent: sessionResult.agent,
           cwd,
+          sinceSession,
         });
       } catch { /* non-fatal — context failure should not block work */ }
 
