@@ -1,6 +1,10 @@
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { listAgentIdentities } from '../core/agent-registry.js';
 import { memoryExists } from '../core/io.js';
+import { listCandidates } from '../core/candidates.js';
+import { listRuntimeNotes } from '../core/runtime.js';
+import { loadState } from '../core/state.js';
+import { detectStaleness, staleSummary } from '../core/staleness.js';
 
 export interface AgentBoardOptions {
   agent?: string;
@@ -33,8 +37,29 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
     includeSessionMeta: options.includeSessionMeta,
   });
 
+  // Phase 4 Sprint 1 Lane A step 3 (pln#390): surface non-destructive
+  // stale warnings alongside the board so operators see them without
+  // running `doctor` separately. Capped at 5 to keep output lean.
+  let staleReport: ReturnType<typeof detectStaleness> | undefined;
+  try {
+    const state = loadState();
+    const pending = listCandidates('pending');
+    const notes = listRuntimeNotes(undefined);
+    staleReport = detectStaleness(
+      state.plan_items,
+      state.known_traps,
+      state.open_handoffs,
+      pending,
+      Date.now(),
+      notes,
+    );
+  } catch { /* non-fatal */ }
+
   if (options.json) {
-    console.log(JSON.stringify(board, null, 2));
+    console.log(JSON.stringify({
+      ...board,
+      ...(staleReport && staleReport.warnings.length > 0 ? { stale_report: staleReport } : {}),
+    }, null, 2));
     return;
   }
 
@@ -145,6 +170,21 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
         const fingerprint = a.identity_key?.fingerprint ? ` fp=${a.identity_key.fingerprint.slice(0, 12)}` : '';
         console.log(`  ${a.agent_name} (${a.trust_level ?? 'contributor'})${caps}${fingerprint}`);
       }
+    }
+  }
+
+  // Stale-memory summary — non-destructive. Shown after the core board
+  // so the signal is visible but does not push the primary state off
+  // the screen.
+  if (staleReport && staleReport.warnings.length > 0) {
+    console.log('');
+    console.log(`⚠ Stale memory: ${staleSummary(staleReport)}`);
+    for (const w of staleReport.warnings.slice(0, 5)) {
+      console.log(`  [${w.entity} ${w.id}] ${w.reason}`);
+      console.log(`    → ${w.suggested_action}`);
+    }
+    if (staleReport.warnings.length > 5) {
+      console.log(`  … and ${staleReport.warnings.length - 5} more (run \`brainclaw doctor\` for the full list).`);
     }
   }
 }

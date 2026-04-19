@@ -660,15 +660,20 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     } catch { /* skip unavailable linked project */ }
   }
 
-  // Staleness detection: non-blocking, capped at 5 warnings to keep context lean
+  // Staleness detection: non-blocking, capped at 5 warnings to keep context lean.
+  // Phase 4 Sprint 1 Lane A step 3 (pln#390): runtime_note staleness now
+  // flows through the same surface.
   let staleWarnings: StalenessWarning[] | undefined;
   try {
     const pendingCandidatesForStaleness = listCandidates('pending', contextCwd);
+    const runtimeNotesForStaleness = listRuntimeNotes(undefined, contextCwd);
     const staleReport = detectStaleness(
       state.plan_items,
       state.known_traps,
       state.open_handoffs,
       pendingCandidatesForStaleness,
+      Date.now(),
+      runtimeNotesForStaleness,
     );
     if (staleReport.warnings.length > 0) {
       staleWarnings = staleReport.warnings.slice(0, 5);

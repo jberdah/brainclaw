@@ -1071,14 +1071,17 @@ export function runDoctor(options: DoctorOptions = {}): void {
     checks.push({ name: 'expired_items', status: 'ok', message: 'No expired items found' });
   }
 
-  // --- Stale memory check: age-based heuristics for plans, handoffs, candidates ---
+  // --- Stale memory check: age-based heuristics for plans, handoffs, candidates, runtime_notes ---
   try {
     const pendingCandidatesForStaleness = listCandidates('pending', options.cwd);
+    const runtimeNotesForStaleness = listRuntimeNotes(undefined, options.cwd);
     const staleReport = detectStaleness(
       state.plan_items,
       state.known_traps,
       state.open_handoffs,
       pendingCandidatesForStaleness,
+      Date.now(),
+      runtimeNotesForStaleness,
     );
     if (staleReport.warnings.length > 0) {
       const summary = staleSummary(staleReport);
