@@ -1,0 +1,439 @@
+/**
+ * Entity Operations — dispatch layer between the canonical CRUD verbs
+ * (bclaw_find/get/create/update/remove/transition) and the entity-specific
+ * code in src/core/*.
+ *
+ * Phase 3 slice 3b (pln_c6472192). Keeps imperative code where it lives
+ * (per P6.2) — this module only routes.
+ *
+ * MVP wiring (this landing): plan, decision, constraint, trap,
+ * runtime_note, candidate. Other entities throw
+ * `EntityOperationUnsupportedError` with a pointer at the legacy tool
+ * until later slices wire them in.
+ */
+
+import path from 'node:path';
+import { loadState, persistState } from './state.js';
+import {
+  archiveCandidate,
+  listCandidates,
+  loadCandidate,
+  saveCandidate,
+} from './candidates.js';
+import {
+  deleteRuntimeNote,
+  listRuntimeNotes,
+  saveRuntimeNote,
+} from './runtime.js';
+import {
+  createConstraint,
+  createDecision,
+  createTrap,
+} from './operations/memory-write.js';
+import {
+  deleteMemoryItem,
+  findMemoryItemInChain,
+  updateMemoryItem,
+} from './operations/memory-mutation.js';
+import {
+  createPlan,
+  deletePlan,
+  updatePlan,
+  type CreatePlanInput,
+  type UpdatePlanInput,
+} from './operations/plan.js';
+import {
+  ENTITY_REGISTRY,
+  isValidTransition,
+  type EntityName,
+} from './entity-registry.js';
+import { generateId } from './ids.js';
+import type {
+  Candidate,
+  Constraint,
+  Decision,
+  PlanItem,
+  RuntimeNote,
+  Trap,
+} from './schema.js';
+
+/** Thrown when a verb is not yet wired for a given entity. */
+export class EntityOperationUnsupportedError extends Error {
+  constructor(entity: EntityName, verb: string, hint?: string) {
+    super(
+      `bclaw_${verb}(entity='${entity}') is not yet wired.` +
+      (hint ? ` ${hint}` : ' Use the legacy tool for now.'),
+    );
+    this.name = 'EntityOperationUnsupportedError';
+  }
+}
+
+export class EntityNotFoundError extends Error {
+  constructor(entity: EntityName, id: string) {
+    super(`${entity} with id '${id}' not found`);
+    this.name = 'EntityNotFoundError';
+  }
+}
+
+export class InvalidTransitionError extends Error {
+  constructor(entity: EntityName, from: string, to: string) {
+    super(`Invalid transition for ${entity}: ${from} -> ${to}`);
+    this.name = 'InvalidTransitionError';
+  }
+}
+
+export interface EntityFilter {
+  status?: string;
+  tag?: string;
+  author?: string;
+  plan_id?: string;
+  limit?: number;
+  offset?: number;
+  [key: string]: unknown;
+}
+
+export interface ListResult<T = unknown> {
+  entity: EntityName;
+  total: number;
+  items: T[];
+}
+
+export interface CreateResult {
+  entity: EntityName;
+  id: string;
+  short_label?: string;
+}
+
+export interface UpdateResult {
+  entity: EntityName;
+  id: string;
+}
+
+export interface RemoveResult {
+  entity: EntityName;
+  id: string;
+  archived: boolean;
+  purged: boolean;
+}
+
+export interface TransitionResult {
+  entity: EntityName;
+  id: string;
+  from: string;
+  to: string;
+  side_effects: readonly string[];
+}
+
+// ─── FIND ─────────────────────────────────────────────────────────────
+
+export function listEntities(
+  name: EntityName,
+  cwd: string,
+  filter: EntityFilter = {},
+): ListResult {
+  const all = loadAll(name, cwd);
+  const filtered = applyFilter(all, filter);
+  const paged = applyPaging(filtered, filter);
+  return { entity: name, total: filtered.length, items: paged };
+}
+
+function loadAll(name: EntityName, cwd: string): unknown[] {
+  switch (name) {
+    case 'plan':         return loadState(cwd).plan_items;
+    case 'decision':     return loadState(cwd).recent_decisions;
+    case 'constraint':   return loadState(cwd).active_constraints;
+    case 'trap':         return loadState(cwd).known_traps;
+    case 'candidate':    return listCandidates(undefined, cwd);
+    case 'runtime_note': return listRuntimeNotes(undefined, cwd);
+    default:
+      throw new EntityOperationUnsupportedError(name, 'find');
+  }
+}
+
+function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
+  let result = items as Array<Record<string, unknown>>;
+  if (filter.status) {
+    result = result.filter((item) => item.status === filter.status);
+  }
+  if (filter.tag) {
+    result = result.filter((item) =>
+      Array.isArray(item.tags) && (item.tags as unknown[]).includes(filter.tag),
+    );
+  }
+  if (filter.author) {
+    result = result.filter((item) => item.author === filter.author);
+  }
+  if (filter.plan_id) {
+    result = result.filter((item) => item.plan_id === filter.plan_id);
+  }
+  return result;
+}
+
+function applyPaging(items: unknown[], filter: EntityFilter): unknown[] {
+  const offset = Math.max(0, filter.offset ?? 0);
+  const limit = filter.limit ?? 50;
+  return items.slice(offset, offset + limit);
+}
+
+// ─── GET ───────────────────────────────────────────────────────────────
+
+export function getEntity(
+  name: EntityName,
+  idOrShortLabel: string,
+  cwd: string,
+): unknown {
+  const items = loadAll(name, cwd) as Array<Record<string, unknown>>;
+  const hit = items.find(
+    (item) => item.id === idOrShortLabel || item.short_label === idOrShortLabel,
+  );
+  if (!hit) throw new EntityNotFoundError(name, idOrShortLabel);
+  return hit;
+}
+
+// ─── CREATE ────────────────────────────────────────────────────────────
+
+export function createEntity(
+  name: EntityName,
+  data: Record<string, unknown>,
+  cwd: string,
+): CreateResult {
+  switch (name) {
+    case 'plan': {
+      const res = createPlan(data as unknown as CreatePlanInput, cwd);
+      return { entity: name, id: res.id, short_label: res.shortLabel };
+    }
+    case 'decision': {
+      const res = createDecision({
+        text: requireString(data, 'text'),
+        author: requireString(data, 'author'),
+        outcome: data.outcome as Decision['outcome'],
+        tags: data.tags as string[] | undefined,
+        relatedPaths: data.related_paths as string[] | undefined,
+        planId: data.plan_id as string | undefined,
+      }, cwd);
+      return { entity: name, id: res.id, short_label: res.shortLabel };
+    }
+    case 'constraint': {
+      const res = createConstraint({
+        text: requireString(data, 'text'),
+        author: requireString(data, 'author'),
+        category: data.category as Constraint['category'],
+        tags: data.tags as string[] | undefined,
+        relatedPaths: data.related_paths as string[] | undefined,
+      }, cwd);
+      return { entity: name, id: res.id, short_label: res.shortLabel };
+    }
+    case 'trap': {
+      const res = createTrap({
+        text: requireString(data, 'text'),
+        author: requireString(data, 'author'),
+        severity: (data.severity ?? 'medium') as Trap['severity'],
+        tags: data.tags as string[] | undefined,
+        relatedPaths: data.related_paths as string[] | undefined,
+      }, cwd);
+      return { entity: name, id: res.id, short_label: res.shortLabel };
+    }
+    case 'runtime_note': {
+      const id = generateId('runtime_note');
+      const note: RuntimeNote = {
+        id,
+        agent: requireString(data, 'agent'),
+        text: requireString(data, 'text'),
+        created_at: new Date().toISOString(),
+        tags: (data.tags as string[] | undefined) ?? [],
+        visibility: (data.visibility as RuntimeNote['visibility']) ?? 'shared',
+        note_type: (data.note_type as RuntimeNote['note_type']) ?? 'observation',
+        ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
+        ...(data.project_id ? { project_id: data.project_id as string } : {}),
+        ...(data.session_id ? { session_id: data.session_id as string } : {}),
+        ...(data.plan_id ? { plan_id: data.plan_id as string } : {}),
+      };
+      saveRuntimeNote(note, cwd);
+      return { entity: name, id };
+    }
+    case 'candidate': {
+      const id = generateId('candidate');
+      const candidate: Candidate = {
+        id,
+        type: requireString(data, 'type') as Candidate['type'],
+        text: requireString(data, 'text'),
+        created_at: new Date().toISOString(),
+        author: requireString(data, 'author'),
+        tags: (data.tags as string[] | undefined) ?? [],
+        status: 'pending',
+        star_count: 0,
+        starred_by: [],
+        usage_count: 0,
+        usage_events: [],
+      };
+      saveCandidate(candidate, cwd);
+      return { entity: name, id };
+    }
+    default:
+      throw new EntityOperationUnsupportedError(name, 'create');
+  }
+}
+
+// ─── UPDATE ────────────────────────────────────────────────────────────
+
+export function updateEntity(
+  name: EntityName,
+  id: string,
+  patch: Record<string, unknown>,
+  cwd: string,
+): UpdateResult {
+  const spec = ENTITY_REGISTRY[name];
+  const invalidFields = Object.keys(patch).filter(
+    (field) => !spec.updatable.includes(field),
+  );
+  if (invalidFields.length > 0) {
+    throw new Error(
+      `Fields not updatable on ${name}: [${invalidFields.join(', ')}]. ` +
+      `Use bclaw_transition for status changes.`,
+    );
+  }
+
+  switch (name) {
+    case 'plan': {
+      updatePlan({ id, ...patch } as UpdatePlanInput, cwd);
+      return { entity: name, id };
+    }
+    case 'decision':
+    case 'constraint':
+    case 'trap': {
+      updateMemoryItem({
+        id,
+        type: name,
+        ...(patch.text ? { text: patch.text as string } : {}),
+        ...(patch.tags ? { tags: patch.tags as string[] } : {}),
+      }, cwd);
+      return { entity: name, id };
+    }
+    case 'runtime_note': {
+      const notes = listRuntimeNotes(undefined, cwd);
+      const note = notes.find((n) => n.id === id);
+      if (!note) throw new EntityNotFoundError(name, id);
+      const patched = { ...note, ...patch } as RuntimeNote;
+      saveRuntimeNote(patched, cwd);
+      return { entity: name, id };
+    }
+    case 'candidate': {
+      const candidate = loadCandidate(id, cwd);
+      const patched = { ...candidate, ...patch } as Candidate;
+      saveCandidate(patched, cwd);
+      return { entity: name, id };
+    }
+    default:
+      throw new EntityOperationUnsupportedError(name, 'update');
+  }
+}
+
+// ─── REMOVE ────────────────────────────────────────────────────────────
+
+export function removeEntity(
+  name: EntityName,
+  id: string,
+  cwd: string,
+  purge: boolean = false,
+): RemoveResult {
+  switch (name) {
+    case 'plan': {
+      deletePlan(id, cwd);
+      return { entity: name, id, archived: !purge, purged: purge };
+    }
+    case 'decision':
+    case 'constraint':
+    case 'trap': {
+      const found = findMemoryItemInChain(id, name, cwd);
+      if (!found) throw new EntityNotFoundError(name, id);
+      deleteMemoryItem(id, name, cwd);
+      return { entity: name, id, archived: false, purged: true };
+    }
+    case 'runtime_note': {
+      const notes = listRuntimeNotes(undefined, cwd);
+      const note = notes.find((n) => n.id === id);
+      if (!note) throw new EntityNotFoundError(name, id);
+      const ok = deleteRuntimeNote(note, cwd);
+      if (!ok) throw new EntityNotFoundError(name, id);
+      return { entity: name, id, archived: false, purged: true };
+    }
+    case 'candidate': {
+      // Remove = archive to rejected. `purge` would delete the file; not exposed yet.
+      const candidate = loadCandidate(id, cwd);
+      archiveCandidate(candidate, 'rejected', cwd);
+      return { entity: name, id, archived: true, purged: false };
+    }
+    default:
+      throw new EntityOperationUnsupportedError(name, 'remove');
+  }
+}
+
+// ─── TRANSITION ───────────────────────────────────────────────────────
+
+export function transitionEntity(
+  name: EntityName,
+  id: string,
+  to: string,
+  cwd: string,
+  _reason?: string,
+): TransitionResult {
+  const spec = ENTITY_REGISTRY[name];
+  if (!spec.statusField) {
+    throw new Error(`${name} has no lifecycle (statusField is undefined)`);
+  }
+  const current = getEntity(name, id, cwd) as Record<string, unknown>;
+  const from = current[spec.statusField] as string | undefined;
+  if (!from) {
+    throw new Error(`${name} '${id}' has no '${spec.statusField}' field set`);
+  }
+  if (!isValidTransition(name, from, to)) {
+    throw new InvalidTransitionError(name, from, to);
+  }
+
+  const key = `${from}->${to}`;
+  const sideEffects = spec.sideEffects[key] ?? [];
+
+  switch (name) {
+    case 'plan': {
+      updatePlan({ id, status: to as PlanItem['status'] }, cwd);
+      return { entity: name, id, from, to, side_effects: sideEffects };
+    }
+    case 'decision':
+    case 'constraint':
+    case 'trap': {
+      const state = loadState(cwd);
+      const bucket = name === 'decision' ? state.recent_decisions
+        : name === 'constraint' ? state.active_constraints
+        : state.known_traps;
+      const item = bucket.find((x) => x.id === id);
+      if (!item) throw new EntityNotFoundError(name, id);
+      (item as Record<string, unknown>)[spec.statusField] = to;
+      persistState(state, cwd);
+      return { entity: name, id, from, to, side_effects: sideEffects };
+    }
+    case 'candidate': {
+      const candidate = loadCandidate(id, cwd);
+      if (to === 'accepted' || to === 'rejected') {
+        archiveCandidate(candidate, to, cwd);
+        return { entity: name, id, from, to, side_effects: sideEffects };
+      }
+      throw new InvalidTransitionError(name, from, to);
+    }
+    default:
+      throw new EntityOperationUnsupportedError(
+        name,
+        'transition',
+        `Lifecycle transitions for ${name} not yet wired.`,
+      );
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+function requireString(data: Record<string, unknown>, field: string): string {
+  const value = data[field];
+  if (typeof value !== 'string' || !value) {
+    throw new Error(`Missing required field: ${field}`);
+  }
+  return value;
+}
