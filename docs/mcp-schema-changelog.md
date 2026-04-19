@@ -2,11 +2,36 @@
 
 This document tracks all breaking and notable changes to the brainclaw MCP server protocol.
 
+See [docs/concepts/mcp-governance.md](concepts/mcp-governance.md) for the
+versioning rules, breaking-change policy, deprecation window, and tier
+guarantees this changelog follows.
+
 ---
 
 ## 0.7.0 (current)
 
-**Added**
+Shipped in brainclaw app `0.63.0`. Consolidates the surface listed
+below — previously accumulating under an inaccurate `SCHEMA_VERSION = '0.6.0'`
+constant — and brings the runtime value in line with the documented
+state. Governance cross-check now passes (see governance doc).
+
+**Added (this landing)**
+- `bclaw_doctor --after-migration` — post-v1-upgrade health check
+  reporting one finding per invariant (provenance coverage, handoff
+  review-strip, candidate archive, schema-version marker). Exits
+  non-zero on any failure.
+- `brainclaw upgrade --to=1.0` — one-shot v1 schema migration
+  covering candidate archive (P6.6), handoff review-strip (P6.1
+  groundwork), provenance rollout (P6.3), schema-version bump
+  (0.6.0 → 0.8.0 in the store marker). Plus `--backup` /
+  `--no-backup` / `--rollback` flags.
+- `provenance` optional passthrough field on Decision, Constraint,
+  Trap, Handoff, RuntimeNote — discriminated-union typing lands in
+  Phase 3 (`pln_c6472192 / 3f`). The declaration lets migration
+  patches stamp `{ kind: 'legacy' }` without Zod stripping it on
+  persist.
+
+**Added (previously unreleased 0.7.0 surface)**
 - `bclaw_check_policy` — pre-execution governance check for a scope
   - Input: `scope` (required), `agent`, `agentId`, `action`
   - Returns `allowed` boolean, `blocks[]` (hard stops), `warnings[]` (context)

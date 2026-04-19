@@ -50,6 +50,11 @@ By default, `tools/list` returns **facade + standard** tools (~33 tools). To get
 
 All tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
+See [docs/concepts/mcp-governance.md](../concepts/mcp-governance.md) for
+the stability contract of each tier (what counts as a breaking change,
+deprecation window, schema versioning rules). Changelog entries for
+every version live in [docs/mcp-schema-changelog.md](../mcp-schema-changelog.md).
+
 ### Tool categories
 
 Each tool also has an `annotations.category` field: `session`, `context`, `memory`, `coordination`, `governance`, or `discovery`.

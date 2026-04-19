@@ -12,7 +12,7 @@ import { loadState, saveState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
-import { createSequence, updateSequence } from '../core/sequence.js';
+import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
@@ -53,8 +53,8 @@ import {
 import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
-import type { CandidateType, MemoryVisibility, PlanStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
-import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
+import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
+import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
@@ -78,7 +78,7 @@ export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
 export type McpConnectionState = 'pre_init' | 'awaiting_initialized' | 'ready' | 'closed';
 export type JsonRpcId = string | number | null;
 
-export const SCHEMA_VERSION = '0.6.0';
+export const SCHEMA_VERSION = '0.7.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
 
@@ -261,13 +261,13 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_search',
-    description: 'Full-text search across all memory items (decisions, constraints, traps, candidates, handoffs) using BM25 scoring.',
+    description: 'Full-text search across all memory items (decisions, constraints, traps, candidates, handoffs, plans, sequences) using BM25 scoring.',
     annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query string.' },
-        type: { type: 'string', description: 'Filter by item type (decision, constraint, trap, handoff, candidate, plan).' },
+        type: { type: 'string', description: 'Filter by section: decisions, constraints, traps, handoffs, candidates, plans, sequences.' },
         section: { type: 'string', description: 'Filter by section (state, candidates, runtime).' },
         since: { type: 'string', description: 'Filter items created after this ISO date.' },
         limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
@@ -1015,6 +1015,67 @@ const MCP_WRITE_TOOLS = [
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
       required: ['planId', 'stepId'],
+    },
+  },
+  {
+    name: 'bclaw_update_step',
+    description: 'Update a plan sub-step (status, text, assignee). Supports all step statuses: todo, in_progress, testing, done, blocked. Requires contributor trust level or above.',
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Plan item ID.' },
+        stepId: { type: 'string', description: 'Step ID to update.' },
+        status: { type: 'string', description: 'New status: todo, in_progress, testing, done, blocked.' },
+        text: { type: 'string', description: 'New step text.' },
+        assignee: { type: 'string', description: 'New assignee (empty string to unassign).' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['planId', 'stepId'],
+    },
+  },
+  {
+    name: 'bclaw_delete_step',
+    description: 'Remove a sub-step from a plan. Requires contributor trust level or above.',
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Plan item ID.' },
+        stepId: { type: 'string', description: 'Step ID to delete.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['planId', 'stepId'],
+    },
+  },
+  {
+    name: 'bclaw_delete_plan',
+    description: 'Delete a plan item by ID. Requires trusted or curator trust level.',
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Plan item ID to delete.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'bclaw_delete_sequence',
+    description: 'Delete a sequence by ID. Requires trusted or curator trust level.',
+    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Sequence ID to delete.' },
+        agent: { type: 'string', description: 'Agent name.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -3838,6 +3899,137 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             plan_id: result.planId,
             progress: { done: result.doneSteps, total: result.totalSteps },
             all_done: result.doneSteps === result.totalSteps,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
+        }
+        return { response: createToolErrorResponse('operation_error', msg) };
+      }
+    }
+
+    if (name === 'bclaw_update_step') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const usPlanId = String(args.planId ?? '').trim();
+      const usStepId = String(args.stepId ?? '').trim();
+      if (!usPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
+      if (!usStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
+      const validStatuses = ['todo', 'in_progress', 'testing', 'done', 'blocked'];
+      if (args.status && !validStatuses.includes(String(args.status))) {
+        return { response: createToolErrorResponse('validation_error', `Invalid status: ${args.status}. Valid: ${validStatuses.join(', ')}`) };
+      }
+      try {
+        const result = updateStepOp({
+          planId: usPlanId,
+          stepId: usStepId,
+          status: args.status as PlanStepStatus | undefined,
+          text: args.text as string | undefined,
+          assignee: args.assignee as string | undefined,
+        }, cwd);
+        const changes: string[] = [];
+        if (args.status) changes.push(`status=${args.status}`);
+        if (args.text) changes.push('text updated');
+        if (args.assignee !== undefined) changes.push(`assignee=${args.assignee || 'unassigned'}`);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Step updated: [${result.stepId}] ${changes.join(', ')} (${result.doneSteps}/${result.totalSteps} done)` }],
+            step_id: result.stepId,
+            plan_id: result.planId,
+            progress: { done: result.doneSteps, total: result.totalSteps },
+            all_done: result.doneSteps === result.totalSteps,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
+        }
+        return { response: createToolErrorResponse('operation_error', msg) };
+      }
+    }
+
+    if (name === 'bclaw_delete_step') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const dsPlanId = String(args.planId ?? '').trim();
+      const dsStepId = String(args.stepId ?? '').trim();
+      if (!dsPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
+      if (!dsStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
+      try {
+        const result = deleteStepOp({ planId: dsPlanId, stepId: dsStepId }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Step deleted: [${result.stepId}] (${result.doneSteps}/${result.totalSteps} remaining)` }],
+            step_id: result.stepId,
+            plan_id: result.planId,
+            progress: { done: result.doneSteps, total: result.totalSteps },
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
+        }
+        return { response: createToolErrorResponse('operation_error', msg) };
+      }
+    }
+
+    if (name === 'bclaw_delete_plan') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const dpId = String(args.id ?? '').trim();
+      if (!dpId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      try {
+        const result = deletePlanOp(dpId, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Plan deleted: [${result.id}] ${result.text.slice(0, 80)}` }],
+            plan_id: result.id,
+          }),
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not found')) {
+          return { response: createToolErrorResponse('not_found', msg) };
+        }
+        return { response: createToolErrorResponse('operation_error', msg) };
+      }
+    }
+
+    if (name === 'bclaw_delete_sequence') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const dsqId = String(args.id ?? '').trim();
+      if (!dsqId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+      try {
+        const result = deleteSequence(dsqId, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Sequence deleted: [${result.id}] ${result.name}` }],
+            sequence_id: result.id,
           }),
         };
       } catch (err: unknown) {
