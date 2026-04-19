@@ -69,6 +69,13 @@ export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
 export const MemoryScopeSchema = z.enum(['project', 'machine', 'user']).default('project');
 export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
 
+/**
+ * Optional passthrough for the v1.0 provenance union. Full discriminated-union
+ * typing lands in Phase 3 (slice 3f); declaring the field here lets migration
+ * patches stamp `{ kind: 'legacy' }` without Zod stripping it on persist.
+ */
+export const ProvenancePassthroughSchema = z.unknown().optional();
+
 export const ConstraintSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -88,6 +95,7 @@ export const ConstraintSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   expires_at: z.string().optional(),
+  provenance: ProvenancePassthroughSchema,
 });
 export type Constraint = z.infer<typeof ConstraintSchema>;
 
@@ -108,6 +116,7 @@ export const DecisionSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   tags: TagsSchema,
+  provenance: ProvenancePassthroughSchema,
 });
 export type Decision = z.infer<typeof DecisionSchema>;
 
@@ -132,6 +141,7 @@ export const TrapSchema = z.object({
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
   platform_scope: z.string().optional(),
+  provenance: ProvenancePassthroughSchema,
 });
 export type Trap = z.infer<typeof TrapSchema>;
 
@@ -184,6 +194,7 @@ export const HandoffSchema = z.object({
   snapshot: z.object({
     diff: z.string().optional(),
   }).optional(),
+  provenance: ProvenancePassthroughSchema,
 });
 export type Handoff = z.infer<typeof HandoffSchema>;
 
@@ -836,6 +847,7 @@ export const RuntimeNoteSchema = z.object({
   expires_at: z.string().optional(),
   note_type: z.enum(['observation', 'session_start', 'session_end']).default('observation'),
   model: z.string().optional(),
+  provenance: ProvenancePassthroughSchema,
 });
 export type RuntimeNote = z.infer<typeof RuntimeNoteSchema>;
 
