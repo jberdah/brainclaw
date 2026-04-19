@@ -195,6 +195,13 @@ export const HandoffSchema = z.object({
     diff: z.string().optional(),
   }).optional(),
   provenance: ProvenancePassthroughSchema,
+  /**
+   * Tombstone pointer (P6.1). Present on correction handoffs that
+   * supersede an earlier, incorrect handoff. The original is left
+   * immutable; federation and history still carry both.
+   */
+  superseded_by: z.string().optional(),
+  supersedes: z.string().optional(),
 });
 export type Handoff = z.infer<typeof HandoffSchema>;
 

@@ -8,7 +8,8 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate, rende
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState, saveState } from '../core/state.js';
+import { generateIdWithLabel } from '../core/ids.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
 import {
@@ -1203,6 +1204,24 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
+    name: 'bclaw_correct_handoff',
+    description: 'Write a correction handoff that supersedes an earlier, incorrect one (P6.1 tombstone). The original handoff is left immutable — federation and history still carry both records. The new handoff copies non-overridden fields from the original and sets `supersedes` back at it; the original gets `superseded_by` pointing at the new record.',
+    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        originalId: { type: 'string', description: 'ID of the handoff to correct.' },
+        text: { type: 'string', description: 'Optional replacement narrative (markdown / free text). Defaults to the original narrative with an appended correction note.' },
+        narrative: { type: 'string', description: 'Optional override of the narrative sub-field.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional replacement tags. Defaults to original tags.' },
+        reason: { type: 'string', description: 'Short rationale for the correction, appended to the narrative.' },
+        agent: { type: 'string', description: 'Author of the correction.' },
+        agentId: { type: 'string', description: 'Registered agent id.' },
+      },
+      required: ['originalId'],
+    },
+  },
+  {
     name: 'bclaw_update_handoff',
     description: 'Update the status, recipient, contract, or review state of an open handoff. Requires contributor trust level or above. Use targetProject to push the resulting handoff state to a linked project.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
@@ -1613,6 +1632,7 @@ const LEGACY_MCP_TOOL_WARNINGS: Record<string, string> = {
   bclaw_claim: 'Deprecated: use bclaw_work(intent: execute, scope: ...) which creates claims automatically.',
   bclaw_get_context: 'Deprecated: use bclaw_work(intent: consult) which returns context directly.',
   bclaw_check_policy: 'Deprecated: policy checks are now implicit in bclaw_work.',
+  bclaw_update_handoff: 'Deprecated (P6.1 tombstone): handoffs are immutable session-end artefacts. Use bclaw_correct_handoff(original_id, correction_data) to write a new handoff that supersedes the original.',
 };
 
 function isLegacyMcpToolFacadeDisabled(name: string): boolean {
@@ -4383,6 +4403,72 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           id: tool.id,
           name: toolName,
           type: toolType,
+          schema_version: SCHEMA_VERSION,
+        }),
+      };
+    }
+
+    if (name === 'bclaw_correct_handoff') {
+      // Phase 3 slice 3e — P6.1 tombstone correction. Writes a new
+      // handoff that supersedes the original. Both records stay on
+      // disk (federation-safe); the original becomes pinned via
+      // `superseded_by`.
+      const originalId = String(args.originalId ?? '').trim();
+      if (!originalId) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: originalId') };
+      }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      const resolvedIdentity = resolved.identity!;
+      const state = loadState(cwd);
+      const original = state.open_handoffs.find((h) => h.id === originalId);
+      if (!original) {
+        return { response: createToolErrorResponse('not_found', `Handoff not found: ${originalId}`) };
+      }
+      if (original.superseded_by) {
+        return { response: createToolErrorResponse('validation_error', `Handoff ${originalId} was already superseded by ${original.superseded_by}. Correct the current tip instead.`) };
+      }
+      const { id: newId, short_label } = generateIdWithLabel('open_handoffs', cwd);
+      const reason = typeof args.reason === 'string' && args.reason ? args.reason : undefined;
+      const overrideText = typeof args.text === 'string' && args.text ? args.text : undefined;
+      const correctionText = overrideText
+        ?? `${original.text}\n\n---\n[correction] ${reason ?? 'superseded by later record'}`;
+      const overrideNarrative = typeof args.narrative === 'string' && args.narrative ? args.narrative : original.narrative;
+      const tags = Array.isArray(args.tags) ? (args.tags as string[]) : original.tags;
+      const correction = {
+        ...original,
+        id: newId,
+        short_label,
+        text: correctionText,
+        narrative: overrideNarrative,
+        tags,
+        created_at: nowISO(),
+        author: resolvedIdentity.agent_name,
+        author_id: resolvedIdentity.agent_id,
+        session_id: connectionSessionId,
+        review: undefined,
+        supersedes: originalId,
+      };
+      delete (correction as Record<string, unknown>).superseded_by;
+      original.superseded_by = newId;
+      state.open_handoffs.push(correction as typeof original);
+      persistState(state, cwd);
+      appendAuditEntry({
+        actor: resolvedIdentity.agent_name,
+        actor_id: resolvedIdentity.agent_id,
+        action: 'create',
+        item_id: newId,
+        item_type: 'handoff',
+        scope: `supersedes:${originalId}`,
+      }, cwd);
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `✔ correction handoff [${short_label ?? newId}] supersedes ${originalId}` }],
+          id: newId,
+          short_label,
+          supersedes: originalId,
           schema_version: SCHEMA_VERSION,
         }),
       };
