@@ -714,16 +714,24 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
-    description: 'Run a dispatch cycle: analyze the active sequence, generate briefs for ready lanes, and send assignment messages to target agents. Returns ready-to-run bash commands per agent — the coordinator should execute them (e.g. via run_in_background). Use dryRun to preview. Requires trusted or curator trust level.',
+    description: 'Unified dispatch entry (Phase 3 slice 3d). `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send), review (review-focused dispatch — set `openLoop` for the review_loop escalation). Consolidates bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
+        intent: { type: 'string', enum: ['analysis', 'execute', 'review'], description: 'Dispatch intent. Default: execute.' },
+        // intent=execute args
         agents: { type: 'array', items: { type: 'string' }, description: 'Only dispatch to these agents. Default: all available.' },
-        lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes.' },
-        maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready).' },
-        dryRun: { type: 'boolean', description: 'Preview assignments without sending messages.' },
-        autoExecute: { type: 'boolean', description: 'Attempt to spawn agents after delivery (default: true). When false, returns command_ready_manual.' },
+        lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes. Also used by intent=analysis.' },
+        maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready). intent=execute only.' },
+        dryRun: { type: 'boolean', description: 'Preview without sending. Accepted by all intents.' },
+        autoExecute: { type: 'boolean', description: 'Attempt to spawn agents after delivery (default: true). intent=execute only.' },
+        // intent=review args (forwarded to bclaw_dispatch_review)
+        handoffId: { type: 'string', description: 'intent=review: specific handoff ID. Default: auto-detect reviewable handoffs.' },
+        reviewer: { type: 'string', description: 'intent=review: specific reviewer agent. Default: any available non-author.' },
+        openLoop: { type: 'boolean', description: 'intent=review: open a review_loop alongside the inbox message (default true).' },
+        reviewMode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'intent=review: loop mode when openLoop=true.' },
+        // Common
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -3428,6 +3436,51 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           eligible_ids: selected.map(i => i.id),
         }),
       };
+    }
+
+    if (name === 'bclaw_dispatch' && (args.intent === 'analysis' || args.intent === 'review')) {
+      // Phase 3 slice 3d — intent dispatch. Routes analysis/review to the
+      // equivalent legacy tool handler, preserving the execute path below.
+      // See docs/concepts/mcp-governance.md.
+      const dispatchIntent = args.intent as string;
+      if (dispatchIntent === 'analysis') {
+        try {
+          return { response: toolResponse(handleMcpReadToolCall('bclaw_dispatch_analysis', args, { cwd })) };
+        } catch (err: unknown) {
+          return { response: createToolErrorResponse('operation_error', (err as Error).message) };
+        }
+      }
+      // dispatchIntent === 'review' — delegate via dispatchReview directly.
+      const resolvedReview = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+      if (resolvedReview.error) {
+        return { response: createToolErrorResponse(resolvedReview.error.kind, resolvedReview.error.message, resolvedReview.error.details) };
+      }
+      try {
+        const result = dispatchReview({
+          handoffId: args.handoffId as string | undefined,
+          reviewer: args.reviewer as string | undefined,
+          dryRun: args.dryRun as boolean | undefined,
+          openLoop: args.openLoop as boolean | undefined,
+          reviewMode: args.reviewMode as 'asymmetric' | 'symmetric' | undefined,
+          dispatcherAgent: resolvedReview.identity!.agent_name,
+          dispatcherAgentId: resolvedReview.identity!.agent_id,
+          sessionId: connectionSessionId,
+        }, cwd);
+        const text = args.dryRun
+          ? `🔍 Review dispatch dry run: ${result.reviews_sent.length} target(s).`
+          : `✔ Review dispatch complete: ${result.reviews_sent.length} target(s).`;
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text }],
+            ...result,
+          }),
+        };
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('operation_error', (err as Error).message) };
+      }
+    }
+    if (name === 'bclaw_dispatch' && args.intent !== undefined && args.intent !== 'execute') {
+      return { response: createToolErrorResponse('validation_error', `bclaw_dispatch: unknown intent '${args.intent}'. Expected analysis | execute | review.`) };
     }
 
     if (name === 'bclaw_dispatch') {
