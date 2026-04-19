@@ -53,9 +53,45 @@ import type {
   Constraint,
   Decision,
   PlanItem,
+  Provenance,
   RuntimeNote,
   Trap,
 } from './schema.js';
+
+/**
+ * Default provenance stamp applied on create when the caller does not
+ * supply one. `user` kind with whatever author is in the payload; the
+ * caller can override to 'agent', 'auto_reflect', etc. at write time.
+ */
+function defaultProvenance(data: Record<string, unknown>): Provenance {
+  const author = typeof data.author === 'string' ? data.author : undefined;
+  if (author) return { kind: 'user', author };
+  return { kind: 'user' };
+}
+
+/**
+ * Default read filter: exclude legacy provenance and low-confidence
+ * auto_reflect records below 0.6. Override via `includeLegacy` /
+ * `minAutoReflectConfidence` in the filter.
+ */
+const DEFAULT_MIN_AUTO_REFLECT_CONFIDENCE = 0.6;
+
+function passesProvenanceFilter(item: Record<string, unknown>, filter: EntityFilter): boolean {
+  const provenance = item.provenance as Provenance | undefined;
+  if (!provenance) return true; // pre-provenance record — never filter out.
+
+  if (provenance.kind === 'legacy') {
+    return filter.includeLegacy === true;
+  }
+  if (provenance.kind === 'auto_reflect') {
+    const threshold = typeof filter.minAutoReflectConfidence === 'number'
+      ? filter.minAutoReflectConfidence
+      : DEFAULT_MIN_AUTO_REFLECT_CONFIDENCE;
+    const confidence = provenance.confidence ?? 0;
+    return confidence >= threshold;
+  }
+  return true;
+}
 
 /** Thrown when a verb is not yet wired for a given entity. */
 export class EntityOperationUnsupportedError extends Error {
@@ -89,6 +125,14 @@ export interface EntityFilter {
   plan_id?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Phase 3 slice 3f — provenance-aware read filtering.
+   * Default: exclude `legacy` provenance + auto_reflect records below
+   * 0.6 confidence. Override to show legacy records or lower the
+   * threshold.
+   */
+  includeLegacy?: boolean;
+  minAutoReflectConfidence?: number;
   [key: string]: unknown;
 }
 
@@ -152,6 +196,7 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
 
 function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
   let result = items as Array<Record<string, unknown>>;
+  result = result.filter((item) => passesProvenanceFilter(item, filter));
   if (filter.status) {
     result = result.filter((item) => item.status === filter.status);
   }
@@ -200,6 +245,7 @@ export function createEntity(
   switch (name) {
     case 'plan': {
       const res = createPlan(data as unknown as CreatePlanInput, cwd);
+      stampProvenanceOnStateItem('plan', res.id, defaultProvenance(data), cwd);
       return { entity: name, id: res.id, short_label: res.shortLabel };
     }
     case 'decision': {
@@ -211,6 +257,7 @@ export function createEntity(
         relatedPaths: data.related_paths as string[] | undefined,
         planId: data.plan_id as string | undefined,
       }, cwd);
+      stampProvenanceOnStateItem('decision', res.id, defaultProvenance(data), cwd);
       return { entity: name, id: res.id, short_label: res.shortLabel };
     }
     case 'constraint': {
@@ -221,6 +268,7 @@ export function createEntity(
         tags: data.tags as string[] | undefined,
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
+      stampProvenanceOnStateItem('constraint', res.id, defaultProvenance(data), cwd);
       return { entity: name, id: res.id, short_label: res.shortLabel };
     }
     case 'trap': {
@@ -231,6 +279,7 @@ export function createEntity(
         tags: data.tags as string[] | undefined,
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
+      stampProvenanceOnStateItem('trap', res.id, defaultProvenance(data), cwd);
       return { entity: name, id: res.id, short_label: res.shortLabel };
     }
     case 'runtime_note': {
@@ -243,6 +292,7 @@ export function createEntity(
         tags: (data.tags as string[] | undefined) ?? [],
         visibility: (data.visibility as RuntimeNote['visibility']) ?? 'shared',
         note_type: (data.note_type as RuntimeNote['note_type']) ?? 'observation',
+        provenance: defaultProvenance(data),
         ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
         ...(data.project_id ? { project_id: data.project_id as string } : {}),
         ...(data.session_id ? { session_id: data.session_id as string } : {}),
@@ -267,6 +317,10 @@ export function createEntity(
         usage_events: [],
       };
       saveCandidate(candidate, cwd);
+      // Stamp provenance post-save through the state path — candidates have
+      // their own store so we can rewrite the file directly.
+      const stamped = { ...candidate, provenance: defaultProvenance(data) } as Candidate;
+      saveCandidate(stamped, cwd);
       return { entity: name, id };
     }
     default:
@@ -429,6 +483,28 @@ export function transitionEntity(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Stamp provenance on a state-resident record (plan, decision, constraint, trap)
+ * immediately after create. Writes one extra persistState call; acceptable for
+ * v1 since create is infrequent compared to reads.
+ */
+function stampProvenanceOnStateItem(
+  name: 'plan' | 'decision' | 'constraint' | 'trap',
+  id: string,
+  provenance: Provenance,
+  cwd: string,
+): void {
+  const state = loadState(cwd);
+  const bucket = name === 'plan' ? state.plan_items
+    : name === 'decision' ? state.recent_decisions
+    : name === 'constraint' ? state.active_constraints
+    : state.known_traps;
+  const item = (bucket as Array<Record<string, unknown>>).find((x) => x.id === id);
+  if (!item) return;
+  item.provenance = provenance;
+  persistState(state, cwd);
+}
 
 function requireString(data: Record<string, unknown>, field: string): string {
   const value = data[field];

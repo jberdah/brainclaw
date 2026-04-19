@@ -70,9 +70,53 @@ export const MemoryScopeSchema = z.enum(['project', 'machine', 'user']).default(
 export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
 
 /**
- * Optional passthrough for the v1.0 provenance union. Full discriminated-union
- * typing lands in Phase 3 (slice 3f); declaring the field here lets migration
- * patches stamp `{ kind: 'legacy' }` without Zod stripping it on persist.
+ * Typed discriminated-union provenance (Phase 3 slice 3f, P6.3).
+ * Tracks how a record entered the store — drives read filters
+ * (default excludes `legacy` + low-confidence `auto_reflect`), audit
+ * narratives, and federation-safe federation behaviour.
+ */
+export const ProvenanceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('agent'),
+    agent_id: z.string().optional(),
+    session_id: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('auto_reflect'),
+    source_session: z.string().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+  }),
+  z.object({
+    kind: z.literal('user'),
+    author: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('loop_artifact'),
+    loop_id: z.string(),
+    slot: z.string().optional(),
+    turn: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal('federation'),
+    source_project: z.string(),
+    remote_id: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('correction'),
+    supersedes: z.string(),
+  }),
+  z.object({
+    kind: z.literal('legacy'),
+  }),
+]);
+export type Provenance = z.infer<typeof ProvenanceSchema>;
+
+/**
+ * Legacy passthrough kept for backwards compatibility with records
+ * that predate slice 3f. Entity shapes carry this (permissive) rather
+ * than `ProvenanceSchema.optional()` so that existing files do not
+ * fail to parse. New writes go through `stampProvenance()` in
+ * entity-operations.ts which enforces the typed shape.
  */
 export const ProvenancePassthroughSchema = z.unknown().optional();
 
