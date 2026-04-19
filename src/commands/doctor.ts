@@ -33,6 +33,8 @@ import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfi
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
 import { detectStaleness, staleSummary } from '../core/staleness.js';
 import { InboxMessageSchema, type Handoff, type InboxMessage } from '../core/schema.js';
+import { resolvePrimaryStore } from '../core/store-resolution.js';
+import { runPostMigrationHealthCheck } from '../core/upgrades/health-check.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
 const NON_MESSAGE_INBOX_SUBDIRS = new Set(['accepted', 'rejected', 'cross-project']);
@@ -112,6 +114,11 @@ export interface DoctorOptions {
   migrationCheck?: boolean;
   fixAgentIgnore?: boolean;
   fix?: boolean;
+  /**
+   * Run the post-migration health check (v1.0 schema upgrade invariants)
+   * and exit non-zero on any failure. Skips the normal doctor suite.
+   */
+  afterMigration?: boolean;
 }
 
 interface DoctorCheck {
@@ -231,6 +238,11 @@ export function runDoctor(options: DoctorOptions = {}): void {
   if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
+  }
+
+  if (options.afterMigration) {
+    runAfterMigrationCheck(options);
+    return;
   }
 
   let hasIssues = false;
@@ -1895,5 +1907,32 @@ export function runDoctor(options: DoctorOptions = {}): void {
   if (!hasIssues) {
     console.log('');
     console.log('All checks passed.');
+  }
+}
+
+function runAfterMigrationCheck(options: DoctorOptions): void {
+  const cwd = options.cwd ?? process.cwd();
+  const store = resolvePrimaryStore(cwd);
+  if (!store) {
+    console.error(`Error: no .brainclaw/ store resolved from ${cwd}`);
+    process.exit(1);
+  }
+
+  const report = runPostMigrationHealthCheck({ storePath: store.storePath });
+
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(`Post-migration health check on ${report.store_path}`);
+    for (const finding of report.findings) {
+      const glyph = finding.status === 'ok' ? '✔' : finding.status === 'warn' ? '⚠' : '✗';
+      console.log(`  ${glyph} [${finding.check}] ${finding.message}`);
+    }
+    console.log('');
+    console.log(report.ok ? '✔ All post-migration invariants hold.' : '✗ Post-migration invariants failed. Inspect the findings above.');
+  }
+
+  if (!report.ok) {
+    process.exit(1);
   }
 }

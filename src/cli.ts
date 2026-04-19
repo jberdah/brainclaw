@@ -237,9 +237,9 @@ program
   .option('--json', 'Output as JSON')
   .option('--dry-run', 'Show what would be done without making changes')
   .option('--self-update', 'Check for a newer brainclaw package version and install it before upgrading memory')
-  .option('--to <version>', 'One-shot target schema version (e.g. --to=1.0). Implies --backup unless --no-backup.')
-  .option('--backup', 'Create a timestamped backup of .brainclaw/ before any write (default when --to is set)')
-  .option('--no-backup', 'Disable the automatic backup (only meaningful with --to)')
+  .option('--to <version>', 'One-shot target schema version (e.g. --to=1.0). Real runs require a backup.')
+  .option('--backup', 'Create a timestamped backup of .brainclaw/ before any write (always on for --to runs)')
+  .option('--no-backup', 'Disable the automatic backup for housekeeping-only upgrade runs')
   .option('--rollback', 'Restore the most recent backup, park the current live store, exit')
   .option('--yes', 'Skip interactive confirmations (reserved for later prompt additions)')
   .action((options) => {
@@ -606,8 +606,9 @@ program
   .option('--migration-check', 'Report versioned documents that need schema migration')
   .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
   .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
+  .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .action((options) => {
-    runDoctor(options);
+    runDoctor({ ...options, afterMigration: options.afterMigration });
   });
 
 // --- version ---
