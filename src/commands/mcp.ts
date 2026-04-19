@@ -89,7 +89,7 @@ export type McpProtocolVersion = '2024-11-05' | '2025-11-25';
 export type McpConnectionState = 'pre_init' | 'awaiting_initialized' | 'ready' | 'closed';
 export type JsonRpcId = string | number | null;
 
-export const SCHEMA_VERSION = '0.8.0';
+export const SCHEMA_VERSION = '1.0.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
 
@@ -272,12 +272,11 @@ export const MCP_READ_TOOLS = [
   },
   {
     // ── Canonical context read (Phase 3 slice 3c) ──────────────────────
-    // Unified dispatcher over the four legacy context reads. Under
-    // advanced tier while wiring stabilises; promoted to standard at
-    // the v1.0 cut (slice 3i).
+    // Unified dispatcher over the four legacy context reads.
+    // Promoted to standard tier at the v1.0 cut.
     name: 'bclaw_context',
-    description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), delta (memory changes since a reference session). Consolidates bclaw_get_context / bclaw_get_execution_context / bclaw_get_agent_board / bclaw_get_agent_board_summary.',
-    annotations: { tier: 'advanced', category: 'context', headlessApproval: 'auto' },
+    description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), delta (memory changes since a reference session).',
+    annotations: { tier: 'standard', category: 'context', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1441,13 +1440,12 @@ const MCP_WRITE_TOOLS = [
       required: [],
     },
   },
-  // ── Canonical CRUD verbs (Phase 3 slice 3b) ──────────────────────
-  // Under `advanced` tier while wiring stabilises. Promoted to
-  // `standard` at the v1.0 cut (slice 3i).
+  // ── Canonical CRUD verbs (Phase 3 / v1.0 grammar) ──────────────────
+  // Promoted to `standard` tier at the v1.0 cut.
   {
     name: 'bclaw_find',
     description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'auto' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1460,7 +1458,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_get',
     description: 'Fetch a single brainclaw entity by id or short_label.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'auto' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1473,7 +1471,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create',
     description: 'Create a new brainclaw entity. Data fields are entity-specific; see src/core/schema.ts.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1486,7 +1484,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update',
     description: 'Partial update of mutable fields. Fields not in EntityRegistry.updatable are rejected — use bclaw_transition for status changes.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1500,7 +1498,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_remove',
     description: 'Remove a brainclaw entity. Archives by default; pass purge:true to hard-delete where supported.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1514,7 +1512,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_transition',
     description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags.',
-    annotations: { tier: 'advanced', category: 'memory', headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {

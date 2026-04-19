@@ -8,7 +8,56 @@ guarantees this changelog follows.
 
 ---
 
-## 0.8.0 (current)
+## 1.0.0 (current)
+
+**Public launch candidate.** Phase 3 slice 3i of `pln_c6472192`.
+Completes the canonical grammar refactor: canonical verbs promoted to
+the default `standard` tier, legacy per-entity tools removed from the
+discoverable surface.
+
+**Changed — tier promotion**
+All canonical verbs land in the default `standard` catalog:
+- `bclaw_find`, `bclaw_get`, `bclaw_create`, `bclaw_update`,
+  `bclaw_remove`, `bclaw_transition`
+- `bclaw_context(kind)` — memory / execution / board / board_summary / delta
+- `bclaw_dispatch(intent)` — analysis / execute / review
+- `bclaw_correct_handoff` — P6.1 tombstone for handoff corrections
+
+**Breaking — legacy per-entity tools removed from the catalog**
+The following tools are no longer returned by `tools/list` default or
+`catalog: "standard"`. They were marked deprecated throughout the
+0.8.x window. Replacement is named in parentheses:
+
+- `bclaw_list_plans` (→ `bclaw_find(entity: "plan")`)
+- `bclaw_list_candidates` (→ `bclaw_find(entity: "candidate")`)
+- `bclaw_list_claims` (→ `bclaw_find(entity: "claim")`)
+- `bclaw_list_actions` (→ `bclaw_find(entity: "action")`)
+- `bclaw_list_assignments` (→ `bclaw_find(entity: "assignment")`)
+- `bclaw_list_runs` (→ `bclaw_find(entity: "agent_run")`)
+- `bclaw_read_handoff` (→ `bclaw_get(entity: "handoff", id)`)
+- `bclaw_create_plan` / `bclaw_create_candidate` (→ `bclaw_create`)
+- `bclaw_update_plan` (→ `bclaw_update` + `bclaw_transition`)
+- `bclaw_accept` / `bclaw_reject` (→ `bclaw_transition(entity: "candidate")`)
+- `bclaw_get_execution_context` / `bclaw_get_agent_board` /
+  `bclaw_get_agent_board_summary` (→ `bclaw_context(kind)`)
+- `bclaw_dispatch_analysis` / `bclaw_dispatch_review` (→ `bclaw_dispatch(intent)`)
+- `bclaw_update_handoff` (→ `bclaw_correct_handoff` — P6.1 tombstone)
+
+The tool *handlers* remain in place for now as defensive code — a
+direct call by a non-MCP-compliant caller that bypasses `tools/list`
+will still succeed. A follow-up PR will strip the dead handler code.
+
+**Changed — versions**
+- `SCHEMA_VERSION` bump: `0.8.0 → 1.0.0`
+- `package.json` bump: `0.63.0 → 1.0.0`
+
+See `docs/integrations/mcp.md` for the full canonical surface + an
+example gallery per verb. See `docs/concepts/mcp-governance.md` for
+the stability contract now that v1.0 has shipped.
+
+---
+
+## 0.8.0
 
 Phase 3 canonical grammar slices shipped under `pln_c6472192` (slices
 3a–3g). Every addition is behind `catalog: "all"` until the v1.0 cut
