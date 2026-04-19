@@ -108,7 +108,12 @@ export function memoryPath(filename: string, cwd?: string, preferredDirName?: st
 }
 
 export function storeLockPath(cwd?: string, preferredDirName?: string): string {
-  return memoryPath(STORE_LOCK_BASENAME, cwd, preferredDirName);
+  const root = cwd ?? process.cwd();
+  const dirName = preferredDirName ?? MEMORY_DIR;
+  // Keep the store-wide lock alongside the store root so it survives
+  // upgrade park/swap renames. Writers and upgrade/rollback all share
+  // this stable target.
+  return path.join(root, `${dirName}${STORE_LOCK_BASENAME}`);
 }
 
 export function memoryExists(cwd?: string, preferredDirName?: string): boolean {
@@ -194,8 +199,10 @@ export function ensureMemoryDir(cwd?: string, preferredDirName?: string): void {
 }
 
 export function withStoreLock<T>(cwd: string = process.cwd(), fn: () => T, preferredDirName?: string): T {
-  ensureMemoryDir(cwd, preferredDirName);
-  return withLock(storeLockPath(cwd, preferredDirName), fn);
+  return withLock(storeLockPath(cwd, preferredDirName), () => {
+    ensureMemoryDir(cwd, preferredDirName);
+    return fn();
+  });
 }
 
 /** Check if a path is a file, or a directory with at least one entry. */

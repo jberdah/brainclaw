@@ -6,6 +6,8 @@ import {
   BACKUP_DIR_PREFIX,
   BACKUP_MANIFEST_FILENAME,
   BackupError,
+  ROLLBACK_PARKED_PREFIX,
+  ROLLBACK_STAGING_PREFIX,
   createBackup,
   listBackups,
   readManifest,
@@ -138,5 +140,92 @@ describe('core/upgrades/backup', () => {
       }),
       (error: unknown) => error instanceof BackupError && error.code === 'schema_mismatch',
     );
+  });
+
+  it('cleans staged restore state when stripping the backup manifest fails', () => {
+    const storePath = storePathOf(workspace);
+    const fixedNow = () => new Date('2026-04-18T19:00:00.000Z');
+    seedFile(storePath, 'memory/decisions/dec_001.json', '{"id":"dec_001","state":"live"}');
+
+    const handle = createBackup({ storePath });
+    const parent = path.dirname(storePath);
+    const stagingPath = path.join(parent, `${ROLLBACK_STAGING_PREFIX}2026-04-18T19-00-00-000Z.pid-${process.pid}`);
+    const parkedPath = path.join(parent, `${ROLLBACK_PARKED_PREFIX}2026-04-18T19-00-00-000Z`);
+
+    const originalUnlinkSync = fs.unlinkSync;
+    (fs as { unlinkSync: typeof fs.unlinkSync }).unlinkSync = ((target: fs.PathLike) => {
+      if (String(target) === path.join(stagingPath, BACKUP_MANIFEST_FILENAME)) {
+        throw new Error('simulated manifest strip failure');
+      }
+      return originalUnlinkSync(target);
+    }) as typeof fs.unlinkSync;
+
+    try {
+      assert.throws(
+        () => restoreBackup({ storePath, backupPath: handle.backupPath, now: fixedNow }),
+        (error: unknown) => error instanceof BackupError && error.code === 'restore_manifest_strip_failed',
+      );
+    } finally {
+      (fs as { unlinkSync: typeof fs.unlinkSync }).unlinkSync = originalUnlinkSync;
+    }
+
+    assert.equal(fs.existsSync(stagingPath), false, 'staging dir should be cleaned on manifest-strip failure');
+    assert.equal(fs.existsSync(parkedPath), false, 'live store must not be parked before manifest strip succeeds');
+    assert.equal(
+      fs.readFileSync(path.join(storePath, 'memory/decisions/dec_001.json'), 'utf-8'),
+      '{"id":"dec_001","state":"live"}',
+    );
+  });
+
+  it('preserves parked and staged trees when swap and un-park both fail', () => {
+    const storePath = storePathOf(workspace);
+    const fixedNow = () => new Date('2026-04-18T20:00:00.000Z');
+    seedFile(storePath, 'memory/traps/trp_001.json', '{"id":"trp_001","state":"live"}');
+
+    const handle = createBackup({ storePath });
+    fs.writeFileSync(path.join(storePath, 'memory/traps/trp_001.json'), '{"id":"trp_001","state":"mutated"}', 'utf-8');
+
+    const parent = path.dirname(storePath);
+    const stagingPath = path.join(parent, `${ROLLBACK_STAGING_PREFIX}2026-04-18T20-00-00-000Z.pid-${process.pid}`);
+    const parkedPath = path.join(parent, `${ROLLBACK_PARKED_PREFIX}2026-04-18T20-00-00-000Z`);
+    const originalRenameSync = fs.renameSync;
+
+    (fs as { renameSync: typeof fs.renameSync }).renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      const src = String(from);
+      const dst = String(to);
+      if (src === stagingPath && dst === storePath) {
+        throw new Error('simulated swap failure');
+      }
+      if (src === parkedPath && dst === storePath) {
+        throw new Error('simulated unpark failure');
+      }
+      return originalRenameSync(from, to);
+    }) as typeof fs.renameSync;
+
+    try {
+      assert.throws(
+        () => restoreBackup({ storePath, backupPath: handle.backupPath, now: fixedNow }),
+        (error: unknown) => {
+          return error instanceof BackupError
+            && error.code === 'restore_catastrophic'
+            && error.message.includes(`parked=${parkedPath}`)
+            && error.message.includes(`staged=${stagingPath}`);
+        },
+      );
+    } finally {
+      (fs as { renameSync: typeof fs.renameSync }).renameSync = originalRenameSync;
+    }
+
+    assert.equal(fs.existsSync(storePath), false, 'live store should remain absent in catastrophic rollback mode');
+    assert.ok(fs.existsSync(parkedPath), 'parked live tree must be preserved for manual recovery');
+    assert.ok(fs.existsSync(stagingPath), 'staged restore tree must be preserved for manual recovery');
+
+    const parkedDisk = JSON.parse(fs.readFileSync(path.join(parkedPath, 'memory/traps/trp_001.json'), 'utf-8')) as { state: string };
+    const stagedDisk = JSON.parse(fs.readFileSync(path.join(stagingPath, 'memory/traps/trp_001.json'), 'utf-8')) as { state: string };
+    assert.equal(parkedDisk.state, 'mutated');
+    assert.equal(stagedDisk.state, 'live');
+
+    fs.rmSync(parkedPath, { recursive: true, force: true });
+    fs.rmSync(stagingPath, { recursive: true, force: true });
   });
 });

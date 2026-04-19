@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir } from '../core/io.js';
+import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir, storeLockPath } from '../core/io.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
@@ -37,8 +37,11 @@ import {
   type ProvenanceRolloutResult,
 } from '../core/upgrades/patches/provenance-rollout.js';
 import {
+  IMPLICIT_BASELINE_VERSION,
+  KNOWN_STORE_SCHEMA_VERSIONS,
   V1_TARGET_SCHEMA_VERSION,
   bumpSchemaVersion,
+  readSchemaVersion,
   type BumpSchemaVersionResult,
 } from '../core/upgrades/schema-version.js';
 import { withLock } from '../core/lock.js';
@@ -59,11 +62,10 @@ export interface UpgradeOptions {
    * Target schema version for the one-shot v1.0 upgrade path. Enables
    * the candidate archive / handoff strip / provenance rollout patches
    * (implemented in later steps of pln_bc6e88cc). Presence of `to`
-   * also implies `backup: true` unless explicitly disabled via
-   * `backup: false`.
+   * also requires a backup on real runs.
    */
   to?: SchemaTarget;
-  /** Create a timestamped backup before any write. Default: true when `to` is set. */
+  /** Create a timestamped backup before any write. Required for schema-targeted upgrade runs. */
   backup?: boolean;
   /** Restore the most recent backup and park the current live store. Early-exits, skips other phases. */
   rollback?: boolean;
@@ -109,21 +111,23 @@ const WORKSPACE_EXPORT_REFRESH_AGENTS = [
 export function runUpgrade(options: UpgradeOptions = {}): void {
   const cwd = options.cwd ?? process.cwd();
 
-  if (!memoryExists(cwd)) {
-    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
-    process.exit(1);
-  }
-
-  // Take an exclusive transaction lock for the whole upgrade/rollback
-  // cycle. Two concurrent upgrades can otherwise race on park/swap
-  // and leave orphan staging dirs, especially on Windows.
-  const lockPath = path.join(memoryDir(cwd), 'upgrade');
+  // Take the common store-wide mutation lock for the whole
+  // upgrade/rollback cycle so normal writers cannot race the park/swap
+  // window. The lock target lives alongside `.brainclaw/`, not inside
+  // it, so it survives rename-based swaps.
+  const lockPath = storeLockPath(cwd);
   try {
-    withLock(lockPath, () => runUpgradeInner(cwd, options));
+    withLock(lockPath, () => {
+      if (!memoryExists(cwd)) {
+        console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+        process.exit(1);
+      }
+      runUpgradeInner(cwd, options);
+    });
   } catch (error: unknown) {
     const message = (error as Error).message;
     if (message.startsWith('Could not acquire lock')) {
-      console.error('Error: another brainclaw upgrade is in progress. Retry once it completes.');
+      console.error('Error: another brainclaw store mutation or upgrade is in progress. Retry once it completes.');
       process.exit(1);
     }
     throw error;
@@ -144,10 +148,15 @@ function runUpgradeInner(cwd: string, options: UpgradeOptions): void {
     process.exit(1);
   }
 
+  if (options.to && options.backup === false && !options.dryRun) {
+    console.error(`Error: --to=${options.to} requires a backup. Remove --no-backup or re-run with --dry-run.`);
+    process.exit(1);
+  }
+
   // Backup pass: create a timestamped backup before any modification.
-  // Explicit --backup always triggers it; --to implies --backup unless
-  // the caller explicitly passed backup:false.
-  const backupRequested = options.backup ?? (options.to !== undefined);
+  // Explicit --backup always triggers it; schema-targeted upgrades are
+  // forced to carry a recovery point on real runs.
+  const backupRequested = options.to !== undefined || options.backup === true;
   let backupHandle: BackupHandle | undefined;
   if (backupRequested && !options.dryRun) {
     try {
@@ -179,7 +188,7 @@ function runUpgradeInner(cwd: string, options: UpgradeOptions): void {
   }
 
   // Self-update: install a newer brainclaw version from npm/local-pack before upgrading memory
-  if (options.selfUpdate) {
+  if (options.selfUpdate && !options.dryRun) {
     const config = loadConfig(cwd);
     const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
     if (updateCheck.status === 'update_available' && updateCheck.install_command) {
@@ -218,6 +227,9 @@ function runUpgradeInner(cwd: string, options: UpgradeOptions): void {
       }
     }
     if (!options.json) console.log('');
+  } else if (options.selfUpdate && options.dryRun && !options.json) {
+    console.log('(dry run — skipping self-update check)');
+    console.log('');
   }
 
   const base = memoryDir(cwd);
@@ -725,7 +737,11 @@ function createUpgradeBackup(cwd: string, options: UpgradeOptions): BackupHandle
   const note = options.to
     ? `brainclaw upgrade --to=${options.to}`
     : 'brainclaw upgrade';
-  return createBackup({ storePath: store.storePath, note });
+  return createBackup({
+    storePath: store.storePath,
+    note,
+    storeSchemaVersion: readSchemaVersion(store.storePath).current,
+  });
 }
 
 function runRollback(cwd: string, options: UpgradeOptions): void {
@@ -760,7 +776,11 @@ function runRollback(cwd: string, options: UpgradeOptions): void {
   }
 
   try {
-    const result = restoreBackup({ storePath: store.storePath, backupPath: target.backupPath });
+    const result = restoreBackup({
+      storePath: store.storePath,
+      backupPath: target.backupPath,
+      acceptSchemaVersions: [...KNOWN_STORE_SCHEMA_VERSIONS],
+    });
     if (options.json) {
       console.log(JSON.stringify({
         status: 'rolled_back',
@@ -771,6 +791,7 @@ function runRollback(cwd: string, options: UpgradeOptions): void {
       }, null, 2));
     } else {
       console.log(`✔ Rolled back to ${target.backupPath} (created ${target.manifest.created_at})`);
+      console.log(`  Restored schema version ${target.manifest.store_schema_version ?? IMPLICIT_BASELINE_VERSION}`);
       console.log(`  Previous live store parked at ${result.parkedPath}`);
     }
   } catch (error: unknown) {

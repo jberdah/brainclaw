@@ -56,13 +56,14 @@ export function mutate<T>(
   const cwd = options.cwd ?? process.cwd();
   const timeoutMs = options.timeoutMs ?? STORE_LOCK_TIMEOUT_MS;
 
-  ensureMemoryDir(cwd, options.preferredDirName);
-
   const lockTarget = storeLockPath(cwd, options.preferredDirName);
   const start = performance.now();
 
   try {
-    const value = withLock(lockTarget, () => fn(cwd), timeoutMs);
+    const value = withLock(lockTarget, () => {
+      ensureMemoryDir(cwd, options.preferredDirName);
+      return fn(cwd);
+    }, timeoutMs);
     const durationMs = performance.now() - start;
 
     if (durationMs > 1_000) {

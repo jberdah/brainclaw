@@ -21,6 +21,9 @@ export const SCHEMA_VERSION_FILE = 'schema-version.json';
 /** Implicit baseline when `.brainclaw/schema-version.json` is absent. */
 export const IMPLICIT_BASELINE_VERSION = '0.6.0';
 
+/** Known store schema states for the v1 upgrade/rollback flow. */
+export const KNOWN_STORE_SCHEMA_VERSIONS = [IMPLICIT_BASELINE_VERSION, '0.7.0', '0.8.0'] as const;
+
 /** Target of a `--to=1.0` upgrade (migration-complete marker). */
 export const V1_TARGET_SCHEMA_VERSION = '0.8.0';
 

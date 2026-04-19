@@ -161,6 +161,14 @@ export interface RestoreResult {
   manifest: BackupManifest;
 }
 
+function cleanupRestoreStaging(stagingPath: string): void {
+  try {
+    fs.rmSync(stagingPath, { recursive: true, force: true });
+  } catch {
+    // Best effort only.
+  }
+}
+
 /**
  * Restore a backup by staging the new live contents into a sibling
  * directory, then doing a single rename swap. Failure-atomic:
@@ -218,7 +226,15 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   // store does not look like a backup.
   const stagedManifest = path.join(stagingPath, BACKUP_MANIFEST_FILENAME);
   if (fs.existsSync(stagedManifest)) {
-    fs.unlinkSync(stagedManifest);
+    try {
+      fs.unlinkSync(stagedManifest);
+    } catch (error: unknown) {
+      cleanupRestoreStaging(stagingPath);
+      throw new BackupError(
+        'restore_manifest_strip_failed',
+        `Could not strip backup manifest from staged restore: ${(error as Error).message}`,
+      );
+    }
   }
 
   // Step 3: park the current live store (if any). From here on we
@@ -229,7 +245,7 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
       fs.renameSync(storePath, parkedPath);
       parked = true;
     } catch (error: unknown) {
-      try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
+      cleanupRestoreStaging(stagingPath);
       throw new BackupError('park_failed', `Could not park live store: ${(error as Error).message}`);
     }
   }
@@ -239,13 +255,24 @@ export function restoreBackup(options: RestoreBackupOptions): RestoreResult {
   try {
     fs.renameSync(stagingPath, storePath);
   } catch (error: unknown) {
-    try { fs.rmSync(stagingPath, { recursive: true, force: true }); } catch { /* best effort */ }
-    if (parked) {
-      try {
-        fs.renameSync(parkedPath, storePath);
-      } catch { /* Catastrophic — both swaps failed. Leave parked for manual recovery. */ }
+    const swapMessage = (error as Error).message;
+    if (!parked) {
+      cleanupRestoreStaging(stagingPath);
+      throw new BackupError('restore_swap_failed', `Could not swap staging into live path: ${swapMessage}`);
     }
-    throw new BackupError('restore_swap_failed', `Could not swap staging into live path: ${(error as Error).message}`);
+
+    try {
+      fs.renameSync(parkedPath, storePath);
+    } catch (unparkError: unknown) {
+      throw new BackupError(
+        'restore_catastrophic',
+        `Could not swap staging into live path: ${swapMessage}; also failed to restore parked live store: ${(unparkError as Error).message}. ` +
+        `Recovery paths preserved at parked=${parkedPath} staged=${stagingPath}`,
+      );
+    }
+
+    cleanupRestoreStaging(stagingPath);
+    throw new BackupError('restore_swap_failed', `Could not swap staging into live path: ${swapMessage}`);
   }
 
   return { parkedPath: parked ? parkedPath : '', restoredFrom: backupPath, manifest };

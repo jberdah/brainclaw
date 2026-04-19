@@ -5,6 +5,9 @@ import path from 'node:path';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { saveState, loadState, emptyState } from '../../src/core/state.js';
 import { runUpgrade } from '../../src/commands/upgrade.js';
+import { listBackups, createBackup } from '../../src/core/upgrades/backup.js';
+import { SCHEMA_VERSION_FILE } from '../../src/core/upgrades/schema-version.js';
+import { storeLockPath } from '../../src/core/io.js';
 
 function captureLogs(fn: () => void): string[] {
   const originalLog = console.log;
@@ -164,6 +167,109 @@ Run \`brainclaw list-claims\`
     assert.ok(!claudeExport.includes('brainclaw list-claims'));
     assert.ok(claudeCommand.includes('brainclaw claim create'));
     assert.ok(!claudeCommand.includes('brainclaw claim "desc"'));
+  });
+
+  it('rejects schema-targeted runs that disable backups', () => {
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    console.error = (...args: unknown[]) => { logs.push('[ERROR] ' + args.map(String).join(' ')); };
+    const originalExit = process.exit;
+
+    process.exit = ((code?: number) => {
+      throw new Error(`process.exit(${code ?? 0})`);
+    }) as typeof process.exit;
+
+    try {
+      assert.throws(() => runUpgrade({ cwd: workspace.dir, to: '1.0', backup: false }), /process\.exit\(1\)/);
+    } finally {
+      process.exit = originalExit;
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    assert.ok(logs.some((line) => line.includes('requires a backup')));
+    assert.equal(listBackups(path.join(workspace.dir, '.brainclaw')).length, 0);
+  });
+
+  it('records the current store schema version in upgrade backups', () => {
+    const schemaFile = path.join(workspace.dir, '.brainclaw', SCHEMA_VERSION_FILE);
+    fs.writeFileSync(schemaFile, JSON.stringify({
+      schema_version: 1,
+      current: '0.7.0',
+      history: [
+        { from: '0.6.0', to: '0.7.0', at: '2026-04-17T00:00:00.000Z', patches: ['seed'] },
+      ],
+    }, null, 2), 'utf-8');
+
+    captureLogs(() => {
+      runUpgrade({ cwd: workspace.dir, to: '1.0' });
+    });
+
+    const backups = listBackups(path.join(workspace.dir, '.brainclaw'));
+    assert.equal(backups.length, 1);
+    assert.equal(backups[0]!.manifest.store_schema_version, '0.7.0');
+  });
+
+  it('refuses rollback when the newest backup advertises an unknown schema version', () => {
+    const storePath = path.join(workspace.dir, '.brainclaw');
+    createBackup({ storePath, storeSchemaVersion: '9.9.9' });
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    console.error = (...args: unknown[]) => { logs.push('[ERROR] ' + args.map(String).join(' ')); };
+    const originalExit = process.exit;
+
+    process.exit = ((code?: number) => {
+      throw new Error(`process.exit(${code ?? 0})`);
+    }) as typeof process.exit;
+
+    try {
+      assert.throws(() => runUpgrade({ cwd: workspace.dir, rollback: true }), /process\.exit\(1\)/);
+    } finally {
+      process.exit = originalExit;
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    assert.ok(logs.some((line) => line.includes('schema 9.9.9')));
+  });
+
+  it('shares the store-wide lock with normal writers', () => {
+    const lockFile = `${storeLockPath(workspace.dir)}.lock`;
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, timestamp: 10_000 }), 'utf-8');
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    console.error = (...args: unknown[]) => { logs.push('[ERROR] ' + args.map(String).join(' ')); };
+    const originalExit = process.exit;
+
+    process.exit = ((code?: number) => {
+      throw new Error(`process.exit(${code ?? 0})`);
+    }) as typeof process.exit;
+    const originalDateNow = Date.now;
+    let nowCalls = 0;
+    Date.now = () => {
+      nowCalls += 1;
+      return nowCalls === 1 ? 1_000 : 7_000;
+    };
+
+    try {
+      assert.throws(() => runUpgrade({ cwd: workspace.dir }), /process\.exit\(1\)/);
+    } finally {
+      Date.now = originalDateNow;
+      process.exit = originalExit;
+      console.log = originalLog;
+      console.error = originalError;
+      fs.rmSync(lockFile, { force: true });
+    }
+
+    assert.ok(logs.some((line) => line.includes('store mutation or upgrade is in progress')));
   });
 });
 
