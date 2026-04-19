@@ -1651,6 +1651,35 @@ export function handleMcpReadToolCall(
     };
   }
 
+  if (name === 'bclaw_context') {
+    // Phase 3 slice 3c — unified dispatcher. See docs/concepts/mcp-governance.md
+    // for the stability contract of the advanced tier.
+    const kind = String(args.kind ?? '');
+    switch (kind) {
+      case 'memory':
+        return handleMcpReadToolCall('bclaw_get_context', args, context);
+      case 'execution':
+        return handleMcpReadToolCall('bclaw_get_execution_context', args, context);
+      case 'board':
+        return handleMcpReadToolCall('bclaw_get_agent_board', args, context);
+      case 'board_summary':
+        return handleMcpReadToolCall('bclaw_get_agent_board_summary', args, context);
+      case 'delta': {
+        const since = args.since;
+        if (typeof since !== 'string' || !since) {
+          throw new Error('bclaw_context(kind="delta") requires `since` (session_id).');
+        }
+        return handleMcpReadToolCall(
+          'bclaw_get_context',
+          { ...args, since_session: since },
+          context,
+        );
+      }
+      default:
+        throw new Error(`bclaw_context: unknown kind '${kind}'. Expected memory | execution | board | board_summary | delta.`);
+    }
+  }
+
   if (name === 'bclaw_get_thread') {
     const threadId = String(args.thread_id ?? '');
     if (!threadId) {

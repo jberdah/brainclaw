@@ -270,6 +270,45 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
+    // ── Canonical context read (Phase 3 slice 3c) ──────────────────────
+    // Unified dispatcher over the four legacy context reads. Under
+    // advanced tier while wiring stabilises; promoted to standard at
+    // the v1.0 cut (slice 3i).
+    name: 'bclaw_context',
+    description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), delta (memory changes since a reference session). Consolidates bclaw_get_context / bclaw_get_execution_context / bclaw_get_agent_board / bclaw_get_agent_board_summary.',
+    annotations: { tier: 'advanced', category: 'context', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['memory', 'execution', 'board', 'board_summary', 'delta'],
+          description: 'memory = project memory context; execution = local env/tooling; board = full agent board; board_summary = lightweight counts; delta = memory changes since `since`.',
+        },
+        since: {
+          type: 'string',
+          description: 'For kind=delta: a session_id (sess_...) used as the reference point. Future: also accept ISO timestamp or handoff_id.',
+        },
+        path: { type: 'string', description: 'kind=memory: file path or glob to filter memory by.' },
+        agent: { type: 'string', description: 'Agent name (memory/board kinds).' },
+        host: { type: 'string', description: 'Host identifier (memory kind).' },
+        allHosts: { type: 'boolean', description: 'Include machine-local runtime from all hosts (memory kind).' },
+        profile: { type: 'string', description: 'Memory profile: dev, dense, compact, copilot, quick, briefing, openclaw, ops, research.' },
+        includePending: { type: 'boolean', description: 'Include pending candidates (memory kind).' },
+        maxItems: { type: 'number', description: 'Max ranked items (memory kind).' },
+        maxChars: { type: 'number', description: 'Approximate character budget (memory kind).' },
+        digest: { type: 'boolean', description: 'Include deterministic digest (memory kind).' },
+        bootstrap: { type: 'boolean', description: 'Enable brownfield bootstrap fallback (memory kind).' },
+        refreshBootstrap: { type: 'boolean', description: 'Force fresh bootstrap scan (memory kind).' },
+        format: { type: 'string', description: 'Output format (memory kind): markdown, json, template.' },
+        explain: { type: 'boolean', description: 'Include ranking reasons (memory kind, markdown format).' },
+        compactTemplate: { type: 'boolean', description: 'Use compact template (memory kind, format=template).' },
+        includeAgentTooling: { type: 'boolean', description: 'Include agent tooling signals (execution kind).' },
+      },
+      required: ['kind'],
+    },
+  },
+  {
     name: 'bclaw_search',
     description: 'Full-text search across all memory items (decisions, constraints, traps, candidates, handoffs, plans, sequences) using BM25 scoring.',
     annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
