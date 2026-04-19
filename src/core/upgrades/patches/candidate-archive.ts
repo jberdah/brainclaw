@@ -28,6 +28,10 @@ export const CandidateArchiveEntrySchema = z.object({
   created_at: z.string(),
   original_path: z.string(),
   archived_path: z.string(),
+  /** Present when the source candidate did not parse cleanly against the
+   *  current Zod schema. The file is still archived; the manifest records
+   *  the first Zod error so an operator can inspect the archive later. */
+  parse_error: z.string().optional(),
 });
 export type CandidateArchiveEntry = z.infer<typeof CandidateArchiveEntrySchema>;
 
@@ -79,24 +83,38 @@ export function archivePendingCandidates(options: CandidateArchiveOptions): Cand
   const reason = options.reason ?? 'v1.0 schema migration (P6.6): pending candidate review queue retired';
   const entries: CandidateArchiveEntry[] = [];
 
-  // First pass: parse + plan. Skip files that do not parse as candidates —
-  // migrating garbage would hide real corruption from the operator.
-  const planned: Array<{ source: string; target: string; candidate: Candidate; baseName: string }> = [];
+  // First pass: parse + plan. Candidates that do not pass the current Zod
+  // schema are still archived — they may be legacy shapes (e.g. status
+  // "proposed" from an older enum). We capture the parse failure in the
+  // manifest so the archive is self-describing.
+  const planned: Array<{
+    source: string;
+    target: string;
+    raw: Record<string, unknown>;
+    candidate: Candidate | null;
+    parseError: string | null;
+    baseName: string;
+  }> = [];
   for (const file of files) {
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    const candidate = CandidateSchema.parse(raw);
-    const baseName = path.basename(file);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`candidate-archive: ${file} is not a JSON object`);
+    }
+    const rawObj = raw as Record<string, unknown>;
+    const parsed = CandidateSchema.safeParse(rawObj);
     planned.push({
       source: file,
-      target: path.join(archiveDir, baseName),
-      candidate,
-      baseName,
+      target: path.join(archiveDir, path.basename(file)),
+      raw: rawObj,
+      candidate: parsed.success ? parsed.data : null,
+      parseError: parsed.success ? null : parsed.error.issues[0]?.message ?? 'zod parse failed',
+      baseName: path.basename(file),
     });
   }
 
   if (options.dryRun) {
     for (const p of planned) {
-      entries.push(makeEntry(p.candidate, p.source, p.target, options.storePath));
+      entries.push(makeEntry(p.candidate, p.raw, p.source, p.target, options.storePath, p.parseError));
     }
     return {
       status: 'planned',
@@ -111,7 +129,7 @@ export function archivePendingCandidates(options: CandidateArchiveOptions): Cand
 
   for (const p of planned) {
     fs.renameSync(p.source, p.target);
-    entries.push(makeEntry(p.candidate, p.source, p.target, options.storePath));
+    entries.push(makeEntry(p.candidate, p.raw, p.source, p.target, options.storePath, p.parseError));
   }
 
   const manifest: CandidateArchiveManifest = {
@@ -145,18 +163,25 @@ function listPendingCandidateFiles(pendingDir: string): string[] {
 }
 
 function makeEntry(
-  candidate: Candidate,
+  candidate: Candidate | null,
+  raw: Record<string, unknown>,
   sourcePath: string,
   archivedPath: string,
   storePath: string,
+  parseError: string | null,
 ): CandidateArchiveEntry {
+  const fallback = (key: string, dflt: string): string => {
+    const v = raw[key];
+    return typeof v === 'string' ? v : dflt;
+  };
   return {
-    id: candidate.id,
-    short_label: candidate.short_label ?? null,
-    type: candidate.type,
-    status: candidate.status,
-    created_at: candidate.created_at,
+    id: candidate?.id ?? fallback('id', path.basename(sourcePath, '.json')),
+    short_label: candidate?.short_label ?? (typeof raw.short_label === 'string' ? raw.short_label : null),
+    type: candidate?.type ?? fallback('type', 'unknown'),
+    status: candidate?.status ?? fallback('status', 'unknown'),
+    created_at: candidate?.created_at ?? fallback('created_at', '1970-01-01T00:00:00.000Z'),
     original_path: path.relative(storePath, sourcePath).split(path.sep).join('/'),
     archived_path: path.relative(storePath, archivedPath).split(path.sep).join('/'),
+    ...(parseError ? { parse_error: parseError } : {}),
   };
 }

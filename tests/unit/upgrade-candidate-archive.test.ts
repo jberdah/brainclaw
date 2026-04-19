@@ -137,4 +137,35 @@ describe('core/upgrades/patches/candidate-archive', () => {
 
     assert.throws(() => archivePendingCandidates({ storePath, now: fixedNow }));
   });
+
+  it('archives legacy-shape candidates (e.g. status="proposed") and records the parse error', () => {
+    const storePath = storePathOf(workspace);
+    const inboxDir = path.join(storePath, PENDING_INBOX_SUBPATH);
+    fs.mkdirSync(inboxDir, { recursive: true });
+    // Legacy candidate: `status: "proposed"` is no longer a valid enum value,
+    // and `text` is missing. The patch must still archive it, not crash.
+    fs.writeFileSync(
+      path.join(inboxDir, 'cnd_legacy.json'),
+      JSON.stringify({
+        id: 'cnd_legacy',
+        short_label: 'cnd#legacy',
+        type: 'decision',
+        status: 'proposed',
+        author: 'legacy-agent',
+        created_at: '2025-01-01T00:00:00.000Z',
+        tags: [],
+      }),
+      'utf-8',
+    );
+
+    const result = archivePendingCandidates({ storePath, now: fixedNow });
+
+    assert.equal(result.status, 'archived');
+    assert.equal(result.moved.length, 1);
+    const entry = result.moved[0]!;
+    assert.equal(entry.id, 'cnd_legacy');
+    assert.equal(entry.status, 'proposed');
+    assert.ok(entry.parse_error, 'parse error should be captured in manifest');
+    assert.ok(typeof entry.parse_error === 'string' && entry.parse_error.length > 0);
+  });
 });
