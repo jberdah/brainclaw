@@ -30,6 +30,7 @@ import { runListAgents } from './commands/list-agents.js';
 import { runSurfaceTaskResource } from './commands/surface-task-resource.js';
 import { runListInstructions } from './commands/list-instructions.js';
 import { runDoctor } from './commands/doctor.js';
+import { runStale } from './commands/stale.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runReflect } from './commands/reflect.js';
 import { runReflectRuntimeNote } from './commands/reflect-runtime-note.js';
@@ -609,6 +610,15 @@ program
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .action((options) => {
     runDoctor({ ...options, afterMigration: options.afterMigration });
+  });
+
+// --- stale (Phase 4 Sprint 1 Lane A / pln#390) ---
+program
+  .command('stale [subcommand] [id]')
+  .description('List or resolve stale memory items (plans, traps, handoffs, candidates, runtime notes). Subcommands: list (default), resolve <id>.')
+  .option('--json', 'Output as JSON')
+  .action((subcommand: string | undefined, id: string | undefined, options) => {
+    runStale(subcommand, id, { json: options.json });
   });
 
 // --- version ---
