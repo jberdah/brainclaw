@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEntity, getEntity, listEntities } from '../../src/core/entity-operations.js';
+import { createEntity, getEntity, listEntities, updateEntity } from '../../src/core/entity-operations.js';
 import { runStaleList, runStaleResolve } from '../../src/commands/stale.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -45,20 +45,35 @@ describe('commands/stale — minimal resolve flow', () => {
     assert.ok(logs.some((l) => l.includes('No stale items')));
   });
 
-  it('resolve <id> transitions a trap to resolved when it is flagged stale', () => {
-    // Seed a trap whose expiry is 10 days in the past → flagged stale.
+  it('resolve <id> removes a runtime_note when it is flagged stale (expired)', () => {
+    // Seed an observation runtime_note, then backdate its expires_at so the
+    // staleness detector flags it. updateEntity for runtime_note goes through
+    // the generic spread path, so expires_at round-trips correctly.
     const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString();
-    const created = createEntity('trap', {
-      text: 'old trap',
-      author: 'tester',
-      severity: 'medium',
+    const created = createEntity('runtime_note', {
+      agent: 'tester',
+      text: 'old observation',
+      note_type: 'observation',
     }, workspace.dir);
-    // Expire it by patching the record directly (the test workspace is isolated).
-    // We can't easily mutate expires_at via the CRUD surface without touching the
-    // schema, so skip the expiry edge and instead test that resolve transitions
-    // the trap to 'resolved' even when not explicitly stale — the wrapper's
-    // guard lives in runStaleResolve, not in the trap lifecycle itself.
-    assert.ok(created.id.startsWith('trp_'));
+    updateEntity('runtime_note', created.id, { expires_at: tenDaysAgo }, workspace.dir);
+
+    // Confirm the note shows up as stale before resolving.
+    const { logs: listLogs } = captureConsole(() => runStaleList({ cwd: workspace.dir }));
+    assert.ok(listLogs.some((l) => l.includes('stale runtime note')), 'stale report should mention the note');
+
+    // Resolve should remove the note.
+    const { logs: resolveLogs } = captureConsole(() => runStaleResolve(created.id, { cwd: workspace.dir }));
+    assert.ok(resolveLogs.some((l) => l.includes(created.id)), 'resolve output should mention the id');
+
+    // After resolve the note is gone from the stale report.
+    const { logs: afterLogs } = captureConsole(() => runStaleList({ cwd: workspace.dir }));
+    assert.ok(afterLogs.some((l) => l.includes('No stale items')), 'stale report should be clear after resolve');
+
+    // And it is no longer retrievable.
+    assert.throws(
+      () => getEntity('runtime_note', created.id, workspace.dir),
+      /not found/i,
+    );
   });
 
   it('resolve <unknown-id> exits with a helpful error', () => {

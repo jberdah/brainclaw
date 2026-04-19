@@ -12,7 +12,6 @@
  *                           handoff     → transition status 'closed'
  *                           candidate   → transition status 'rejected'
  *                           trap        → transition status 'resolved'
- *                           constraint  → transition status 'resolved'
  *                           runtime_note → remove (archive via entity-operations)
  */
 
