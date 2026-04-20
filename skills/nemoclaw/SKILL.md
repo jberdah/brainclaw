@@ -65,17 +65,19 @@ Multi-agent coordination tool for AI coding agents.
 CLI + MCP server providing shared memory, claims, plans, and handoffs
 across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, and others.
 
-- **Stage:** Active development, v0.50.x
-- **Audience:** AI coding agents + human dev supervisors
-- **Stack:** TypeScript, Node16 ESM, zero runtime deps beyond commander/yaml/zod
-- **Architecture:** File-based store (.brainclaw/), MCP over stdio, hooks for 6+ agents
-- **Current focus:** Export quality, runtime integration, multi-agent coordination DX
+- **Stage:** v1.0 shipped, Phase 4 (operator maturity) complete. Private usage across a few machines; adoption-grade hardening in progress.
+- **Audience:** AI coding agents + human dev supervisors.
+- **Stack:** TypeScript, ESM (Node ≥18), zero runtime deps beyond commander/yaml/zod. MCP over stdio.
+- **Architecture:** File-based store (`.brainclaw/`), canonical grammar (`bclaw_work`, `bclaw_context`, `bclaw_find/get/create/update/remove/transition`), per-agent surfaces generated from a single source of truth.
+- **Current focus:** Cross-agent surface coherence (facade-first everywhere), onboarding for a fresh agent, federation groundwork.
 
 ## brainclaw — session protocol
 
 1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically.
-2. Call `bclaw_coordinate(intent)` to assign, consult, or review other agents.
+2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.
 3. Do not assume project state without reading brainclaw context first.
+
+_Escalation path (only when you orchestrate other agents):_ `bclaw_coordinate(intent)` to assign/consult/review, `bclaw_dispatch(intent)` for sequence lanes, `bclaw_loop` for multi-turn review/ideation loops.
 
 ## brainclaw — working rules
 
