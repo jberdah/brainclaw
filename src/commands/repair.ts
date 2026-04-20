@@ -1,14 +1,24 @@
 /**
  * `brainclaw repair` — safe, non-destructive repair flow built on doctor's
- * structured repair candidates (pln#397 stp_b31fbe23).
+ * structured repair candidates (pln#397 stp_b31fbe23 + stp_7ad66f68).
  *
  * Design:
  *   1. Run the doctor JSON output and capture `repair_candidates[]`.
  *   2. Split into `safe` and `unsafe`.
  *   3. Execute safe candidates by default; unsafe stay deferred unless the
- *      caller passes `includeUnsafe`. Preservation guarantees (no lossy
- *      writes without a warning, no silent deletion of memory) are
- *      enforced in stp_7ad66f68.
+ *      caller passes `includeUnsafe`.
+ *
+ * Preservation guarantees (stp_7ad66f68):
+ *   - NO action in this module deletes files. Lossy-looking actions
+ *     (quarantine, archive) always rename into a clearly-labelled parking
+ *     directory so operators can recover. Enforced by a source-level
+ *     invariant test in tests/unit/repair-preservation.test.ts.
+ *   - Before executing any unsafe candidate, a highlighted warning prints
+ *     exactly what will be moved and where it will land — operators get
+ *     full visibility before data relocates.
+ *   - Memory entities (plans, decisions, constraints, traps, claims,
+ *     handoffs) are never touched by any current action. Only inbox
+ *     hygiene and filesystem-shape candidates are wired.
  *
  * Exposed via CLI (`brainclaw repair`) and MCP (`bclaw_repair`). Always
  * returns a structured summary so agents can inspect what changed.
@@ -158,6 +168,20 @@ export function runRepair(options: RepairOptions = {}): RepairResult {
 
   const toRun = [...safe, ...(options.includeUnsafe ? unsafe : [])];
   const deferred = options.includeUnsafe ? [] : unsafe;
+
+  // pln#397 stp_7ad66f68: explicit warning banner whenever we're about to
+  // touch existing files. Operators see exactly what moves and where
+  // before any rename executes. No JSON noise.
+  if (!options.json && !options.dryRun && options.includeUnsafe && unsafe.length > 0) {
+    console.warn('');
+    console.warn('⚠ Preservation notice — the following unsafe actions will RELOCATE files (never delete):');
+    for (const candidate of unsafe) {
+      console.warn(`  • ${candidate.action} → ${candidate.target}`);
+      console.warn(`    ${candidate.description}`);
+    }
+    console.warn('Files are moved to labelled parking directories (e.g. inbox/.quarantine/) so you can recover them manually.');
+    console.warn('');
+  }
 
   for (const candidate of toRun) {
     if (options.dryRun) {
