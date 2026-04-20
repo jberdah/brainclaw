@@ -236,10 +236,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _workspaceBoard: BoardData | null = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
+  private _fileDecoRefresh?: () => void;
 
-  constructor(workspaceRoot: string, projects: BoardProject[]) {
+  constructor(workspaceRoot: string, projects: BoardProject[], fileDecoRefresh?: () => void) {
     this._workspaceRoot = this._normalizePath(workspaceRoot);
     this._projects = this._dedupeProjects(projects);
+    this._fileDecoRefresh = fileDecoRefresh;
     for (const project of this._projects) {
       this._projectIndex.set(project.path, project);
     }
@@ -261,9 +263,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     void this._refreshBoards();
   }
 
-  public exec(command: string, cwd?: string): void {
+  public async exec(command: string, cwd?: string): Promise<void> {
     const targetCwd = this._normalizePath(cwd ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp(command, targetCwd);
+    await this._execViaMcp(command, targetCwd);
   }
 
   public async quickCapture(text: string): Promise<void> {
@@ -426,6 +428,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const [tool, args] = this._mapCommandToMcpTool(command);
       await client.callTool(tool, args);
       this.refresh();
+      // Claim-mutating operations invalidate the file-decoration state; refresh
+      // lock icons synchronously with the board so operators don't see stale
+      // locks after release/claim (pln#393 stp_9010b323).
+      if (tool === 'bclaw_release_claim' || tool === 'bclaw_claim') {
+        this._fileDecoRefresh?.();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -457,14 +465,14 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     throw new Error(`Unsupported command: ${command}`);
   }
 
-  public approveAction(actionId: string, projectPath?: string): void {
+  public async approveAction(actionId: string, projectPath?: string): Promise<void> {
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp('approve-action ' + actionId, cwd);
+    await this._execViaMcp('approve-action ' + actionId, cwd);
   }
 
-  public rejectAction(actionId: string, projectPath?: string): void {
+  public async rejectAction(actionId: string, projectPath?: string): Promise<void> {
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp('reject-action ' + actionId, cwd);
+    await this._execViaMcp('reject-action ' + actionId, cwd);
   }
 
   public async dispatchPlan(planId: string, projectPath?: string): Promise<void> {
@@ -490,9 +498,89 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
   }
 
-  public releaseClaim(claimId: string, projectPath?: string): void {
+  public async releaseClaim(claimId: string, projectPath?: string): Promise<void> {
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
-    void this._execViaMcp('claim release ' + claimId, cwd);
+    await this._execViaMcp('claim release ' + claimId, cwd);
+  }
+
+  /**
+   * Claim a scope via MCP. Replaces the previous fire-and-forget CLI exec()
+   * so errors surface to the operator and the board + lock icons refresh
+   * in sync (pln#393 stp_9010b323).
+   */
+  public async claimScope(scope: string, description: string, projectPath?: string): Promise<void> {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(cwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+    try {
+      await client.callTool('bclaw_claim', { scope, description });
+      this.refresh();
+      this._fileDecoRefresh?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  /**
+   * Add a trap via MCP. Replaces the previous fire-and-forget CLI exec().
+   */
+  public async addTrap(text: string, scopePath: string, projectPath?: string): Promise<void> {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(cwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+    try {
+      await client.callTool('bclaw_create', {
+        entity: 'trap',
+        data: { text, path: scopePath, severity: 'medium' },
+      });
+      this.refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
+  }
+
+  /**
+   * Search memory for a scope and render the results in an output channel.
+   * Replaces the previous stub (pln#393 stp_9010b323).
+   */
+  public async viewMemoryForScope(scope: string, output: vscode.OutputChannel, projectPath?: string): Promise<void> {
+    const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
+    const client = await this._getMcpClient(cwd);
+    if (!client) {
+      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      return;
+    }
+    output.clear();
+    output.appendLine(`Brainclaw memory for scope: ${scope}`);
+    output.appendLine('');
+    try {
+      const result = await client.callTool('bclaw_search', { query: scope, limit: 20 });
+      const results = Array.isArray(result.results) ? result.results as SearchResultItem[] : [];
+      if (results.length === 0) {
+        output.appendLine('(no matches)');
+      } else {
+        for (const entry of results) {
+          const kind = entry.section ?? entry.type ?? 'memory';
+          output.appendLine(`[${entry.id}] ${kind} · score ${(entry.score ?? 0).toFixed(2)}`);
+          output.appendLine(`  ${entry.text}`);
+          output.appendLine('');
+        }
+      }
+      output.show(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      output.appendLine(`Error: ${message}`);
+      output.show(true);
+      vscode.window.showErrorMessage(`Brainclaw: ${message}`);
+    }
   }
 
   private _normalizePath(targetPath: string): string {

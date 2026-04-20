@@ -127,6 +127,7 @@ function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: numbe
 let statusBarItem: vscode.StatusBarItem;
 let doctorOutput: vscode.OutputChannel;
 let searchOutput: vscode.OutputChannel;
+let memoryOutput: vscode.OutputChannel;
 let eventWatchers: fs.FSWatcher[] = [];
 let unseenCount = 0;
 
@@ -138,23 +139,26 @@ export function activate(context: vscode.ExtensionContext) {
   const projects = discoverBrainclawProjects(workspaceFolders);
   console.log('[brainclaw] activate — cwd:', cwd ?? 'NONE', 'projects:', projects.map((project) => project.path).join(', ') || 'none');
 
-  // Board Tree Provider — always register to avoid "no data provider" error
-  const treeProvider = cwd ? new BrainclawBoardProvider(cwd, projects) : undefined;
-  doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
-  searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
-  );
-  context.subscriptions.push(doctorOutput, searchOutput);
-  if (treeProvider) {
-    context.subscriptions.push({ dispose: () => treeProvider.dispose() });
-  }
-
-  // File Decoration Provider — shows lock icon on claimed scopes
+  // File Decoration Provider — shows lock icon on claimed scopes (created first
+  // so we can wire its refresh callback into the tree provider for
+  // post-mutation sync, pln#393 stp_9010b323).
   const fileDecoProvider = cwd ? new BrainclawFileDecorationProvider(cwd) : undefined;
   if (fileDecoProvider) {
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecoProvider));
     context.subscriptions.push({ dispose: () => fileDecoProvider.dispose() });
+  }
+
+  // Board Tree Provider — always register to avoid "no data provider" error
+  const treeProvider = cwd ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh()) : undefined;
+  doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
+  searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
+  memoryOutput = vscode.window.createOutputChannel('Brainclaw Memory');
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
+  );
+  context.subscriptions.push(doctorOutput, searchOutput, memoryOutput);
+  if (treeProvider) {
+    context.subscriptions.push({ dispose: () => treeProvider.dispose() });
   }
 
   context.subscriptions.push(
@@ -171,24 +175,28 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // --- Action commands ---
+  // pln#393 stp_9010b323: every state-mutating action awaits the underlying
+  // MCP call AND the post-write refresh so the UI reflects reality before the
+  // handler returns. Previous void handlers let the VS Code command resolve
+  // before the refresh hit, which surfaced as stale rows after approve/reject.
   context.subscriptions.push(
-    vscode.commands.registerCommand('brainclaw.acceptCandidate', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`accept ${item.itemId}`, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.acceptCandidate', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.exec(`accept ${item.itemId}`, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.rejectCandidate', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.exec(`reject ${item.itemId}`, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.rejectCandidate', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.exec(`reject ${item.itemId}`, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.releaseClaim', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.releaseClaim(item.itemId, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.releaseClaim', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.releaseClaim(item.itemId, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.approveAction', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.approveAction(item.itemId, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.approveAction', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.approveAction(item.itemId, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.rejectAction', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.rejectAction(item.itemId, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.rejectAction', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.rejectAction(item.itemId, item.projectPath);
     }),
-    vscode.commands.registerCommand('brainclaw.dispatchPlan', (item: BrainclawTreeItem) => {
-      if (item.itemId) treeProvider?.dispatchPlan(item.itemId, item.projectPath);
+    vscode.commands.registerCommand('brainclaw.dispatchPlan', async (item: BrainclawTreeItem) => {
+      if (item.itemId) await treeProvider?.dispatchPlan(item.itemId, item.projectPath);
     }),
   );
 
@@ -214,29 +222,28 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // --- Explorer context menu commands ---
+  // pln#393 stp_9010b323: these previously used fire-and-forget exec() calls
+  // that swallowed errors and never waited for the post-write refresh.
+  // They now go through awaited MCP tool calls with explicit error surface.
   context.subscriptions.push(
     vscode.commands.registerCommand('brainclaw.claimScope', async (uri: vscode.Uri) => {
       if (!cwd || !uri) return;
       const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
       const description = await vscode.window.showInputBox({ prompt: 'Claim description', placeHolder: 'What are you working on?' });
       if (!description) return;
-      treeProvider?.exec(`claim create "${scope}" --description "${description}"`);
-      fileDecoProvider?.refresh();
+      await treeProvider?.claimScope(scope, description);
     }),
     vscode.commands.registerCommand('brainclaw.addTrap', async (uri: vscode.Uri) => {
       if (!cwd || !uri) return;
       const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
       const text = await vscode.window.showInputBox({ prompt: 'Trap description', placeHolder: 'What can go wrong here?' });
       if (!text) return;
-      treeProvider?.exec(`memory create trap "${text}" --path "${scope}" --severity medium`);
+      await treeProvider?.addTrap(text, scope);
     }),
     vscode.commands.registerCommand('brainclaw.viewMemory', async (uri: vscode.Uri) => {
       if (!cwd || !uri) return;
       const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
-      treeProvider?.exec(`search "${scope}"`);
-      const output = vscode.window.createOutputChannel('Brainclaw Memory');
-      output.appendLine(`Searching memory for scope: ${scope}`);
-      output.show();
+      await treeProvider?.viewMemoryForScope(scope, memoryOutput);
     }),
   );
 
