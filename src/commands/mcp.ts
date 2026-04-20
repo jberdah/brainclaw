@@ -276,7 +276,7 @@ export const MCP_READ_TOOLS = [
     // Promoted to standard tier at the v1.0 cut.
     name: 'bclaw_context',
     description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), delta (memory changes since a reference session).',
-    annotations: { tier: 'standard', category: 'context', headlessApproval: 'auto' },
+    annotations: { tier: 'facade', category: 'context', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -715,7 +715,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
     description: 'Unified dispatch entry (Phase 3 slice 3d). `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send), review (review-focused dispatch — set `openLoop` for the review_loop escalation). Consolidates bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1583,13 +1583,58 @@ export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
 /** All tools minus the v1.0 removal set. Used by every tools/list branch. */
 const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool.name));
 
-/** Tools with tier facade or standard — returned by default. Advanced tools require catalog=all. */
-const DEFAULT_PUBLISHED_TOOLS = PUBLISHED_TOOLS.filter(
-  (tool) => {
+/**
+ * Canonical facade order — drives what a fresh agent sees first in tools/list.
+ * bclaw_work comes first (the "one call does everything" entry point for any
+ * session), followed by coordinate/context/dispatch/loop (intent dispatchers),
+ * and setup last (rarely needed after the initial onboarding). pln#397 + Codex
+ * audit P2.
+ */
+export const FACADE_ORDER = [
+  'bclaw_work',
+  'bclaw_coordinate',
+  'bclaw_context',
+  'bclaw_dispatch',
+  'bclaw_loop',
+  'bclaw_setup',
+] as const;
+
+function tierRank(tool: { annotations?: { tier?: string } }): number {
+  const tier = tool.annotations?.tier;
+  if (tier === 'facade') return 0;
+  if (tier === 'standard') return 1;
+  return 2; // advanced or missing
+}
+
+function facadePositionalRank(name: string): number {
+  const idx = (FACADE_ORDER as readonly string[]).indexOf(name);
+  return idx >= 0 ? idx : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Tools with tier facade or standard — returned by default. Advanced tools
+ * require catalog=all. Sort rules (pln#397 Codex P2):
+ *   1. tier: facade first, then standard.
+ *   2. inside facades: FACADE_ORDER puts work/coordinate/context/dispatch/loop/setup
+ *      at the head — the sequence a new agent should learn in.
+ *   3. inside standards: original declaration order (stable-sort fallback via index).
+ */
+export const DEFAULT_PUBLISHED_TOOLS = PUBLISHED_TOOLS
+  .filter((tool) => {
     const tier = (tool as { annotations?: { tier?: string } }).annotations?.tier;
     return tier === 'facade' || tier === 'standard';
-  },
-);
+  })
+  .map((tool, index) => ({ tool, index }))
+  .sort((a, b) => {
+    const tierDiff = tierRank(a.tool) - tierRank(b.tool);
+    if (tierDiff !== 0) return tierDiff;
+    if (tierRank(a.tool) === 0) {
+      const pos = facadePositionalRank(a.tool.name) - facadePositionalRank(b.tool.name);
+      if (pos !== 0) return pos;
+    }
+    return a.index - b.index;
+  })
+  .map(({ tool }) => tool);
 
 class McpProtocolError extends Error {
   code: number;
