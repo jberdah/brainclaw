@@ -50,6 +50,56 @@ describe('agent export registry', () => {
       assert.ok(names.includes(expected), `registry should contain ${expected}`);
     }
   });
+
+});
+
+describe('brainclaw export --all — no format is silently skipped', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-export-all-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  it('every registry format generates a non-empty export (regression for Unknown-format drift)', () => {
+    // Regression for the bug where openclaw / nanoclaw / nemoclaw / picoclaw /
+    // zeroclaw were declared in AGENT_EXPORT_REGISTRY but missing from
+    // formatToAgentName in export.ts — so `brainclaw export --all --write`
+    // skipped them with "Unknown export format". Fix derives the map from
+    // the registry so new entries automatically get an adaptive generator.
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    console.warn = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    try {
+      runExport({ all: true, write: true, cwd: workspace.dir });
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+    }
+
+    // No "Unknown export format" warnings tolerated.
+    const unknownFormatWarnings = logs.filter((l) => /Unknown export format/.test(l));
+    assert.deepEqual(
+      unknownFormatWarnings,
+      [],
+      `export --all must handle every registry format; got: ${unknownFormatWarnings.join(' | ')}`,
+    );
+
+    // Every registered target should report as updated, created, or
+    // "skipped" for a benign reason (never Unknown-format).
+    for (const target of AGENT_EXPORT_REGISTRY) {
+      const pattern = new RegExp(target.relativePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      assert.ok(
+        logs.some((l) => pattern.test(l)),
+        `no log line matched ${target.relativePath} — is ${target.format} (${target.agentName}) still exported?`,
+      );
+    }
+  });
 });
 
 describe('writeExportFile', () => {

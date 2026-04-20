@@ -330,20 +330,21 @@ function declareAgentIntegrationFromTarget(
   }
 }
 
+/**
+ * Map an export format to the agent name used to look up a capability profile.
+ *
+ * Derived from AGENT_EXPORT_REGISTRY so new formats registered there
+ * automatically get the adaptive generation path. Historically this was a
+ * hand-maintained map that drifted: the 5 autonomous-agent formats
+ * (openclaw, nanoclaw, nemoclaw, picoclaw, zeroclaw) were in the registry
+ * and had capability profiles but were missing here, so `brainclaw export
+ * --all --write` skipped them with "Unknown export format".
+ */
 function formatToAgentName(format: ExportFormat): string | undefined {
-  const map: Record<string, string> = {
-    'claude-md': 'claude-code',
-    'cursor-rules': 'cursor',
-    'copilot-instructions': 'github-copilot',
-    'agents-md': 'codex',
-    'gemini-md': 'antigravity',
-    'board-md': 'brainclaw',
-    'windsurf': 'windsurf',
-    'cline': 'cline',
-    'roo': 'roo',
-    'continue': 'continue',
-  };
-  return map[format];
+  for (const entry of AGENT_EXPORT_REGISTRY) {
+    if (entry.format === format) return entry.agentName;
+  }
+  return undefined;
 }
 
 function generateExport(format: ExportFormat, options: ExportOptions, cwd: string): string {
