@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleMcpReadToolCall } from '../../src/commands/mcp-read-handlers.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
+import { saveClaim } from '../../src/core/claims.js';
+import { saveSequence } from '../../src/core/sequence.js';
+import { loadState, persistState } from '../../src/core/state.js';
+import type { Claim, PlanItem, Sequence } from '../../src/core/schema.js';
 
 /**
  * Phase 3 slice 3d — bclaw_dispatch(intent) unified. The intent router
@@ -41,5 +45,59 @@ describe('commands — bclaw_dispatch(intent) read delegate', () => {
     // text response.
     const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
     assert.ok(text.length > 0);
+  });
+
+  it('Codex r2: pre-adoption lane renders "pending adoption" (not "working") in MCP analysis text', () => {
+    // Seed a plan with a fresh coordinator claim (no session_id → young,
+    // pre-adoption). The CLI dispatch renderer was fixed in round 1 but the
+    // MCP mirror still printed the misleading "agent working" label.
+    const plan: PlanItem = {
+      id: 'pln_pending_adopt',
+      text: 'pre-adoption lane',
+      status: 'in_progress',
+      priority: 'medium',
+      tags: [],
+      depends_on: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      author: 'test',
+    };
+    const state = loadState(workspace.dir);
+    state.plan_items = [plan];
+    persistState(state, workspace.dir);
+
+    const claim: Claim = {
+      schema_version: 2,
+      id: 'clm_pending_adopt',
+      agent: 'claude-code',
+      scope: 'src/x.ts',
+      description: 'Awaiting worker',
+      created_at: new Date(Date.now() - 5 * 60_000).toISOString(), // 5 min ago = young
+      status: 'active',
+      plan_id: 'pln_pending_adopt',
+      // Intentionally no session_id / adopted_at — pre-adoption.
+    };
+    saveClaim(claim, workspace.dir);
+
+    const sequence: Sequence = {
+      schema_version: 2,
+      id: 'seq_pending_adopt',
+      name: 'pending-adopt-test',
+      status: 'active',
+      items: [{ rank: 1, planId: 'pln_pending_adopt', hard_after: [], soft_after: [] }],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      author: 'test',
+      tags: [],
+    };
+    saveSequence(sequence, workspace.dir);
+
+    const result = handleMcpReadToolCall('bclaw_dispatch_analysis', {}, { cwd: workspace.dir });
+    const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
+    assert.match(text, /pending adoption/, 'pre-adoption lane should render "pending adoption"');
+    assert.ok(
+      !/claude-code working$/m.test(text),
+      'must not print plain "working" for a pre-adoption lane',
+    );
   });
 });

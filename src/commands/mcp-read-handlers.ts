@@ -1592,7 +1592,16 @@ export function handleMcpReadToolCall(
       lines.push(`🔵 Active (${active.length}):`);
       for (const a of active) {
         const lane = a.lane ? ` [${a.lane}]` : '';
-        lines.push(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} working`);
+        // Mirror dispatch.ts: pre-adoption lanes render as "pending adoption",
+        // degraded liveness states get a [TAG] suffix.
+        let status = 'working';
+        let livenessTag = '';
+        if (a.liveness === 'young' && !a.claim.session_id) {
+          status = 'pending adoption';
+        } else if (a.liveness && a.liveness !== 'live' && a.liveness !== 'young') {
+          livenessTag = ` [${a.liveness.toUpperCase()}]`;
+        }
+        lines.push(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} ${status}${livenessTag}`);
       }
     }
 
