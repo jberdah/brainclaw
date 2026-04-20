@@ -198,6 +198,44 @@ describe('assessClaimLiveness', { concurrency: false }, () => {
       });
       assert.equal(result.status, 'stale');
     });
+
+    it('pln#388 stp_168b7bfb: stale immediately when session file is missing (session ended cleanly)', () => {
+      // Claim is 2h old — past the 30min YOUNG floor but well under the 24h
+      // legacy threshold. With the session-aware fix we no longer require
+      // wall-clock age once the session is confirmed gone.
+      const claim = makeClaim({
+        id: 'clm_session_gone',
+        created_at: hoursAgo(2),
+        session_id: 'sess_ended_cleanly',
+        // No session file written — simulates session-end having deleted it.
+      });
+      const result = assessClaimLiveness(claim, {
+        cwd: workspace.dir,
+        thresholdHours: 24,
+        sessionTtlMs: 4 * 3_600_000,
+      });
+      assert.equal(result.status, 'stale', `expected stale, got ${result.status}: ${result.reason}`);
+      assert.match(result.reason, /record is gone/);
+    });
+
+    it('pln#388 stp_168b7bfb: young when session last_seen_at is just past TTL (brief disconnect grace)', () => {
+      // Session last_seen 4h ago (TTL 4h) — right at the boundary, short
+      // grace window before declaring stale so a reconnecting session can
+      // update its heartbeat.
+      const sessionId = 'sess_briefly_dead';
+      writeSession(sessionId, workspace.dir, 4 * 3_600_000 + 10_000); // ~4h01s
+      const claim = makeClaim({
+        id: 'clm_brief_dip',
+        created_at: hoursAgo(2),
+        session_id: sessionId,
+      });
+      const result = assessClaimLiveness(claim, {
+        cwd: workspace.dir,
+        thresholdHours: 24,
+        sessionTtlMs: 4 * 3_600_000,
+      });
+      assert.equal(result.status, 'young', `expected young within grace, got ${result.status}: ${result.reason}`);
+    });
   });
 
   describe('never-adopted claims (coordinator claims not dispatched)', () => {

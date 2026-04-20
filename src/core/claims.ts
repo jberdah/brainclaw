@@ -309,15 +309,23 @@ export function assessClaimLiveness(
   if (claim.session_id) {
     let sessionAgeMs: number | undefined;
     let sessionAlive = false;
+    let sessionMissing = false;
+    const sessionTtlMs = options.sessionTtlMs ?? resolveSessionTtlMs(options.cwd);
 
     try {
       const session = loadSessionById(claim.session_id, options.cwd);
       if (session) {
-        const sessionTtlMs = options.sessionTtlMs ?? resolveSessionTtlMs(options.cwd);
         sessionAgeMs = nowMs - new Date(session.last_seen_at).getTime();
         sessionAlive = sessionAgeMs < sessionTtlMs;
+      } else {
+        // File not found — session either ended cleanly (session-end deletes it)
+        // or the record was deleted externally. Either way, session cannot return.
+        sessionMissing = true;
       }
-    } catch { /* session file error — treat as dead */ }
+    } catch {
+      // Session file error — treat as dead to avoid hanging claims forever.
+      sessionMissing = true;
+    }
 
     if (sessionAlive) {
       return {
@@ -328,12 +336,12 @@ export function assessClaimLiveness(
       };
     }
 
-    // Session is dead or not found
+    // Session is dead or not found.
     if (claim.adopted_at) {
-      // Worker was dispatched and formally adopted the claim — this is a crash
-      const sessionDesc = sessionAgeMs !== undefined
-        ? `last seen ${Math.round(sessionAgeMs / 3_600_000)}h ago`
-        : 'cannot be found';
+      // Worker was dispatched and formally adopted the claim — this is a crash.
+      const sessionDesc = sessionMissing
+        ? 'session record cannot be found'
+        : `last seen ${Math.round((sessionAgeMs ?? 0) / 3_600_000)}h ago`;
       return {
         status: 'orphaned',
         reason: `Session ${claim.session_id} was adopted at ${claim.adopted_at} but is now dead (${sessionDesc})`,
@@ -342,20 +350,31 @@ export function assessClaimLiveness(
       };
     }
 
-    // session_id set (direct agent claim) but session ended normally — stale
-    if (ageMs >= thresholdMs) {
+    // Direct agent claim, no adopted_at, session dead (Phase 4 slice pln#388):
+    // once we have confirmed the session cannot return — either the file is
+    // missing (clean end) or last_seen_at is well past the TTL — mark stale
+    // immediately. The old 24h age threshold forced orphaned claims to hang
+    // around purely because of wall-clock age, even though we already knew
+    // they belonged to a dead session.
+    const sessionConfirmedDead = sessionMissing
+      || (sessionAgeMs !== undefined && sessionAgeMs >= sessionTtlMs + YOUNG_CLAIM_THRESHOLD_MS);
+    if (sessionConfirmedDead) {
+      const reason = sessionMissing
+        ? `Session ${claim.session_id} record is gone (ended cleanly or deleted externally)`
+        : `Session ${claim.session_id} last_seen_at is ${Math.round((sessionAgeMs ?? 0) / 3_600_000)}h past TTL`;
       return {
         status: 'stale',
-        reason: `Session ${claim.session_id} is no longer active and claim is ${Math.round(ageMs / 3_600_000)}h old`,
+        reason,
         ageMs,
         sessionAgeMs,
       };
     }
 
-    // session dead but claim still within threshold — treat as young
+    // Session last_seen_at just slipped past TTL — allow a short grace window
+    // in case the session heartbeat catches up (brief disconnect).
     return {
       status: 'young',
-      reason: 'Session ended but claim is still within the stale threshold',
+      reason: 'Session is briefly past TTL — waiting for heartbeat or confirmed end',
       ageMs,
       sessionAgeMs,
     };
