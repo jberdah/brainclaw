@@ -12,7 +12,7 @@ import { getVisibleMemoryVersion, readContextMarker } from '../core/freshness.js
 import { generateMarkdown } from '../core/markdown.js';
 import { loadProjectIdentity, projectIdentityExists } from '../core/project-registry.js';
 import { findInstructionConflicts, loadInstructions } from '../core/instructions.js';
-import { memoryExists, memoryPath, readFileSync, resolveEntityDir } from '../core/io.js';
+import { memoryExists, memoryPath, readFileSync, resolveEntityDir, memoryDir, REQUIRED_ENTITY_SUBDIRS } from '../core/io.js';
 import { logger } from '../core/logger.js';
 import { cleanupStaleCandidates, listCandidates, listArchivedCandidates } from '../core/candidates.js';
 import { listClaims, isClaimExpired, assessClaimLiveness } from '../core/claims.js';
@@ -128,6 +128,31 @@ interface DoctorCheck {
   details?: unknown;
 }
 
+/**
+ * Machine-readable repair candidate emitted by a doctor check (pln#397 stp_b5337e30).
+ *
+ * The execution flow in stp_b31fbe23 consumes this shape to drive safe,
+ * non-destructive repairs without operators needing to run `brainclaw init
+ * --force` or hand-edit the store.
+ *
+ * `safe: true` means the action is either pure creation (mkdir, append .gitignore
+ * entry, backup-and-rewrite) or observably idempotent. `safe: false` is reserved
+ * for actions that can lose data (releasing an adopted claim, dropping an
+ * orphaned message) and MUST prompt before running.
+ */
+export interface RepairCandidate {
+  /** Stable, machine-readable verb: 'mkdir' | 'patch_mcp_config' | 'move_inbox_message' | 'release_stale_claim' | 'apply_migration' | 'prune_agents_list'. */
+  action: string;
+  /** Path or entity id the action operates on. */
+  target: string;
+  /** Human-readable description shown to operators before execution. */
+  description: string;
+  /** True when the action cannot lose data. False requires confirmation. */
+  safe: boolean;
+  /** Name of the DoctorCheck that produced this candidate. */
+  related_check: string;
+}
+
 interface InboxMessageAudit {
   checked: number;
   invalid: Array<{ path: string; error: string }>;
@@ -168,6 +193,22 @@ function normalizeInboxAgentName(agent: string): string {
 
 function toRelativeDoctorPath(filepath: string, cwd?: string): string {
   return path.relative(cwd ?? process.cwd(), filepath).replace(/\\/g, '/');
+}
+
+/**
+ * Return the absolute paths of entity subdirectories that should exist under
+ * `.brainclaw/` but don't. Source of truth is REQUIRED_ENTITY_SUBDIRS in
+ * core/io.ts (pln#397 stp_b5337e30).
+ */
+function scanMissingEntitySubdirs(cwd?: string): string[] {
+  const root = memoryDir(cwd);
+  if (!fs.existsSync(root)) return [];
+  const missing: string[] = [];
+  for (const subdir of REQUIRED_ENTITY_SUBDIRS) {
+    const full = path.join(root, subdir);
+    if (!fs.existsSync(full)) missing.push(full);
+  }
+  return missing;
 }
 
 function auditInboxMessages(cwd?: string): InboxMessageAudit {
@@ -247,8 +288,44 @@ export function runDoctor(options: DoctorOptions = {}): void {
 
   let hasIssues = false;
   const checks: DoctorCheck[] = [];
+  const repairCandidates: RepairCandidate[] = [];
   let migrationEntries = [] as ReturnType<typeof scanMigrationStatus>;
   let agentGitHygieneFixed: string[] = [];
+
+  // pln#397 stp_b5337e30: scan entity-aligned subdirectories and emit safe
+  // mkdir repair candidates for any that are missing. Runs before other
+  // checks so downstream validators don't emit cascading "not found" noise.
+  const missingDirs = scanMissingEntitySubdirs(options.cwd);
+  if (missingDirs.length > 0) {
+    const rel = missingDirs.map((p) => toRelativeDoctorPath(p, options.cwd));
+    checks.push({
+      name: 'entity_subdirs',
+      status: 'warn',
+      message: `${missingDirs.length} required subdirectorie(s) missing from .brainclaw/`,
+      details: { missing: rel },
+    });
+    for (const dir of missingDirs) {
+      repairCandidates.push({
+        action: 'mkdir',
+        target: toRelativeDoctorPath(dir, options.cwd),
+        description: `Create missing entity subdirectory ${toRelativeDoctorPath(dir, options.cwd)}`,
+        safe: true,
+        related_check: 'entity_subdirs',
+      });
+    }
+    hasIssues = true;
+    if (!options.json) {
+      console.warn(`⚠ ${missingDirs.length} required subdirectorie(s) missing under .brainclaw/:`);
+      for (const p of rel) {
+        console.warn(`  - ${p}`);
+      }
+    }
+  } else {
+    checks.push({ name: 'entity_subdirs', status: 'ok', message: 'all entity subdirectories present' });
+    if (!options.json) {
+      console.log('✔ all entity subdirectories present');
+    }
+  }
 
   // Validate config
   let config;
@@ -1131,6 +1208,27 @@ export function runDoctor(options: DoctorOptions = {}): void {
         orphaned: inboxAudit.orphaned.slice(0, 10),
       },
     });
+    // pln#397 stp_b5337e30: orphaned messages (wrong-dir placement) can be
+    // moved safely. Invalid JSON requires manual inspection — surface as
+    // unsafe so the repair flow prompts.
+    for (const orphaned of inboxAudit.orphaned) {
+      repairCandidates.push({
+        action: 'move_inbox_message',
+        target: orphaned.path,
+        description: `Move orphaned inbox message to the correct agent subdirectory (${orphaned.reason})`,
+        safe: true,
+        related_check: 'inbox_messages',
+      });
+    }
+    for (const invalid of inboxAudit.invalid) {
+      repairCandidates.push({
+        action: 'quarantine_inbox_message',
+        target: invalid.path,
+        description: `Move malformed inbox message to inbox/.quarantine for later inspection (${invalid.error})`,
+        safe: false,
+        related_check: 'inbox_messages',
+      });
+    }
     if (!options.json) {
       console.warn(`⚠ Inbox messages: ${inboxAudit.invalid.length} invalid, ${inboxAudit.orphaned.length} orphaned.`);
       for (const invalid of inboxAudit.invalid.slice(0, 10)) {
@@ -1883,6 +1981,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
     console.log(JSON.stringify({
       ok: !hasIssues,
       checks,
+      repair_candidates: repairCandidates,
       metrics: {
         ...metrics,
         migration_outdated_documents: migrationEntries.filter((entry) => entry.status === 'outdated').length,
@@ -1895,6 +1994,8 @@ export function runDoctor(options: DoctorOptions = {}): void {
         circuit_breaker_threshold: circuitSnapshot.threshold,
         circuit_breaker_window_days: circuitSnapshot.window_days,
         agent_git_hygiene_fixed: agentGitHygieneFixed.length,
+        repair_candidates_safe: repairCandidates.filter((c) => c.safe).length,
+        repair_candidates_unsafe: repairCandidates.filter((c) => !c.safe).length,
       },
       migration: options.migrationCheck
         ? {

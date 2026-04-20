@@ -177,20 +177,26 @@ function extractVisionFromProjectMd(content: string): string | undefined {
   return descriptionLines.length > 0 ? descriptionLines.join('\n') : undefined;
 }
 
+/**
+ * Canonical list of entity-aligned subdirectories expected under `.brainclaw/`.
+ * Exposed so doctor + repair flows can audit presence without duplicating the
+ * list (pln#397 stp_b5337e30).
+ */
+export const REQUIRED_ENTITY_SUBDIRS = [
+  'memory/constraints', 'memory/decisions', 'memory/traps', 'memory/instructions',
+  'coordination/plans', 'coordination/sequences', 'coordination/claims', 'coordination/handoffs', 'coordination/sessions',
+  'coordination/inbox',
+  'discovery',
+  'agents',
+] as const;
+
 export function ensureMemoryDir(cwd?: string, preferredDirName?: string): void {
   const dir = memoryDir(cwd, preferredDirName);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
   // Ensure entity-aligned subdirectories exist
-  const entityDirs = [
-    'memory/constraints', 'memory/decisions', 'memory/traps', 'memory/instructions',
-    'coordination/plans', 'coordination/sequences', 'coordination/claims', 'coordination/handoffs', 'coordination/sessions',
-    'coordination/inbox',
-    'discovery',
-    'agents',
-  ];
-  for (const subdir of entityDirs) {
+  for (const subdir of REQUIRED_ENTITY_SUBDIRS) {
     const p = path.join(dir, subdir);
     if (!fs.existsSync(p)) {
       fs.mkdirSync(p, { recursive: true });
