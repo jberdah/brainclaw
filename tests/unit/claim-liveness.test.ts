@@ -13,8 +13,10 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  adoptClaimSession,
   assessClaimLiveness,
   isClaimStale,
+  loadClaim,
   releaseStaleClaimsFromOtherAgents,
   saveClaim,
   listClaims,
@@ -411,5 +413,248 @@ describe('releaseStaleClaimsFromOtherAgents', { concurrency: false }, () => {
     const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir);
     assert.equal(result.released.length, 1);
     assert.equal(result.released[0]!.id, 'clm_predispatch');
+  });
+
+  // ── Additional regressions (pln#388 stp_a24b1871) ───────────────────────────
+
+  it('doctor-mode sweep (no currentAgent, no currentSessionId) releases all stale claims', () => {
+    // Cleanup path used by `brainclaw doctor` or ad-hoc sweeps — caller owns no
+    // claims and wants the global stale floor cleared.
+    saveClaim(
+      makeClaim({ id: 'clm_doc_a', agent: 'agent-a', created_at: hoursAgo(30) }),
+      workspace.dir,
+    );
+    saveClaim(
+      makeClaim({ id: 'clm_doc_b', agent: 'agent-b', created_at: hoursAgo(48) }),
+      workspace.dir,
+    );
+
+    const result = releaseStaleClaimsFromOtherAgents(undefined, workspace.dir);
+    const ids = result.released.map((c) => c.id).sort();
+    assert.deepEqual(ids, ['clm_doc_a', 'clm_doc_b']);
+  });
+
+  it('currentSessionId preserves multiple claims from the same session (one agent, many scopes)', () => {
+    // A single worker legitimately holds claims on several adjacent files
+    // under one session. The sweeper must not touch any of them.
+    saveClaim(
+      makeClaim({
+        id: 'clm_multi_a',
+        agent: 'current-agent',
+        created_at: hoursAgo(3),
+        session_id: 'sess_alive',
+        adopted_at: hoursAgo(3),
+      }),
+      workspace.dir,
+    );
+    saveClaim(
+      makeClaim({
+        id: 'clm_multi_b',
+        agent: 'current-agent',
+        created_at: hoursAgo(2),
+        session_id: 'sess_alive',
+        adopted_at: hoursAgo(2),
+      }),
+      workspace.dir,
+    );
+
+    const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir, 'sess_alive');
+    assert.equal(result.released.length, 0);
+    const remainingIds = listClaims(workspace.dir)
+      .filter((c) => c.status === 'active')
+      .map((c) => c.id)
+      .sort();
+    assert.deepEqual(remainingIds, ['clm_multi_a', 'clm_multi_b']);
+  });
+
+  it('currentSessionId preserves live other-agent claim while releasing dead other-agent claim', () => {
+    // Combined scenario: caller names its session; one other agent is alive,
+    // one is crashed. Session-aware liveness must dominate the sweep.
+    const liveSession = 'sess_other_live';
+    writeSession(liveSession, workspace.dir, 30_000); // 30s ago
+    saveClaim(
+      makeClaim({
+        id: 'clm_other_live',
+        agent: 'agent-alive',
+        created_at: hoursAgo(50),
+        session_id: liveSession,
+        adopted_at: hoursAgo(50),
+      }),
+      workspace.dir,
+    );
+    saveClaim(
+      makeClaim({
+        id: 'clm_other_dead',
+        agent: 'agent-dead',
+        created_at: hoursAgo(3),
+        session_id: 'sess_other_dead',
+        adopted_at: hoursAgo(3),
+      }),
+      workspace.dir,
+    );
+
+    const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir, 'sess_current');
+    const releasedIds = result.released.map((c) => c.id);
+    assert.deepEqual(releasedIds, ['clm_other_dead']);
+  });
+
+  it('coordinator claim that is still young is preserved (never-adopted path under threshold)', () => {
+    // Dispatch has been issued but the worker hasn't come online yet — the
+    // coordinator's claim is only minutes old and must survive the sweep.
+    saveClaim(
+      makeClaim({
+        id: 'clm_coord_fresh',
+        agent: 'other-agent',
+        created_at: minutesAgo(10),
+        // No session_id — coordinator is pre-dispatch
+      }),
+      workspace.dir,
+    );
+
+    const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir);
+    assert.equal(result.released.length, 0, 'young coordinator claim must not be released');
+    assert.equal(
+      listClaims(workspace.dir).find((c) => c.id === 'clm_coord_fresh')?.status,
+      'active',
+    );
+  });
+});
+
+// ── Long-running session regressions (pln#388 stp_a24b1871) ────────────────
+
+describe('assessClaimLiveness — extreme long-running sessions', { concurrency: false }, () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-longrun-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  it('72h-old claim with fresh heartbeat is still live', () => {
+    const sessionId = 'sess_72h';
+    writeSession(sessionId, workspace.dir, 10_000); // 10s ago
+    const claim = makeClaim({
+      id: 'clm_72h',
+      created_at: hoursAgo(72),
+      session_id: sessionId,
+      adopted_at: hoursAgo(72),
+    });
+    const result = assessClaimLiveness(claim, {
+      cwd: workspace.dir,
+      thresholdHours: 24,
+      sessionTtlMs: 4 * 3_600_000,
+    });
+    assert.equal(result.status, 'live', `72h claim with live session must be live, got ${result.status}: ${result.reason}`);
+  });
+
+  it('7-day claim with fresh heartbeat is still live (no wall-clock cap on liveness)', () => {
+    const sessionId = 'sess_week';
+    writeSession(sessionId, workspace.dir, 60_000); // 1min ago
+    const claim = makeClaim({
+      id: 'clm_week',
+      created_at: hoursAgo(24 * 7),
+      session_id: sessionId,
+      adopted_at: hoursAgo(24 * 7),
+    });
+    assert.equal(
+      assessClaimLiveness(claim, { cwd: workspace.dir, sessionTtlMs: 4 * 3_600_000 }).status,
+      'live',
+    );
+    assert.equal(isClaimStale(claim, 24, workspace.dir), false);
+  });
+
+  it('session TTL boundary: exactly at TTL is treated as dead (enters grace window)', () => {
+    // A session whose last_seen_at sits right at the TTL boundary must not be
+    // classified as 'live'. We accept either 'young' (grace) or 'stale' here
+    // because the exact boundary depends on ms-level timing; both are safe
+    // outcomes (do-not-release for grace, release for stale).
+    const sessionId = 'sess_boundary';
+    writeSession(sessionId, workspace.dir, 4 * 3_600_000); // exactly TTL
+    const claim = makeClaim({
+      id: 'clm_boundary',
+      created_at: hoursAgo(2),
+      session_id: sessionId,
+    });
+    const result = assessClaimLiveness(claim, {
+      cwd: workspace.dir,
+      thresholdHours: 24,
+      sessionTtlMs: 4 * 3_600_000,
+    });
+    assert.notEqual(result.status, 'live', `boundary session must not be 'live', got '${result.status}'`);
+  });
+});
+
+// ── adoptClaimSession regression (pln#388 stp_a24b1871) ────────────────────
+
+describe('adoptClaimSession — dispatch adoption edge cases', { concurrency: false }, () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-adopt-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  it('idempotent: same session re-adopting its own claim succeeds and refreshes adopted_at', () => {
+    const sessionId = 'sess_self';
+    writeSession(sessionId, workspace.dir, 0);
+    const originalAdopt = hoursAgo(1);
+    saveClaim(
+      makeClaim({
+        id: 'clm_idem',
+        session_id: sessionId,
+        adopted_at: originalAdopt,
+      }),
+      workspace.dir,
+    );
+
+    const result = adoptClaimSession('clm_idem', sessionId, workspace.dir);
+    assert.equal(result.adopted, true, 're-adoption by same session must succeed');
+
+    const reloaded = loadClaim('clm_idem', workspace.dir);
+    assert.equal(reloaded.session_id, sessionId);
+    assert.ok(reloaded.adopted_at, 'adopted_at remains set');
+    assert.notEqual(reloaded.adopted_at, originalAdopt, 'adopted_at is refreshed on re-adoption');
+  });
+
+  it('refuses adoption when claim is not active (already released)', () => {
+    saveClaim(
+      {
+        ...makeClaim({ id: 'clm_released', created_at: hoursAgo(1) }),
+        status: 'released',
+        released_at: new Date().toISOString(),
+      },
+      workspace.dir,
+    );
+
+    const result = adoptClaimSession('clm_released', 'sess_new', workspace.dir);
+    assert.equal(result.adopted, false);
+    assert.match(result.reason, /not active/);
+  });
+
+  it('adopts a fresh coordinator claim (no session_id yet) — happy path for dispatch', () => {
+    // Classic dispatch flow: coordinator creates the claim with no session_id,
+    // worker starts up and calls adoptClaimSession with its own session.
+    saveClaim(
+      makeClaim({
+        id: 'clm_fresh_coord',
+        agent: 'worker-agent',
+        created_at: minutesAgo(5),
+        // No session_id, no adopted_at — coordinator hasn't linked a worker
+      }),
+      workspace.dir,
+    );
+
+    const result = adoptClaimSession('clm_fresh_coord', 'sess_worker', workspace.dir);
+    assert.equal(result.adopted, true);
+
+    const reloaded = loadClaim('clm_fresh_coord', workspace.dir);
+    assert.equal(reloaded.session_id, 'sess_worker');
+    assert.ok(reloaded.adopted_at, 'adopted_at is set on first adoption');
   });
 });
