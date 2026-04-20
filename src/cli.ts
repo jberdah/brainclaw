@@ -30,6 +30,7 @@ import { runListAgents } from './commands/list-agents.js';
 import { runSurfaceTaskResource } from './commands/surface-task-resource.js';
 import { runListInstructions } from './commands/list-instructions.js';
 import { runDoctor } from './commands/doctor.js';
+import { runRepair } from './commands/repair.js';
 import { runStale } from './commands/stale.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runReflect } from './commands/reflect.js';
@@ -610,6 +611,21 @@ program
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .action((options) => {
     runDoctor({ ...options, afterMigration: options.afterMigration });
+  });
+
+// --- repair (Phase 4 Sprint 2 Lane C / pln#397) ---
+program
+  .command('repair')
+  .description('Apply safe, non-destructive fixes for the repair candidates surfaced by doctor')
+  .option('--dry-run', 'Print the plan without executing anything')
+  .option('--include-unsafe', 'Also apply candidates flagged unsafe (preserves data but requires confirmation)')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    runRepair({
+      dryRun: options.dryRun,
+      includeUnsafe: options.includeUnsafe,
+      json: options.json,
+    });
   });
 
 // --- stale (Phase 4 Sprint 1 Lane A / pln#390) ---
