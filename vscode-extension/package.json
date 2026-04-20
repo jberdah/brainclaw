@@ -207,7 +207,7 @@
   "scripts": {
     "compile": "tsc -p ./tsconfig.json",
     "watch": "tsc -watch -p ./tsconfig.json",
-    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js"
+    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js out/acceptance-bar.test.js"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
