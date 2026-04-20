@@ -20,7 +20,7 @@ import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type Agen
 import { loadState } from './state.js';
 import { readAuditLog, type AuditAction, type AuditEntry } from './audit.js';
 import { listCandidates } from './candidates.js';
-import { listClaims, isClaimExpired } from './claims.js';
+import { listClaims, isClaimExpired, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
 import { listAssignments } from './assignments.js';
 import { listRuntimeNotes } from './runtime.js';
 import { isTrapActive, listOperationalTraps } from './traps.js';
@@ -68,7 +68,12 @@ export interface ContextItem {
 }
 
 export interface OpenWorkSummary {
-  active_claims: Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id' | 'expires_at'>[];
+  active_claims: Array<
+    Pick<Claim, 'id' | 'scope' | 'description' | 'created_at' | 'plan_id' | 'expires_at'> & {
+      /** Session-aware classification (live/young/orphaned/stale/never-adopted) — pln#388 stp_aa095668. */
+      liveness?: ClaimLivenessStatus;
+    }
+  >;
   active_assignments: Array<{
     id: string;
     status: string;
@@ -600,7 +605,15 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     );
     if (myClaims.length > 0 || activeAssignments.length > 0 || inProgressPlans.length > 0) {
       openWork = {
-        active_claims: myClaims.map(({ id, scope, description, created_at, plan_id, expires_at }) => ({ id, scope, description, created_at, plan_id, expires_at })),
+        active_claims: myClaims.map((c) => ({
+          id: c.id,
+          scope: c.scope,
+          description: c.description,
+          created_at: c.created_at,
+          plan_id: c.plan_id,
+          expires_at: c.expires_at,
+          liveness: assessClaimLiveness(c, { cwd: contextCwd }).status,
+        })),
         active_assignments: activeAssignments.map(({ id, status, scope, description, plan_id, last_heartbeat_at }) => ({
           id,
           status,
@@ -750,7 +763,10 @@ export function renderContextMarkdown(result: ContextResult, explain: boolean = 
         const planRef = claim.plan_id ? ` [plan: ${claim.plan_id}]` : '';
         const expired = claim.expires_at && claim.expires_at < now ? ' ⚠ EXPIRED — run brainclaw prune' : '';
         const ttlInfo = claim.expires_at && !expired ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
-        lines.push(`- [${claim.id}] ${claim.description}${planRef}${ttlInfo}${expired}`);
+        const livenessTag = claim.liveness && claim.liveness !== 'live' && claim.liveness !== 'young'
+          ? ` [${claim.liveness.toUpperCase()}]`
+          : '';
+        lines.push(`- [${claim.id}] ${claim.description}${planRef}${ttlInfo}${livenessTag}${expired}`);
         lines.push(`  scope: ${claim.scope}`);
       }
     }
@@ -1155,12 +1171,13 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
     if (result.open_work.active_claims.length > 0) {
       lines.push(compact ? '  claims:' : '  active_claims:');
       for (const claim of result.open_work.active_claims) {
+        const lv = claim.liveness ? (compact ? ` lv=${claim.liveness}` : ` liveness=${claim.liveness}`) : '';
         if (compact) {
           const planRef = claim.plan_id ? ` pl=${claim.plan_id}` : '';
-          lines.push(`    - id=${claim.id}${planRef} sc="${claim.scope}" tx="${claim.description}"`);
+          lines.push(`    - id=${claim.id}${planRef} sc="${claim.scope}" tx="${claim.description}"${lv}`);
         } else {
           const planRef = claim.plan_id ? ` plan_id=${claim.plan_id}` : '';
-          lines.push(`    - id=${claim.id}${planRef} scope="${claim.scope}" description="${claim.description}"`);
+          lines.push(`    - id=${claim.id}${planRef} scope="${claim.scope}" description="${claim.description}"${lv}`);
         }
       }
     }

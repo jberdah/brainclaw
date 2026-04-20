@@ -35,7 +35,7 @@
  */
 import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
-import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment } from './claims.js';
+import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
 import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
 import { memoryDir } from './io.js';
@@ -80,6 +80,8 @@ export interface ActiveLane {
   lane?: string;
   claim: Claim;
   agent: string;
+  /** Session-aware liveness of the active claim — pln#388 stp_aa095668. */
+  liveness?: ClaimLivenessStatus;
 }
 
 /** Per-agent capacity summary for multi-instance dispatch. */
@@ -216,6 +218,7 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
         lane: item.lane,
         claim: activeClaim,
         agent: activeClaim.agent,
+        liveness: assessClaimLiveness(activeClaim, { cwd }).status,
       });
       continue;
     }

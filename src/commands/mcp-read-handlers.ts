@@ -20,7 +20,7 @@ import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { listArchivedCandidates, listCandidates, resolvedSource } from '../core/candidates.js';
 import type { CandidateSource } from '../core/schema.js';
-import { listClaims } from '../core/claims.js';
+import { listClaims, assessClaimLiveness } from '../core/claims.js';
 import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { listActionRequired } from '../core/actions.js';
@@ -456,7 +456,9 @@ export function handleMcpReadToolCall(
     for (const claim of board.active_claims.slice(0, 10)) {
       const identity = claim.agent_id ? ` [${claim.agent_id}]` : '';
       const session = claim.session_id ? ` session=${claim.session_id}` : '';
-      lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}`);
+      const liveness = assessClaimLiveness(claim).status;
+      const liveTag = liveness === 'live' || liveness === 'young' ? '' : ` [${liveness.toUpperCase()}]`;
+      lines.push(`- [${claim.id}] ${claim.agent}${identity} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${session}${liveTag}`);
     }
     lines.push(`Active assignments: ${board.active_assignments.length}`);
     for (const assignment of board.active_assignments.slice(0, 10)) {

@@ -868,4 +868,69 @@ describe('core/dispatcher', () => {
       assert.ok(brief.includes('[ ] Step two'));
     });
   });
+
+  describe('analyzeSequence — claim liveness on active lanes (pln#388 stp_aa095668)', () => {
+    let testDir: string;
+    beforeEach(() => {
+      testDir = createTestStore();
+      setupAgents(testDir);
+    });
+    afterEach(() => {
+      cleanupTestStore(testDir);
+    });
+
+    it('surfaces liveness="never-adopted" on an active lane whose coordinator claim was never adopted', () => {
+      const plan = makePlan({ id: 'pln_nl1', text: 'lane plan', status: 'in_progress' });
+      const state = loadState(testDir);
+      state.plan_items = [plan];
+      persistState(state, testDir);
+
+      // 30h-old claim with no session_id → never-adopted
+      const staleClaim: Claim = {
+        schema_version: 2,
+        id: 'clm_never_lane',
+        agent: 'claude-code',
+        scope: 'src/foo.ts',
+        description: 'Never adopted',
+        created_at: new Date(Date.now() - 30 * 3_600_000).toISOString(),
+        status: 'active',
+        plan_id: 'pln_nl1',
+      };
+      saveClaim(staleClaim, testDir);
+
+      saveSequence(makeSequence([
+        { rank: 1, planId: 'pln_nl1', hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const analysis = analyzeSequence(testDir)!;
+      assert.equal(analysis.active.length, 1);
+      assert.equal(analysis.active[0]!.liveness, 'never-adopted');
+    });
+
+    it('marks a young lane claim as liveness="young" (not released by dispatch sweeps)', () => {
+      const plan = makePlan({ id: 'pln_yl1', text: 'young lane', status: 'in_progress' });
+      const state = loadState(testDir);
+      state.plan_items = [plan];
+      persistState(state, testDir);
+
+      const freshClaim: Claim = {
+        schema_version: 2,
+        id: 'clm_young_lane',
+        agent: 'claude-code',
+        scope: 'src/bar.ts',
+        description: 'Just created',
+        created_at: new Date(Date.now() - 5 * 60_000).toISOString(), // 5 min ago
+        status: 'active',
+        plan_id: 'pln_yl1',
+      };
+      saveClaim(freshClaim, testDir);
+
+      saveSequence(makeSequence([
+        { rank: 1, planId: 'pln_yl1', hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const analysis = analyzeSequence(testDir)!;
+      assert.equal(analysis.active[0]!.liveness, 'young');
+    });
+  });
 });

@@ -5,6 +5,13 @@ import { listCandidates } from '../core/candidates.js';
 import { listRuntimeNotes } from '../core/runtime.js';
 import { loadState } from '../core/state.js';
 import { detectStaleness, staleSummary } from '../core/staleness.js';
+import { assessClaimLiveness, type ClaimLivenessStatus } from '../core/claims.js';
+
+/** Tag non-healthy liveness states so operators spot orphaned/stale/never-adopted claims at a glance. */
+function livenessTag(status: ClaimLivenessStatus): string {
+  if (status === 'live' || status === 'young') return '';
+  return ` [${status.toUpperCase()}]`;
+}
 
 export interface AgentBoardOptions {
   agent?: string;
@@ -86,7 +93,8 @@ export function runAgentBoard(options: AgentBoardOptions = {}): void {
   console.log('');
   console.log(`Active claims: ${board.active_claims.length}`);
   for (const claim of board.active_claims.slice(0, 10)) {
-    console.log(`  [${claim.id}] ${claim.agent} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}`);
+    const tag = livenessTag(assessClaimLiveness(claim).status);
+    console.log(`  [${claim.id}] ${claim.agent} -> ${claim.scope}${claim.plan_id ? ` (plan ${claim.plan_id})` : ''}${tag}`);
   }
   console.log('');
   console.log(`Active assignments: ${board.active_assignments.length}`);

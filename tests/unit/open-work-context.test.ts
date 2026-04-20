@@ -261,4 +261,114 @@ describe('open_work in context', () => {
     assert.ok(tmpl.includes('ow:'));
     assert.ok(tmpl.includes('clm_test007'));
   });
+
+  // ── pln#388 stp_aa095668: claim-state observability in context ───────────
+
+  describe('claim liveness is surfaced (pln#388 stp_aa095668)', () => {
+    it('active_claims entries carry a liveness field', () => {
+      // Fresh claim with no session → should surface as "young"
+      saveClaim({
+        id: 'clm_liveness_young',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/x.ts',
+        description: 'fresh claim',
+        created_at: iso(5),
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      assert.ok(result.open_work);
+      assert.equal(result.open_work.active_claims.length, 1);
+      assert.equal(result.open_work.active_claims[0].liveness, 'young');
+    });
+
+    it('never-adopted coordinator claim surfaces with liveness="never-adopted"', () => {
+      // Old claim with no session_id → never-adopted (past 24h threshold)
+      saveClaim({
+        id: 'clm_liveness_never',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/abandoned.ts',
+        description: 'old coordinator claim',
+        created_at: iso(60 * 30), // 30h ago
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      assert.ok(result.open_work);
+      assert.equal(result.open_work.active_claims[0].liveness, 'never-adopted');
+    });
+
+    it('renderContextMarkdown tags non-healthy liveness states', () => {
+      saveClaim({
+        id: 'clm_md_tag',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/md.ts',
+        description: 'stale coordinator claim',
+        created_at: iso(60 * 30),
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      const md = renderContextMarkdown(result);
+      assert.match(md, /\[NEVER-ADOPTED\]/, 'markdown should tag never-adopted');
+    });
+
+    it('renderContextMarkdown omits tag for healthy young claims', () => {
+      saveClaim({
+        id: 'clm_md_young',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/y.ts',
+        description: 'young claim',
+        created_at: iso(5),
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      const md = renderContextMarkdown(result);
+      assert.ok(!/\[YOUNG\]/i.test(md), 'young claims should not be tagged in markdown (healthy)');
+      assert.ok(!/\[LIVE\]/i.test(md), 'live claims should not be tagged in markdown (healthy)');
+    });
+
+    it('renderContextPromptTemplate (compact) emits lv= token for each claim', () => {
+      saveClaim({
+        id: 'clm_tpl_compact',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/t.ts',
+        description: 'compact template',
+        created_at: iso(60 * 30),
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      const tmpl = renderContextPromptTemplate(result, true);
+      assert.match(tmpl, /lv=never-adopted/);
+    });
+
+    it('renderContextPromptTemplate (full) emits liveness= token for each claim', () => {
+      saveClaim({
+        id: 'clm_tpl_full',
+        agent: 'testuser',
+        agent_id: workspace.currentAgent.agent_id,
+        scope: 'src/core/t2.ts',
+        description: 'full template',
+        created_at: iso(60 * 30),
+        status: 'active',
+        schema_version: 2,
+      }, workspace.dir);
+
+      const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+      const tmpl = renderContextPromptTemplate(result, false);
+      assert.match(tmpl, /liveness=never-adopted/);
+    });
+  });
 });

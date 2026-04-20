@@ -58,7 +58,10 @@ export function runDispatchAnalysis(options: DispatchCommandOptions): void {
     console.log(`\n🔵 Active (${analysis.active.length}):`);
     for (const a of analysis.active) {
       const lane = a.lane ? ` [${a.lane}]` : '';
-      console.log(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} working`);
+      const livenessTag = a.liveness && a.liveness !== 'live' && a.liveness !== 'young'
+        ? ` [${a.liveness.toUpperCase()}]`
+        : '';
+      console.log(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} working${livenessTag}`);
     }
   }
 
