@@ -66,6 +66,13 @@ interface BoardData {
   pending_candidates?: any[];
   linked_projects?: any[];
   incoming_signals?: any[];
+  /**
+   * Server-computed advisory strings ("19 high-priority plans available",
+   * "consider claiming scope X", …). Produced by bclaw_context; rendered as
+   * read-only leaf items under the Review queue section so the extension
+   * doesn't have to re-derive next actions (pln#393 stp_0859ea93).
+   */
+  workflow_hints?: string[];
   /** True when board was loaded via bclaw_get_agent_board_summary (Tier 1 Summary). */
   summary?: boolean;
   /** Pre-computed counts populated in summary mode instead of full arrays. */
@@ -1185,17 +1192,23 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     switch (sectionId) {
       case SECTION.ATTENTION: {
-        const [actions, assignments, candidates, runs] = await Promise.all([
+        // pln#393 stp_0859ea93: pull server-computed workflow_hints alongside
+        // the actionable entities so the tree surfaces next-action advice
+        // without re-deriving it extension-side.
+        const [actions, assignments, candidates, runs, context] = await Promise.all([
           client.callTool('bclaw_list_actions', { status: 'pending', limit: 100 }),
           client.callTool('bclaw_list_assignments', { status: 'blocked', limit: 100 }),
           client.callTool('bclaw_list_candidates', { status: 'pending', auto_generated: false, limit: 100 }),
           client.callTool('bclaw_list_runs', { limit: 100 }),
+          client.callTool('bclaw_context', { compact: true }).catch(() => ({} as Record<string, unknown>)),
         ]);
         board.active_actions = (actions.actions as any[] | undefined) ?? [];
         board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
         board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
         board.active_runs = ((runs.runs as any[] | undefined) ?? []).filter((run: any) =>
           run.status === 'blocked' || run.status === 'waiting_input' || run.status === 'failed');
+        const hints = (context as { workflow_hints?: string[] }).workflow_hints;
+        board.workflow_hints = Array.isArray(hints) ? hints : [];
         return board;
       }
       case SECTION.IN_PROGRESS: {
@@ -1299,12 +1312,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {
     const sections: BrainclawTreeItem[] = [];
 
-    // --- Attention required ---
+    // --- Review queue & next actions ---
+    // pln#393 stp_0859ea93: the section loader asks MCP with
+    // auto_generated: false (bclaw_list_candidates filter), so
+    // board.pending_candidates is already the actionable review queue —
+    // no extension-side re-filter needed. Full-board fallback may still
+    // mix sources; we split once here as a render-time mapping from the
+    // MCP-provided `source` field, not as business-logic classification.
     const pendingActions = activeActions(board);
-    const nonAutoCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
+    const reviewCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
     const blockedAssignments = activeAssignments(board).filter((a: any) => a.status === 'blocked');
     const staleRuns = activeRuns(board).filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
-    const attentionCount = pendingActions.length + nonAutoCandidates.length + blockedAssignments.length + staleRuns.length;
+    const hints = (board.workflow_hints ?? []).length;
+    const attentionCount = pendingActions.length + reviewCandidates.length + blockedAssignments.length + staleRuns.length + hints;
     if (attentionCount > 0) {
       sections.push(new BrainclawTreeItem(
         `Attention required (${attentionCount})`,
@@ -1426,8 +1446,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildActions(board, projectPath));
     }
 
-    const nonAutoCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
-    items.push(...this._buildCandidateItems(nonAutoCandidates, projectPath));
+    const reviewCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
+    items.push(...this._buildCandidateItems(reviewCandidates, projectPath));
 
     const blockedAssignments = activeAssignments(board).filter((a: any) => a.status === 'blocked');
     if (blockedAssignments.length > 0) {
@@ -1439,7 +1459,28 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildRunItems(staleRuns, projectPath));
     }
 
+    // pln#393 stp_0859ea93: server-computed next-action hints. These are
+    // advisory strings from bclaw_context; rendered as read-only leaves so
+    // the extension never invents them.
+    items.push(...this._buildWorkflowHintItems(board.workflow_hints ?? [], projectPath));
+
     return items;
+  }
+
+  private _buildWorkflowHintItems(hints: string[], projectPath: string): BrainclawTreeItem[] {
+    return hints.map((hint, index) => new BrainclawTreeItem(
+      hint,
+      vscode.TreeItemCollapsibleState.None,
+      'next action',
+      new vscode.ThemeIcon('lightbulb', new vscode.ThemeColor('editorInfo.foreground')),
+      hint,
+      'workflow-hint',
+      undefined,
+      projectPath,
+      undefined,
+      'leaf',
+      `workflow-hint:${projectPath}:${index}`,
+    ));
   }
 
   private _buildInProgressChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
