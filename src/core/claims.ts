@@ -422,13 +422,25 @@ export interface StaleClaimResult {
 }
 
 /**
- * Detect and auto-release stale claims from other agents.
+ * Detect and auto-release stale claims across the store.
+ *
+ * Phase 4 slice pln#388 stp_e2b10ab4: session-aware safety. When a
+ * `currentSessionId` is provided, the sweep skips only claims that
+ * belong to THAT session — prior-session claims from the same agent
+ * are legitimately reclaimable (crash recovery for the same agent on
+ * reconnect). Without `currentSessionId` we fall back to the old
+ * "skip same agent" rule to stay source-compatible.
+ *
  * Uses claims.auto_release_after from config (default 24h).
- * Skips claims from the current agent (they should use session_end --auto-release).
- * Skips claims whose session is still live ('live') or too young to classify ('young').
- * Releases 'stale', 'orphaned' (crash recovery), and 'never-adopted' claims.
+ * Skips claims whose session is still live ('live') or too young to
+ * classify ('young'). Releases 'stale', 'orphaned' (crash recovery),
+ * and 'never-adopted' claims.
  */
-export function releaseStaleClaimsFromOtherAgents(currentAgent?: string, cwd?: string): StaleClaimResult {
+export function releaseStaleClaimsFromOtherAgents(
+  currentAgent?: string,
+  cwd?: string,
+  currentSessionId?: string,
+): StaleClaimResult {
   const config = loadConfig(cwd);
   const thresholdHours = config.claims?.auto_release_after_hours ?? DEFAULT_STALE_HOURS;
   const store = claimStore(cwd);
@@ -439,7 +451,15 @@ export function releaseStaleClaimsFromOtherAgents(currentAgent?: string, cwd?: s
 
   for (const claim of all) {
     if (claim.status !== 'active') continue;
-    if (claim.agent === currentAgent) continue; // skip own claims
+
+    // Session-aware skip: if the caller names its current session, only that
+    // session's claims are off-limits. Otherwise fall back to the legacy
+    // "skip same agent" rule.
+    if (currentSessionId) {
+      if (claim.session_id === currentSessionId) continue;
+    } else if (claim.agent === currentAgent) {
+      continue;
+    }
 
     const { status } = assessClaimLiveness(claim, { thresholdHours, cwd });
     if (status === 'live' || status === 'young') continue;

@@ -330,14 +330,45 @@ describe('releaseStaleClaimsFromOtherAgents', { concurrency: false }, () => {
     assert.equal(result.released[0]!.id, 'clm_never_r');
   });
 
-  it('skips own claims (current agent)', () => {
+  it('skips own claims (current agent) without currentSessionId — legacy compat', () => {
     saveClaim(
       makeClaim({ id: 'clm_own_r', agent: 'current-agent', created_at: hoursAgo(48) }),
       workspace.dir,
     );
 
     const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir);
-    assert.equal(result.released.length, 0, 'Own claims must never be auto-released');
+    assert.equal(result.released.length, 0, 'Own claims must never be auto-released in legacy mode');
+  });
+
+  it('pln#388 stp_e2b10ab4: same-agent crash recovery — releases prior-session claims when currentSessionId is provided', () => {
+    // Prior session (crashed — no file written, so session is missing).
+    // Claim belongs to the same agent but a different session than the
+    // caller's current one → must be released.
+    saveClaim(
+      makeClaim({
+        id: 'clm_own_prior',
+        agent: 'current-agent',
+        created_at: hoursAgo(2),
+        session_id: 'sess_crashed',
+        adopted_at: hoursAgo(2),
+      }),
+      workspace.dir,
+    );
+    // Current session's claim — must be preserved.
+    saveClaim(
+      makeClaim({
+        id: 'clm_own_current',
+        agent: 'current-agent',
+        created_at: hoursAgo(1),
+        session_id: 'sess_current',
+        adopted_at: hoursAgo(1),
+      }),
+      workspace.dir,
+    );
+
+    const result = releaseStaleClaimsFromOtherAgents('current-agent', workspace.dir, 'sess_current');
+    const releasedIds = result.released.map((c) => c.id);
+    assert.deepEqual(releasedIds, ['clm_own_prior']);
   });
 
   it('handles mixed claims: releases stale, keeps live', () => {

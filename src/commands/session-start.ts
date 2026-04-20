@@ -270,11 +270,14 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     } catch { /* non-fatal */ }
   }
 
-  // Stale claim auto-release: release claims from OTHER agents that are older than threshold
+  // Stale claim auto-release. Phase 4 slice pln#388 stp_e2b10ab4: pass
+  // the new session_id so same-agent prior-session claims can be swept
+  // too — without it, a crash-recovered agent would keep its own orphaned
+  // claims hanging until 24h.
   let staleClaimsReleased: Array<{ id: string; agent: string; scope: string }> | undefined;
   if (maintenanceMode === 'full') {
     try {
-      const staleResult = releaseStaleClaimsFromOtherAgents(actor.agent, options.cwd);
+      const staleResult = releaseStaleClaimsFromOtherAgents(actor.agent, options.cwd, snapshot.session_id);
       if (staleResult.released.length > 0) {
         staleClaimsReleased = staleResult.released.map(c => ({ id: c.id, agent: c.agent, scope: c.scope }));
       }
