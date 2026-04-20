@@ -1585,15 +1585,24 @@ const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool
 
 /**
  * Canonical facade order — drives what a fresh agent sees first in tools/list.
- * bclaw_work comes first (the "one call does everything" entry point for any
- * session), followed by coordinate/context/dispatch/loop (intent dispatchers),
- * and setup last (rarely needed after the initial onboarding). pln#397 + Codex
- * audit P2.
+ *
+ * Mental model for the default agent (doing its own work, not orchestrating):
+ *   1. bclaw_work     — entry point: session + context + claim in one call.
+ *   2. bclaw_context  — explicit memory read when bclaw_work isn't enough.
+ *   3. bclaw_coordinate / bclaw_dispatch / bclaw_loop — ESCALATION path for
+ *      agents that need to assign work, dispatch other agents, or drive
+ *      multi-turn loops. Optional for most sessions.
+ *   4. bclaw_setup    — one-time interactive onboarding.
+ *
+ * The typical working loop is: bclaw_work → canonical grammar
+ * (bclaw_find/get/create/update/remove/transition) → bclaw_release_claim.
+ * Coordination facades are not the default path.
+ * (pln#397 + Codex audit P2, refined after user feedback on orchestration bias.)
  */
 export const FACADE_ORDER = [
   'bclaw_work',
-  'bclaw_coordinate',
   'bclaw_context',
+  'bclaw_coordinate',
   'bclaw_dispatch',
   'bclaw_loop',
   'bclaw_setup',
