@@ -231,7 +231,13 @@ function readMcpConfig(configPath: string, cwd: string, env: NodeJS.ProcessEnv):
 
   for (const line of lines) {
     const trimmed = line.trim();
-    const sectionMatch = /^\[mcp_servers\.([A-Za-z0-9_.-]+)\]$/.exec(trimmed);
+    // Only top-level MCP server entries, not nested subtables. In TOML,
+    // `[mcp_servers.brainclaw.env]` and `[mcp_servers.brainclaw.tools.*]`
+    // are subtables of the `brainclaw` server, not separate servers. The
+    // previous regex accepted dots in the captured name, so Codex config
+    // files produced fake entries like `brainclaw.env` and
+    // `brainclaw.tools.bclaw_ack_message` in the agent-tooling inventory.
+    const sectionMatch = /^\[mcp_servers\.([A-Za-z0-9_-]+)\]$/.exec(trimmed);
     if (sectionMatch) {
       if (current) {
         items.push(toMcpServerItem(current, configPath, cwd, env));

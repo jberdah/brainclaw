@@ -120,4 +120,42 @@ describe('core/agent-context', () => {
     assert.equal(snapshot.mcp_servers[0]?.availability, 'missing_command');
     assert.equal(snapshot.mcp_servers[0]?.source, 'codex_home');
   });
+
+  it('does not synthesize fake servers from nested TOML subtables (Codex P4)', () => {
+    // Reproduction: Codex audit surfaced fake entries like `brainclaw.env`
+    // and `brainclaw.tools.bclaw_ack_message` because the section regex
+    // accepted dotted names. Those are TOML subtables of the brainclaw
+    // server, not separate MCP servers.
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      [
+        '[mcp_servers.brainclaw]',
+        'command = "node"',
+        'args = ["C:/dist/cli.js", "mcp"]',
+        '',
+        '[mcp_servers.brainclaw.env]',
+        'BRAINCLAW_DEBUG = "1"',
+        '',
+        '[mcp_servers.brainclaw.tools.bclaw_ack_message]',
+        'description = "ack an inbox message"',
+        '',
+        '[mcp_servers.brainclaw.tools.bclaw_add_step]',
+        'description = "add a step to a plan"',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const snapshot = buildAgentToolingContext({ cwd: dir });
+    const names = snapshot.mcp_servers.map((s) => s.name).sort();
+    assert.deepEqual(
+      names,
+      ['brainclaw'],
+      `only the top-level brainclaw server should appear, got: ${names.join(', ')}`,
+    );
+    assert.ok(
+      !names.some((n) => /\./.test(n)),
+      `no entry name should contain a dot; got: ${names.join(', ')}`,
+    );
+  });
 });
