@@ -3,6 +3,15 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { McpClient } from './mcp-client';
+import {
+  STALE_MS,
+  agentFreshness,
+  formatRelativeAge,
+  isAutoCandidate,
+  isStale,
+  timeAgo,
+  type Freshness,
+} from './tree-helpers';
 
 export interface BoardProject {
   path: string;
@@ -101,51 +110,7 @@ interface SearchResultItem {
   score?: number;
 }
 
-function timeAgo(isoDate: string): string {
-  const diff = Date.now() - new Date(isoDate).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-function formatRelativeAge(isoDate: string): string {
-  const diff = Date.now() - Date.parse(isoDate);
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${Math.max(mins, 0)}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 14) return `${days}d`;
-  return `${days}d ago`;
-}
-
-const STALE_MS = {
-  plan: 7 * 24 * 60 * 60 * 1000,
-  claim: 4 * 60 * 60 * 1000,
-  assignment: 30 * 60 * 1000,
-  action: 60 * 60 * 1000,
-} as const;
-
 const SECTION_CACHE_TTL_MS = 30_000;
-
-function isStale(isoDate: string | undefined, thresholdMs: number): boolean {
-  if (!isoDate) return false;
-  return Date.now() - Date.parse(isoDate) > thresholdMs;
-}
-type Freshness = 'active' | 'idle' | 'stale';
-
-function agentFreshness(agent: any): Freshness {
-  if (agent.has_open_session || agent.claim_count > 0) return 'active';
-  if (!agent.last_active) return 'stale';
-  const hours = (Date.now() - new Date(agent.last_active).getTime()) / 3600000;
-  if (hours < 1) return 'active';
-  if (hours < 6) return 'idle';
-  return 'stale';
-}
 
 function freshnessIcon(freshness: Freshness): vscode.ThemeIcon {
   switch (freshness) {
@@ -189,9 +154,6 @@ function openSessions(board: BoardData): number {
   return (board.other_agents ?? []).filter((agent: any) => agent.has_open_session).length;
 }
 
-function isAutoCandidate(candidate: any): boolean {
-  return candidate.source === 'auto' || String(candidate.origin ?? '').startsWith('session-end');
-}
 
 const SECTION = {
   PROJECTS: 'projects',
