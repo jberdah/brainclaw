@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'yaml';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../commands/mcp.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
 
 /**
  * Resolve the brainclaw command for MCP configs.
@@ -476,7 +476,13 @@ type JsonObject = Record<string, unknown>;
  *    `approval_mode = "approve"` bypasses this).
  */
 function getHeadlessAutoApprovedToolNames(): string[] {
-  return MCP_HEADLESS_AUTO_TOOL_NAMES;
+  // Filter out tools removed at v1.0 — their handlers still exist as a
+  // migration escape hatch, but we don't want to advertise them in agent
+  // configs anymore. Otherwise Codex / Cline / Roo still discover names
+  // like `bclaw_get_context`, `bclaw_list_plans`, etc. and dispatch to
+  // deprecation warnings instead of the canonical grammar (pln#397 Codex
+  // post-alignment audit).
+  return MCP_HEADLESS_AUTO_TOOL_NAMES.filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
 }
 
 const CLINE_MCP_RELATIVE_PATH = '.vscode/cline_mcp_settings.json';
@@ -1399,6 +1405,20 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
 
   let content = existing;
   let changed = false;
+
+  // Strip any pre-existing MACHINE_MANAGED_HEADER blocks before we emit a
+  // fresh one. replaceTomlSection only touches `[section]` headers, so the
+  // decorative comment block above the tool sections was preserved on each
+  // run and accumulated (we observed three back-to-back copies in the wild).
+  // Detection: a run of lines matching the header shape — a `# ==` divider,
+  // a `# MACHINE-MANAGED — DO NOT EDIT` marker, then the rest up to the
+  // closing `# ==` divider.
+  const machineManagedBlockRe = /(?:\r?\n)?# =+\r?\n# MACHINE-MANAGED — DO NOT EDIT\r?\n(?:#[^\r\n]*\r?\n)+# =+\r?\n?/g;
+  const strippedContent = content.replace(machineManagedBlockRe, '\n');
+  if (strippedContent !== content) {
+    content = strippedContent;
+    changed = true;
+  }
 
   // Main brainclaw block: create if missing, update only when force-resolving
   // (to preserve user customizations like `cwd` on the main section).
