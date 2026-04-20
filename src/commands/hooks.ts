@@ -30,23 +30,26 @@ alwaysApply: true
 
 # Brainclaw session bootstrap
 
-**At the start of every session, before doing anything else:**
+Brainclaw is the shared coordination layer for this project. Use its MCP facades first — the CLI is only a fallback when MCP is unavailable.
 
-\`\`\`bash
-brainclaw context
-\`\`\`
+## At the start of every session
 
-This loads the shared project memory: active constraints, recent decisions, known traps,
-open plan items, active claims, and the last handoff.
+Call \`bclaw_work(intent)\` — it handles session setup, context load, and scope claim in a single call.
 
-**Before finishing any session:**
+- \`bclaw_work(intent: "resume")\` when continuing an existing task.
+- \`bclaw_work(intent: "execute", scope: "<path>", task: "<text>")\` when starting new work on a specific scope.
+- \`bclaw_work(intent: "consult")\` to read context without claiming.
 
-\`\`\`bash
-brainclaw claim release <id>               # release claims you opened
-brainclaw plan update <id> --status done   # close plan items you completed
-# or in one shot:
-brainclaw session-end --auto-release
-\`\`\`
+## To coordinate with other agents
+
+\`bclaw_coordinate(intent)\` — \`assign\`, \`consult\`, \`review\`, or \`reroute\`.
+
+## Before finishing
+
+- Release your claims: \`bclaw_release_claim(id)\`.
+- Close out the session: \`bclaw_session_end\` (or let it auto-release via the session hook).
+
+CLI fallback only: \`brainclaw context\` / \`brainclaw session-end --auto-release\` if MCP is not reachable.
 `;
 }
 
@@ -61,23 +64,24 @@ export function generateWindsurfHook(projectName: string): string {
 
 ## SESSION START (always run first)
 
-Before responding to any request, execute:
+Call the Brainclaw MCP facade before responding to any request:
 
-\`\`\`bash
-brainclaw context
-\`\`\`
+- \`bclaw_work(intent: "resume")\` when continuing an existing task.
+- \`bclaw_work(intent: "execute", scope: "<path>", task: "<text>")\` when starting new work on a specific scope.
+- \`bclaw_work(intent: "consult")\` to read context without claiming.
 
-This gives you: active constraints, recent decisions, known traps, open plans, active claims,
-and the last handoff note. Do not skip this step.
+This returns active constraints, recent decisions, known traps, open plans, active claims, and the last handoff. Do not skip.
+
+## COORDINATION
+
+\`bclaw_coordinate(intent)\` to assign, consult, review, or reroute other agents.
 
 ## SESSION END (before finishing)
 
-\`\`\`bash
-brainclaw claim release <id>               # for each claim you hold
-brainclaw plan update <id> --status done   # for each plan item you completed
-# or:
-brainclaw session-end --auto-release
-\`\`\`
+- \`bclaw_release_claim(id)\` for each claim you hold.
+- \`bclaw_session_end\` to close the session (auto-releases remaining claims).
+
+CLI fallback only when MCP is unavailable: \`brainclaw context\` / \`brainclaw session-end --auto-release\`.
 `;
 }
 
@@ -90,23 +94,24 @@ export function generateMarkdownHook(agentName: string, projectName: string): st
 
 ## SESSION START (always run first)
 
-Before responding to any request, execute:
+Call the Brainclaw MCP facade before responding to any request:
 
-\`\`\`bash
-brainclaw context
-\`\`\`
+- \`bclaw_work(intent: "resume")\` when continuing an existing task.
+- \`bclaw_work(intent: "execute", scope: "<path>", task: "<text>")\` when starting new work on a specific scope.
+- \`bclaw_work(intent: "consult")\` to read context without claiming.
 
-This gives you: active constraints, recent decisions, known traps, open plans, active claims,
-and the last handoff note. Do not skip this step.
+This returns active constraints, recent decisions, known traps, open plans, active claims, and the last handoff. Do not skip.
+
+## COORDINATION
+
+\`bclaw_coordinate(intent)\` to assign, consult, review, or reroute other agents.
 
 ## SESSION END (before finishing)
 
-\`\`\`bash
-brainclaw claim release <id>               # for each claim you hold
-brainclaw plan update <id> --status done   # for each plan item you completed
-# or:
-brainclaw session-end --auto-release
-\`\`\`
+- \`bclaw_release_claim(id)\` for each claim you hold.
+- \`bclaw_session_end\` to close the session (auto-releases remaining claims).
+
+CLI fallback only when MCP is unavailable: \`brainclaw context\` / \`brainclaw session-end --auto-release\`.
 `;
 }
 

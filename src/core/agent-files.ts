@@ -744,23 +744,32 @@ export function ensureWindsurfModernRules(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, WINDSURF_MODERN_RULES_RELATIVE_PATH);
   const content = `# Brainclaw coordination rules
 
-Load brainclaw project memory and follow the coordination protocol before making code changes.
+Brainclaw is the shared coordination layer. Use its MCP facades first — the CLI is only a fallback when MCP is unavailable.
 
 ## Session start
 
-1. Run \`brainclaw context --json\` (or \`npx brainclaw context --json\`) to load memory, constraints, decisions, traps, plans, and handoffs.
-2. Run \`brainclaw claim list\` — respect active claims from other agents; do not edit a claimed scope.
-3. Before editing any file, claim your scope: \`brainclaw claim create "<description>" --scope <path>\`.
+Call \`bclaw_work(intent)\`. It loads memory (constraints, decisions, traps, plans, handoffs), resolves the claim, and starts a session in a single call.
+
+- \`bclaw_work(intent: "resume")\` — continue existing work (auto-surfaces the context diff).
+- \`bclaw_work(intent: "execute", scope: "<path>", task: "<text>")\` — start new work and claim the scope.
+- \`bclaw_work(intent: "consult")\` — read-only context without claiming.
 
 ## During work
 
-- Mark steps done as you go: \`brainclaw complete-step <planId> <stepId>\`.
-- Check the inbox for new assignments: \`brainclaw inbox list\`.
+- Mark plan steps done: \`bclaw_complete_step(planId, stepId)\`.
+- Read the inbox: \`bclaw_read_inbox\`.
+- Record notes, decisions, traps: \`bclaw_write_note\`, \`bclaw_create(entity, data)\`.
+
+## To coordinate with other agents
+
+\`bclaw_coordinate(intent)\` — \`assign\`, \`consult\`, \`review\`, or \`reroute\`.
 
 ## Before finishing
 
-- Release your claims: \`brainclaw session-end --auto-release\`.
-- Update the plan with your progress: \`brainclaw update-plan <id> --status in-progress\`.
+- Release your claims: \`bclaw_release_claim(id)\`.
+- Close the session: \`bclaw_session_end\` (auto-releases remaining claims).
+
+CLI fallback only when MCP is unavailable: \`brainclaw context\` / \`brainclaw session-end --auto-release\`.
 `;
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
@@ -783,13 +792,15 @@ description: "Use this skill when you need the latest Brainclaw context, active 
 
 # Brainclaw Context
 
-Use this skill to fetch live project memory before significant edits or when asked about repository rules.
+Fetch live project memory before significant edits. Prefer the Brainclaw MCP facade; use the CLI only as a fallback when MCP is unavailable.
 
 ## Steps
 
-1. Run \`brainclaw context --json\`.
-2. Read active plans, constraints, decisions, traps, and handoffs from the result.
-3. Prefer Brainclaw state over stale assumptions from older instructions or prior sessions.
+1. Call \`bclaw_work(intent: "resume")\` to continue existing work, or \`bclaw_work(intent: "consult")\` for read-only context. The response contains active plans, constraints, decisions, traps, and handoffs.
+2. Prefer Brainclaw state over stale assumptions from older instructions or prior sessions.
+3. Coordinate with other agents via \`bclaw_coordinate(intent)\` (\`assign\`, \`consult\`, \`review\`).
+
+CLI fallback: \`brainclaw context --json\` if the MCP server is not reachable.
 `;
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
@@ -821,14 +832,16 @@ allowed-tools: 'Read Bash(npx brainclaw:*)'
 
 # Brainclaw
 
-Use this skill to load the shared coordination state before any significant code change.
+Load the shared coordination state before any significant code change. Prefer the Brainclaw MCP facade; the CLI is a fallback when MCP is not reachable.
 
 ## Steps
 
-1. Run \`brainclaw context --json\` (or \`npx brainclaw context --json\`) to load memory, constraints, decisions, traps, plans, and handoffs.
-2. Run \`brainclaw claim list\` — respect active claims from other agents; do not edit a claimed scope.
-3. Before editing, claim your scope: \`brainclaw claim create "<description>" --scope <path>\`.
-4. When done, run \`brainclaw session-end --auto-release\` to release claims and close the session.
+1. Call \`bclaw_work(intent)\` — \`resume\` to continue existing work, \`execute\` to claim a new scope, or \`consult\` for read-only context. The response gives you memory, active claims, plans, traps, and handoffs.
+2. Respect active claims from other agents reported in the response; do not edit a claimed scope unless you own the claim.
+3. Use \`bclaw_coordinate(intent)\` to assign, consult, or review other agents when needed.
+4. When done, call \`bclaw_session_end\` (auto-releases your remaining claims).
+
+CLI fallback only: \`brainclaw context --json\` / \`brainclaw claim create\` / \`brainclaw session-end --auto-release\` if the MCP server is unavailable.
 `;
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
@@ -926,12 +939,13 @@ globs: "**/*"
 alwaysApply: true
 ---
 
-Before significant edits or when asked about project rules, run:
-<run_command>
-brainclaw context --json
-</run_command>
+Brainclaw is the shared coordination layer. Call the MCP facade first; the CLI is only a fallback when MCP is not reachable.
 
-If Brainclaw reports active claims or in-progress plans, follow them before editing.
+Before significant edits or when asked about project rules, call \`bclaw_work(intent: "consult")\` (or \`"resume"\` if continuing a task) via the Brainclaw MCP server. The response carries active claims, in-progress plans, constraints, decisions, traps, and handoffs.
+
+If the response lists active claims or in-progress plans, follow them before editing. Use \`bclaw_coordinate(intent)\` to dispatch, consult, or review other agents.
+
+CLI fallback only when MCP is unavailable: \`brainclaw context --json\`.
 `;
   const { created, updated } = writeTextFileIfChanged(filePath, content);
 
