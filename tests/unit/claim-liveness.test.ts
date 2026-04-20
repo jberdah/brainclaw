@@ -657,4 +657,36 @@ describe('adoptClaimSession — dispatch adoption edge cases', { concurrency: fa
     assert.equal(reloaded.session_id, 'sess_worker');
     assert.ok(reloaded.adopted_at, 'adopted_at is set on first adoption');
   });
+
+  it('Codex r1: sequential adoption race on a dead-session claim — second call sees first session and refuses if live', () => {
+    // Both reconnecting workers observe the same dead prior session.
+    // The atomic adopt wraps load/decide/save in one mutate(); after the
+    // FIRST adoption, a LIVE session file is written for sess_reclaim_a,
+    // so the second call must observe the live session and refuse.
+    saveClaim(
+      makeClaim({
+        id: 'clm_race',
+        created_at: hoursAgo(2),
+        session_id: 'sess_crashed',
+        adopted_at: hoursAgo(2),
+      }),
+      workspace.dir,
+    );
+
+    const resultA = adoptClaimSession('clm_race', 'sess_reclaim_a', workspace.dir);
+    assert.equal(resultA.adopted, true, 'first adopter wins');
+
+    // After adopter A owns the claim, its session goes live (worker starts
+    // emitting heartbeats). A straggler adopter B that was still looking at
+    // the OLD dead session file must be refused once it contends.
+    writeSession('sess_reclaim_a', workspace.dir, 0);
+
+    const resultB = adoptClaimSession('clm_race', 'sess_reclaim_b', workspace.dir);
+    assert.equal(resultB.adopted, false, 'second adopter refused because winner is now live');
+    assert.match(resultB.reason, /live session/);
+
+    // Claim still belongs to A.
+    const reloaded = loadClaim('clm_race', workspace.dir);
+    assert.equal(reloaded.session_id, 'sess_reclaim_a');
+  });
 });

@@ -58,10 +58,18 @@ export function runDispatchAnalysis(options: DispatchCommandOptions): void {
     console.log(`\n🔵 Active (${analysis.active.length}):`);
     for (const a of analysis.active) {
       const lane = a.lane ? ` [${a.lane}]` : '';
-      const livenessTag = a.liveness && a.liveness !== 'live' && a.liveness !== 'young'
-        ? ` [${a.liveness.toUpperCase()}]`
-        : '';
-      console.log(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} working${livenessTag}`);
+      // Codex r1 finding: on the dispatch surface, `young` is NOT a no-alarm
+      // state — it means the coordinator claim exists but no worker session
+      // has adopted it yet. "agent working" would mislead the operator into
+      // thinking the lane is actively progressing.
+      let status = 'working';
+      let livenessTag = '';
+      if (a.liveness === 'young' && !a.claim.session_id) {
+        status = 'pending adoption';
+      } else if (a.liveness && a.liveness !== 'live' && a.liveness !== 'young') {
+        livenessTag = ` [${a.liveness.toUpperCase()}]`;
+      }
+      console.log(`  ${a.plan.short_label ?? a.plan.id}${lane} — ${a.agent} ${status}${livenessTag}`);
     }
   }
 

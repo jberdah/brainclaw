@@ -587,35 +587,43 @@ export function linkClaimToAssignment(claimId: string, assignmentId: string, cwd
  * Adopt a claim from a spawned instance's session.
  * Sets session_id + adopted_at on the claim. Refuses if the claim is already
  * adopted by a different live session (prevents race conditions).
+ *
+ * Codex r1 finding (pln#388 stp_aa095668 review): the whole load/decide/save
+ * sequence runs inside a single `mutate` critical section so two reconnecting
+ * workers racing on a dead-session claim cannot both succeed — the second
+ * adopter re-reads the claim under the lock and observes the first
+ * adopter's session_id as live.
  */
 export function adoptClaimSession(
   claimId: string,
   sessionId: string,
   cwd?: string,
 ): { adopted: boolean; reason: string } {
-  const claim = loadClaim(claimId, cwd);
-  if (claim.status !== 'active') {
-    return { adopted: false, reason: `Claim ${claimId} is not active (status: ${claim.status})` };
-  }
-  if (claim.session_id && claim.session_id !== sessionId) {
-    // Check if the existing session is still alive — allow re-adoption if dead/stale
-    let isAlive = false;
-    try {
-      const existingSession = loadSessionById(claim.session_id, cwd);
-      if (existingSession) {
-        let ttlMs = 4 * 3_600_000; // default 4h
-        try { ttlMs = parseTtl(loadConfig(cwd).implicit_session_ttl ?? '4h'); } catch { /* use default */ }
-        const lastSeen = new Date(existingSession.last_seen_at).getTime();
-        isAlive = !isNaN(lastSeen) && (Date.now() - lastSeen) < ttlMs;
-      }
-    } catch { /* session file error — treat as dead */ }
-    if (isAlive) {
-      return { adopted: false, reason: `Claim ${claimId} already adopted by live session ${claim.session_id}` };
+  return mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    if (claim.status !== 'active') {
+      return { adopted: false, reason: `Claim ${claimId} is not active (status: ${claim.status})` };
     }
-    // Existing session is dead/stale — allow re-adoption
-  }
-  claim.session_id = sessionId;
-  claim.adopted_at = nowISO();
-  saveClaim(claim, cwd);
-  return { adopted: true, reason: 'ok' };
+    if (claim.session_id && claim.session_id !== sessionId) {
+      // Check if the existing session is still alive — allow re-adoption if dead/stale
+      let isAlive = false;
+      try {
+        const existingSession = loadSessionById(claim.session_id, cwd);
+        if (existingSession) {
+          let ttlMs = 4 * 3_600_000; // default 4h
+          try { ttlMs = parseTtl(loadConfig(cwd).implicit_session_ttl ?? '4h'); } catch { /* use default */ }
+          const lastSeen = new Date(existingSession.last_seen_at).getTime();
+          isAlive = !isNaN(lastSeen) && (Date.now() - lastSeen) < ttlMs;
+        }
+      } catch { /* session file error — treat as dead */ }
+      if (isAlive) {
+        return { adopted: false, reason: `Claim ${claimId} already adopted by live session ${claim.session_id}` };
+      }
+      // Existing session is dead/stale — allow re-adoption
+    }
+    claim.session_id = sessionId;
+    claim.adopted_at = nowISO();
+    saveClaim(claim, cwd);
+    return { adopted: true, reason: 'ok' };
+  });
 }
