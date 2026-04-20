@@ -224,6 +224,31 @@ When Brainclaw detects generated local agent files such as `.mcp.json` or `.clau
 
 In `multi-project` mode with `projects.strategy: folder`, `doctor` now checks the effective workspace project set, not just `config.projects.known`. That avoids false positives on workspaces that resolve child stores from the filesystem or global project registry.
 
+#### Repair candidates (pln#397)
+
+`doctor --json` also emits a `repair_candidates[]` array listing machine-readable remediation actions. Each entry has `{ action, target, description, safe, related_check }`. Safe candidates are pure-creation or idempotent; unsafe candidates relocate existing files and require explicit confirmation. Consume them with `brainclaw repair`.
+
+### `brainclaw repair`
+
+Apply the structured `repair_candidates[]` surfaced by `doctor`. By default only `safe: true` candidates run; unsafe candidates stay deferred with a clear reason.
+
+| Option | Description |
+|---|---|
+| `--dry-run` | Print the plan without executing anything |
+| `--include-unsafe` | Also apply candidates flagged unsafe (files are **relocated**, never deleted) |
+| `--json` | Output as JSON |
+
+```bash
+brainclaw repair --dry-run          # preview
+brainclaw repair                    # execute safe actions
+brainclaw repair --include-unsafe   # include quarantine etc.
+brainclaw repair --json             # structured output
+```
+
+Preservation guarantees: the repair module never calls `unlink`/`rm`/`rmdir`. Unsafe actions (e.g. malformed inbox messages) are relocated to labelled parking directories such as `coordination/inbox/.quarantine/` so operators can recover them manually. A preservation banner lists exactly what moves and where before execution.
+
+Today the flow covers missing entity subdirectories (`mkdir` action) and inbox hygiene (`move_inbox_message`, `quarantine_inbox_message`). More actions — orphaned agent references, mixed-version drift — land as additional repair candidates emitted by `doctor`.
+
 ### `brainclaw rebuild`
 
 Regenerate `project.md` from canonical state. No options.
