@@ -123,6 +123,19 @@ export function createSequence(input: CreateSequenceInput, cwd?: string): { id: 
   return { id, shortLabel: short_label, name: input.name };
 }
 
+export function deleteSequence(id: string, cwd?: string): { id: string; name: string } {
+  return mutate({ cwd }, () => {
+    ensureSequencesDir(cwd);
+    const store = sequenceStore(cwd, 'write');
+    const current = store.list().find((entry) => entry.id === id || entry.short_label === id);
+    if (!current) {
+      throw new Error(`Sequence not found: ${id}`);
+    }
+    store.delete(current.id);
+    return { id: current.id, name: current.name };
+  });
+}
+
 export function updateSequence(input: UpdateSequenceInput, cwd?: string): Sequence {
   return mutate({ cwd }, () => {
     ensureSequencesDir(cwd);

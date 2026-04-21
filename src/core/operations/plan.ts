@@ -8,7 +8,7 @@
  */
 import { mutateState } from '../state.js';
 import { generateIdWithLabel, generateId, nowISO } from '../ids.js';
-import type { PlanItem, PlanStep, PlanStatus, PlanType, Priority } from '../schema.js';
+import type { PlanItem, PlanStep, PlanStatus, PlanStepStatus, PlanType, Priority } from '../schema.js';
 
 // ── Create Plan ──────────────────────────────────────────────
 
@@ -206,6 +206,109 @@ export function completeStep(input: CompleteStepInput, cwd?: string): CompleteSt
     }
 
     return { stepId: step.id, planId: plan.id, totalSteps, doneSteps, planAutoCompleted };
+  }, cwd);
+
+  return result;
+}
+
+// ── Update Step ─────────────────────────────────────────────
+
+export interface UpdateStepInput {
+  planId: string;
+  stepId: string;
+  status?: PlanStepStatus;
+  text?: string;
+  assignee?: string;
+}
+
+export interface UpdateStepResult {
+  stepId: string;
+  planId: string;
+  totalSteps: number;
+  doneSteps: number;
+  planAutoCompleted: boolean;
+}
+
+export function updateStep(input: UpdateStepInput, cwd?: string): UpdateStepResult {
+  const result = mutateState((state) => {
+    const plan = state.plan_items.find(
+      (p) => p.id === input.planId || p.short_label === input.planId,
+    );
+    if (!plan) {
+      throw new Error(`Plan '${input.planId}' not found.`);
+    }
+    if (!plan.steps || plan.steps.length === 0) {
+      throw new Error(`Plan '${input.planId}' has no steps.`);
+    }
+
+    const step = plan.steps.find(
+      (s) => s.id === input.stepId,
+    );
+    if (!step) {
+      throw new Error(`Step '${input.stepId}' not found in plan '${input.planId}'.`);
+    }
+
+    const timestamp = nowISO();
+    if (input.status) step.status = input.status;
+    if (input.text !== undefined) step.text = input.text;
+    if (input.assignee !== undefined) step.assignee = input.assignee || undefined;
+    step.updated_at = timestamp;
+    plan.updated_at = timestamp;
+
+    const totalSteps = plan.steps.length;
+    const doneSteps = plan.steps.filter((s) => s.status === 'done').length;
+
+    let planAutoCompleted = false;
+    if (doneSteps === totalSteps && plan.status !== 'done') {
+      plan.status = 'done';
+      plan.completed_at = timestamp;
+      planAutoCompleted = true;
+    }
+
+    return { stepId: step.id, planId: plan.id, totalSteps, doneSteps, planAutoCompleted };
+  }, cwd);
+
+  return result;
+}
+
+// ── Delete Step ─────────────────────────────────────────────
+
+export interface DeleteStepInput {
+  planId: string;
+  stepId: string;
+}
+
+export interface DeleteStepResult {
+  stepId: string;
+  planId: string;
+  totalSteps: number;
+  doneSteps: number;
+}
+
+export function deleteStep(input: DeleteStepInput, cwd?: string): DeleteStepResult {
+  const result = mutateState((state) => {
+    const plan = state.plan_items.find(
+      (p) => p.id === input.planId || p.short_label === input.planId,
+    );
+    if (!plan) {
+      throw new Error(`Plan '${input.planId}' not found.`);
+    }
+    if (!plan.steps || plan.steps.length === 0) {
+      throw new Error(`Plan '${input.planId}' has no steps.`);
+    }
+
+    const idx = plan.steps.findIndex((s) => s.id === input.stepId);
+    if (idx < 0) {
+      throw new Error(`Step '${input.stepId}' not found in plan '${input.planId}'.`);
+    }
+
+    plan.steps.splice(idx, 1);
+    plan.updated_at = nowISO();
+
+    const totalSteps = plan.steps.length;
+    const doneSteps = plan.steps.filter((s) => s.status === 'done').length;
+
+    return { stepId: input.stepId, planId: plan.id, totalSteps, doneSteps };
   }, cwd);
 
   return result;

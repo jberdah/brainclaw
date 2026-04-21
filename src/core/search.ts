@@ -1,5 +1,6 @@
 import { loadState } from './state.js';
 import { listCandidates } from './candidates.js';
+import { listSequences } from './sequence.js';
 import type { State } from './schema.js';
 
 export interface SearchResult {
@@ -40,7 +41,7 @@ function tokenize(text: string): string[] {
     .filter(t => t.length > 1);
 }
 
-function buildCorpus(state: State, includePending: boolean): BM25Doc[] {
+function buildCorpus(state: State, includePending: boolean, cwd?: string): BM25Doc[] {
   const docs: BM25Doc[] = [];
 
   const add = (section: string, item: SearchCorpusInput) => {
@@ -53,6 +54,26 @@ function buildCorpus(state: State, includePending: boolean): BM25Doc[] {
   for (const t of state.known_traps) add('traps', { ...t, text: t.text });
   for (const h of state.open_handoffs) add('handoffs', { ...h, text: `${h.from} -> ${h.to}: ${h.text}` });
   for (const p of state.plan_items) add('plans', p);
+
+  // Index sequences: combine name, description, item labels/lanes into searchable text
+  try {
+    const sequences = listSequences(cwd);
+    for (const seq of sequences) {
+      const itemTexts = (seq.items ?? []).map(
+        (it) => [it.lane, it.scope_hint, (it as Record<string, unknown>).label as string, it.rationale].filter(Boolean).join(' '),
+      );
+      const text = [seq.name, seq.description ?? '', ...itemTexts].join(' — ');
+      add('sequences', {
+        id: seq.id,
+        text,
+        author: seq.author,
+        created_at: seq.created_at,
+        tags: seq.tags ?? [],
+      });
+    }
+  } catch {
+    // Sequences dir may not exist yet — non-fatal
+  }
 
   if (includePending) {
     const candidates = listCandidates('pending');
@@ -160,6 +181,6 @@ export function searchCorpus(documents: SearchCorpusDocument[], options: Omit<Se
 
 export function search(options: SearchOptions): SearchResult[] {
   const state = loadState(options.cwd);
-  const corpus = buildCorpus(state, options.includePending ?? false);
+  const corpus = buildCorpus(state, options.includePending ?? false, options.cwd);
   return searchCorpus(corpus, options);
 }
