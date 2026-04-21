@@ -311,6 +311,61 @@ describe('instruction-templates', () => {
     });
   });
 
+  describe('user workflow', () => {
+    it('is included on all tiers', () => {
+      for (const agent of ['claude-code', 'roo', 'openclaw']) {
+        const result = renderBrainclawSection(makeInput(agent));
+        assert.ok(
+          result.sectionsIncluded.includes('user-workflow'),
+          `${agent} missing user-workflow section`,
+        );
+        assert.ok(result.content.includes('## brainclaw — user workflow'));
+      }
+    });
+
+    it('describes the canonical flow keywords', () => {
+      const result = renderBrainclawSection(makeInput('claude-code'));
+      for (const keyword of [
+        'ideation',
+        'plan',
+        'sequence',
+        'claim',
+        'implement',
+        'release claim',
+        'review',
+        'merge',
+      ]) {
+        assert.ok(
+          result.content.includes(keyword),
+          `user workflow should mention "${keyword}"`,
+        );
+      }
+    });
+
+    it('maps core entities to their role in the flow', () => {
+      const result = renderBrainclawSection(makeInput('claude-code'));
+      for (const entity of ['plan', 'step', 'sequence', 'claim', 'handoff', 'candidate']) {
+        assert.ok(
+          result.content.includes(`\`${entity}\``),
+          `entity cheatsheet should mention \`${entity}\``,
+        );
+      }
+    });
+
+    it('marks Review & Fix Loop as implemented and other loops as planned', () => {
+      const result = renderBrainclawSection(makeInput('claude-code'));
+      assert.ok(result.content.includes('Review & Fix Loop'));
+      assert.ok(
+        result.content.includes('Review & Fix Loop — *implemented*'),
+        'Review & Fix Loop must be marked implemented',
+      );
+      assert.ok(
+        /Ideation.*planned/i.test(result.content),
+        'Ideation loop must be marked planned',
+      );
+    });
+  });
+
   describe('cross-tier consistency', () => {
     it('all tiers include header and protocol', () => {
       for (const agent of ['claude-code', 'roo', 'openclaw']) {

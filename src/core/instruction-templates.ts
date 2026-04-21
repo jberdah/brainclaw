@@ -96,6 +96,9 @@ function renderStableTierA(input: InstructionTemplateInput): InstructionTemplate
   sections.push(renderSessionProtocol());
   included.push('protocol');
 
+  sections.push(renderUserWorkflow());
+  included.push('user-workflow');
+
   sections.push(renderAvailableTools());
   included.push('available-tools');
 
@@ -119,6 +122,9 @@ function renderStableTierB(input: InstructionTemplateInput): InstructionTemplate
 
   sections.push(renderSessionProtocol());
   included.push('protocol');
+
+  sections.push(renderUserWorkflow());
+  included.push('user-workflow');
 
   const rules = renderWorkingRules(input.state);
   if (rules) { sections.push(rules); included.push('working-rules'); }
@@ -168,6 +174,9 @@ function renderStableTierC(input: InstructionTemplateInput): InstructionTemplate
 
   sections.push(renderSessionProtocol());
   included.push('protocol');
+
+  sections.push(renderUserWorkflow());
+  included.push('user-workflow');
 
   const rules = renderWorkingRules(input.state);
   if (rules) { sections.push(rules); included.push('working-rules'); }
@@ -241,6 +250,31 @@ function renderSessionProtocol(): string {
     '3. Do not assume project state without reading brainclaw context first.',
     '',
     '_Escalation path (only when you orchestrate other agents):_ `bclaw_coordinate(intent)` to assign/consult/review, `bclaw_dispatch(intent)` for sequence lanes, `bclaw_loop` for multi-turn review/ideation loops.',
+  ].join('\n');
+}
+
+function renderUserWorkflow(): string {
+  return [
+    '## brainclaw — user workflow',
+    '',
+    'The intended end-to-end flow, executable by a single agent:',
+    '',
+    '    ideation → plan (+ steps) → sequence → claim → implement → release claim → review → close step/plan → merge',
+    '',
+    'Multi-agent coordination is optional — use the escalation path only when delegating to another agent.',
+    '',
+    '**Entity → role in the flow:**',
+    '- `plan` — intended outcome. Create with `bclaw_create(plan, …)`, decompose with `bclaw_add_step`.',
+    '- `step` — incremental unit inside a plan; mark done with `bclaw_complete_step` as you implement.',
+    '- `sequence` — ordered lanes when work can be parallelized across claims/agents.',
+    '- `claim` — advisory reservation of a scope before editing; release once implementation is ready for review.',
+    '- `handoff` — immutable snapshot of what moved to the next stage (review, merge).',
+    '- `candidate` — proposed decision / constraint / trap awaiting review before entering durable memory.',
+    '- `decision` / `constraint` / `trap` / `runtime_note` — captured along the way to preserve context for future sessions.',
+    '',
+    '**Loops (`bclaw_loop`, advanced — delegates multi-turn work to other agents):**',
+    '- Review & Fix Loop — *implemented*. Delegates review+fix to another agent, then loops back until no blocking findings remain.',
+    '- Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/agent-first-model.md` §3.',
   ].join('\n');
 }
 
