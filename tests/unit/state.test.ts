@@ -146,4 +146,39 @@ describe('core/state', () => {
       'valid plan file should remain on disk',
     );
   });
+
+  it('preserves schema-invalid legacy plan files during legacy cleanup', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    const legacyPlansDir = path.join(dir, '.brainclaw', 'plans');
+    fs.mkdirSync(legacyPlansDir, { recursive: true });
+    const invalidLegacyPath = path.join(legacyPlansDir, 'pln_legacy_orphan.json');
+    fs.writeFileSync(
+      invalidLegacyPath,
+      JSON.stringify({
+        schema_version: 2,
+        id: 'pln_legacy_orphan',
+        text: 'Legacy JSON-valid plan missing required author/status fields',
+        created_at: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+
+    mutateState((state) => {
+      state.recent_decisions.push({
+        id: 'dec_probe',
+        short_label: 'dec#1',
+        text: 'Trigger write with empty canonical plans dir',
+        created_at: '2026-01-01T00:02:00.000Z',
+        author: 'tester',
+        tags: [],
+      });
+    }, dir);
+
+    assert.equal(
+      fs.existsSync(invalidLegacyPath),
+      true,
+      'schema-invalid legacy plan file must not be deleted by legacy cleanup',
+    );
+  });
 });

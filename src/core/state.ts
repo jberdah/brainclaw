@@ -136,28 +136,36 @@ function persistStateUnlocked(state: State, cwd: string, options: PersistStateOp
   try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
 }
 
-function cleanupLegacyDir(entityName: string, currentIds: Set<string>, cwd: string): void {
+function cleanupLegacyDir<T extends { id: string }>(
+  entityName: string,
+  currentIds: Set<string>,
+  cwd: string,
+  documentType: VersionedDocumentType,
+  schema: ZodType<T, ZodTypeDef, unknown>,
+): void {
   const writeDir = resolveEntityDir(entityName, cwd, 'write');
   const readDir = resolveEntityDir(entityName, cwd, 'read');
   // If read resolves to a different (legacy) directory, clean orphans there too.
-  // We don't have the schema here, so we skip deletion rather than risk silent loss —
-  // stale legacy files are harmless; silent data loss is not. If the legacy cleanup
-  // matters later, operators can use bclaw_compact to handle it explicitly.
+  // Match syncDirectory's safety condition: only delete parseable records that
+  // are absent from the current state. Schema-invalid legacy files may be drifted
+  // data that operators still need to inspect or repair.
   if (readDir !== writeDir && fs.existsSync(readDir)) {
     const files = fs.readdirSync(readDir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       const id = file.replace('.json', '');
       if (currentIds.has(id)) continue;
-      // Attempt a best-effort JSON parse. Only delete if the file is at least
-      // valid JSON; anything else is preserved so corruption does not cascade.
       const filepath = path.join(readDir, file);
+      let parseable = false;
       try {
-        JSON.parse(fs.readFileSync(filepath, 'utf8'));
+        schema.parse(loadVersionedJsonFile<T>(documentType, filepath).document);
+        parseable = true;
       } catch {
         logger.warn(`Preserving unparseable legacy ${entityName} file ${file}`);
         continue;
       }
-      fs.unlinkSync(filepath);
+      if (parseable) {
+        fs.unlinkSync(filepath);
+      }
     }
   }
 }
@@ -183,7 +191,7 @@ function writeStateDirectories(state: State, cwd?: string): void {
     const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
     syncDirectory(writeDir, items, docType, schema);
     const currentIds = new Set(items.map(item => item.id));
-    cleanupLegacyDir(name, currentIds, effectiveCwd);
+    cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema);
   }
 }
 
