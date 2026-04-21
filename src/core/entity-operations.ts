@@ -43,7 +43,6 @@ import {
   createPlan,
   deletePlan,
   updatePlan,
-  type CreatePlanInput,
   type UpdatePlanInput,
 } from './operations/plan.js';
 import {
@@ -220,6 +219,17 @@ function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
   if (filter.plan_id) {
     result = result.filter((item) => item.plan_id === filter.plan_id);
   }
+  if (filter.source) {
+    result = result.filter((item) => item.source === filter.source);
+  }
+  if (typeof filter.auto_generated === 'boolean') {
+    result = result.filter((item) => {
+      const source = typeof item.source === 'string' ? item.source : undefined;
+      const origin = typeof item.origin === 'string' ? item.origin : undefined;
+      const isAuto = source === 'auto' || origin?.startsWith('session-end') === true;
+      return filter.auto_generated ? isAuto : !isAuto;
+    });
+  }
   return result;
 }
 
@@ -253,7 +263,22 @@ export function createEntity(
 ): CreateResult {
   switch (name) {
     case 'plan': {
-      const res = createPlan(data as unknown as CreatePlanInput, cwd);
+      // Explicit field whitelist + required-author check brings plan create in line
+      // with decision/constraint/trap above. Previous behaviour (`data as CreatePlanInput`)
+      // bypassed validation and allowed schema-invalid plan files on disk, which
+      // were then silently GC'd at the next state mutation. See fix plan pln_5f44426c.
+      const res = createPlan({
+        text: requireString(data, 'text'),
+        author: requireString(data, 'author'),
+        type: data.type as PlanItem['type'] | undefined,
+        priority: data.priority as PlanItem['priority'] | undefined,
+        assignee: data.assignee as string | undefined,
+        project: data.project as string | undefined,
+        tags: data.tags as string[] | undefined,
+        relatedPaths: data.related_paths as string[] | undefined,
+        dependsOn: data.depends_on as string[] | undefined,
+        estimatedEffort: data.estimated_effort as number | undefined,
+      }, cwd);
       stampProvenanceOnStateItem('plan', res.id, defaultProvenance(data), cwd);
       return { entity: name, id: res.id, short_label: res.shortLabel };
     }
@@ -324,6 +349,8 @@ export function createEntity(
         starred_by: [],
         usage_count: 0,
         usage_events: [],
+        source: data.source as Candidate['source'],
+        origin: data.origin as string | undefined,
         provenance: defaultProvenance(data),
       };
       saveCandidate(candidate, cwd);

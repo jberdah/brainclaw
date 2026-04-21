@@ -9,6 +9,7 @@ import { appendEvent } from './event-log.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
 import { rebuildProjectMd } from './markdown.js';
 import { refreshLiveCompanions } from '../commands/export.js';
+import { logger } from './logger.js';
 export function emptyState(): State {
   return {
     version: 1,
@@ -32,8 +33,10 @@ function loadDirectoryItems<T>(
   for (const file of files) {
     try {
       items.push(schema.parse(loadVersionedJsonFile<T>(documentType, path.join(dirPath, file)).document));
-    } catch {
-      // skip invalid files
+    } catch (error) {
+      // Record-level schema failure. We preserve the file on disk (see syncDirectory)
+      // so nothing is silently lost, but surface the drift so operators can repair.
+      logger.warn(`Invalid ${documentType} file ${file} in ${dirPath}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return items;
@@ -64,6 +67,7 @@ function syncDirectory<T extends { id: string }>(
   dirPath: string,
   items: T[],
   documentType: VersionedDocumentType,
+  schema: ZodType<T, ZodTypeDef, unknown>,
 ) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -77,12 +81,28 @@ function syncDirectory<T extends { id: string }>(
     saveVersionedJsonFile(documentType, filepath, item);
   }
 
-  // Remove files that are no longer in the state (e.g. if deleted/pruned)
+  // Remove files that are no longer in the state (e.g. if deleted/pruned).
+  // CRITICAL: we must distinguish "file dropped from state intentionally" from
+  // "file silently dropped by loadDirectoryItems because its schema.parse threw".
+  // Deleting the second kind corrupts data (see trap: silent-data-loss via
+  // load-swallow + write-sync-GC). So before unlinking, we re-validate the file
+  // against the schema. Parseable + not in state = intentional remove → unlink.
+  // Unparseable = preserved, operator can inspect/repair.
   const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'));
   for (const file of files) {
     const id = file.replace('.json', '');
-    if (!currentIds.has(id)) {
-      fs.unlinkSync(path.join(dirPath, file));
+    if (currentIds.has(id)) continue;
+
+    const filepath = path.join(dirPath, file);
+    let parseable = false;
+    try {
+      schema.parse(loadVersionedJsonFile<T>(documentType, filepath).document);
+      parseable = true;
+    } catch {
+      // Already logged by loadDirectoryItems — leave the file in place.
+    }
+    if (parseable) {
+      fs.unlinkSync(filepath);
     }
   }
 }
@@ -119,14 +139,25 @@ function persistStateUnlocked(state: State, cwd: string, options: PersistStateOp
 function cleanupLegacyDir(entityName: string, currentIds: Set<string>, cwd: string): void {
   const writeDir = resolveEntityDir(entityName, cwd, 'write');
   const readDir = resolveEntityDir(entityName, cwd, 'read');
-  // If read resolves to a different (legacy) directory, clean orphans there too
+  // If read resolves to a different (legacy) directory, clean orphans there too.
+  // We don't have the schema here, so we skip deletion rather than risk silent loss —
+  // stale legacy files are harmless; silent data loss is not. If the legacy cleanup
+  // matters later, operators can use bclaw_compact to handle it explicitly.
   if (readDir !== writeDir && fs.existsSync(readDir)) {
     const files = fs.readdirSync(readDir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       const id = file.replace('.json', '');
-      if (!currentIds.has(id)) {
-        fs.unlinkSync(path.join(readDir, file));
+      if (currentIds.has(id)) continue;
+      // Attempt a best-effort JSON parse. Only delete if the file is at least
+      // valid JSON; anything else is preserved so corruption does not cascade.
+      const filepath = path.join(readDir, file);
+      try {
+        JSON.parse(fs.readFileSync(filepath, 'utf8'));
+      } catch {
+        logger.warn(`Preserving unparseable legacy ${entityName} file ${file}`);
+        continue;
       }
+      fs.unlinkSync(filepath);
     }
   }
 }
@@ -135,17 +166,22 @@ function writeStateDirectories(state: State, cwd?: string): void {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
 
-  const entities: Array<{ name: string; items: { id: string }[]; docType: VersionedDocumentType }> = [
-    { name: 'constraints', items: state.active_constraints, docType: 'constraint' },
-    { name: 'decisions', items: state.recent_decisions, docType: 'decision' },
-    { name: 'traps', items: state.known_traps, docType: 'trap' },
-    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff' },
-    { name: 'plans', items: state.plan_items, docType: 'plan' },
+  const entities: Array<{
+    name: string;
+    items: { id: string }[];
+    docType: VersionedDocumentType;
+    schema: ZodType<{ id: string }, ZodTypeDef, unknown>;
+  }> = [
+    { name: 'constraints', items: state.active_constraints, docType: 'constraint', schema: ConstraintSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
+    { name: 'decisions', items: state.recent_decisions, docType: 'decision', schema: DecisionSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
+    { name: 'traps', items: state.known_traps, docType: 'trap', schema: TrapSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
+    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff', schema: HandoffSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
+    { name: 'plans', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
   ];
 
-  for (const { name, items, docType } of entities) {
+  for (const { name, items, docType, schema } of entities) {
     const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
-    syncDirectory(writeDir, items, docType);
+    syncDirectory(writeDir, items, docType, schema);
     const currentIds = new Set(items.map(item => item.id));
     cleanupLegacyDir(name, currentIds, effectiveCwd);
   }

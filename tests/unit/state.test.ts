@@ -81,4 +81,69 @@ describe('core/state', () => {
     assert.equal(state.recent_decisions.length, 1);
     assert.equal(fs.existsSync(path.join(dir, '.brainclaw', 'coordination', 'plans', 'pln_test.json')), true);
   });
+
+  it('preserves schema-invalid plan files across mutateState instead of silently deleting them', () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    // Seed one valid plan so the directory exists and the sync loop runs.
+    mutateState((state) => {
+      state.plan_items.push({
+        id: 'pln_valid',
+        short_label: 'pln#1',
+        text: 'Valid plan',
+        type: 'fix',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+        author: 'tester',
+        status: 'todo',
+        priority: 'medium',
+        tags: [],
+        depends_on: [],
+      });
+    }, dir);
+
+    // Drop an invalid plan file (missing required `author`) — this is what
+    // bclaw_create would do before fix pln_5f44426c.
+    const plansDir = path.join(dir, '.brainclaw', 'coordination', 'plans');
+    const invalidPath = path.join(plansDir, 'pln_orphan.json');
+    fs.writeFileSync(
+      invalidPath,
+      JSON.stringify({
+        schema_version: 2,
+        id: 'pln_orphan',
+        text: 'Missing author, tags, status — invalid',
+        created_at: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+
+    assert.equal(fs.existsSync(invalidPath), true, 'invalid plan file should start on disk');
+
+    // Trigger a mutation that forces writeStateDirectories.
+    mutateState((state) => {
+      state.recent_decisions.push({
+        id: 'dec_probe',
+        short_label: 'dec#1',
+        text: 'Probe mutation',
+        created_at: '2026-01-01T00:02:00.000Z',
+        author: 'tester',
+        tags: [],
+      });
+    }, dir);
+
+    // Before the fix, syncDirectory would unlink pln_orphan.json because it is
+    // not in the loaded state. After the fix, the unparseable file is preserved.
+    assert.equal(
+      fs.existsSync(invalidPath),
+      true,
+      'invalid plan file must NOT be silently deleted by syncDirectory',
+    );
+
+    // The valid plan should still be there.
+    assert.equal(
+      fs.existsSync(path.join(plansDir, 'pln_valid.json')),
+      true,
+      'valid plan file should remain on disk',
+    );
+  });
 });

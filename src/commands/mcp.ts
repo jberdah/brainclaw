@@ -1959,6 +1959,36 @@ function ensureTrust(
   }
 }
 
+/**
+ * Resolve the agent identity for canonical-grammar mutation verbs
+ * (bclaw_create/update/remove/transition). Returns a best-effort identity so
+ * that handlers can auto-fill required fields (e.g. plan.author) instead of
+ * letting the create land on disk with a missing field — which would then be
+ * silently GC'd by the state sync loop (see fix plan pln_5f44426c).
+ *
+ * Falls back to args.agent if resolution fails, and finally to 'unknown'.
+ */
+function resolveCanonicalAuthor(
+  args: Record<string, unknown>,
+  cwd?: string,
+  connectionSessionId?: string,
+): { agent_name: string; agent_id?: string } {
+  const resolved = resolveMutationIdentity(
+    args,
+    { nameField: 'agent', idField: 'agentId' },
+    cwd,
+    connectionSessionId,
+  );
+  if ('identity' in resolved && resolved.identity) {
+    return {
+      agent_name: resolved.identity.agent_name,
+      agent_id: resolved.identity.agent_id,
+    };
+  }
+  const explicit = typeof args.agent === 'string' ? args.agent : undefined;
+  return { agent_name: explicit ?? 'unknown' };
+}
+
 function explicitSessionIdFromEnv(): string | undefined {
   return process.env.BRAINCLAW_SESSION_ID?.trim()
     || process.env.OPENCLAW_SESSION_ID?.trim()
@@ -5595,8 +5625,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_create') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
-        const data = (args.data ?? {}) as Record<string, unknown>;
+        const rawData = (args.data ?? {}) as Record<string, unknown>;
+
+        // Auto-fill identity fields. Without this, a caller who omits author/agent
+        // creates a schema-invalid record that is silently dropped on read and
+        // GC'd from disk on the next mutation. Fallback chain:
+        // resolved MCP identity → args.agent → 'unknown'.
+        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const data: Record<string, unknown> = { ...rawData };
+        if (data.author === undefined) data.author = agent_name;
+        if (data.agent === undefined) data.agent = agent_name;
+        if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
+
         const result = createEntity(entity, data, cwd);
+        appendAuditEntry(
+          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'create', item_id: result.id, item_type: entity },
+          cwd,
+        );
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ created ${entity} ${result.id}` }],
@@ -5613,7 +5658,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const patch = (args.patch ?? {}) as Record<string, unknown>;
+        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = updateEntity(entity, id, patch, cwd);
+        appendAuditEntry(
+          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
+          cwd,
+        );
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ updated ${entity} ${id}` }],
@@ -5630,7 +5680,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const purge = args.purge === true;
+        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = removeEntity(entity, id, cwd, purge);
+        appendAuditEntry(
+          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
+          cwd,
+        );
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ removed ${entity} ${id}` }],
@@ -5648,7 +5703,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const id = String(args.id ?? '');
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
+        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = transitionEntity(entity, id, to, cwd, reason);
+        appendAuditEntry(
+          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
+          cwd,
+        );
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}` }],

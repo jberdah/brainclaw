@@ -118,6 +118,50 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       const fetched = getEntity('plan', created.id, workspace.dir) as { status: string };
       assert.equal(fetched.status, 'in_progress');
     });
+
+    it('create rejects missing author (parity with decision/constraint/trap)', () => {
+      // Before fix pln_5f44426c, createEntity('plan', {...}) silently accepted
+      // a payload missing `author`, wrote a schema-invalid file to disk, and the
+      // state sync loop garbage-collected it on the next mutation. The guard
+      // now rejects the call up-front so the caller sees the problem.
+      assert.throws(
+        () => createEntity('plan', { text: 'no author', type: 'feat' }, workspace.dir),
+        /author/,
+      );
+    });
+
+    it('create with only text + author succeeds and persists', () => {
+      const created = createEntity('plan', { text: 'minimal', author: 'jberdah' }, workspace.dir);
+      const fetched = getEntity('plan', created.id, workspace.dir) as { author: string; text: string };
+      assert.equal(fetched.author, 'jberdah');
+      assert.equal(fetched.text, 'minimal');
+    });
+  });
+
+  describe('candidate', () => {
+    it('find honours canonical source and auto_generated filters', () => {
+      const auto = createEntity('candidate', {
+        type: 'decision',
+        text: 'auto candidate',
+        author: 'agent',
+        source: 'auto',
+      }, workspace.dir);
+      const human = createEntity('candidate', {
+        type: 'decision',
+        text: 'human candidate',
+        author: 'user',
+        source: 'human',
+      }, workspace.dir);
+
+      const autoOnly = listEntities('candidate', workspace.dir, { status: 'pending', auto_generated: true });
+      assert.deepEqual(autoOnly.items.map((item: any) => item.id), [auto.id]);
+
+      const nonAuto = listEntities('candidate', workspace.dir, { status: 'pending', auto_generated: false });
+      assert.deepEqual(nonAuto.items.map((item: any) => item.id), [human.id]);
+
+      const bySource = listEntities('candidate', workspace.dir, { source: 'human' });
+      assert.deepEqual(bySource.items.map((item: any) => item.id), [human.id]);
+    });
   });
 
   describe('unsupported entities', () => {
