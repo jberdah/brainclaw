@@ -90,6 +90,11 @@ describe('doctor connectivity', () => {
   it('reports tier-a for codex when AGENTS.md and a valid MCP config are present', () => {
     fs.writeFileSync(path.join(workspaceDir, 'AGENTS.md'), '# test\n', 'utf-8');
     writeCodexToml(homeDir, 'npx', ['brainclaw', 'mcp']);
+    // Codex's default surfaces also include a universal skill file —
+    // tier-a requires every declared surface to exist (not just MCP).
+    const skillDir = path.join(workspaceDir, '.agents', 'skills', 'brainclaw');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# brainclaw skill\n', 'utf-8');
 
     const config = defaultConfig('brainclaw-tests');
     config.agent_integrations.declarations.push(buildAgentIntegrationDeclaration('codex', 'manual'));

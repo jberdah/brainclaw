@@ -89,6 +89,11 @@ describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
 describe('commands/mcp — v1.0 catalog integrity', () => {
   const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8');
 
+  // Canonical grammar verbs — tier:standard in the default catalog.
+  // NOTE: bclaw_context is also a canonical read verb but is tagged
+  // tier:facade (shipped alongside bclaw_work as the entry-point pair).
+  // Its presence in the default catalog is checked in a separate facade
+  // ordering test, not here.
   const CANONICAL_VERBS = [
     'bclaw_find',
     'bclaw_get',
@@ -96,7 +101,6 @@ describe('commands/mcp — v1.0 catalog integrity', () => {
     'bclaw_update',
     'bclaw_remove',
     'bclaw_transition',
-    'bclaw_context',
     'bclaw_correct_handoff',
   ];
 

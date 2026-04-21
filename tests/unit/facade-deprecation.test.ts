@@ -4,11 +4,15 @@ import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { saveState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
+// Expected warning strings must match LEGACY_MCP_TOOL_WARNINGS and
+// REMOVED_TOOL_REDIRECTS in src/commands/mcp.ts. bclaw_get_context was
+// escalated from "Deprecated" to "Removed in v1.0" when the canonical
+// grammar (bclaw_context) promoted to default tier.
 const LEGACY_WARNING_BY_TOOL = {
   bclaw_session_start: 'Deprecated: use bclaw_work(intent: execute) which handles session start automatically.',
   bclaw_claim: 'Deprecated: use bclaw_work(intent: execute, scope: ...) which creates claims automatically.',
-  bclaw_get_context: 'Deprecated: use bclaw_work(intent: consult) which returns context directly.',
-  bclaw_check_policy: 'Deprecated: policy checks are now implicit in bclaw_work.',
+  bclaw_get_context: 'Removed in v1.0: use bclaw_context(kind: "memory") or bclaw_work(intent: consult).',
+  bclaw_check_policy: 'Deprecated: policy checks are now implicit; use bclaw_work which surfaces them at claim time.',
 } as const;
 
 const LEGACY_DISABLED_MESSAGE = 'This tool is disabled. Use bclaw_work or bclaw_coordinate instead.';

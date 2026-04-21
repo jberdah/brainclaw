@@ -93,27 +93,38 @@ describe('instruction-templates', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.ok(result.sectionsIncluded.includes('available-tools'), 'should include available-tools section');
       assert.ok(result.content.includes('## brainclaw — available tools'));
+      // Tools actually rendered by renderAvailableTools() in v1.0 — the post-cut
+      // canonical grammar plus the retained session/plan/inbox/notes/setup
+      // helpers and the escalation facades. Legacy names (bclaw_list_plans,
+      // bclaw_accept, bclaw_get_context, bclaw_dispatch_review) are present
+      // only inside the retirement sentence and are still substring-findable.
       const toolNames = [
         'bclaw_work',
+        'bclaw_context',
+        'bclaw_find',
+        'bclaw_get',
+        'bclaw_create',
+        'bclaw_update',
+        'bclaw_remove',
+        'bclaw_transition',
         'bclaw_coordinate',
+        'bclaw_dispatch',
+        'bclaw_loop',
         'bclaw_session_start',
         'bclaw_session_end',
         'bclaw_claim',
         'bclaw_release_claim',
-        'bclaw_get_context',
-        'bclaw_get_execution_context',
-        'bclaw_get_agent_board',
+        'bclaw_add_step',
+        'bclaw_complete_step',
+        'bclaw_update_step',
+        'bclaw_delete_step',
         'bclaw_read_inbox',
-        'bclaw_read_handoff',
-        'bclaw_list_plans',
-        'bclaw_list_claims',
-        'bclaw_list_candidates',
-        'bclaw_create_candidate',
-        'bclaw_accept',
-        'bclaw_reject',
         'bclaw_ack_message',
+        'bclaw_send_message',
+        'bclaw_correct_handoff',
         'bclaw_write_note',
         'bclaw_quick_capture',
+        'bclaw_search',
         'bclaw_bootstrap',
         'bclaw_release_notes',
         'bclaw_switch',

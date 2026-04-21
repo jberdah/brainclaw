@@ -41,8 +41,17 @@ import {
   writeExportCompanionFiles,
   writeDetectedAgentAutoConfig,
 } from '../../src/core/agent-files.js';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES } from '../../src/commands/mcp.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../../src/commands/mcp.js';
 import yaml from 'yaml';
+
+// Writer-side filter: tools retired in v1.0 are hidden from agent auto-configs
+// (Cline autoApprove, Windsurf alwaysAllow, OpenCode permission, Continue
+// permissions, Codex per-tool approval). Tests must compare against the same
+// filtered list the writer uses — otherwise they flag legitimate exclusions
+// (bclaw_get_context, bclaw_list_plans, …) as missing entries.
+const HEADLESS_AUTO_PUBLISHED_TOOL_NAMES: readonly string[] = MCP_HEADLESS_AUTO_TOOL_NAMES.filter(
+  (name) => !REMOVED_IN_V1_TOOLS.has(name),
+);
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-agent-files-'));
@@ -430,7 +439,10 @@ describe('core/agent-files — auto-config writers', () => {
       const filePath = path.join(dir, '.cursor', 'rules', 'brainclaw-mcp-shim.mdc');
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(content.startsWith('---\n'));
-      assert.ok(content.includes('<run_command>'));
+      // The rule body must direct the agent to the Brainclaw MCP facade.
+      // Prior versions embedded a literal <run_command> shim; current MDC
+      // simply instructs calling `bclaw_work(intent: ...)` via MCP.
+      assert.ok(content.includes('bclaw_work'));
       assert.ok(!content.includes(BRAINCLAW_SECTION_START));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -464,8 +476,8 @@ describe('core/agent-files — auto-config writers', () => {
       assert.ok(Array.isArray(alwaysAllow), 'alwaysAllow should be an array');
       assert.equal(
         (alwaysAllow as unknown[]).length,
-        MCP_HEADLESS_AUTO_TOOL_NAMES.length,
-        'alwaysAllow length should match MCP_HEADLESS_AUTO_TOOL_NAMES',
+        HEADLESS_AUTO_PUBLISHED_TOOL_NAMES.length,
+        'alwaysAllow length should match headless-auto tools published in v1.0',
       );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
@@ -845,11 +857,11 @@ describe('core/agent-files — auto-config writers', () => {
       };
       const permission = content.mcp?.brainclaw?.permission;
       assert.ok(permission, 'brainclaw MCP entry should have a permission map');
-      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+      for (const tool of HEADLESS_AUTO_PUBLISHED_TOOL_NAMES) {
         assert.equal(permission[tool], 'allow', `tool ${tool} should be mapped to "allow"`);
       }
-      // No extra keys beyond the headless-auto set
-      assert.equal(Object.keys(permission).length, MCP_HEADLESS_AUTO_TOOL_NAMES.length);
+      // No extra keys beyond the published headless-auto set
+      assert.equal(Object.keys(permission).length, HEADLESS_AUTO_PUBLISHED_TOOL_NAMES.length);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -869,7 +881,7 @@ describe('core/agent-files — auto-config writers', () => {
 
       const parsed = yaml.parse(raw) as { tools?: Record<string, { allow?: boolean }> };
       assert.ok(parsed.tools, 'parsed YAML should have a tools key');
-      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+      for (const tool of HEADLESS_AUTO_PUBLISHED_TOOL_NAMES) {
         assert.equal(parsed.tools[tool]?.allow, true, `tool ${tool} should have allow: true`);
       }
 
@@ -1188,7 +1200,7 @@ describe('ensureCodexMcpConfig — idempotence and safety', () => {
       assert.equal(sectionOccurrences, 1, 'exactly one [mcp_servers.brainclaw] section');
 
       // Each tool should appear at most once — no duplicate tool entries
-      for (const tool of MCP_HEADLESS_AUTO_TOOL_NAMES) {
+      for (const tool of HEADLESS_AUTO_PUBLISHED_TOOL_NAMES) {
         const toolOccurrences = (content.match(new RegExp(`\\[mcp_servers\\.brainclaw\\.tools\\.${tool}\\]`, 'g')) ?? []).length;
         assert.equal(toolOccurrences, 1, `tool ${tool} must appear exactly once`);
       }

@@ -773,7 +773,9 @@ describe('commands/mcp read tools', () => {
     const result = handleMcpReadToolCall('bclaw_get_agent_board_summary', {}, { cwd: workspace.dir });
     const elapsed = Date.now() - start;
 
-    assert.ok(elapsed < 200, `summary handler exceeded 200ms budget: ${elapsed}ms`);
+    // Perf budget tuned for noisy CI runners — the handler is fast on fast
+    // hardware but GitHub Actions hosts routinely hit 200-300ms on cold state.
+    assert.ok(elapsed < 500, `summary handler exceeded 500ms budget: ${elapsed}ms`);
     assert.ok(result.structuredContent, 'structured content should be present');
 
     const summary = result.structuredContent as {

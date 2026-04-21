@@ -24,8 +24,12 @@ describe('hooks — generateCursorHook', () => {
 
   it('includes brainclaw context and session-end commands', () => {
     const content = generateCursorHook('proj');
-    assert.ok(content.includes('brainclaw context'), 'must reference brainclaw context');
-    assert.ok(content.includes('brainclaw claim release'), 'must reference brainclaw claim release');
+    // CLI fallback line still mentions `brainclaw context` / `session-end`;
+    // MCP calls use the canonical facade names (bclaw_release_claim /
+    // bclaw_session_end). Both shapes must appear so the agent can pick
+    // whichever surface is available.
+    assert.ok(content.includes('brainclaw context'), 'must reference brainclaw context (CLI fallback)');
+    assert.ok(content.includes('bclaw_release_claim'), 'must reference bclaw_release_claim');
     assert.ok(content.includes('session-end'), 'must reference session-end');
   });
 });
@@ -40,7 +44,7 @@ describe('hooks — generateWindsurfHook', () => {
 
   it('includes session-end instructions', () => {
     const content = generateWindsurfHook('proj');
-    assert.ok(content.includes('brainclaw claim release'), 'must reference brainclaw claim release');
+    assert.ok(content.includes('bclaw_release_claim'), 'must reference bclaw_release_claim');
     assert.ok(content.includes('session-end'), 'must reference session-end');
   });
 });

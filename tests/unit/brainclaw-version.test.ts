@@ -47,12 +47,15 @@ describe('core/brainclaw-version', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-version-check-'));
     try {
       const manifestPath = path.join(dir, 'brainclaw-release.json');
+      // Use a clearly-future version so the test stays green regardless of
+      // what the current package.json version is (we only need the comparison
+      // "manifest > installed").
       fs.writeFileSync(manifestPath, JSON.stringify({
         version: 1,
         channel: 'local-pack',
         package_name: 'brainclaw',
-        latest_installable_version: '1.0.0',
-        artifact_path: './brainclaw-1.0.0.tgz',
+        latest_installable_version: '99.0.0',
+        artifact_path: './brainclaw-99.0.0.tgz',
         release_notes: 'Adds local installable update checks.',
       }, null, 2), 'utf-8');
 
@@ -66,8 +69,8 @@ describe('core/brainclaw-version', () => {
       }, dir);
 
       assert.equal(result.status, 'update_available');
-      assert.equal(result.latest_installable_version, '1.0.0');
-      assert.ok(result.install_command?.includes('brainclaw-1.0.0.tgz'));
+      assert.equal(result.latest_installable_version, '99.0.0');
+      assert.ok(result.install_command?.includes('brainclaw-99.0.0.tgz'));
       assert.equal(result.release_notes, 'Adds local installable update checks.');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -198,12 +201,14 @@ describe('core/brainclaw-version', () => {
         action_recommendation: 'Review TTL defaults before upgrading shared projects.',
       };
       const manifestPath = path.join(dir, 'brainclaw-release.json');
+      // Future-proof version (> any currently-shipped package) so the
+      // installable-update check keeps producing `update_available`.
       fs.writeFileSync(manifestPath, JSON.stringify({
         version: 1,
         channel: 'local-pack',
         package_name: 'brainclaw',
-        latest_installable_version: '1.0.0',
-        artifact_path: './brainclaw-1.0.0.tgz',
+        latest_installable_version: '99.0.0',
+        artifact_path: './brainclaw-99.0.0.tgz',
         release_notes: 'Claim TTL.',
         agent_release_notes: arn,
       }, null, 2), 'utf-8');

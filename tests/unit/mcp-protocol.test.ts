@@ -7,6 +7,7 @@ import { loadState, saveState } from '../../src/core/state.js';
 import {
   MCP_SERVER_NOT_INITIALIZED,
   McpServerConnection,
+  SCHEMA_VERSION,
   createInitializeResult,
   executeMcpToolCall,
   parseMcpLine,
@@ -38,7 +39,7 @@ describe('commands/mcp protocol core', () => {
   it('creates initialize payloads for supported protocol versions', () => {
     assert.deepEqual(createInitializeResult('2025-11-25'), {
       protocolVersion: '2025-11-25',
-      serverInfo: { name: 'brainclaw', version: '0.6.0' },
+      serverInfo: { name: 'brainclaw', version: SCHEMA_VERSION },
       capabilities: { tools: { listChanged: false } },
     });
     assert.equal(createInitializeResult('2024-11-05').protocolVersion, '2024-11-05');
@@ -56,7 +57,7 @@ describe('commands/mcp protocol core', () => {
           response: {
             content: [{ type: 'text', text: 'ok' }],
             isError: false,
-            schema_version: '0.6.0',
+            schema_version: SCHEMA_VERSION,
           },
           nextConnectionSessionId: 'sess_conn_1',
         };
@@ -115,7 +116,7 @@ describe('commands/mcp protocol core', () => {
       cwd: process.cwd(),
       send: (message) => sent.push(message),
       executeTool: async () => ({
-        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
       }),
     });
 
@@ -132,7 +133,7 @@ describe('commands/mcp protocol core', () => {
       cwd: process.cwd(),
       send: (message) => negotiatedSent.push(message),
       executeTool: async () => ({
-        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
       }),
     });
     negotiated.handleLine(JSON.stringify({
@@ -151,7 +152,7 @@ describe('commands/mcp protocol core', () => {
       cwd: process.cwd(),
       send: (message) => sent.push(message),
       executeTool: async () => ({
-        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
       }),
     });
 
@@ -178,7 +179,7 @@ describe('commands/mcp protocol core', () => {
       cwd: process.cwd(),
       send: (message) => sent.push(message),
       executeTool: async () => ({
-        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: '0.6.0' },
+        response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
       }),
     });
 
@@ -213,7 +214,7 @@ describe('commands/mcp protocol core', () => {
       });
       assert.equal(result.response.isError, true);
       assert.ok(typeof (result.response.structuredContent as { error: { kind: string } }).error.kind === 'string');
-      assert.equal(result.response.schema_version, '0.6.0');
+      assert.equal(result.response.schema_version, SCHEMA_VERSION);
     } finally {
       workspace.cleanup();
     }
