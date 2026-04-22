@@ -1340,40 +1340,39 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {
     const sections: BrainclawTreeItem[] = [];
+    // Stable layout: always render the 5 canonical sections (Attention,
+    // Live activity, Sprints, Backlog, System). Prior behaviour conditionally
+    // hid a section when its count was 0, which made sections appear/disappear
+    // as the summary board vs. full board loaded at different speeds. See
+    // dec_465ed157 ("Never blank the tree on refresh") + pln#453. An empty
+    // section expands to "No items" via _buildSectionChildren empty-state
+    // handling, which is clearer than a missing section header.
 
     // --- Review queue & next actions ---
-    // pln#393 stp_0859ea93: the section loader asks MCP with
-    // auto_generated: false (bclaw_find candidate filter), so
-    // board.pending_candidates is already the actionable review queue —
-    // no extension-side re-filter needed. Full-board fallback may still
-    // mix sources; we split once here as a render-time mapping from the
-    // MCP-provided `source` field, not as business-logic classification.
     const pendingActions = activeActions(board);
     const reviewCandidates = (board.pending_candidates ?? []).filter((c: any) => !isAutoCandidate(c));
     const blockedAssignments = activeAssignments(board).filter((a: any) => a.status === 'blocked');
     const staleRuns = activeRuns(board).filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
     const hints = (board.workflow_hints ?? []).length;
     const attentionCount = pendingActions.length + reviewCandidates.length + blockedAssignments.length + staleRuns.length + hints;
-    if (attentionCount > 0) {
-      sections.push(new BrainclawTreeItem(
-        `Attention required (${attentionCount})`,
-        vscode.TreeItemCollapsibleState.Expanded,
-        undefined,
-        new vscode.ThemeIcon('bell-dot'),
-        undefined,
-        undefined,
-        undefined,
-        projectPath,
-        SECTION.ATTENTION,
-        'section',
-        `section:${projectPath}:${SECTION.ATTENTION}`,
-      ));
-    }
+    sections.push(new BrainclawTreeItem(
+      `Attention required (${attentionCount})`,
+      attentionCount > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+      undefined,
+      new vscode.ThemeIcon(attentionCount > 0 ? 'bell-dot' : 'bell'),
+      undefined,
+      undefined,
+      undefined,
+      projectPath,
+      SECTION.ATTENTION,
+      'section',
+      `section:${projectPath}:${SECTION.ATTENTION}`,
+    ));
 
     // --- Live activity ---
     // Covers claims/assignments/runs (actual in-progress work) and idle agents
     // registered on the project. Label reflects the mixed nature so a section
-    // showing "(11)" that is only the agent list is not mislabelled as "in
+    // showing "(N)" that is only the agent list is not mislabelled as "in
     // progress" work (pln#453 UX finding).
     const agents = board.other_agents ?? [];
     const claims = activeClaims(board);
@@ -1381,26 +1380,26 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
     const activeWorkCount = claims.length + runningAssignments.length + activeRunsList.length;
     const liveCount = agents.length + activeWorkCount;
-    if (liveCount > 0) {
-      const label = activeWorkCount > 0
-        ? `Live activity (${liveCount})`
-        : `Agents on board (${liveCount})`;
-      sections.push(this._sectionHeader(label, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated));
-    }
+    const liveLabel = activeWorkCount > 0
+      ? `Live activity (${liveCount})`
+      : `Agents on board (${liveCount})`;
+    sections.push(this._sectionHeader(liveLabel, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated && liveCount > 0));
 
     // --- Sprints ---
-    if (board.active_sequence) {
-      const sprintTotal = board.active_sequence.items?.length ?? 0;
-      sections.push(this._sectionHeader(`Sprints`, SECTION.SPRINTS, 'rocket', sprintTotal, projectPath, expandWhenPopulated));
-    }
+    const sprintTotal = board.active_sequence?.items?.length ?? 0;
+    sections.push(this._sectionHeader(`Sprints`, SECTION.SPRINTS, 'rocket', sprintTotal, projectPath, expandWhenPopulated && sprintTotal > 0));
 
     // --- Backlog ---
+    // Prefer summary _counts when arrays aren't populated yet (first render
+    // before lazy section load) so the header shows a meaningful count
+    // immediately rather than (0) that jumps to (26) a second later.
     const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
     const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
-    const backlogCount = backlogPlans.length + highTraps.length;
-    if (backlogCount > 0) {
-      sections.push(this._sectionHeader(`Backlog (${backlogCount})`, SECTION.BACKLOG, 'tasklist', backlogCount, projectPath, expandWhenPopulated));
-    }
+    const summaryPlansCount = board.summary && board._counts ? board._counts.plans : 0;
+    const backlogCount = backlogPlans.length > 0 || highTraps.length > 0
+      ? backlogPlans.length + highTraps.length
+      : summaryPlansCount;
+    sections.push(this._sectionHeader(`Backlog (${backlogCount})`, SECTION.BACKLOG, 'tasklist', backlogCount, projectPath, expandWhenPopulated && backlogCount > 0));
 
     // --- System (always collapsed) ---
     const autoCandidates = (board.pending_candidates ?? []).filter((c: any) => isAutoCandidate(c));
@@ -1409,21 +1408,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const linked = board.linked_projects ?? [];
     const signals = board.incoming_signals ?? [];
     const systemCount = autoCandidates.length + notes.length + handoffs.length + linked.length + signals.length;
-    if (systemCount > 0) {
-      sections.push(new BrainclawTreeItem(
-        `System`,
-        vscode.TreeItemCollapsibleState.Collapsed,
-        undefined,
-        new vscode.ThemeIcon('server'),
-        undefined,
-        undefined,
-        undefined,
-        projectPath,
-        SECTION.SYSTEM,
-        'section',
-        `section:${projectPath}:${SECTION.SYSTEM}`,
-      ));
-    }
+    sections.push(new BrainclawTreeItem(
+      `System`,
+      vscode.TreeItemCollapsibleState.Collapsed,
+      systemCount > 0 ? `${systemCount} item(s)` : undefined,
+      new vscode.ThemeIcon('server'),
+      undefined,
+      undefined,
+      undefined,
+      projectPath,
+      SECTION.SYSTEM,
+      'section',
+      `section:${projectPath}:${SECTION.SYSTEM}`,
+    ));
 
     return sections;
   }
@@ -1501,6 +1498,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     // the extension never invents them.
     items.push(...this._buildWorkflowHintItems(board.workflow_hints ?? [], projectPath));
 
+    if (items.length === 0) return [this._emptyLeaf('Nothing needs your attention')];
     return items;
   }
 
@@ -1539,6 +1537,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildRunItems(activeRunsList, projectPath));
     }
 
+    if (items.length === 0) return [this._emptyLeaf('No active work or agents')];
     return items;
   }
 
@@ -1551,7 +1550,17 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
     items.push(...this._buildTrapItems(highTraps, projectPath));
 
+    if (items.length === 0) return [this._emptyLeaf('No backlog items')];
     return items;
+  }
+
+  private _emptyLeaf(message: string): BrainclawTreeItem {
+    return new BrainclawTreeItem(
+      message,
+      vscode.TreeItemCollapsibleState.None,
+      undefined,
+      new vscode.ThemeIcon('info'),
+    );
   }
 
   private _buildSystemChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -1574,6 +1583,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildCrossProject(board, projectPath));
     }
 
+    if (items.length === 0) return [this._emptyLeaf('No system items')];
     return items;
   }
 

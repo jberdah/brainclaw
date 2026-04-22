@@ -5595,10 +5595,16 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const filter = (args.filter ?? {}) as EntityFilter;
         const result = listEntities(entity, cwd, filter);
+        // structuredContent is the canonical MCP return channel that clients
+        // (VS Code extension, Codex, etc.) read for machine-parseable data.
+        // Prior to this fix we spread `...result` at top-level of the
+        // response body, which got dropped by the MCP protocol wrapper so
+        // `result.items` arrived as undefined on the client — the root cause
+        // of the VS Code Backlog section rendering empty.
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)` }],
-            ...result,
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
@@ -5614,7 +5620,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ fetched ${entity} ${id}` }],
-            entity, item,
+            structuredContent: { entity, item },
           }),
         };
       } catch (error: unknown) {
@@ -5645,7 +5651,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ created ${entity} ${result.id}` }],
-            ...result,
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
@@ -5667,7 +5673,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ updated ${entity} ${id}` }],
-            ...result,
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
@@ -5689,7 +5695,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ removed ${entity} ${id}` }],
-            ...result,
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
@@ -5712,7 +5718,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}` }],
-            ...result,
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
