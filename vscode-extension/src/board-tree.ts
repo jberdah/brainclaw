@@ -129,19 +129,36 @@ function activePlans(board: BoardData): any[] {
 }
 
 function activeClaims(board: BoardData): any[] {
-  return board.active_claims ?? [];
+  // "active" means: held by an agent right now. Released/expired claims are
+  // history and belong in System, not Live activity. The fetch already filters
+  // but we filter again defensively so the section does not render stale
+  // entries if the MCP layer ever loosens its filter.
+  return (board.active_claims ?? []).filter((claim: any) => {
+    const status = claim.status ?? 'active';
+    return status === 'active';
+  });
 }
 
 function activeAssignments(board: BoardData): any[] {
-  return board.active_assignments ?? [];
+  return (board.active_assignments ?? []).filter((a: any) => {
+    const status = a.status ?? 'active';
+    // Any non-terminal state counts as "in flight" from a human's perspective.
+    return status !== 'completed' && status !== 'expired' && status !== 'rerouted' && status !== 'cancelled';
+  });
 }
 
 function activeRuns(board: BoardData): any[] {
-  return board.active_runs ?? [];
+  return (board.active_runs ?? []).filter((r: any) => {
+    const status = r.status ?? 'active';
+    return status !== 'completed' && status !== 'cancelled';
+  });
 }
 
 function activeActions(board: BoardData): any[] {
-  return board.active_actions ?? [];
+  return (board.active_actions ?? []).filter((a: any) => {
+    const status = a.status ?? 'pending';
+    return status === 'pending' || status === 'in_progress';
+  });
 }
 
 function visibleHandoffs(board: BoardData): any[] {
@@ -1240,15 +1257,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.IN_PROGRESS: {
+        // Fetch only active/in-flight entities. Released claims, completed
+        // assignments, finished runs belong to history, not Live activity.
+        // Server filter + client filter (defense in depth).
         const [claims, assignments, runs] = await Promise.all([
-          this._findEntities(client, 'claim', { limit: 100 }),
+          this._findEntities(client, 'claim', { status: 'active', limit: 100 }),
           this._findEntities(client, 'assignment', { limit: 100 }),
           this._findEntities(client, 'agent_run', { limit: 100 }),
         ]);
         board.active_claims = claims;
         board.active_assignments = assignments;
         board.active_runs = runs.filter((run: any) =>
-          run.status !== 'blocked' && run.status !== 'waiting_input' && run.status !== 'failed');
+          run.status !== 'blocked' && run.status !== 'waiting_input' && run.status !== 'failed'
+          && run.status !== 'completed' && run.status !== 'cancelled');
         return board;
       }
       case SECTION.SPRINTS:
@@ -1370,20 +1391,18 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     ));
 
     // --- Live activity ---
-    // Covers claims/assignments/runs (actual in-progress work) and idle agents
-    // registered on the project. Label reflects the mixed nature so a section
-    // showing "(N)" that is only the agent list is not mislabelled as "in
-    // progress" work (pln#453 UX finding).
-    const agents = board.other_agents ?? [];
+    // Strictly actual in-progress work: active claims (scopes held right now),
+    // running assignments, running agent_runs. Agents-as-registry moved to
+    // System so the section headline always reflects work, not roster.
     const claims = activeClaims(board);
     const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
     const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
-    const activeWorkCount = claims.length + runningAssignments.length + activeRunsList.length;
-    const liveCount = agents.length + activeWorkCount;
-    const liveLabel = activeWorkCount > 0
-      ? `Live activity (${liveCount})`
-      : `Agents on board (${liveCount})`;
-    sections.push(this._sectionHeader(liveLabel, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated && liveCount > 0));
+    const liveArrayCount = claims.length + runningAssignments.length + activeRunsList.length;
+    const summaryLiveCount = board.summary && board._counts
+      ? board._counts.claims + board._counts.assignments + board._counts.runs
+      : 0;
+    const liveCount = liveArrayCount > 0 ? liveArrayCount : summaryLiveCount;
+    sections.push(this._sectionHeader(`Live activity (${liveCount})`, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated && liveCount > 0));
 
     // --- Sprints ---
     const sprintTotal = board.active_sequence?.items?.length ?? 0;
@@ -1394,7 +1413,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     // before lazy section load) so the header shows a meaningful count
     // immediately rather than (0) that jumps to (26) a second later.
     const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
-    const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
+    const highTraps = (board.known_traps ?? [])
+      .filter((t: any) => (t.status ?? 'active') === 'active')
+      .sort((a: any, b: any) => {
+        const rank = (s: string) => (s === 'high' ? 0 : s === 'medium' ? 1 : 2);
+        return rank(a.severity ?? 'medium') - rank(b.severity ?? 'medium');
+      });
     const summaryPlansCount = board.summary && board._counts ? board._counts.plans : 0;
     const backlogCount = backlogPlans.length > 0 || highTraps.length > 0
       ? backlogPlans.length + highTraps.length
@@ -1402,12 +1426,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     sections.push(this._sectionHeader(`Backlog (${backlogCount})`, SECTION.BACKLOG, 'tasklist', backlogCount, projectPath, expandWhenPopulated && backlogCount > 0));
 
     // --- System (always collapsed) ---
+    // Includes the agent roster so "Live activity" stays strictly scoped
+    // to in-flight work (dec_465ed157 section-semantics principle).
+    const agentRoster = board.other_agents ?? [];
     const autoCandidates = (board.pending_candidates ?? []).filter((c: any) => isAutoCandidate(c));
     const notes = board.runtime_notes ?? [];
     const handoffs = visibleHandoffs(board);
     const linked = board.linked_projects ?? [];
     const signals = board.incoming_signals ?? [];
-    const systemCount = autoCandidates.length + notes.length + handoffs.length + linked.length + signals.length;
+    const systemCount = agentRoster.length + autoCandidates.length + notes.length + handoffs.length + linked.length + signals.length;
     sections.push(new BrainclawTreeItem(
       `System`,
       vscode.TreeItemCollapsibleState.Collapsed,
@@ -1519,11 +1546,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 
   private _buildInProgressChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    // Work only — no roster. Claims + running assignments + running agent_runs.
     const items: BrainclawTreeItem[] = [];
-
-    if ((board.other_agents ?? []).length > 0) {
-      items.push(...this._buildAgents(board, projectPath));
-    }
 
     items.push(...this._buildClaims(board, projectPath));
 
@@ -1537,7 +1561,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildRunItems(activeRunsList, projectPath));
     }
 
-    if (items.length === 0) return [this._emptyLeaf('No active work or agents')];
+    if (items.length === 0) return [this._emptyLeaf('No active claims, assignments, or runs')];
     return items;
   }
 
@@ -1547,7 +1571,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
     items.push(...this._buildPlanItems(backlogPlans, projectPath));
 
-    const highTraps = (board.known_traps ?? []).filter((t: any) => t.severity === 'high');
+    const highTraps = (board.known_traps ?? [])
+      .filter((t: any) => (t.status ?? 'active') === 'active')
+      .sort((a: any, b: any) => {
+        const rank = (s: string) => (s === 'high' ? 0 : s === 'medium' ? 1 : 2);
+        return rank(a.severity ?? 'medium') - rank(b.severity ?? 'medium');
+      });
     items.push(...this._buildTrapItems(highTraps, projectPath));
 
     if (items.length === 0) return [this._emptyLeaf('No backlog items')];
@@ -1564,7 +1593,14 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 
   private _buildSystemChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
+    // System = reference data. Registered agents (roster), cross-project
+    // links, incoming signals, runtime notes, handoffs, auto-generated
+    // candidates. Human browses this occasionally; it's not the daily cockpit.
     const items: BrainclawTreeItem[] = [];
+
+    if ((board.other_agents ?? []).length > 0) {
+      items.push(...this._buildAgents(board, projectPath));
+    }
 
     if ((board.runtime_notes ?? []).length > 0) {
       items.push(...this._buildActivity(board, projectPath));
