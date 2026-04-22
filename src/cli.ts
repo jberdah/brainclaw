@@ -1229,6 +1229,9 @@ program
   .option('--dry-run', 'Preview eligible items without archiving')
   .option('--max-items <n>', 'Maximum items to compact (default: 20)', parseInt)
   .option('--min-age <days>', 'Minimum age in days for eligibility (default: 7)', parseInt)
+  .option('--no-dedup-handoffs', 'Skip deduplication of auto-generated session-end handoffs')
+  .option('--no-purge-claims', 'Skip archival of released claims')
+  .option('--no-purge-session-notes', 'Skip archival of session-lifecycle runtime_notes')
   .action((options) => {
     runCompact(options);
   });

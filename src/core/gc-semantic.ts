@@ -52,6 +52,12 @@ export interface CompactionOptions {
   maxItems?: number;
   minAgeDays?: number;
   cwd?: string;
+  /** Also archive released claims older than `minAgeDays`. Default true. */
+  purgeReleasedClaims?: boolean;
+  /** Also archive session-lifecycle runtime_notes older than `minAgeDays`. Default true. */
+  purgeSessionNotes?: boolean;
+  /** Also deduplicate auto-generated session-end handoffs. Default true. */
+  dedupHandoffs?: boolean;
 }
 
 export interface CompactionResult {
@@ -61,6 +67,10 @@ export interface CompactionResult {
   archived_items: CompactableItem[];
   backup_path?: string;
   template?: string;
+  /** Post-v1 extensions: file-direct cleanup alongside plans/handoffs. */
+  claims_archived?: number;
+  session_notes_archived?: number;
+  handoffs_deduped?: number;
 }
 
 export interface CompactionNewItem {
@@ -159,7 +169,17 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
   const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
   const minAgeDays = options.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
   const dryRun = options.dryRun ?? false;
+  const purgeReleasedClaims = options.purgeReleasedClaims ?? true;
+  const purgeSessionNotes = options.purgeSessionNotes ?? true;
+  const dedupHandoffs = options.dedupHandoffs ?? true;
   const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // Extensions (pln#436): file-direct sweeps, independent of mutateState
+  // since claims and runtime_notes live in their own stores.
+  const claimsArchived = purgeReleasedClaims ? archiveReleasedClaims(cwd, minAgeDays, dryRun) : 0;
+  const sessionNotesArchived = purgeSessionNotes ? archiveSessionNotes(cwd, minAgeDays, dryRun) : 0;
+  const handoffsDeduped = dedupHandoffs ? dedupAutoHandoffs(cwd, dryRun) : 0;
+
   if (dryRun) {
     const state = loadState(cwd);
     const eligible = collectEligible(state, cutoff);
@@ -170,6 +190,9 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
       archived_count: 0,
       archived_items: selected,
       template: selected.length > 0 ? buildCompactionTemplate(selected) : undefined,
+      claims_archived: claimsArchived,
+      session_notes_archived: sessionNotesArchived,
+      handoffs_deduped: handoffsDeduped,
     };
   }
   return mutateState((state) => {
@@ -181,6 +204,9 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
         eligible_count: eligible.length,
         archived_count: 0,
         archived_items: [] as CompactableItem[],
+        claims_archived: claimsArchived,
+        session_notes_archived: sessionNotesArchived,
+        handoffs_deduped: handoffsDeduped,
       } as CompactionResult;
     }
     const backupPath = createBackup(selected, cwd);
@@ -195,6 +221,9 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
       archived_items: archived,
       backup_path: backupPath,
       template: buildCompactionTemplate(archived),
+      claims_archived: claimsArchived,
+      session_notes_archived: sessionNotesArchived,
+      handoffs_deduped: handoffsDeduped,
     };
   }, cwd);
 }
@@ -371,4 +400,152 @@ function countEligibleItems(state: ReturnType<typeof loadState>, minAgeDays: num
     if (handoff.created_at <= cutoff) count++;
   }
   return count;
+}
+
+/**
+ * Archive released claims older than the cutoff. Claims live in their own
+ * JsonStore (.brainclaw/coordination/claims/*.json), independent of the
+ * mutateState pipeline, so this is a direct file sweep with a compacted.jsonl
+ * + gc-backup trail matching the plans/handoffs compaction contract.
+ */
+function archiveReleasedClaims(cwd: string, minAgeDays: number, dryRun: boolean): number {
+  const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  const claimsDir = path.join(cwd, '.brainclaw', 'coordination', 'claims');
+  if (!fs.existsSync(claimsDir)) return 0;
+  const files = fs.readdirSync(claimsDir).filter(f => f.endsWith('.json'));
+  const eligible: Array<{ file: string; content: string }> = [];
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(path.join(claimsDir, file), 'utf-8');
+      const parsed = JSON.parse(content) as Record<string, unknown>;
+      const status = typeof parsed.status === 'string' ? parsed.status : '';
+      const releasedAt = typeof parsed.released_at === 'string' ? parsed.released_at
+        : typeof parsed.updated_at === 'string' ? parsed.updated_at
+        : typeof parsed.created_at === 'string' ? parsed.created_at : '';
+      if (status !== 'released') continue;
+      if (!releasedAt || releasedAt > cutoff) continue;
+      eligible.push({ file, content });
+    } catch {
+      // Skip unparseable files — they'll be surfaced by loadDirectoryItems'
+      // logger.warn in a separate pass (data-loss fix guarantees preservation).
+    }
+  }
+  if (dryRun || eligible.length === 0) return eligible.length;
+  // Archive to compacted.jsonl + backup + unlink.
+  const archivePath = path.join(claimsDir, 'compacted.jsonl');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(cwd, '.brainclaw', 'gc-backups', `compact-claims-${timestamp}.jsonl`);
+  fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+  for (const { file, content } of eligible) {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    parsed._compacted_at = new Date().toISOString();
+    parsed._compaction_type = 'released-claim';
+    fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
+    fs.appendFileSync(backupPath, content.trim() + '\n', 'utf-8');
+    fs.unlinkSync(path.join(claimsDir, file));
+  }
+  return eligible.length;
+}
+
+/**
+ * Archive session-lifecycle runtime_notes older than the cutoff. These are
+ * the "Session started / ended" auto-generated notes (tagged `session`) which
+ * accumulate at 1000s per project and bury the real human signal.
+ */
+function archiveSessionNotes(cwd: string, minAgeDays: number, dryRun: boolean): number {
+  const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  const runtimeDir = path.join(cwd, '.brainclaw', 'coordination', 'runtime');
+  if (!fs.existsSync(runtimeDir)) return 0;
+  const eligible: Array<{ filePath: string; content: string }> = [];
+  // Runtime notes are nested: runtime/<agent>/<id>.json
+  for (const agent of fs.readdirSync(runtimeDir)) {
+    const agentDir = path.join(runtimeDir, agent);
+    if (!fs.statSync(agentDir).isDirectory()) continue;
+    const files = fs.readdirSync(agentDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      const filePath = path.join(agentDir, file);
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(content) as Record<string, unknown>;
+        const tags = Array.isArray(parsed.tags) ? parsed.tags as unknown[] : [];
+        const isSession = tags.some(t => t === 'session');
+        const createdAt = typeof parsed.created_at === 'string' ? parsed.created_at : '';
+        if (!isSession || !createdAt || createdAt > cutoff) continue;
+        eligible.push({ filePath, content });
+      } catch {
+        // Skip unparseable
+      }
+    }
+  }
+  if (dryRun || eligible.length === 0) return eligible.length;
+  const archivePath = path.join(runtimeDir, 'session-notes-archive.jsonl');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(cwd, '.brainclaw', 'gc-backups', `compact-session-notes-${timestamp}.jsonl`);
+  fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+  for (const { filePath, content } of eligible) {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    parsed._compacted_at = new Date().toISOString();
+    parsed._compaction_type = 'session-note';
+    fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
+    fs.appendFileSync(backupPath, content.trim() + '\n', 'utf-8');
+    fs.unlinkSync(filePath);
+  }
+  return eligible.length;
+}
+
+/**
+ * Deduplicate auto-generated session-end handoffs. These carry the same
+ * commits list when several sessions close on the same project state, so the
+ * board ends up with N near-identical handoff rows. Group by a signature
+ * built from the commits block and keep only the most recent per group.
+ */
+function dedupAutoHandoffs(cwd: string, dryRun: boolean): number {
+  const handoffsDir = path.join(cwd, '.brainclaw', 'coordination', 'handoffs');
+  if (!fs.existsSync(handoffsDir)) return 0;
+  const files = fs.readdirSync(handoffsDir).filter(f => f.endsWith('.json'));
+  // signature -> [{file, created_at, content}]
+  const groups = new Map<string, Array<{ file: string; createdAt: string; content: string }>>();
+  for (const file of files) {
+    const filePath = path.join(handoffsDir, file);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(content) as Record<string, unknown>;
+      const text = typeof parsed.text === 'string' ? parsed.text : '';
+      // Auto-generated session-end handoffs start with "Session sess_… — auto-generated handoff"
+      // and enumerate commits in a block. Skip non-matching handoffs (human-authored).
+      if (!text.startsWith('Session sess_') || !text.includes('auto-generated handoff')) continue;
+      // Signature: first 100 chars of the "Commits:" block.
+      const commitsIdx = text.indexOf('Commits:');
+      const sig = commitsIdx >= 0 ? text.slice(commitsIdx, commitsIdx + 100) : text.slice(0, 100);
+      const createdAt = typeof parsed.created_at === 'string' ? parsed.created_at : '';
+      const list = groups.get(sig) ?? [];
+      list.push({ file, createdAt, content });
+      groups.set(sig, list);
+    } catch {
+      // Skip unparseable
+    }
+  }
+  // For each group with >1 entries, keep the most recent and archive the rest.
+  const toArchive: Array<{ filePath: string; content: string }> = [];
+  for (const list of groups.values()) {
+    if (list.length <= 1) continue;
+    list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); // newest first
+    for (const entry of list.slice(1)) {
+      toArchive.push({ filePath: path.join(handoffsDir, entry.file), content: entry.content });
+    }
+  }
+  if (dryRun || toArchive.length === 0) return toArchive.length;
+  const archivePath = path.join(handoffsDir, 'compacted.jsonl');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(cwd, '.brainclaw', 'gc-backups', `compact-handoffs-dedup-${timestamp}.jsonl`);
+  fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+  for (const { filePath, content } of toArchive) {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    parsed._compacted_at = new Date().toISOString();
+    parsed._compaction_type = 'handoff-dedup';
+    fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
+    fs.appendFileSync(backupPath, content.trim() + '\n', 'utf-8');
+    fs.unlinkSync(filePath);
+  }
+  return toArchive.length;
 }

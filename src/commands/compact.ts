@@ -13,6 +13,9 @@ export interface CompactCliOptions {
   dryRun?: boolean;
   maxItems?: number;
   minAge?: number;
+  noDedupHandoffs?: boolean;
+  noPurgeClaims?: boolean;
+  noPurgeSessionNotes?: boolean;
 }
 
 export function runCompact(options: CompactCliOptions = {}): void {
@@ -46,21 +49,40 @@ export function runCompact(options: CompactCliOptions = {}): void {
     dryRun: options.dryRun,
     maxItems: options.maxItems,
     minAgeDays: options.minAge,
+    dedupHandoffs: !options.noDedupHandoffs,
+    purgeReleasedClaims: !options.noPurgeClaims,
+    purgeSessionNotes: !options.noPurgeSessionNotes,
   });
 
   if (result.dry_run) {
-    console.log(`🔍 Dry run — ${result.eligible_count} item(s) eligible for compaction.`);
+    console.log(`🔍 Dry run — ${result.eligible_count} plan/handoff item(s) eligible for compaction.`);
   } else {
-    console.log(`✔ Compacted ${result.archived_count}/${result.eligible_count} item(s).`);
+    console.log(`✔ Compacted ${result.archived_count}/${result.eligible_count} plan/handoff item(s).`);
     if (result.backup_path) {
       console.log(`Backup: ${result.backup_path}`);
     }
   }
 
+  // Post-v1 extension summaries (pln#436)
+  const extras: string[] = [];
+  if ((result.claims_archived ?? 0) > 0) {
+    extras.push(`${result.claims_archived} released claim(s)`);
+  }
+  if ((result.session_notes_archived ?? 0) > 0) {
+    extras.push(`${result.session_notes_archived} session runtime_note(s)`);
+  }
+  if ((result.handoffs_deduped ?? 0) > 0) {
+    extras.push(`${result.handoffs_deduped} duplicate handoff(s)`);
+  }
+  if (extras.length > 0) {
+    const verb = result.dry_run ? 'eligible' : 'archived';
+    console.log(`  • ${verb}: ${extras.join(', ')}`);
+  }
+
   if (result.template) {
     console.log('');
     console.log(result.template);
-  } else if (result.eligible_count === 0) {
+  } else if (result.eligible_count === 0 && extras.length === 0) {
     console.log('No items eligible for compaction.');
   }
 }
