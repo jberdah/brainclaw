@@ -22,6 +22,8 @@ import { runDeletePlan } from './commands/delete-plan.js';
 import { runPlanResource } from './commands/plan-resource.js';
 import { runSequenceResource } from './commands/sequence.js';
 import { runAddStep } from './commands/add-step.js';
+import { runDeleteStep } from './commands/delete-step.js';
+import { runUpdateStep } from './commands/update-step.js';
 import { runEstimationReport } from './commands/estimation-report.js';
 import { runCompleteStep } from './commands/complete-step.js';
 import { runUpdateHandoff } from './commands/update-handoff.js';
@@ -520,6 +522,25 @@ program
   .description('Mark a plan step as done')
   .action((planId, stepId) => {
     runCompleteStep(planId, stepId);
+  });
+
+// --- update-step ---
+program
+  .command('update-step <planId> <stepId>')
+  .description('Update a plan step (status, text, assignee)')
+  .option('--status <status>', 'New status: todo, in_progress, testing, done, blocked')
+  .option('--text <text>', 'Replace step description')
+  .option('--assign <assignee>', 'Assign the step (empty string to unassign)')
+  .action((planId, stepId, options) => {
+    runUpdateStep(planId, stepId, options);
+  });
+
+// --- delete-step ---
+program
+  .command('delete-step <planId> <stepId>')
+  .description('Remove a step from a plan')
+  .action((planId, stepId) => {
+    runDeleteStep(planId, stepId);
   });
 
 // --- estimation-report ---
