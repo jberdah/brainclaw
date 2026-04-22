@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
 
-import { BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
+import { BrainclawBoardProvider, BrainclawTreeItem, type BrainclawStatusSummary } from './board-tree';
 import { BrainclawFileDecorationProvider } from './file-decorations';
 import { discoverBrainclawProjects } from './project-discovery';
 
@@ -11,67 +10,19 @@ class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   getChildren() { return [new vscode.TreeItem('No workspace open')]; }
 }
 
-// --- Event bus types (mirror of core/event-log.ts) ---
-
-interface MemoryEvent {
-  ts: string;
-  agent: string;
-  agent_id?: string;
-  action: string;
-  item_type: string;
-  item_id?: string;
-  summary?: string;
-}
-
-interface AgentCursor {
-  offset: number;
-  last_read: string;
-}
-
-// --- Constants ---
-
-const EVENTS_FILE = 'events.jsonl';
-const CURSORS_DIR = '.cursors';
-const VSCODE_AGENT = 'vscode-extension';
-
-// Human-readable labels for event actions
-const ACTION_LABELS: Record<string, string> = {
-  create: 'created',
-  update: 'updated',
-  delete: 'deleted',
-  accept: 'accepted',
-  reject: 'rejected',
-  claim: 'claimed',
-  release_claim: 'released claim on',
-  session_start: 'started session',
-  session_end: 'ended session',
-};
-
-const ITEM_LABELS: Record<string, string> = {
-  constraint: 'constraint',
-  decision: 'decision',
-  trap: 'trap',
-  handoff: 'handoff',
-  plan: 'plan',
-  claim: 'scope',
-  candidate: 'candidate',
-  runtime_note: 'note',
-  instruction: 'instruction',
-  session: 'session',
-  state: 'state',
-};
-
 // --- Activation ---
 
 let statusBarItem: vscode.StatusBarItem;
 let doctorOutput: vscode.OutputChannel;
 let searchOutput: vscode.OutputChannel;
 let memoryOutput: vscode.OutputChannel;
-let eventWatchers: fs.FSWatcher[] = [];
-let unseenCount = 0;
+let statusBarSummary: BrainclawStatusSummary = emptyStatusSummary();
+let previousActionCount: number | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'brainclaw.active', true);
+  statusBarSummary = emptyStatusSummary();
+  previousActionCount = undefined;
 
   const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
   const cwd = workspaceFolders[0]?.uri.fsPath;
@@ -81,14 +32,16 @@ export function activate(context: vscode.ExtensionContext) {
   // File Decoration Provider — shows lock icon on claimed scopes (created first
   // so we can wire its refresh callback into the tree provider for
   // post-mutation sync, pln#393 stp_9010b323).
-  const fileDecoProvider = cwd ? new BrainclawFileDecorationProvider(cwd) : undefined;
+  const fileDecoProvider = cwd ? new BrainclawFileDecorationProvider(cwd, projects) : undefined;
   if (fileDecoProvider) {
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecoProvider));
     context.subscriptions.push({ dispose: () => fileDecoProvider.dispose() });
   }
 
   // Board Tree Provider — always register to avoid "no data provider" error
-  const treeProvider = cwd ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh()) : undefined;
+  const treeProvider = cwd
+    ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh(), handleStatusSummary)
+    : undefined;
   doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
   searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
   memoryOutput = vscode.window.createOutputChannel('Brainclaw Memory');
@@ -101,8 +54,8 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('brainclaw.refreshBoard', () => {
-      treeProvider?.refresh();
+    vscode.commands.registerCommand('brainclaw.refreshBoard', async () => {
+      await treeProvider?.refresh();
       fileDecoProvider?.refresh();
     })
   );
@@ -146,8 +99,13 @@ export function activate(context: vscode.ExtensionContext) {
         prompt: 'Quick capture',
         placeHolder: 'Note, idea, or decision...',
       });
-      if (!text || !text.trim()) return;
-      await treeProvider?.quickCapture(text.trim());
+      if (text === undefined) return;
+      const trimmed = text.trim();
+      if (!trimmed) {
+        vscode.window.showWarningMessage('Brainclaw: enter text to capture');
+        return;
+      }
+      await treeProvider?.quickCapture(trimmed);
     }),
     vscode.commands.registerCommand('brainclaw.dispatch', async () => {
       await treeProvider?.dispatchWithPicker();
@@ -169,15 +127,25 @@ export function activate(context: vscode.ExtensionContext) {
       if (!cwd || !uri) return;
       const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
       const description = await vscode.window.showInputBox({ prompt: 'Claim description', placeHolder: 'What are you working on?' });
-      if (!description) return;
-      await treeProvider?.claimScope(scope, description);
+      if (description === undefined) return;
+      const trimmed = description.trim();
+      if (!trimmed) {
+        vscode.window.showWarningMessage('Brainclaw: enter a claim description');
+        return;
+      }
+      await treeProvider?.claimScope(scope, trimmed);
     }),
     vscode.commands.registerCommand('brainclaw.addTrap', async (uri: vscode.Uri) => {
       if (!cwd || !uri) return;
       const scope = path.relative(cwd, uri.fsPath).replace(/\\/g, '/');
       const text = await vscode.window.showInputBox({ prompt: 'Trap description', placeHolder: 'What can go wrong here?' });
-      if (!text) return;
-      await treeProvider?.addTrap(text, scope);
+      if (text === undefined) return;
+      const trimmed = text.trim();
+      if (!trimmed) {
+        vscode.window.showWarningMessage('Brainclaw: enter a trap description');
+        return;
+      }
+      await treeProvider?.addTrap(trimmed, scope);
     }),
     vscode.commands.registerCommand('brainclaw.viewMemory', async (uri: vscode.Uri) => {
       if (!cwd || !uri) return;
@@ -186,174 +154,108 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Status bar item — unseen event count
+  // Status bar item — server-computed board summary
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  statusBarItem.command = 'brainclaw.clearNotifications';
-  statusBarItem.tooltip = 'Brainclaw: unseen agent events (click to clear)';
-  updateStatusBar(0);
+  statusBarItem.command = 'brainclaw.showBoard';
+  statusBarItem.tooltip = 'Brainclaw coordination summary';
+  updateStatusBar(statusBarSummary);
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  // Clear notifications command
-  context.subscriptions.push(
-    vscode.commands.registerCommand('brainclaw.clearNotifications', () => {
-      for (const project of projects) {
-        advanceCursor(project.path);
+  if (treeProvider) {
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearRefreshTimer = () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = undefined;
       }
-      unseenCount = 0;
-      updateStatusBar(0);
-    })
-  );
+    };
+    const scheduleRefresh = () => {
+      clearRefreshTimer();
+      const intervalMs = getRefreshIntervalMs();
+      if (intervalMs <= 0) return;
+      refreshTimer = setTimeout(async () => {
+        await treeProvider.refresh();
+        scheduleRefresh();
+      }, intervalMs);
+    };
 
-  // Start watching events.jsonl
-  if (projects.length > 0) {
-    startEventBusWatchers(projects.map((project) => project.path));
+    scheduleRefresh();
+    context.subscriptions.push(
+      { dispose: clearRefreshTimer },
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('brainclaw.refreshIntervalMs')) {
+          scheduleRefresh();
+        }
+      }),
+    );
   }
 }
 
 export function deactivate() {
-  for (const watcher of eventWatchers) {
-    watcher.close();
-  }
-  eventWatchers = [];
-}
-
-// --- Event bus watcher ---
-
-function startEventBusWatchers(cwds: string[]): void {
-  for (const watcher of eventWatchers) {
-    watcher.close();
-  }
-  eventWatchers = [];
-
-  const uniqueCwds = [...new Set(cwds.map((cwd) => path.resolve(cwd)))];
-  for (const cwd of uniqueCwds) {
-    const brainclawDir = path.join(cwd, '.brainclaw');
-    if (!fs.existsSync(brainclawDir)) {
-      continue;
-    }
-
-    advanceCursor(cwd);
-
-    try {
-      const watcher = fs.watch(brainclawDir, (_eventType: string, filename: string | Buffer | null) => {
-        if (filename === EVENTS_FILE || filename === EVENTS_FILE.replace(/\//g, '\\')) {
-          processNewEvents(cwd);
-        }
-      });
-      eventWatchers.push(watcher);
-    } catch {
-      // Ignore watcher failures for individual projects.
-    }
-  }
-}
-
-function processNewEvents(cwd: string): void {
-  const events = readUnseenEvents(cwd);
-  if (events.length === 0) return;
-
-  unseenCount += events.length;
-  updateStatusBar(unseenCount);
-
-  // Status bar badge is enough — no toast popups (too noisy with active agents).
-  // The user can click the status bar to see the board.
-}
-
-// --- Cursor-based event reading (mirrors core/event-log.ts logic) ---
-
-function eventsPath(cwd: string): string {
-  return path.join(cwd, '.brainclaw', EVENTS_FILE);
-}
-
-function cursorDir(cwd: string): string {
-  return path.join(cwd, '.brainclaw', CURSORS_DIR);
-}
-
-function cursorPath(cwd: string): string {
-  return path.join(cursorDir(cwd), `${VSCODE_AGENT}.json`);
-}
-
-function loadCursor(cwd: string): AgentCursor {
-  const fp = cursorPath(cwd);
-  if (!fs.existsSync(fp)) return { offset: 0, last_read: '' };
-  try {
-    return JSON.parse(fs.readFileSync(fp, 'utf-8')) as AgentCursor;
-  } catch {
-    return { offset: 0, last_read: '' };
-  }
-}
-
-function saveCursor(cwd: string, cursor: AgentCursor): void {
-  const dir = cursorDir(cwd);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(cursorPath(cwd), JSON.stringify(cursor), 'utf-8');
-}
-
-function readUnseenEvents(cwd: string): MemoryEvent[] {
-  const logPath = eventsPath(cwd);
-  if (!fs.existsSync(logPath)) return [];
-
-  const cursor = loadCursor(cwd);
-  let size: number;
-  try {
-    size = fs.statSync(logPath).size;
-  } catch {
-    return [];
-  }
-
-  if (size <= cursor.offset) return [];
-
-  // Read from offset
-  const fd = fs.openSync(logPath, 'r');
-  const buffer = Buffer.alloc(size - cursor.offset);
-  fs.readSync(fd, buffer, 0, buffer.length, cursor.offset);
-  fs.closeSync(fd);
-
-  const newContent = buffer.toString('utf-8');
-  const lines = newContent.split('\n').filter(Boolean);
-  const events: MemoryEvent[] = [];
-  for (const line of lines) {
-    try {
-      const evt = JSON.parse(line) as MemoryEvent;
-      // Exclude events from self and session noise
-      if (evt.agent !== VSCODE_AGENT) {
-        events.push(evt);
-      }
-    } catch {
-      // skip malformed
-    }
-  }
-
-  // Update cursor
-  saveCursor(cwd, { offset: size, last_read: new Date().toISOString() });
-
-  return events;
-}
-
-/** Advance cursor to current EOF without reading events (used for baseline & clear). */
-function advanceCursor(cwd: string): void {
-  const logPath = eventsPath(cwd);
-  if (!fs.existsSync(logPath)) return;
-  try {
-    const size = fs.statSync(logPath).size;
-    saveCursor(cwd, { offset: size, last_read: new Date().toISOString() });
-  } catch {
-    // ignore
-  }
 }
 
 // --- Status bar ---
 
-function updateStatusBar(count: number): void {
-  if (count === 0) {
-    statusBarItem.text = '$(brain) Brainclaw';
-    statusBarItem.backgroundColor = undefined;
-  } else {
-    statusBarItem.text = `$(brain) Brainclaw (${count})`;
-    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+function emptyStatusSummary(): BrainclawStatusSummary {
+  return {
+    plans: 0,
+    claims: 0,
+    assignments: 0,
+    runs: 0,
+    actions: 0,
+    agents: 0,
+    sessions: 0,
+  };
+}
+
+function getRefreshIntervalMs(): number {
+  const configured = vscode.workspace.getConfiguration('brainclaw').get<number>('refreshIntervalMs', 30_000);
+  if (!Number.isFinite(configured)) return 30_000;
+  if (configured <= 0) return 0;
+  return Math.max(1_000, Math.floor(configured));
+}
+
+function getNotificationMode(): 'urgent' | 'all' | 'none' {
+  const configured = vscode.workspace.getConfiguration('brainclaw').get<string>('notifications', 'urgent');
+  if (configured === 'all' || configured === 'none') return configured;
+  return 'urgent';
+}
+
+function handleStatusSummary(summary: BrainclawStatusSummary): void {
+  const previous = previousActionCount;
+  statusBarSummary = summary;
+  updateStatusBar(summary);
+
+  if (previous !== undefined && summary.actions > previous && getNotificationMode() !== 'none') {
+    void vscode.window.showInformationMessage(
+      `Brainclaw: ${summary.actions - previous} new action required`,
+      'Show Board',
+    ).then((choice) => {
+      if (choice === 'Show Board') {
+        void vscode.commands.executeCommand('brainclaw.showBoard');
+      }
+    });
   }
+  previousActionCount = summary.actions;
+}
+
+function updateStatusBar(summary: BrainclawStatusSummary): void {
+  const inProgress = summary.claims + summary.assignments + summary.runs;
+  statusBarItem.text = `$(brain) Brainclaw: ${summary.actions} urgent · ${inProgress} in progress · ${summary.plans} plans`;
+  statusBarItem.tooltip = [
+    'Brainclaw coordination summary',
+    `Urgent actions: ${summary.actions}`,
+    `Claims: ${summary.claims}`,
+    `Assignments: ${summary.assignments}`,
+    `Runs: ${summary.runs}`,
+    `Plans: ${summary.plans}`,
+    `Agents: ${summary.agents}`,
+    `Open sessions: ${summary.sessions}`,
+  ].join('\n');
+  statusBarItem.backgroundColor = summary.actions > 0
+    ? new vscode.ThemeColor('statusBarItem.warningBackground')
+    : undefined;
 }
 
 

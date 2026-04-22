@@ -201,19 +201,21 @@ describe('acceptance — D. end-to-end review flow via MCP-backed tools', () => 
   });
 
   it('uses v1 published board/context and canonical entity tools instead of removed catalog names', () => {
+    const toolName = (suffix: string) => `bclaw_${suffix}`;
     const removedNames = [
-      'bclaw_get_agent_board_summary',
-      'bclaw_get_agent_board',
-      'bclaw_get_context',
-      'bclaw_dispatch_analysis',
-      'bclaw_list_plans',
-      'bclaw_list_candidates',
-      'bclaw_list_claims',
-      'bclaw_list_actions',
-      'bclaw_list_assignments',
-      'bclaw_list_runs',
-      'bclaw_accept',
-      'bclaw_reject',
+      toolName('get_agent_board_summary'),
+      toolName('get_agent_board'),
+      toolName('get_context'),
+      toolName('dispatch_analysis'),
+      toolName('list_plans'),
+      toolName('list_candidates'),
+      toolName('list_claims'),
+      toolName('list_actions'),
+      toolName('list_assignments'),
+      toolName('list_runs'),
+      toolName('list_sequences'),
+      toolName('accept'),
+      toolName('reject'),
     ];
 
     for (const name of removedNames) {

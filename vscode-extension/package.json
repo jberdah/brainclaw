@@ -38,10 +38,6 @@
         "title": "Brainclaw: Show Agent Board"
       },
       {
-        "command": "brainclaw.clearNotifications",
-        "title": "Brainclaw: Clear Event Notifications"
-      },
-      {
         "command": "brainclaw.refreshBoard",
         "title": "Brainclaw: Refresh Board",
         "icon": "$(refresh)"
@@ -203,7 +199,28 @@
         "key": "ctrl+alt+h",
         "when": "brainclaw.active"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Brainclaw",
+      "properties": {
+        "brainclaw.notifications": {
+          "type": "string",
+          "enum": [
+            "urgent",
+            "all",
+            "none"
+          ],
+          "default": "urgent",
+          "description": "Controls Brainclaw action-required notifications."
+        },
+        "brainclaw.refreshIntervalMs": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 0,
+          "description": "Polling interval for refreshing the Brainclaw board summary. Set to 0 to disable polling."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./tsconfig.json",

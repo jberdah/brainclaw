@@ -55,6 +55,8 @@ interface BoardSummaryCounts {
   sessions: number;
 }
 
+export type BrainclawStatusSummary = BoardSummaryCounts;
+
 interface SectionCacheEntry {
   board: BoardData | null;
   expiresAt: number;
@@ -102,7 +104,7 @@ interface RegisteredAgent {
   kind?: string;
 }
 
-type CanonicalEntity = 'plan' | 'claim' | 'assignment' | 'agent_run' | 'action' | 'candidate';
+type CanonicalEntity = 'plan' | 'claim' | 'assignment' | 'agent_run' | 'action' | 'candidate' | 'sequence';
 
 interface SearchResultItem {
   id: string;
@@ -208,11 +210,18 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _workspaceBoard: BoardData | null = null;
   private _refreshTimer?: ReturnType<typeof setTimeout>;
   private _fileDecoRefresh?: () => void;
+  private _statusUpdate?: (summary: BrainclawStatusSummary) => void;
 
-  constructor(workspaceRoot: string, projects: BoardProject[], fileDecoRefresh?: () => void) {
+  constructor(
+    workspaceRoot: string,
+    projects: BoardProject[],
+    fileDecoRefresh?: () => void,
+    statusUpdate?: (summary: BrainclawStatusSummary) => void,
+  ) {
     this._workspaceRoot = this._normalizePath(workspaceRoot);
     this._projects = this._dedupeProjects(projects);
     this._fileDecoRefresh = fileDecoRefresh;
+    this._statusUpdate = statusUpdate;
     for (const project of this._projects) {
       this._projectIndex.set(project.path, project);
     }
@@ -225,13 +234,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }));
 
     setTimeout(() => {
-      this.refresh();
+      void this.refresh();
       this._startWatches();
     }, 0);
   }
 
-  public refresh(): void {
-    void this._refreshBoards();
+  public async refresh(): Promise<void> {
+    await this._refreshBoards();
   }
 
   public async exec(command: string, cwd?: string): Promise<void> {
@@ -248,7 +257,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
     try {
       await client.callTool('bclaw_quick_capture', { text });
-      this.refresh();
+      await this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -300,7 +309,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
       await client.callTool('bclaw_dispatch', { intent: 'execute', lanes: [picked.lane], agents: [selectedAgent.label], maxAssignments: 1 });
       vscode.window.showInformationMessage(`Brainclaw: dispatched ${picked.planId} to ${selectedAgent.label}`);
-      this.refresh();
+      await this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -319,13 +328,18 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       prompt: 'Search Brainclaw memory',
       placeHolder: 'plan, claim, trap, decision...',
     });
-    if (!query || !query.trim()) return;
+    if (query === undefined) return;
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      vscode.window.showWarningMessage('Brainclaw: enter a search query');
+      return;
+    }
 
     try {
-      const result = await client.callTool('bclaw_search', { query: query.trim(), limit: 20 });
+      const result = await client.callTool('bclaw_search', { query: trimmedQuery, limit: 20 });
       const results = Array.isArray(result.results) ? result.results as SearchResultItem[] : [];
       if (results.length === 0) {
-        vscode.window.showInformationMessage(`Brainclaw: no results for "${query.trim()}"`);
+        vscode.window.showInformationMessage(`Brainclaw: no results for "${trimmedQuery}"`);
         return;
       }
 
@@ -336,12 +350,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
           detail: `score ${(entry.score ?? 0).toFixed(2)}`,
           result: entry,
         })),
-        { placeHolder: `Search results for "${query.trim()}"` },
+        { placeHolder: `Search results for "${trimmedQuery}"` },
       );
       if (!picked) return;
 
       output.clear();
-      output.appendLine(`Brainclaw Search: ${query.trim()}`);
+      output.appendLine(`Brainclaw Search: ${trimmedQuery}`);
       output.appendLine('');
       output.appendLine(`[${picked.result.id}] ${picked.result.section ?? picked.result.type ?? 'memory'}`);
       output.appendLine(picked.result.text);
@@ -397,7 +411,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       // Map legacy CLI command strings to MCP tool calls
       const [tool, args] = this._mapCommandToMcpTool(command);
       await client.callTool(tool, args);
-      this.refresh();
+      await this.refresh();
       // Claim-mutating operations invalidate the file-decoration state; refresh
       // lock icons synchronously with the board so operators don't see stale
       // locks after release/claim (pln#393 stp_9010b323).
@@ -461,7 +475,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
     try {
       await client.callTool('bclaw_dispatch', { intent: 'execute', lanes: [plan.lane] });
-      this.refresh();
+      await this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -487,7 +501,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
     try {
       await client.callTool('bclaw_claim', { scope, description });
-      this.refresh();
+      await this.refresh();
       this._fileDecoRefresh?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -510,7 +524,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         entity: 'trap',
         data: { text, path: scopePath, severity: 'medium' },
       });
-      this.refresh();
+      await this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Brainclaw: ${message}`);
@@ -592,12 +606,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       await Promise.allSettled(loads);
     }
 
+    this._statusUpdate?.(this._aggregateStatusSummary());
     this._onDidChangeTreeData.fire();
   }
 
   private _debouncedRefresh(): void {
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
-    this._refreshTimer = setTimeout(() => this.refresh(), 500);
+    this._refreshTimer = setTimeout(() => { void this.refresh(); }, 500);
   }
 
   dispose(): void {
@@ -691,6 +706,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     // Use the lightweight board summary through the v1 facade for activation polling.
     const raw = await client.callTool('bclaw_context', { kind: 'board_summary' }) as Record<string, any>;
     const plans = (raw['plans'] as Record<string, number> | undefined) ?? {};
+    const sequences = (raw['sequences'] as Record<string, unknown> | undefined) ?? {};
+    const activeSequenceName = typeof sequences['active_name'] === 'string' ? sequences['active_name'] as string : undefined;
     return {
       active_plans: [],
       active_claims: [],
@@ -700,6 +717,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       open_handoffs: [],
       runtime_notes: [],
       other_agents: [],
+      active_sequence: activeSequenceName ? { name: activeSequenceName, status: 'active', items: [] } : undefined,
       summary: true,
       _counts: {
         plans: (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0),
@@ -804,6 +822,41 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       agents: workingAgents(board).length,
       sessions: openSessions(board),
     };
+  }
+
+  private _aggregateStatusSummary(): BrainclawStatusSummary {
+    const total: BrainclawStatusSummary = {
+      plans: 0,
+      claims: 0,
+      assignments: 0,
+      runs: 0,
+      actions: 0,
+      agents: 0,
+      sessions: 0,
+    };
+
+    const boards: BoardData[] = [];
+    if (this._projects.length > 0) {
+      for (const project of this._projects) {
+        const board = this._getBoardForPath(project.path);
+        if (board) boards.push(board);
+      }
+    } else if (this._workspaceBoard) {
+      boards.push(this._workspaceBoard);
+    }
+
+    for (const board of boards) {
+      const summary = this._projectSummary(board);
+      total.plans += summary.plans;
+      total.claims += summary.claims;
+      total.assignments += summary.assignments;
+      total.runs += summary.runs;
+      total.actions += summary.actions;
+      total.agents += summary.agents;
+      total.sessions += summary.sessions;
+    }
+
+    return total;
   }
 
   getTreeItem(element: BrainclawTreeItem): vscode.TreeItem {
@@ -1171,7 +1224,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
           this._findEntities(client, 'assignment', { status: 'blocked', limit: 100 }),
           this._findEntities(client, 'candidate', { status: 'pending', auto_generated: false, limit: 100 }),
           this._findEntities(client, 'agent_run', { limit: 100 }),
-          client.callTool('bclaw_context', { kind: 'memory', compact: true }).catch(() => ({} as Record<string, unknown>)),
+          client.callTool('bclaw_context', { kind: 'memory', profile: 'quick' }).catch(() => ({} as Record<string, unknown>)),
         ]);
         board.active_actions = actions;
         board.active_assignments = assignments;
@@ -1196,8 +1249,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       }
       case SECTION.SPRINTS:
       case SECTION.SPRINT: {
-        const sequences = await client.callTool('bclaw_list_sequences', { status: 'active', limit: 20 });
-        const activeSequences = (sequences.sequences as any[] | undefined) ?? [];
+        const activeSequences = await this._findEntities(client, 'sequence', { status: 'active', limit: 20 });
         board.active_sequence = activeSequences[0];
         return board;
       }
