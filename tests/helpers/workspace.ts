@@ -72,7 +72,11 @@ export function cleanupTestEnv(options: CleanupTestEnvOptions): void {
 /**
  * Save and clear all agent detection env vars.
  * Returns a restore function to call in afterEach.
- * Also creates an isolated fake homeDir to prevent filesystem-based detection.
+ * Also creates an isolated fake homeDir to prevent filesystem-based detection,
+ * and clears BRAINCLAW_STORE_BOUNDARY so a leaked parent boundary does not
+ * widen the store chain into the host machine (trp#7 + trp#17, pln#450).
+ * Tests that need a specific boundary can set process.env.BRAINCLAW_STORE_BOUNDARY
+ * themselves after calling this.
  */
 export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   const saved: Record<string, string | undefined> = {};
@@ -85,10 +89,12 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   saved.USERPROFILE = process.env.USERPROFILE;
   saved.HOMEDRIVE = process.env.HOMEDRIVE;
   saved.HOMEPATH = process.env.HOMEPATH;
+  saved.BRAINCLAW_STORE_BOUNDARY = process.env.BRAINCLAW_STORE_BOUNDARY;
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
   delete process.env.HOMEDRIVE;
   delete process.env.HOMEPATH;
+  delete process.env.BRAINCLAW_STORE_BOUNDARY;
   return {
     fakeHome,
     restore: () => cleanupTestEnv({ fakeHome, envBackup: saved }),
@@ -102,6 +108,12 @@ export function createTestWorkspace(options: TestWorkspaceOptions = {}): TestWor
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), options.prefix ?? 'bclaw-workspace-'));
   ensureMemoryDir(dir);
+
+  // Tight store boundary pinned to this workspace — store chain resolution
+  // does not walk outside `dir`, so a user-level ~/.brainclaw/ or a CI tmpdir
+  // that sits outside $HOME cannot leak into the test's view of memory.
+  // Restored by the cleanup path via the envBackup captured in isolateAgentEnv.
+  process.env.BRAINCLAW_STORE_BOUNDARY = dir;
 
   const config = defaultConfig(options.projectName ?? 'brainclaw-tests', {
     projectId: options.projectId ?? 'prj_test_workspace',

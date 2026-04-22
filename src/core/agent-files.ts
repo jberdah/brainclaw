@@ -159,11 +159,16 @@ function brainclawMcpEntry(agentName: string, existing?: unknown, workspacePath?
 
   // When _forceResolve is true (post-upgrade), always use newly resolved paths.
   // Otherwise preserve existing command if it's an absolute path (manual edit).
+  // CRITICAL: once we decide to preserve the command, we MUST also preserve
+  // the args. Previously args was always overwritten, which silently clobbered
+  // manual customizations (--cwd, --debug, etc.) and broke setups on DGX.
+  // See trp#12 + pln#450.
   const useExisting = !_forceResolve && typeof ex.command === 'string' && ex.command !== 'npx';
+  const existingArgs = Array.isArray(ex.args) ? (ex.args as unknown[]) : undefined;
 
   return {
     command: useExisting ? ex.command : defaults.command,
-    args: defaults.args,
+    args: useExisting && existingArgs ? existingArgs : defaults.args,
     // Merge env: preserve user-added vars, ensure BRAINCLAW_AGENT is set
     env: {
       ...exEnv,
