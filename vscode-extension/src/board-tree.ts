@@ -1257,19 +1257,27 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.IN_PROGRESS: {
-        // Fetch only active/in-flight entities. Released claims, completed
-        // assignments, finished runs belong to history, not Live activity.
-        // Server filter + client filter (defense in depth).
+        // Strict live-work filter. Exhaustive exclusion list so pre-v1 states
+        // like 'interrupted' / 'timed_out' (which are terminal for all
+        // practical purposes) don't render as active work. Anything surviving
+        // the filter is genuinely in flight right now.
+        const TERMINAL_RUN_STATUSES = new Set([
+          'blocked', 'waiting_input', 'failed', 'completed', 'cancelled',
+          'interrupted', 'timed_out', 'expired', 'rerouted',
+        ]);
+        const TERMINAL_ASSIGNMENT_STATUSES = new Set([
+          'completed', 'expired', 'rerouted', 'cancelled', 'failed', 'timed_out',
+        ]);
         const [claims, assignments, runs] = await Promise.all([
-          this._findEntities(client, 'claim', { status: 'active', limit: 100 }),
-          this._findEntities(client, 'assignment', { limit: 100 }),
-          this._findEntities(client, 'agent_run', { limit: 100 }),
+          this._findEntities(client, 'claim', { status: 'active', limit: 100, includeLegacy: true }),
+          this._findEntities(client, 'assignment', { limit: 100, includeLegacy: true }),
+          this._findEntities(client, 'agent_run', { limit: 100, includeLegacy: true }),
         ]);
         board.active_claims = claims;
-        board.active_assignments = assignments;
+        board.active_assignments = assignments.filter((a: any) =>
+          !TERMINAL_ASSIGNMENT_STATUSES.has(a.status));
         board.active_runs = runs.filter((run: any) =>
-          run.status !== 'blocked' && run.status !== 'waiting_input' && run.status !== 'failed'
-          && run.status !== 'completed' && run.status !== 'cancelled');
+          !TERMINAL_RUN_STATUSES.has(run.status));
         return board;
       }
       case SECTION.SPRINTS:
@@ -1279,15 +1287,14 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.BACKLOG: {
-        // Independent fetches — plans + traps side-by-side, no cascade into
-        // _loadFullBoardForProject which would (a) clear the section cache
-        // mid-flight (the root cause of the Backlog showing only traps bug)
-        // and (b) fire _onDidChangeTreeData before this section's data is
-        // stored (the refresh flicker users see as "Loading..." wiping the
-        // tree). See pln#453.
+        // Independent fetches — plans + traps side-by-side. includeLegacy=true
+        // on traps because pre-v1 captures are all tagged provenance.kind='legacy'
+        // (see default read filter in src/core/entity-operations.ts); without
+        // the override, every trap captured before the provenance rollout
+        // disappears from the Backlog. Operators still need to see those.
         const [plans, traps] = await Promise.all([
-          this._findEntities(client, 'plan', { limit: 100 }),
-          this._findEntities(client, 'trap', { status: 'active', limit: 100 }),
+          this._findEntities(client, 'plan', { limit: 100, includeLegacy: true }),
+          this._findEntities(client, 'trap', { status: 'active', limit: 100, includeLegacy: true }),
         ]);
         board.active_plans = plans;
         board.known_traps = traps;
@@ -1299,10 +1306,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         // not reachable via a canonical `bclaw_find` yet — use the cached
         // project board if present and fall back to a one-off load ONLY if
         // nothing is cached (no cascading fire in the common case).
+        // runtime_note limit is intentionally large: the filter at render
+        // time drops ~99% of them (session-lifecycle noise, agent-runtime
+        // tracking). Fetching 200 leaves a realistic number of human-facing
+        // notes after filtering. Compaction (pln#436) will trim this at the
+        // source eventually.
         const [autoCandidates, runtimeNotes, handoffs] = await Promise.all([
-          this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100 }),
-          this._findEntities(client, 'runtime_note', { limit: 50 }),
-          this._findEntities(client, 'handoff', { limit: 50 }),
+          this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100, includeLegacy: true }),
+          this._findEntities(client, 'runtime_note', { limit: 200, includeLegacy: true }),
+          this._findEntities(client, 'handoff', { limit: 50, includeLegacy: true }),
         ]);
         board.pending_candidates = autoCandidates;
         board.runtime_notes = runtimeNotes;
@@ -1391,17 +1403,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     ));
 
     // --- Live activity ---
-    // Strictly actual in-progress work: active claims (scopes held right now),
-    // running assignments, running agent_runs. Agents-as-registry moved to
-    // System so the section headline always reflects work, not roster.
-    const claims = activeClaims(board);
-    const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
-    const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
+    // Strictly actual in-progress work: active claims, running assignments,
+    // running agent_runs. Count source priority: section cache (post-expand)
+    // → project board → summary _counts. This keeps the header in sync with
+    // whatever the user actually sees below.
+    const liveSectionBoard = this._getSectionBoard(projectPath, SECTION.IN_PROGRESS);
+    const claims = activeClaims(liveSectionBoard ?? board);
+    const runningAssignments = activeAssignments(liveSectionBoard ?? board).filter((a: any) => a.status !== 'blocked');
+    const activeRunsList = activeRuns(liveSectionBoard ?? board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
     const liveArrayCount = claims.length + runningAssignments.length + activeRunsList.length;
     const summaryLiveCount = board.summary && board._counts
       ? board._counts.claims + board._counts.assignments + board._counts.runs
       : 0;
-    const liveCount = liveArrayCount > 0 ? liveArrayCount : summaryLiveCount;
+    const liveCount = liveSectionBoard ? liveArrayCount : (liveArrayCount > 0 ? liveArrayCount : summaryLiveCount);
     sections.push(this._sectionHeader(`Live activity (${liveCount})`, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated && liveCount > 0));
 
     // --- Sprints ---
@@ -1409,20 +1423,24 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     sections.push(this._sectionHeader(`Sprints`, SECTION.SPRINTS, 'rocket', sprintTotal, projectPath, expandWhenPopulated && sprintTotal > 0));
 
     // --- Backlog ---
-    // Prefer summary _counts when arrays aren't populated yet (first render
-    // before lazy section load) so the header shows a meaningful count
-    // immediately rather than (0) that jumps to (26) a second later.
-    const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
-    const highTraps = (board.known_traps ?? [])
+    // Same count-source priority as Live activity: section cache → project
+    // board → summary counts. So once the section is loaded the header
+    // reflects "(plans + traps)" rather than just plan count.
+    const backlogSectionBoard = this._getSectionBoard(projectPath, SECTION.BACKLOG);
+    const backlogBase = backlogSectionBoard ?? board;
+    const backlogPlans = activePlans(backlogBase).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
+    const highTraps = (backlogBase.known_traps ?? [])
       .filter((t: any) => (t.status ?? 'active') === 'active')
       .sort((a: any, b: any) => {
         const rank = (s: string) => (s === 'high' ? 0 : s === 'medium' ? 1 : 2);
         return rank(a.severity ?? 'medium') - rank(b.severity ?? 'medium');
       });
     const summaryPlansCount = board.summary && board._counts ? board._counts.plans : 0;
-    const backlogCount = backlogPlans.length > 0 || highTraps.length > 0
+    const backlogCount = backlogSectionBoard
       ? backlogPlans.length + highTraps.length
-      : summaryPlansCount;
+      : (backlogPlans.length > 0 || highTraps.length > 0
+        ? backlogPlans.length + highTraps.length
+        : summaryPlansCount);
     sections.push(this._sectionHeader(`Backlog (${backlogCount})`, SECTION.BACKLOG, 'tasklist', backlogCount, projectPath, expandWhenPopulated && backlogCount > 0));
 
     // --- System (always collapsed) ---
@@ -1677,7 +1695,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 
   private _buildActivity(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    const notes = (board.runtime_notes ?? []).slice(-10).reverse();
+    // Filter out session-lifecycle noise: "Session started / ended" notes
+    // (tagged `session`) accumulate at 1000s-per-project and bury real
+    // operator signal. Same for per-run/per-assignment tracking notes
+    // (`agent-runtime`), which are more usefully surfaced as runs /
+    // assignments in Live activity, not duplicated here. Keep the last
+    // 10 human-facing notes only.
+    const NOISE_TAGS = new Set(['session', 'agent-runtime']);
+    const isSignal = (note: any): boolean => {
+      const tags = Array.isArray(note.tags) ? note.tags : [];
+      if (tags.length === 0) return true;
+      return !tags.some((tag: string) => NOISE_TAGS.has(tag));
+    };
+    const notes = (board.runtime_notes ?? [])
+      .filter(isSignal)
+      .slice(-10)
+      .reverse();
     return notes.map((note: any) => {
       const ago = note.created_at ? timeAgo(note.created_at) : '';
       return new BrainclawTreeItem(
