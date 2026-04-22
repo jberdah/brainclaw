@@ -12,6 +12,7 @@ import {
   timeAgo,
   type Freshness,
 } from './tree-helpers';
+import type { OpenEntityArgs, SupportedEntity } from './content-provider';
 
 export interface BoardProject {
   path: string;
@@ -28,7 +29,7 @@ export class BrainclawTreeItem extends vscode.TreeItem {
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
     public readonly description?: string,
     public readonly iconPath?: vscode.ThemeIcon | string | vscode.Uri,
-    public readonly tooltip?: string,
+    tooltip?: string | vscode.MarkdownString,
     public readonly contextValue?: string,
     public readonly itemId?: string,
     public readonly projectPath?: string,
@@ -39,10 +40,47 @@ export class BrainclawTreeItem extends vscode.TreeItem {
     super(label, collapsibleState);
     if (description) this.description = description;
     if (iconPath) this.iconPath = iconPath;
-    if (tooltip) this.tooltip = tooltip;
+    if (tooltip !== undefined) this.tooltip = tooltip;
     if (contextValue) this.contextValue = contextValue;
     if (treeId) this.id = treeId;
   }
+}
+
+/**
+ * Attach entity preview behaviour to a tree item:
+ *  - clicking the item runs `brainclaw.openEntity` and opens a markdown preview
+ *  - the tooltip becomes a trusted MarkdownString with an "Open preview" link
+ *
+ * Called per entity row so the main loop stays lean; `summary` is the
+ * human-friendly multi-line string the caller already built for the plain
+ * tooltip (we reuse it so UI text stays consistent).
+ */
+function attachEntityPreview(
+  item: BrainclawTreeItem,
+  entity: SupportedEntity,
+  id: string | undefined,
+  projectPath: string | undefined,
+  summary: string | undefined,
+): void {
+  if (!id || !projectPath) return;
+  const args: OpenEntityArgs = { entity, id, projectPath };
+  const encoded = encodeURIComponent(JSON.stringify([args]));
+
+  item.command = {
+    command: 'brainclaw.openEntity',
+    title: 'Open preview',
+    arguments: [args],
+  };
+
+  const md = new vscode.MarkdownString(undefined, true);
+  md.isTrusted = true;
+  md.supportHtml = false;
+  if (summary) {
+    md.appendMarkdown(summary.split('\n').map((line) => line.trim()).filter(Boolean).join('  \n'));
+    md.appendMarkdown('\n\n');
+  }
+  md.appendMarkdown(`[Open preview ▸](command:brainclaw.openEntity?${encoded})`);
+  item.tooltip = md;
 }
 
 interface BoardSummaryCounts {
@@ -258,6 +296,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
   public async refresh(): Promise<void> {
     await this._refreshBoards();
+  }
+
+  /**
+   * Expose the MCP client for a project so other consumers (e.g. the entity
+   * preview content provider) can reuse the live, initialized connection
+   * instead of spawning their own brainclaw process.
+   */
+  public getMcpClient(projectPath: string): Promise<McpClient | null> {
+    const targetCwd = this._normalizePath(projectPath || this._rootProjectPath || this._workspaceRoot);
+    return this._getMcpClient(targetCwd);
   }
 
   public async exec(command: string, cwd?: string): Promise<void> {
@@ -1659,17 +1707,21 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const claims = agent.claim_count > 0 ? ` · ${agent.claim_count} claim(s)` : '';
       const desc = freshness === 'stale' ? `${agent.trust_level} · ${ago}` : `${agent.trust_level}${claims}${session} · ${ago}`;
       const scopeList = (agent.scopes ?? []).join(', ');
+      const summary = `Agent: ${agent.name}\nTrust: ${agent.trust_level}\nClaims: ${agent.claim_count}\nScopes: ${scopeList || 'none'}\nLast active: ${ago}\nSession: ${agent.has_open_session ? 'open' : 'closed'}`;
+      const agentKey = agent.id ?? agent.name;
 
-      return new BrainclawTreeItem(
+      const item = new BrainclawTreeItem(
         agent.name,
         vscode.TreeItemCollapsibleState.None,
         desc,
         freshnessIcon(freshness),
-        `Agent: ${agent.name}\nTrust: ${agent.trust_level}\nClaims: ${agent.claim_count}\nScopes: ${scopeList || 'none'}\nLast active: ${ago}\nSession: ${agent.has_open_session ? 'open' : 'closed'}`,
-        undefined,
-        undefined,
+        summary,
+        'agent',
+        agentKey,
         projectPath,
       );
+      attachEntityPreview(item, 'agent', agentKey, projectPath, summary);
+      return item;
     });
   }
 
@@ -1731,16 +1783,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const assignee = plan.assignee ? ` @${plan.assignee}` : '';
       const stepsInfo = plan.steps?.length ? ` [${plan.steps.filter((step: any) => step.status === 'done').length}/${plan.steps.length}]` : '';
       const icon = plan.status === 'in_progress' ? 'play-circle' : plan.status === 'blocked' ? 'error' : 'circle-outline';
-      return new BrainclawTreeItem(
+      const summary = `[${plan.id}] ${plan.text}\nStatus: ${plan.status}\nPriority: ${plan.priority ?? 'medium'}${assignee}${stepsInfo}`;
+      const item = new BrainclawTreeItem(
         plan.text?.slice(0, 80) ?? plan.id,
         vscode.TreeItemCollapsibleState.None,
         `${plan.status} · ${plan.priority ?? 'medium'}${assignee}${stepsInfo}`,
         new vscode.ThemeIcon(icon),
-        `[${plan.id}] ${plan.text}\nStatus: ${plan.status}\nPriority: ${plan.priority ?? 'medium'}${assignee}${stepsInfo}`,
+        summary,
         'plan',
         plan.id,
         projectPath,
       );
+      attachEntityPreview(item, 'plan', plan.id, projectPath, summary);
+      return item;
     });
   }
 
@@ -1756,16 +1811,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const claims = activeClaims(board);
     return claims.map((claim: any) => {
       const ago = claim.created_at ? timeAgo(claim.created_at) : '';
-      return new BrainclawTreeItem(
+      const summary = `Claimed by: ${claim.agent}\nScope: ${claim.scope}\nDescription: ${claim.description ?? ''}\nSince: ${ago}`;
+      const item = new BrainclawTreeItem(
         claim.scope,
         vscode.TreeItemCollapsibleState.None,
         `by ${claim.agent} · ${ago}`,
         new vscode.ThemeIcon('shield'),
-        `Claimed by: ${claim.agent}\nScope: ${claim.scope}\nDescription: ${claim.description ?? ''}\nSince: ${ago}`,
+        summary,
         'claim',
         claim.id,
         projectPath,
       );
+      attachEntityPreview(item, 'claim', claim.id, projectPath, summary);
+      return item;
     });
   }
 
@@ -1874,16 +1932,21 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 
   private _buildHandoffs(board: BoardData, projectPath: string): BrainclawTreeItem[] {
-    return visibleHandoffs(board).map((handoff: any) => new BrainclawTreeItem(
-      handoff.text?.slice(0, 80) ?? handoff.id,
-      vscode.TreeItemCollapsibleState.None,
-      `${handoff.from ?? '?'} → ${handoff.to ?? '?'}`,
-      new vscode.ThemeIcon('arrow-swap'),
-      `From: ${handoff.from}\nTo: ${handoff.to}\n${handoff.text}`,
-      undefined,
-      undefined,
-      projectPath,
-    ));
+    return visibleHandoffs(board).map((handoff: any) => {
+      const summary = `From: ${handoff.from}\nTo: ${handoff.to}\n${handoff.text ?? ''}`;
+      const item = new BrainclawTreeItem(
+        handoff.text?.slice(0, 80) ?? handoff.id,
+        vscode.TreeItemCollapsibleState.None,
+        `${handoff.from ?? '?'} → ${handoff.to ?? '?'}`,
+        new vscode.ThemeIcon('arrow-swap'),
+        summary,
+        'handoff',
+        handoff.id,
+        projectPath,
+      );
+      attachEntityPreview(item, 'handoff', handoff.id, projectPath, summary);
+      return item;
+    });
   }
 
   private _buildSprint(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -1934,16 +1997,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _buildTrapItems(traps: any[], projectPath: string): BrainclawTreeItem[] {
     return traps.map((trap: any) => {
       const icon = trap.severity === 'high' ? 'error' : trap.severity === 'medium' ? 'warning' : 'info';
-      return new BrainclawTreeItem(
+      const summary = `[${trap.severity}] ${trap.text}`;
+      const item = new BrainclawTreeItem(
         trap.text?.slice(0, 80) ?? trap.id,
         vscode.TreeItemCollapsibleState.None,
         trap.severity,
         new vscode.ThemeIcon(icon),
-        `[${trap.severity}] ${trap.text}`,
-        undefined,
-        undefined,
+        summary,
+        'trap',
+        trap.id,
         projectPath,
       );
+      attachEntityPreview(item, 'trap', trap.id, projectPath, summary);
+      return item;
     });
   }
 

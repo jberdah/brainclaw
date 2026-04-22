@@ -4,6 +4,13 @@ import * as path from 'path';
 import { BrainclawBoardProvider, BrainclawTreeItem, type BrainclawStatusSummary } from './board-tree';
 import { BrainclawFileDecorationProvider } from './file-decorations';
 import { discoverBrainclawProjects } from './project-discovery';
+import {
+  BRAINCLAW_SCHEME,
+  BrainclawContentProvider,
+  buildEntityUri,
+  type OpenEntityArgs,
+  type SupportedEntity,
+} from './content-provider';
 
 class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   getTreeItem(el: vscode.TreeItem) { return el; }
@@ -58,6 +65,29 @@ export function activate(context: vscode.ExtensionContext) {
       await treeProvider?.refresh();
       fileDecoProvider?.refresh();
     })
+  );
+
+  // Entity preview: virtual brainclaw: documents rendered as markdown in the editor
+  const contentProvider = treeProvider
+    ? new BrainclawContentProvider((projectPath) => treeProvider.getMcpClient(projectPath))
+    : undefined;
+  if (contentProvider) {
+    context.subscriptions.push(
+      vscode.workspace.registerTextDocumentContentProvider(BRAINCLAW_SCHEME, contentProvider),
+      { dispose: () => contentProvider.dispose() },
+    );
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('brainclaw.openEntity', async (args: OpenEntityArgs) => {
+      if (!args || !args.entity || !args.id || !args.projectPath) return;
+      const uri = buildEntityUri(args);
+      await vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+    }),
+    vscode.commands.registerCommand('brainclaw.refreshEntityPreview', async (args: OpenEntityArgs) => {
+      if (!contentProvider || !args) return;
+      contentProvider.notifyChange(buildEntityUri(args));
+    }),
   );
 
   context.subscriptions.push(

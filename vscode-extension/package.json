@@ -2,7 +2,7 @@
   "name": "brainclaw-vscode",
   "displayName": "Brainclaw",
   "description": "Real-time agent coordination board for brainclaw",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -103,9 +103,27 @@
         "command": "brainclaw.doctor",
         "title": "Brainclaw: Doctor",
         "icon": "$(stethoscope)"
+      },
+      {
+        "command": "brainclaw.openEntity",
+        "title": "Brainclaw: Open entity preview"
+      },
+      {
+        "command": "brainclaw.refreshEntityPreview",
+        "title": "Brainclaw: Refresh entity preview"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "brainclaw.openEntity",
+          "when": "false"
+        },
+        {
+          "command": "brainclaw.refreshEntityPreview",
+          "when": "false"
+        }
+      ],
       "view/title": [
         {
           "command": "brainclaw.refreshBoard",
@@ -225,7 +243,7 @@
   "scripts": {
     "compile": "tsc -p ./tsconfig.json",
     "watch": "tsc -watch -p ./tsconfig.json",
-    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js out/project-discovery.test.js out/acceptance-bar.test.js"
+    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js out/project-discovery.test.js out/acceptance-bar.test.js out/content-provider.test.js"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
