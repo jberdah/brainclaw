@@ -36,7 +36,7 @@ When a human operator needs the CLI equivalent of `bclaw_write_note`, use `brain
 
 ## Available Tools
 
-All 57 MCP tools are discoverable via `tools/list`. Each tool carries an `annotations` object with `tier` and `category` metadata so clients can filter or group tools without server-side hiding.
+All 59 published MCP tools are discoverable via `tools/list`. Each tool carries an `annotations` object with `tier` and `category` metadata so clients can filter or group tools without server-side hiding.
 
 ### Tool tiers
 
@@ -46,7 +46,7 @@ Every tool has one of three tiers in its `annotations.tier` field:
 - **standard** — Day-to-day coordination tools: plans, claims, messaging, dispatch, review, memory. Returned by default alongside facades.
 - **advanced** — Specialized governance, audit, registry, sequences, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (~33 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (~34 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 All tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 

@@ -124,20 +124,25 @@ protocol changes. Conventions:
   latest released version in this changelog. A mismatch is a bug —
   bump the constant or amend the changelog, but do not ship drift.
 
-## Enforcement hooks (future)
+## Enforcement guard
 
-`pln_aaf94588` step 5 tracks a lightweight doctor / CI guard that
-warns when `src/commands/mcp.ts` changes in ways that should show up
-in the changelog. Proposed shape:
+`tests/unit/mcp-governance.test.ts` computes a stable fingerprint of
+the published MCP surface from `src/commands/mcp.ts`:
 
-- Detect edits to tool registration blocks or `MCP_WRITE_TOOLS` /
-  `LEGACY_MCP_TOOL_WARNINGS` tables.
-- When detected without a corresponding changelog edit, print a
-  warning (advisory, not blocking).
-- Wireable into `doctor` as a new check or into pre-commit hooks.
+- tool name
+- tier
+- category
+- input schema with descriptions stripped
 
-Not scoped into the first governance landing — added when surface
-churn becomes frequent enough that human reviewers start missing it.
+The test requires the current section of
+`docs/mcp-schema-changelog.md` to include that fingerprint. If a
+public tool is added, removed, moved between tiers, or has its input
+contract changed, the test fails until the changelog is updated.
+
+This guard is intentionally advisory-by-test rather than a runtime
+block. It catches contract drift in CI and local validation without
+preventing operators from using `brainclaw doctor` during active
+development.
 
 ## Changelog → code cross-check
 
@@ -149,3 +154,12 @@ head -5 docs/mcp-schema-changelog.md
 ```
 
 Both should report the same version. Drift = bug.
+
+Quick command to inspect the current public-surface fingerprint:
+
+```bash
+node --test dist-test/tests/unit/mcp-governance.test.js
+```
+
+If the test fails, copy the reported fingerprint into the current
+`docs/mcp-schema-changelog.md` section and describe the surface change.

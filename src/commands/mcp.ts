@@ -1580,8 +1580,8 @@ export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
   'bclaw_get_context',
 ]);
 
-/** All tools minus the v1.0 removal set. Used by every tools/list branch. */
-const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool.name));
+/** All tools minus the v1.0 removal set. Used by every tools/list branch and governance guards. */
+export const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool.name));
 
 /**
  * Canonical facade order — drives what a fresh agent sees first in tools/list.

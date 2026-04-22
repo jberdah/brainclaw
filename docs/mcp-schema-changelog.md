@@ -51,6 +51,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
 - `SCHEMA_VERSION` bump: `0.8.0 → 1.0.0`
 - `package.json` bump: `0.63.0 → 1.0.0`
 
+**Changed — governance guard**
+- `tests/unit/mcp-governance.test.ts` now checks that the current
+  changelog records the published MCP surface fingerprint. When a tool
+  name, tier, category, or input schema changes, the test fails until
+  this section is updated.
+- MCP public surface fingerprint: `sha256:a479f710ff043ef6`
+
 See `docs/integrations/mcp.md` for the full canonical surface + an
 example gallery per verb. See `docs/concepts/mcp-governance.md` for
 the stability contract now that v1.0 has shipped.
