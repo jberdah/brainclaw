@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { analyzeSequence, generateBrief, dispatch, findReviewableHandoffs, generateReviewBrief, dispatchReview } from '../../src/core/dispatcher.js';
+import { analyzeSequence, generateBrief, dispatch, findReviewableHandoffs, generateReviewBrief, dispatchReview, selectWorktreeBaseForReadyLane } from '../../src/core/dispatcher.js';
 import { saveSequence } from '../../src/core/sequence.js';
 import { saveClaim } from '../../src/core/claims.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
@@ -136,6 +136,50 @@ describe('core/dispatcher', () => {
       assert.equal(result.done.length, 1);
       assert.equal(result.ready.length, 1);
       assert.equal(result.ready[0]!.plan.id, 'pln_b');
+    });
+
+    it('selects integrated HEAD as worktree base for ready lanes with satisfied hard_after deps', () => {
+      const plans = [
+        makePlan({ id: 'pln_dep', text: 'Dependency', status: 'done' }),
+        makePlan({ id: 'pln_downstream', text: 'Downstream', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_dep', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_downstream', rank: 2, hard_after: ['pln_dep'], soft_after: [] },
+      ]), testDir);
+
+      const analysis = analyzeSequence(testDir)!;
+      const downstream = analysis.ready.find((entry) => entry.plan.id === 'pln_downstream')!;
+      const selection = selectWorktreeBaseForReadyLane(downstream.item, analysis);
+
+      assert.equal(selection.baseRef, 'HEAD');
+      assert.equal(selection.resetExistingBranch, true);
+      assert.ok(selection.reason?.includes('pln_dep'));
+    });
+
+    it('keeps default worktree base for lanes without hard_after deps', () => {
+      const plans = [makePlan({ id: 'pln_root', text: 'Root task', status: 'todo' })];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+
+      saveSequence(makeSequence([
+        { planId: 'pln_root', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const analysis = analyzeSequence(testDir)!;
+      const selection = selectWorktreeBaseForReadyLane(analysis.ready[0]!.item, analysis);
+
+      assert.equal(selection.baseRef, undefined);
+      assert.equal(selection.resetExistingBranch, undefined);
     });
 
     it('identifies blocked lanes with unmet hard deps', () => {

@@ -28,6 +28,7 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
+  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -215,6 +216,7 @@ export async function attemptExecution(
         command: manual.command,
         shell: manual.shell,
         error: `Spawn skipped: ${instanceCheck.reason}. Use the command manually.`,
+        failure_kind: 'spawn_capacity',
       };
     }
   }
@@ -243,6 +245,8 @@ export async function attemptExecution(
           command: manual.command,
           shell: manual.shell,
           error: `Spawn launched (pid ${result.pid}) but assignment ${options.assignmentId} did not acknowledge within ${handshakeTimeoutMs}ms`,
+          failure_kind: 'spawn_no_handshake',
+          pid: result.pid,
         };
       }
     }
@@ -285,6 +289,7 @@ export async function attemptExecution(
       command: manual.command,
       shell: manual.shell,
       error: `Spawn failed (${errorMsg}), falling back to manual execution`,
+      failure_kind: 'spawn_failed',
     };
   }
 }

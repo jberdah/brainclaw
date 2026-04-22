@@ -2,7 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import {
+  createWorktree,
+  findWorktreePathForBranch,
   worktreesBaseDir,
   resolveWorktreePath,
   isBareRepo,
@@ -104,5 +108,56 @@ describe('detectSharedCheckoutRisk', () => {
     // Conflict may or may not exist, but the function must return the shape
     assert.ok(typeof risk.has_conflict === 'boolean');
     assert.ok(Array.isArray(risk.conflicting_paths));
+  });
+});
+
+describe('findWorktreePathForBranch', () => {
+  it('returns the worktree path for an attached branch', () => {
+    const pathForBranch = findWorktreePathForBranch([
+      { path: '/repo', branch: 'main', commit: 'abc', is_main: true },
+      { path: '/repo-feature', branch: 'feat/live', commit: 'def', is_main: false },
+    ], 'feat/live');
+
+    assert.equal(pathForBranch, '/repo-feature');
+  });
+
+  it('returns undefined when no worktree has the branch', () => {
+    const pathForBranch = findWorktreePathForBranch([
+      { path: '/repo', branch: 'main', commit: 'abc', is_main: true },
+    ], 'feat/missing');
+
+    assert.equal(pathForBranch, undefined);
+  });
+});
+
+describe('createWorktree reset guard', () => {
+  it('refuses to force-reset a branch checked out in another worktree', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-worktree-reset-'));
+    const externalWorktree = path.join(repo, '..', `${path.basename(repo)}-linked`);
+    const targetPath = resolveWorktreePath(repo, 'feat/live');
+
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=test@example.com', '-c', 'user.name=Test User', 'commit', '--allow-empty', '-m', 'init']);
+      git(['branch', 'feat/live']);
+      git(['worktree', 'add', externalWorktree, 'feat/live']);
+
+      assert.throws(
+        () => createWorktree(repo, 'feat/live', { resetExistingBranch: true, baseRef: 'HEAD' }),
+        /Cannot reset branch feat\/live: it is checked out in worktree/,
+      );
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', externalWorktree], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(externalWorktree, { recursive: true, force: true });
+    }
   });
 });

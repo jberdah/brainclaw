@@ -4845,6 +4845,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             autoExecute: opts.autoExecute,
             worktreePath,
             claimId: entry.claim_id,
+            assignmentId: entry.assignment_id,
             dispatcherAgent: opts.senderAgent,
             dispatcherAgentId: opts.senderAgentId,
             cwd: opts.cwd,
@@ -4859,6 +4860,49 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }
           if (execResult.error) opts.warnings.push(execResult.error);
           if (entry.assignment_id && entry.claim_id) {
+            if (execResult.failure_kind === 'spawn_no_handshake') {
+              try {
+                const run = createAgentRun({
+                  assignment_id: entry.assignment_id,
+                  claim_id: entry.claim_id,
+                  message_id: entry.message_id,
+                  agent: entry.agent,
+                  transport: 'cli_spawn',
+                  status: 'launching',
+                  scope: worktreePath ?? entry.scope ?? entry.ref ?? entry.assignment_id,
+                  description: `Coordinate execution attempt for ${entry.scope ?? entry.ref ?? entry.assignment_id}`,
+                  worktree_path: worktreePath,
+                  command: execResult.command,
+                  shell: execResult.shell,
+                  pid: execResult.pid,
+                  status_reason: 'CLI spawn launched by coordinator',
+                  tags: ['coordinate-run', `message:${entry.message_type}`],
+                }, opts.cwd);
+                transitionAgentRun(run.id, 'failed', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  pid: execResult.pid,
+                  status_reason: execResult.error,
+                  error_message: execResult.error,
+                }, opts.cwd);
+              } catch (runErr) {
+                opts.warnings.push(`AgentRun creation failed for ${entry.assignment_id}: ${runErr instanceof Error ? runErr.message : String(runErr)}`);
+              }
+
+              try {
+                transitionAssignment(entry.assignment_id, 'failed', {
+                  actor: opts.senderAgent,
+                  actor_id: opts.senderAgentId,
+                  error_message: execResult.error,
+                  status_reason: execResult.error,
+                  syncAgentRun: false,
+                }, opts.cwd);
+              } catch (assignmentErr) {
+                opts.warnings.push(`Assignment failure transition failed for ${entry.assignment_id}: ${assignmentErr instanceof Error ? assignmentErr.message : String(assignmentErr)}`);
+              }
+              continue;
+            }
+
             try {
               const run = createAgentRun({
                 assignment_id: entry.assignment_id,

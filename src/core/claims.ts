@@ -483,6 +483,8 @@ export interface CoordinatorClaimOptions {
   dispatcherAgent: string;
   sessionId?: string;
   cwd: string;
+  worktreeBaseRef?: string;
+  resetExistingWorktreeBranch?: boolean;
 }
 
 export interface CoordinatorClaimResult {
@@ -537,6 +539,8 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
     worktreePath = createWorktree(options.cwd, worktreeBranch, {
       sessionId: options.sessionId,
       agent: options.agent,
+      baseRef: options.worktreeBaseRef,
+      resetExistingBranch: options.resetExistingWorktreeBranch,
     });
   } catch (err) {
     worktreeWarning = `Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`;

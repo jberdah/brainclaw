@@ -9,7 +9,7 @@ import {
   syncAgentRunFromAssignmentTransition,
   transitionAgentRun,
 } from '../../src/core/agentruns.js';
-import { createAssignment } from '../../src/core/assignments.js';
+import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 let ws: TestWorkspace;
@@ -199,5 +199,39 @@ describe('syncAgentRunFromAssignmentTransition — guard against invalid transit
     // Run should still be launching (transition was skipped)
     const reloaded = loadAgentRun(run.id, ws.dir);
     assert.equal(reloaded?.status, 'launching');
+  });
+
+  it('can skip AgentRun sync when a caller manages the launch attempt explicitly', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_sync_skip',
+      agent: 'test-agent-3',
+      dispatcher_agent: 'dispatcher',
+      scope: 'src/sync-skip',
+      description: 'Skip sync test',
+    }, ws.dir);
+
+    const priorRun = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: assignment.claim_id,
+      agent: 'test-agent-3',
+      transport: 'manual_command',
+      scope: assignment.scope,
+      description: 'Prior attempt',
+    }, ws.dir);
+    transitionAgentRun(priorRun.id, 'waiting_input', { actor: 'dispatcher' }, ws.dir);
+    transitionAssignment(assignment.id, 'offered', {
+      actor: 'dispatcher',
+      status_reason: 'assignment offered before launch attempt',
+    }, ws.dir);
+
+    const result = transitionAssignment(assignment.id, 'failed', {
+      actor: 'dispatcher',
+      status_reason: 'new spawn attempt failed before handshake',
+      error_message: 'new spawn attempt failed before handshake',
+      syncAgentRun: false,
+    }, ws.dir);
+
+    assert.equal(result.assignment.status, 'failed');
+    assert.equal(loadAgentRun(priorRun.id, ws.dir)?.status, 'waiting_input');
   });
 });

@@ -58,6 +58,26 @@ function cleanupTestStore(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function installFakeAgentBinary(dir: string, name: string): () => void {
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(binDir, `${name}.cmd`), '@echo off\r\nexit /b 0\r\n');
+  } else {
+    const binaryPath = path.join(binDir, name);
+    fs.writeFileSync(binaryPath, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(binaryPath, 0o755);
+  }
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = previousPath ? `${binDir}${path.delimiter}${previousPath}` : binDir;
+  return () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  };
+}
+
 function makePlan(overrides: Partial<PlanItem> & { id: string; text: string }): PlanItem {
   return {
     created_at: '2026-04-01T00:00:00Z',
@@ -215,6 +235,49 @@ describe('dispatch-e2e/per-agent-cycle', () => {
 
     // Verify brief mode
     assert.equal(resolveBriefMode('codex'), 'compact');
+  });
+
+  it('codex: spawned process without assignment handshake fails the assignment and run', async () => {
+    const restorePath = installFakeAgentBinary(testDir, 'codex');
+    const currentNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    delete process.env.BRAINCLAW_NO_SPAWN;
+    try {
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [],
+        plan_items: [makePlan({ id: 'pln_noack', text: 'No ack task', assignee: 'codex' })],
+      }, testDir);
+      saveSequence(makeSequence([
+        { planId: 'pln_noack', rank: 1, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = (await dispatch({
+        dispatcherAgent: 'coordinator',
+        agents: ['codex'],
+        handshakeTimeoutMs: 50,
+      }, testDir))!;
+
+      assert.equal(result.result.messages_sent.length, 1);
+      assert.ok(result.result.warnings.some((warning) => warning.includes('did not acknowledge')));
+      const entry = result.result.messages_sent[0]!;
+      assert.equal(entry.execution_status, 'command_ready_manual');
+      assert.ok(entry.pid, 'spawn pid is retained for diagnostics');
+
+      const assignment = loadAssignment(entry.assignment_id!, testDir);
+      assert.equal(assignment?.status, 'failed');
+      assert.ok(assignment?.error_message?.includes('did not acknowledge'));
+
+      const run = findLatestAgentRunForAssignment(entry.assignment_id!, testDir);
+      assert.ok(run, 'failed run is recorded');
+      assert.equal(run!.transport, 'cli_spawn');
+      assert.equal(run!.status, 'failed');
+      assert.equal(run!.pid, entry.pid);
+    } finally {
+      restorePath();
+      if (currentNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+      else process.env.BRAINCLAW_NO_SPAWN = currentNoSpawn;
+    }
   });
 
   it('assignment lifecycle can progress from dispatch to terminal states for key CLI agents', async () => {

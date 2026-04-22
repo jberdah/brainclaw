@@ -627,6 +627,32 @@ export interface DispatchOptions {
   sessionId?: string;
   /** Attempt to spawn agents after delivery (default: true). When false, always return command_ready_manual. */
   autoExecute?: boolean;
+  /** Test/ops override for assignment startup acknowledgement. */
+  handshakeTimeoutMs?: number;
+}
+
+export interface WorktreeBaseSelection {
+  baseRef?: string;
+  resetExistingBranch?: boolean;
+  reason?: string;
+}
+
+export function selectWorktreeBaseForReadyLane(
+  item: SequenceItem,
+  analysis: DispatchAnalysis,
+): WorktreeBaseSelection {
+  const hardAfter = item.hard_after ?? [];
+  if (hardAfter.length === 0) return {};
+
+  const donePlanIds = new Set(analysis.done.map((entry) => entry.planId));
+  const allHardDepsDone = hardAfter.every((planId) => donePlanIds.has(planId));
+  if (!allHardDepsDone) return {};
+
+  return {
+    baseRef: 'HEAD',
+    resetExistingBranch: true,
+    reason: `hard_after dependencies already integrated: ${hardAfter.join(', ')}`,
+  };
 }
 
 /**
@@ -717,6 +743,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     let claimId = '(dry-run)';
     let worktreePath: string | undefined;
     if (!options.dryRun) {
+      const worktreeBase = selectWorktreeBaseForReadyLane(readyItem.item, analysis);
       const claimResult = createCoordinatorClaim({
         agent: targetAgent,
         scope: claimScope,
@@ -725,6 +752,8 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         dispatcherAgent: options.dispatcherAgent,
         sessionId: options.sessionId,
         cwd,
+        worktreeBaseRef: worktreeBase.baseRef,
+        resetExistingWorktreeBranch: worktreeBase.resetExistingBranch,
       });
       // Scope conflict: a different agent holds this scope — skip this plan
       if (claimResult.scopeConflict) {
@@ -908,6 +937,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         dispatcherAgent: options.dispatcherAgent,
         dispatcherAgentId: options.dispatcherAgentId,
         cwd,
+        handshakeTimeoutMs: options.handshakeTimeoutMs,
       });
       entry.execution_status = execResult.execution_status;
       if (execResult.pid) entry.pid = execResult.pid;
@@ -917,6 +947,51 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       if (execResult.error) result.warnings.push(execResult.error);
 
       if (entry.assignment_id && entry.claim_id) {
+        if (execResult.failure_kind === 'spawn_no_handshake') {
+          try {
+            const run = createAgentRun({
+              assignment_id: entry.assignment_id,
+              claim_id: entry.claim_id,
+              message_id: entry.message_id,
+              plan_id: entry.plan_id,
+              sequence_id: analysis.sequence.id,
+              agent: entry.agent,
+              transport: 'cli_spawn',
+              status: 'launching',
+              scope: prepared.worktreePath ?? entry.plan_id,
+              description: `Execution attempt for ${entry.plan_id}`,
+              worktree_path: prepared.worktreePath,
+              command: execResult.command,
+              shell: execResult.shell,
+              pid: execResult.pid,
+              status_reason: 'CLI spawn launched by dispatcher',
+              tags: ['dispatch-run', ...(entry.lane ? [`lane:${entry.lane}`] : [])],
+            }, cwd);
+            transitionAgentRun(run.id, 'failed', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              pid: execResult.pid,
+              status_reason: execResult.error,
+              error_message: execResult.error,
+            }, cwd);
+          } catch (runErr) {
+            result.warnings.push(`AgentRun creation failed for ${entry.assignment_id}: ${runErr instanceof Error ? runErr.message : String(runErr)}`);
+          }
+
+          try {
+            transitionAssignment(entry.assignment_id, 'failed', {
+              actor: options.dispatcherAgent,
+              actor_id: options.dispatcherAgentId,
+              error_message: execResult.error,
+              status_reason: execResult.error,
+              syncAgentRun: false,
+            }, cwd);
+          } catch (assignmentErr) {
+            result.warnings.push(`Assignment failure transition failed for ${entry.assignment_id}: ${assignmentErr instanceof Error ? assignmentErr.message : String(assignmentErr)}`);
+          }
+          continue;
+        }
+
         try {
           const run = createAgentRun({
             assignment_id: entry.assignment_id,

@@ -112,6 +112,13 @@ export function detectSharedCheckoutRisk(mainWorktreePath: string): SharedChecko
   };
 }
 
+export function findWorktreePathForBranch(
+  worktrees: WorktreeInfo[],
+  branchName: string,
+): string | undefined {
+  return worktrees.find((worktree) => worktree.branch === branchName)?.path;
+}
+
 /**
  * Creates a git linked worktree at the computed placement path.
  *
@@ -123,7 +130,14 @@ export function detectSharedCheckoutRisk(mainWorktreePath: string): SharedChecko
 export function createWorktree(
   mainWorktreePath: string,
   branchName: string,
-  options: { sessionId?: string; agent?: string } = {},
+  options: {
+    sessionId?: string;
+    agent?: string;
+    /** Git ref used when creating a new branch, or resetting a stale existing branch. Defaults to HEAD. */
+    baseRef?: string;
+    /** Reset an existing local branch to baseRef before adding the worktree. */
+    resetExistingBranch?: boolean;
+  } = {},
 ): string {
   const trySymlinkSharedPath = (entryName: string): void => {
     const sourcePath = path.join(mainWorktreePath, entryName);
@@ -166,12 +180,27 @@ export function createWorktree(
   // Check if branch exists locally
   const branchCheck = runGit(['rev-parse', '--verify', branchName], mainWorktreePath);
   const branchExists = branchCheck.ok;
+  const baseRef = options.baseRef ?? 'HEAD';
+
+  if (branchExists && options.resetExistingBranch) {
+    const attachedWorktreePath = findWorktreePathForBranch(listWorktrees(mainWorktreePath), branchName);
+    if (attachedWorktreePath) {
+      throw new Error(
+        `Cannot reset branch ${branchName}: it is checked out in worktree ${attachedWorktreePath}. Remove or merge that worktree first.`,
+      );
+    }
+
+    const reset = runGit(['branch', '--force', branchName, baseRef], mainWorktreePath);
+    if (!reset.ok) {
+      throw new Error(`git branch --force failed for ${branchName}: ${reset.stderr.trim()}`);
+    }
+  }
 
   // Use forward-slash paths for git on Windows
   const gitTargetPath = gitPath(targetPath);
   const worktreeArgs = branchExists
     ? ['worktree', 'add', gitTargetPath, branchName]
-    : ['worktree', 'add', '-b', branchName, gitTargetPath];
+    : ['worktree', 'add', '-b', branchName, gitTargetPath, baseRef];
 
   const result = runGit(worktreeArgs, mainWorktreePath);
   if (!result.ok) {
@@ -205,6 +234,8 @@ export function createWorktree(
     user: process.env.USER || process.env.USERNAME || undefined,
     created_at: new Date().toISOString(),
     main_worktree_path: mainWorktreePath,
+    base_ref: baseRef,
+    reset_existing_branch: options.resetExistingBranch === true,
     git_advice: 'git add ONLY specific files, NEVER git add -A.',
   };
   fs.writeFileSync(

@@ -366,6 +366,8 @@ describe('attemptExecution with mock adapter', () => {
       assert.equal(result.execution_status, 'command_ready_manual');
       assert.equal(result.command, 'fallback-cmd');
       assert.ok(result.error?.includes('did not acknowledge'));
+      assert.equal(result.failure_kind, 'spawn_no_handshake');
+      assert.equal(result.pid, 1234);
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }

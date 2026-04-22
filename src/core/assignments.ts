@@ -107,7 +107,7 @@ export function generateAssignmentId(cwd?: string): { id: string; short_label: s
  */
 const VALID_TRANSITIONS = new Map<string, Set<string>>([
   ['created',   new Set(['offered', 'rerouted'])],
-  ['offered',   new Set(['accepted', 'expired', 'rerouted'])],
+  ['offered',   new Set(['accepted', 'failed', 'expired', 'rerouted'])],
   ['accepted',  new Set(['started', 'timed_out', 'rerouted'])],
   ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out', 'rerouted'])],
   ['failed',    new Set(['retrying', 'rerouted'])],
@@ -137,6 +137,8 @@ export interface TransitionOptions {
   status_reason?: string;
   artifacts?: AssignmentArtifact[];
   error_message?: string;
+  /** Disable AgentRun sync when the caller is managing a specific run attempt. */
+  syncAgentRun?: boolean;
   /** Actor performing the transition (agent name or dispatcher). */
   actor?: string;
   actor_id?: string;
@@ -210,17 +212,19 @@ export function transitionAssignment(
 
   saveAssignment(assignment, cwd);
   emitAssignmentEvent(assignment, `assignment_${newStatus}`, options.actor, cwd);
-  try {
-    syncAgentRunFromAssignmentTransition(assignment, newStatus, {
-      actor: options.actor,
-      actor_id: options.actor_id,
-      session_id: options.session_id,
-      status_reason: options.status_reason,
-      artifacts: options.artifacts,
-      error_message: options.error_message,
-    }, cwd);
-  } catch {
-    /* best-effort: run state should not break assignment lifecycle */
+  if (options.syncAgentRun !== false) {
+    try {
+      syncAgentRunFromAssignmentTransition(assignment, newStatus, {
+        actor: options.actor,
+        actor_id: options.actor_id,
+        session_id: options.session_id,
+        status_reason: options.status_reason,
+        artifacts: options.artifacts,
+        error_message: options.error_message,
+      }, cwd);
+    } catch {
+      /* best-effort: run state should not break assignment lifecycle */
+    }
   }
 
   appendAuditEntry({
