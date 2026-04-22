@@ -104,7 +104,7 @@ interface RegisteredAgent {
   kind?: string;
 }
 
-type CanonicalEntity = 'plan' | 'claim' | 'assignment' | 'agent_run' | 'action' | 'candidate' | 'sequence';
+type CanonicalEntity = 'plan' | 'claim' | 'assignment' | 'agent_run' | 'action' | 'candidate' | 'sequence' | 'trap' | 'runtime_note' | 'handoff';
 
 interface SearchResultItem {
   id: string;
@@ -770,7 +770,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       .then((board) => {
         this._projectBoards.set(normalizedPath, board);
         this._projectErrors.delete(normalizedPath);
-        this._clearSectionCache(normalizedPath);
+        // Keep section cache intact so expanded sections don't collapse to
+        // "Loading..." on refresh. Each section has its own TTL and refetches
+        // itself lazily on next expand. See pln#453 (refresh flicker).
         if (normalizedPath === this._rootProjectPath) {
           this._workspaceBoard = board;
         }
@@ -780,7 +782,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         const message = error instanceof Error ? error.message : String(error);
         this._projectBoards.delete(normalizedPath);
         this._projectErrors.set(normalizedPath, message);
-        this._clearSectionCache(normalizedPath);
+        // Preserve section cache on error too — stale data is better than a
+        // blank tree for a transient failure.
         if (normalizedPath === this._rootProjectPath) {
           this._workspaceBoard = null;
         }
@@ -1061,7 +1064,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const board = await client.callTool('bclaw_context', { kind: 'board' }) as unknown as BoardData;
       this._projectBoards.set(normalizedPath, board);
       this._projectErrors.delete(normalizedPath);
-      this._clearSectionCache(normalizedPath);
+      // Do not clear section cache: each section owns its own TTL + refresh.
+      // Wiping on every full-board reload is what produced the mid-refresh
+      // "Loading..." flicker users reported (pln#453).
       if (normalizedPath === this._rootProjectPath) {
         this._workspaceBoard = board;
       }
@@ -1070,7 +1075,6 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const message = error instanceof Error ? error.message : String(error);
       this._projectBoards.delete(normalizedPath);
       this._projectErrors.set(normalizedPath, message);
-      this._clearSectionCache(normalizedPath);
       if (normalizedPath === this._rootProjectPath) {
         this._workspaceBoard = null;
       }
@@ -1254,31 +1258,41 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.BACKLOG: {
-        board.active_plans = await this._findEntities(client, 'plan', { limit: 100 });
-        const fallback = this._getBoardForPath(projectPath);
-        if (fallback && !fallback.summary && (fallback.known_traps?.length ?? 0) > 0) {
-          board.known_traps = fallback.known_traps;
-        } else {
-          const fullBoard = await this._loadFullBoardForProject(projectPath);
-          if (fullBoard) {
-            board.known_traps = fullBoard.known_traps;
-          }
-        }
+        // Independent fetches — plans + traps side-by-side, no cascade into
+        // _loadFullBoardForProject which would (a) clear the section cache
+        // mid-flight (the root cause of the Backlog showing only traps bug)
+        // and (b) fire _onDidChangeTreeData before this section's data is
+        // stored (the refresh flicker users see as "Loading..." wiping the
+        // tree). See pln#453.
+        const [plans, traps] = await Promise.all([
+          this._findEntities(client, 'plan', { limit: 100 }),
+          this._findEntities(client, 'trap', { status: 'active', limit: 100 }),
+        ]);
+        board.active_plans = plans;
+        board.known_traps = traps;
         return board;
       }
       case SECTION.SYSTEM: {
-        board.pending_candidates = await this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100 });
-        const fullBoard = this._getBoardForPath(projectPath)?.summary ? null : this._getBoardForPath(projectPath);
-        if (fullBoard) {
-          board.runtime_notes = fullBoard.runtime_notes ?? [];
-          board.open_handoffs = fullBoard.open_handoffs ?? [];
-          board.linked_projects = fullBoard.linked_projects ?? [];
-          board.incoming_signals = fullBoard.incoming_signals ?? [];
+        // Same self-sufficient pattern as BACKLOG. Linked projects + incoming
+        // signals still come from the full-board snapshot because they are
+        // not reachable via a canonical `bclaw_find` yet — use the cached
+        // project board if present and fall back to a one-off load ONLY if
+        // nothing is cached (no cascading fire in the common case).
+        const [autoCandidates, runtimeNotes, handoffs] = await Promise.all([
+          this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100 }),
+          this._findEntities(client, 'runtime_note', { limit: 50 }),
+          this._findEntities(client, 'handoff', { limit: 50 }),
+        ]);
+        board.pending_candidates = autoCandidates;
+        board.runtime_notes = runtimeNotes;
+        board.open_handoffs = handoffs;
+        const cached = this._getBoardForPath(projectPath);
+        if (cached && !cached.summary) {
+          board.linked_projects = cached.linked_projects ?? [];
+          board.incoming_signals = cached.incoming_signals ?? [];
         } else {
           const loadedBoard = await this._loadFullBoardForProject(projectPath);
           if (loadedBoard) {
-            board.runtime_notes = loadedBoard.runtime_notes ?? [];
-            board.open_handoffs = loadedBoard.open_handoffs ?? [];
             board.linked_projects = loadedBoard.linked_projects ?? [];
             board.incoming_signals = loadedBoard.incoming_signals ?? [];
           }
@@ -1356,14 +1370,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       ));
     }
 
-    // --- In progress ---
+    // --- Live activity ---
+    // Covers claims/assignments/runs (actual in-progress work) and idle agents
+    // registered on the project. Label reflects the mixed nature so a section
+    // showing "(11)" that is only the agent list is not mislabelled as "in
+    // progress" work (pln#453 UX finding).
     const agents = board.other_agents ?? [];
     const claims = activeClaims(board);
     const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
     const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
-    const inProgressCount = agents.length + claims.length + runningAssignments.length + activeRunsList.length;
-    if (inProgressCount > 0) {
-      sections.push(this._sectionHeader(`In progress (${inProgressCount})`, SECTION.IN_PROGRESS, 'play-circle', inProgressCount, projectPath, expandWhenPopulated));
+    const activeWorkCount = claims.length + runningAssignments.length + activeRunsList.length;
+    const liveCount = agents.length + activeWorkCount;
+    if (liveCount > 0) {
+      const label = activeWorkCount > 0
+        ? `Live activity (${liveCount})`
+        : `Agents on board (${liveCount})`;
+      sections.push(this._sectionHeader(label, SECTION.IN_PROGRESS, 'play-circle', liveCount, projectPath, expandWhenPopulated));
     }
 
     // --- Sprints ---
