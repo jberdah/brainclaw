@@ -17,7 +17,7 @@
  *                        MCP call (viewMemory in particular must no
  *                        longer just print "Searching memory for scope").
  *   D. E2E review flow — accept/reject/release/approve/reject-action are
- *                        wired to the canonical MCP tools.
+ *                        wired to the published v1 MCP tools.
  *
  * Runtime activation and live refresh checks need the @vscode/test-electron
  * harness; see the MANUAL E2E notes printed by the suite below.
@@ -34,6 +34,7 @@ const pkgJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.jso
 const declaredCommands = pkgJson.contributes.commands.map((c) => c.command);
 const extensionSrc = fs.readFileSync(path.join(extensionRoot, 'src', 'extension.ts'), 'utf-8');
 const boardTreeSrc = fs.readFileSync(path.join(extensionRoot, 'src', 'board-tree.ts'), 'utf-8');
+const fileDecorationsSrc = fs.readFileSync(path.join(extensionRoot, 'src', 'file-decorations.ts'), 'utf-8');
 
 // Internal commands registered in board-tree that aren't meant for the palette
 // (no package.json entry needed) — keep this list narrow and explicit.
@@ -168,8 +169,8 @@ describe('acceptance — D. end-to-end review flow via MCP-backed tools', () => 
   // Each entry: the CLI head token that branches _mapCommandToMcpTool, the
   // expected MCP tool name, and an optional second positional token check.
   const mappings: Array<{ head: string; tool: string; second?: string }> = [
-    { head: 'accept', tool: 'bclaw_accept' },
-    { head: 'reject', tool: 'bclaw_reject' },
+    { head: 'accept', tool: 'bclaw_transition' },
+    { head: 'reject', tool: 'bclaw_transition' },
     { head: 'claim', second: 'release', tool: 'bclaw_release_claim' },
     { head: 'approve-action', tool: 'bclaw_assignment_action' },
     { head: 'reject-action', tool: 'bclaw_assignment_action' },
@@ -195,8 +196,33 @@ describe('acceptance — D. end-to-end review flow via MCP-backed tools', () => 
   it('candidate review queue uses server-side auto_generated filter', () => {
     assert.match(
       boardTreeSrc,
-      /bclaw_list_candidates['"][^)]*auto_generated:\s*false/,
+      /_findEntities\([\s\S]*?['"]candidate['"][\s\S]*?auto_generated:\s*false/,
     );
+  });
+
+  it('uses v1 published board/context and canonical entity tools instead of removed catalog names', () => {
+    const removedNames = [
+      'bclaw_get_agent_board_summary',
+      'bclaw_get_agent_board',
+      'bclaw_get_context',
+      'bclaw_dispatch_analysis',
+      'bclaw_list_plans',
+      'bclaw_list_candidates',
+      'bclaw_list_claims',
+      'bclaw_list_actions',
+      'bclaw_list_assignments',
+      'bclaw_list_runs',
+      'bclaw_accept',
+      'bclaw_reject',
+    ];
+
+    for (const name of removedNames) {
+      assert.ok(!boardTreeSrc.includes(`'${name}'`), `board-tree must not call removed tool ${name}`);
+      assert.ok(!fileDecorationsSrc.includes(`'${name}'`), `file-decorations must not call removed tool ${name}`);
+    }
+    assert.match(boardTreeSrc, /bclaw_context[\s\S]*?kind:\s*['"]board_summary['"]/);
+    assert.match(boardTreeSrc, /bclaw_context[\s\S]*?kind:\s*['"]board['"]/);
+    assert.match(boardTreeSrc, /bclaw_find/);
   });
 });
 

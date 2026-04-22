@@ -71,10 +71,11 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
 
       // Use MCP (stdio-streamed, no maxBuffer limit) instead of cp.exec.
       // Ask only for active claims with generous pagination to avoid O(n) truncation.
-      const result = await client.callTool('bclaw_list_claims', { limit: 1000 }) as {
-        structuredContent?: { claims?: Array<{ scope: string; agent: string; description?: string; status?: string }> };
-      };
-      const claims = result.structuredContent?.claims ?? [];
+      const result = await client.callTool('bclaw_find', {
+        entity: 'claim',
+        filter: { limit: 1000 },
+      }) as { items?: Array<{ scope: string; agent: string; description?: string; status?: string }> };
+      const claims = result.items ?? [];
       this._claims = claims
         .filter(c => !c.status || c.status === 'active')
         .map(c => ({ scope: c.scope, agent: c.agent, description: c.description }));

@@ -2,8 +2,9 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { BoardProject, BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
+import { BrainclawBoardProvider, BrainclawTreeItem } from './board-tree';
 import { BrainclawFileDecorationProvider } from './file-decorations';
+import { discoverBrainclawProjects } from './project-discovery';
 
 class EmptyTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   getTreeItem(el: vscode.TreeItem) { return el; }
@@ -32,22 +33,6 @@ interface AgentCursor {
 const EVENTS_FILE = 'events.jsonl';
 const CURSORS_DIR = '.cursors';
 const VSCODE_AGENT = 'vscode-extension';
-const PROJECT_SCAN_SKIP_DIRS = new Set([
-  '.brainclaw',
-  '.git',
-  'node_modules',
-  'dist',
-  'dist-test',
-  'build',
-  'coverage',
-  '.next',
-  '.nuxt',
-  '.venv',
-  'venv',
-  '__pycache__',
-  'target',
-  'vendor',
-]);
 
 // Human-readable labels for event actions
 const ACTION_LABELS: Record<string, string> = {
@@ -75,52 +60,6 @@ const ITEM_LABELS: Record<string, string> = {
   session: 'session',
   state: 'state',
 };
-
-function discoverBrainclawProjects(workspaceFolders: readonly vscode.WorkspaceFolder[]): BoardProject[] {
-  const discovered = new Map<string, BoardProject>();
-  for (const folder of workspaceFolders) {
-    scanWorkspaceFolder(folder.uri.fsPath, folder.uri.fsPath, 0, discovered);
-  }
-
-  return [...discovered.values()].sort((left, right) => {
-    if (left.isWorkspaceRoot !== right.isWorkspaceRoot) {
-      return left.isWorkspaceRoot ? -1 : 1;
-    }
-    return left.relativePath.localeCompare(right.relativePath) || left.path.localeCompare(right.path);
-  });
-}
-
-function scanWorkspaceFolder(rootPath: string, currentPath: string, depth: number, discovered: Map<string, BoardProject>): void {
-  // Depth 3 supports monorepos (e.g. packages/foo/.brainclaw/) without scanning too deep
-  if (depth > 3) {
-    return;
-  }
-
-  const normalizedPath = path.resolve(currentPath);
-  if (fs.existsSync(path.join(normalizedPath, '.brainclaw'))) {
-    const relativePath = path.relative(rootPath, normalizedPath) || '.';
-    discovered.set(normalizedPath, {
-      path: normalizedPath,
-      name: path.basename(normalizedPath),
-      relativePath,
-      isWorkspaceRoot: relativePath === '.',
-    });
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (PROJECT_SCAN_SKIP_DIRS.has(entry.name)) continue;
-    if (entry.name.startsWith('.') && entry.name !== '.brainclaw') continue;
-    scanWorkspaceFolder(rootPath, path.join(normalizedPath, entry.name), depth + 1, discovered);
-  }
-}
 
 // --- Activation ---
 

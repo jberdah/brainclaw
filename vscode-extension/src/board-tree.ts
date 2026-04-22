@@ -82,7 +82,7 @@ interface BoardData {
    * doesn't have to re-derive next actions (pln#393 stp_0859ea93).
    */
   workflow_hints?: string[];
-  /** True when board was loaded via bclaw_get_agent_board_summary (Tier 1 Summary). */
+  /** True when board was loaded via bclaw_context(kind="board_summary"). */
   summary?: boolean;
   /** Pre-computed counts populated in summary mode instead of full arrays. */
   _counts?: BoardSummaryCounts;
@@ -101,6 +101,8 @@ interface RegisteredAgent {
   agent_id?: string;
   kind?: string;
 }
+
+type CanonicalEntity = 'plan' | 'claim' | 'assignment' | 'agent_run' | 'action' | 'candidate';
 
 interface SearchResultItem {
   id: string;
@@ -261,8 +263,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       return;
     }
 
-    const planResponse = await client.callTool('bclaw_list_plans', { status: 'todo', compact: true, limit: 50 });
-    const plans = Array.isArray(planResponse.plans) ? planResponse.plans as ListedPlan[] : [];
+    const plans = await this._findEntities<ListedPlan>(client, 'plan', { status: 'todo', limit: 50 });
     if (plans.length === 0) {
       vscode.window.showInformationMessage('No todo plans available to dispatch');
       return;
@@ -284,7 +285,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     try {
-      const analysis = await client.callTool('bclaw_dispatch_analysis', { lanes: [picked.lane] });
+      const analysis = await client.callTool('bclaw_dispatch', { intent: 'analysis', lanes: [picked.lane] });
       const availableAgents = Array.isArray(analysis.available_agents) ? analysis.available_agents as string[] : [];
       if (availableAgents.length === 0) {
         vscode.window.showWarningMessage(`Brainclaw: no available agents for lane ${picked.lane}`);
@@ -297,7 +298,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       );
       if (!selectedAgent) return;
 
-      await client.callTool('bclaw_dispatch', { lanes: [picked.lane], agents: [selectedAgent.label], maxAssignments: 1 });
+      await client.callTool('bclaw_dispatch', { intent: 'execute', lanes: [picked.lane], agents: [selectedAgent.label], maxAssignments: 1 });
       vscode.window.showInformationMessage(`Brainclaw: dispatched ${picked.planId} to ${selectedAgent.label}`);
       this.refresh();
     } catch (err) {
@@ -413,11 +414,11 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const parts = command.trim().split(/\s+/);
     // "accept <id>"
     if (parts[0] === 'accept' && parts[1]) {
-      return ['bclaw_accept', { id: parts[1] }];
+      return ['bclaw_transition', { entity: 'candidate', id: parts[1], to: 'accepted' }];
     }
     // "reject <id>"
     if (parts[0] === 'reject' && parts[1]) {
-      return ['bclaw_reject', { id: parts[1] }];
+      return ['bclaw_transition', { entity: 'candidate', id: parts[1], to: 'rejected' }];
     }
     // "claim release <id>"
     if (parts[0] === 'claim' && parts[1] === 'release' && parts[2]) {
@@ -459,7 +460,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       return;
     }
     try {
-      await client.callTool('bclaw_dispatch', { lanes: [plan.lane] });
+      await client.callTool('bclaw_dispatch', { intent: 'execute', lanes: [plan.lane] });
       this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -687,9 +688,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       throw new Error(`No brainclaw command found for ${projectPath}`);
     }
 
-    // Use the lightweight summary tool for the initial project load (Tier 1 Summary, §5.1).
-    // bclaw_get_agent_board remains available as fallback for section-level expansion.
-    const raw = await client.callTool('bclaw_get_agent_board_summary', {}) as Record<string, any>;
+    // Use the lightweight board summary through the v1 facade for activation polling.
+    const raw = await client.callTool('bclaw_context', { kind: 'board_summary' }) as Record<string, any>;
     const plans = (raw['plans'] as Record<string, number> | undefined) ?? {};
     return {
       active_plans: [],
@@ -1005,7 +1005,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       if (!client) {
         throw new Error(`No brainclaw command found for ${normalizedPath}`);
       }
-      const board = await client.callTool('bclaw_get_agent_board', {}) as unknown as BoardData;
+      const board = await client.callTool('bclaw_context', { kind: 'board' }) as unknown as BoardData;
       this._projectBoards.set(normalizedPath, board);
       this._projectErrors.delete(normalizedPath);
       this._clearSectionCache(normalizedPath);
@@ -1144,6 +1144,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return load;
   }
 
+  private async _findEntities<T = any>(
+    client: McpClient,
+    entity: CanonicalEntity,
+    filter: Record<string, unknown> = {},
+  ): Promise<T[]> {
+    const result = await client.callTool('bclaw_find', { entity, filter });
+    return Array.isArray(result.items) ? result.items as T[] : [];
+  }
+
   private async _runSectionBoardLoad(projectPath: string, sectionId: string): Promise<BoardData> {
     const client = await this._getMcpClient(projectPath);
     if (!client) {
@@ -1158,16 +1167,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         // the actionable entities so the tree surfaces next-action advice
         // without re-deriving it extension-side.
         const [actions, assignments, candidates, runs, context] = await Promise.all([
-          client.callTool('bclaw_list_actions', { status: 'pending', limit: 100 }),
-          client.callTool('bclaw_list_assignments', { status: 'blocked', limit: 100 }),
-          client.callTool('bclaw_list_candidates', { status: 'pending', auto_generated: false, limit: 100 }),
-          client.callTool('bclaw_list_runs', { limit: 100 }),
-          client.callTool('bclaw_context', { compact: true }).catch(() => ({} as Record<string, unknown>)),
+          this._findEntities(client, 'action', { status: 'pending', limit: 100 }),
+          this._findEntities(client, 'assignment', { status: 'blocked', limit: 100 }),
+          this._findEntities(client, 'candidate', { status: 'pending', auto_generated: false, limit: 100 }),
+          this._findEntities(client, 'agent_run', { limit: 100 }),
+          client.callTool('bclaw_context', { kind: 'memory', compact: true }).catch(() => ({} as Record<string, unknown>)),
         ]);
-        board.active_actions = (actions.actions as any[] | undefined) ?? [];
-        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
-        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
-        board.active_runs = ((runs.runs as any[] | undefined) ?? []).filter((run: any) =>
+        board.active_actions = actions;
+        board.active_assignments = assignments;
+        board.pending_candidates = candidates;
+        board.active_runs = runs.filter((run: any) =>
           run.status === 'blocked' || run.status === 'waiting_input' || run.status === 'failed');
         const hints = (context as { workflow_hints?: string[] }).workflow_hints;
         board.workflow_hints = Array.isArray(hints) ? hints : [];
@@ -1175,13 +1184,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       }
       case SECTION.IN_PROGRESS: {
         const [claims, assignments, runs] = await Promise.all([
-          client.callTool('bclaw_list_claims', { limit: 100 }),
-          client.callTool('bclaw_list_assignments', { limit: 100 }),
-          client.callTool('bclaw_list_runs', { limit: 100 }),
+          this._findEntities(client, 'claim', { limit: 100 }),
+          this._findEntities(client, 'assignment', { limit: 100 }),
+          this._findEntities(client, 'agent_run', { limit: 100 }),
         ]);
-        board.active_claims = (claims.claims as any[] | undefined) ?? [];
-        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
-        board.active_runs = ((runs.runs as any[] | undefined) ?? []).filter((run: any) =>
+        board.active_claims = claims;
+        board.active_assignments = assignments;
+        board.active_runs = runs.filter((run: any) =>
           run.status !== 'blocked' && run.status !== 'waiting_input' && run.status !== 'failed');
         return board;
       }
@@ -1193,8 +1202,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.BACKLOG: {
-        const plans = await client.callTool('bclaw_list_plans', { limit: 100 });
-        board.active_plans = (plans.plans as any[] | undefined) ?? [];
+        board.active_plans = await this._findEntities(client, 'plan', { limit: 100 });
         const fallback = this._getBoardForPath(projectPath);
         if (fallback && !fallback.summary && (fallback.known_traps?.length ?? 0) > 0) {
           board.known_traps = fallback.known_traps;
@@ -1207,8 +1215,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.SYSTEM: {
-        const candidates = await client.callTool('bclaw_list_candidates', { status: 'pending', auto_generated: true, limit: 100 });
-        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
+        board.pending_candidates = await this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100 });
         const fullBoard = this._getBoardForPath(projectPath)?.summary ? null : this._getBoardForPath(projectPath);
         if (fullBoard) {
           board.runtime_notes = fullBoard.runtime_notes ?? [];
@@ -1227,33 +1234,27 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.PLANS: {
-        const plans = await client.callTool('bclaw_list_plans', { limit: 100 });
-        board.active_plans = (plans.plans as any[] | undefined) ?? [];
+        board.active_plans = await this._findEntities(client, 'plan', { limit: 100 });
         return board;
       }
       case SECTION.CLAIMS: {
-        const claims = await client.callTool('bclaw_list_claims', { limit: 100 });
-        board.active_claims = (claims.claims as any[] | undefined) ?? [];
+        board.active_claims = await this._findEntities(client, 'claim', { limit: 100 });
         return board;
       }
       case SECTION.ASSIGNMENTS: {
-        const assignments = await client.callTool('bclaw_list_assignments', { limit: 100 });
-        board.active_assignments = (assignments.assignments as any[] | undefined) ?? [];
+        board.active_assignments = await this._findEntities(client, 'assignment', { limit: 100 });
         return board;
       }
       case SECTION.RUNS: {
-        const runs = await client.callTool('bclaw_list_runs', { limit: 100 });
-        board.active_runs = (runs.runs as any[] | undefined) ?? [];
+        board.active_runs = await this._findEntities(client, 'agent_run', { limit: 100 });
         return board;
       }
       case SECTION.ACTIONS: {
-        const actions = await client.callTool('bclaw_list_actions', { status: 'pending', limit: 100 });
-        board.active_actions = (actions.actions as any[] | undefined) ?? [];
+        board.active_actions = await this._findEntities(client, 'action', { status: 'pending', limit: 100 });
         return board;
       }
       case SECTION.CANDIDATES: {
-        const candidates = await client.callTool('bclaw_list_candidates', { status: 'pending', limit: 100 });
-        board.pending_candidates = (candidates.candidates as any[] | undefined) ?? [];
+        board.pending_candidates = await this._findEntities(client, 'candidate', { status: 'pending', limit: 100 });
         return board;
       }
       case SECTION.AGENTS:
@@ -1276,7 +1277,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     // --- Review queue & next actions ---
     // pln#393 stp_0859ea93: the section loader asks MCP with
-    // auto_generated: false (bclaw_list_candidates filter), so
+    // auto_generated: false (bclaw_find candidate filter), so
     // board.pending_candidates is already the actionable review queue —
     // no extension-side re-filter needed. Full-board fallback may still
     // mix sources; we split once here as a render-time mapping from the
