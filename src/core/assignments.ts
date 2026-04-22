@@ -97,15 +97,22 @@ export function generateAssignmentId(cwd?: string): { id: string; short_label: s
 
 // ── Status FSM ───────────────────────────────────────────────
 
-/** Valid transitions: from → Set<to>. */
+/** Valid transitions: from → Set<to>.
+ *
+ * `rerouted` is reachable from every non-terminal state (pln#451 / trp#61):
+ * rerouting a claim must close the predecessor assignment regardless of where
+ * it was in the FSM. Previously only `blocked` could reach `rerouted`, which
+ * left assignments stuck in `created` or `offered` when the coordinator
+ * rerouted a still-unstarted lane.
+ */
 const VALID_TRANSITIONS = new Map<string, Set<string>>([
-  ['created',   new Set(['offered'])],
-  ['offered',   new Set(['accepted', 'expired'])],
-  ['accepted',  new Set(['started', 'timed_out'])],
-  ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out'])],
-  ['failed',    new Set(['retrying'])],
-  ['timed_out', new Set(['retrying'])],
-  ['retrying',  new Set(['offered'])],
+  ['created',   new Set(['offered', 'rerouted'])],
+  ['offered',   new Set(['accepted', 'expired', 'rerouted'])],
+  ['accepted',  new Set(['started', 'timed_out', 'rerouted'])],
+  ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out', 'rerouted'])],
+  ['failed',    new Set(['retrying', 'rerouted'])],
+  ['timed_out', new Set(['retrying', 'rerouted'])],
+  ['retrying',  new Set(['offered', 'rerouted'])],
   ['blocked',   new Set(['rerouted', 'started', 'failed'])],
   // Terminal: completed, expired, rerouted (no outgoing transitions)
 ]);

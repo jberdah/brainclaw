@@ -71,7 +71,7 @@ import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
-import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode } from '../core/agent-capability.js';
+import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode, validateAgentForDispatch } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import {
@@ -5031,11 +5031,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (req.intent === 'assign') {
         const delivery_plan: CoordinateDeliveryEntry[] = [];
         for (const agentName of resolvedAgents) {
-          const profile = getCapabilityProfile(agentName);
-          if (!profile) {
-            warnings.push(`Unknown agent profile: ${agentName}`);
+          // trp#51: dispatch-time validation rejects unknown profiles,
+          // non-spawnable agents, and missing invoke_binary. Caller gets a
+          // specific error code instead of a silent skip, so automated
+          // retry loops can react (e.g. fall back to a different agent).
+          const check = validateAgentForDispatch(agentName, { requireSpawnable: true });
+          if (!check.valid) {
+            warnings.push(JSON.stringify({
+              warning: 'agent_validation_failed',
+              agent: agentName,
+              code: check.code,
+              reason: check.reason,
+            }));
             continue;
           }
+          const profile = check.profile!;
           // Ensure target agent is registered before creating claims/messages
           ensureAgentRegisteredForDispatch(agentName, cwd);
           const assignScope = req.scope ?? req.task;
@@ -5386,11 +5396,40 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, cwd);
         side_effects.push({ action: 'release', entity: 'claim', id: oldClaim.id });
 
+        // trp#61: supersede assignments attached to the old claim so they
+        // don't linger in `created`/`offered`/etc. Prior behaviour only
+        // released the claim, leaving the assignment FSM stuck and confusing
+        // dispatch analysis / review.
+        const { listAssignments: listAsgn } = await import('../core/assignments.js');
+        const predecessors = listAsgn(cwd, { claim_id: oldClaim.id })
+          .filter((a) => a.status !== 'completed' && a.status !== 'expired' && a.status !== 'rerouted');
+        for (const predecessor of predecessors) {
+          try {
+            transitionAssignment(predecessor.id, 'rerouted', {
+              actor: senderAgent,
+              status_reason: `reroute: claim ${oldClaim.id} reassigned`,
+            }, cwd);
+            side_effects.push({ action: 'update', entity: 'assignment', id: predecessor.id });
+          } catch (err) {
+            warnings.push(`Failed to close predecessor assignment ${predecessor.id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
         const newAgentName = resolvedAgents.find((a) => a !== oldClaim.agent) ?? resolvedAgents[0];
         let newClaimId: string | undefined;
         if (newAgentName) {
-          const profile = getCapabilityProfile(newAgentName);
-          if (profile) {
+          // trp#51: validate target agent before creating a new claim.
+          const check = validateAgentForDispatch(newAgentName, { requireSpawnable: true });
+          if (!check.valid) {
+            warnings.push(JSON.stringify({
+              warning: 'agent_validation_failed',
+              agent: newAgentName,
+              code: check.code,
+              reason: check.reason,
+            }));
+          }
+          const profile = check.profile;
+          if (check.valid && profile) {
             ensureAgentRegisteredForDispatch(newAgentName, cwd);
             const rerouteClaimResult = createCoordinatorClaim({
               agent: newAgentName,

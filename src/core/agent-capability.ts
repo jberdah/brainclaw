@@ -16,6 +16,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 export type AgentCategory = 'code-agent' | 'autonomous-agent' | 'desktop-ai';
 export type WorkflowModel = 'interactive' | 'task-based' | 'scheduled';
@@ -815,6 +816,61 @@ export function getAgentsByTier(tier: 'A' | 'B' | 'C'): AgentCapabilityProfile[]
 export function isKnownAgent(name: string): name is AgentName {
   const resolved = resolveAgentAlias(name);
   return resolved in PROFILES;
+}
+
+/**
+ * Dispatch-time agent validation (pln#451 / trp#51).
+ *
+ * Callers (coordinate/assign, dispatch, reroute) should reject agents that
+ * cannot reasonably be spawned: unknown profile, not spawnable, or the
+ * declared invoke_binary isn't on PATH. Non-spawnable agents still pass
+ * `requireSpawnable: false` (e.g. dispatching a review task to Copilot).
+ */
+export interface DispatchValidation {
+  valid: boolean;
+  reason?: string;
+  code?: 'unknown_profile' | 'not_spawnable' | 'binary_missing';
+  profile?: AgentCapabilityProfile;
+}
+
+export function validateAgentForDispatch(
+  name: string,
+  options: { requireSpawnable?: boolean } = {},
+): DispatchValidation {
+  const profile = getCapabilityProfile(name);
+  if (!profile) {
+    return {
+      valid: false,
+      code: 'unknown_profile',
+      reason: `Unknown agent profile: '${name}'. Registered agents: ${Object.keys(PROFILES).join(', ')}.`,
+    };
+  }
+
+  if (options.requireSpawnable) {
+    if (!profile.runtime.spawnable_cli) {
+      return {
+        valid: false,
+        code: 'not_spawnable',
+        reason: `Agent '${name}' has no CLI spawn support (runtime.spawnable_cli=false). Use a worker-capable agent for dispatch.`,
+        profile,
+      };
+    }
+    const bin = profile.invoke_binary;
+    if (bin) {
+      const probe = process.platform === 'win32' ? 'where' : 'which';
+      const result = spawnSync(probe, [bin], { encoding: 'utf-8' });
+      if (result.status !== 0) {
+        return {
+          valid: false,
+          code: 'binary_missing',
+          reason: `Agent '${name}' declares invoke_binary='${bin}' but it is not on PATH. Install the agent CLI or update its profile.`,
+          profile,
+        };
+      }
+    }
+  }
+
+  return { valid: true, profile };
 }
 
 /**
