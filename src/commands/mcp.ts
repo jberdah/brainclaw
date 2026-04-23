@@ -5799,6 +5799,27 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const filter = (args.filter ?? {}) as EntityFilter;
+        // pln#460 stp_c6125ee5 — fail loudly on unknown filter keys. Previously
+        // a typo like filter={staus:'todo'} or a made-up key like
+        // filter={banana:'split'} silently passed through applyFilter (which
+        // only checks known keys), letting the caller believe the filter had
+        // applied when it hadn't. Under the new contract, an unknown key is
+        // a validation_error listing the keys actually honored.
+        const KNOWN_FILTER_KEYS = new Set([
+          'status', 'tag', 'author', 'plan_id', 'source', 'auto_generated',
+          'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
+        ]);
+        const unknownKeys = Object.keys(filter).filter((k) => !KNOWN_FILTER_KEYS.has(k));
+        if (unknownKeys.length > 0) {
+          return {
+            response: createToolErrorResponse(
+              'validation_error',
+              `Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. ` +
+              `Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`,
+              { unknown_keys: unknownKeys, accepted_keys: [...KNOWN_FILTER_KEYS].sort() },
+            ),
+          };
+        }
         const result = listEntities(entity, cwd, filter);
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.

@@ -161,6 +161,33 @@ runtime_note, candidate, claim, action, assignment, agent_run
 (read-only for the latter four). Declarative transition matrix +
 updatable field list live in [src/core/entity-registry.ts](../../src/core/entity-registry.ts).
 
+##### `bclaw_find` filter keys
+
+The `filter` object accepts the following keys. **Unknown keys are
+rejected with `validation_error`** (pln#460) — a typo like
+`{staus:'todo'}` fails fast instead of silently returning unfiltered
+results.
+
+| Key | Type | Applies to | Effect |
+|---|---|---|---|
+| `status` | string | all entities with a `status` field | Exact match on the entity's lifecycle status |
+| `tag` | string | entities with `tags[]` | Returns items where `tags` contains the value |
+| `author` | string | entities with an `author` field | Exact match |
+| `plan_id` | string | handoff, candidate, runtime_note, claim, action, assignment, agent_run | Filter to items linked to a given plan |
+| `source` | string (`auto` / `agent` / `human`) | candidate | Provenance source filter |
+| `auto_generated` | boolean | candidate | `true` keeps only auto-generated candidates, `false` excludes them (matches `source === 'auto'` OR legacy `origin` starting with `session-end`) |
+| `limit` | number (default 50) | all | Max items returned (paging) |
+| `offset` | number (default 0) | all | Paging offset |
+| `includeLegacy` | boolean (default false) | all | Include records with `provenance.kind='legacy'` |
+| `minAutoReflectConfidence` | number 0-1 (default 0.6) | all | Threshold below which `auto_reflect` records are hidden |
+
+Notes:
+- `candidate` has an active bucket of `pending` only; accepted / rejected
+  candidates are archived on transition and don't appear in `bclaw_find`.
+- Combining filters intersects them (AND, not OR).
+- Filters that don't apply to a given entity (e.g. `plan_id` on `plan`)
+  are currently no-ops — they don't error, but they don't match either.
+
 #### Unified intent dispatchers
 
 | Tool | Consolidates | Example |
