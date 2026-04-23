@@ -178,6 +178,54 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
     });
   });
 
+  describe('MCP transport quirk — filter arriving as a JSON string (pln#460 follow-up)', () => {
+    // Live-session observation: Claude Code's MCP client stringifies the
+    // filter object before shipping it over stdio when the tool schema
+    // declares `filter: { type: 'object' }` without a sub-property schema.
+    // The handler must parse string-typed filters defensively so the whole
+    // filter facility doesn't silently break for those clients.
+
+    it('parses a JSON-string filter back into an object before validation', async () => {
+      const planTodo = createEntity('plan', { text: 'todo', author: 'claude-code' }, workspace.dir);
+      const planDone = createEntity('plan', { text: 'done', author: 'claude-code' }, workspace.dir);
+      transitionEntity('plan', planDone.id, 'in_progress', workspace.dir);
+      transitionEntity('plan', planDone.id, 'done', workspace.dir);
+
+      // Pass filter as a string (same shape Claude Code sends over stdio).
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_find',
+        args: { entity: 'plan', filter: '{"status":"todo"}' as unknown as object },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, false, `expected success, got ${JSON.stringify(outcome.response.structuredContent)}`);
+      const result = outcome.response.structuredContent as unknown as FindResult;
+      assert.equal(result.total, 1);
+      assert.equal(result.items[0].id, planTodo.id);
+    });
+
+    it('rejects filter string that is not valid JSON', async () => {
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_find',
+        args: { entity: 'plan', filter: 'not-json-at-all' as unknown as object },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, true);
+      const envelope = outcome.response.structuredContent as unknown as { error?: { message?: string } };
+      assert.match(envelope.error?.message ?? '', /not valid JSON/i);
+    });
+
+    it('rejects filter string whose JSON is not an object (e.g. array, number)', async () => {
+      const outcome = await executeMcpToolCall({
+        name: 'bclaw_find',
+        args: { entity: 'plan', filter: '[1, 2, 3]' as unknown as object },
+        cwd: workspace.dir,
+      });
+      assert.equal(outcome.response.isError, true);
+      const envelope = outcome.response.structuredContent as unknown as { error?: { message?: string } };
+      assert.match(envelope.error?.message ?? '', /must be a JSON object/i);
+    });
+  });
+
   describe('unknown filter keys fail loudly (pln#460 stp_c6125ee5)', () => {
     it('filter={banana:"split"} returns a validation_error instead of silently ignoring', async () => {
       createEntity('plan', { text: 'one', author: 'claude-code' }, workspace.dir);

@@ -5798,7 +5798,33 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_find') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
-        const filter = (args.filter ?? {}) as EntityFilter;
+        // pln#460 follow-up — some MCP clients (notably Claude Code with a
+        // tool schema that declares `filter: { type: 'object' }` without a
+        // sub-property schema) stringify the filter object before shipping
+        // it over stdio. Object.keys('{"status":"todo"}') returns ["0",
+        // "1", …] as char indices, not ["status"]. We parse it back to an
+        // object defensively before validation so the whole filter
+        // facility doesn't break for those clients.
+        let filter: EntityFilter;
+        if (typeof args.filter === 'string') {
+          try {
+            const parsed = JSON.parse(args.filter);
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              return { response: createToolErrorResponse(
+                'validation_error',
+                `filter must be a JSON object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`,
+              ) };
+            }
+            filter = parsed as EntityFilter;
+          } catch (parseErr) {
+            return { response: createToolErrorResponse(
+              'validation_error',
+              `filter is a string that is not valid JSON: ${(parseErr as Error).message}`,
+            ) };
+          }
+        } else {
+          filter = (args.filter ?? {}) as EntityFilter;
+        }
         // pln#460 stp_c6125ee5 — fail loudly on unknown filter keys. Previously
         // a typo like filter={staus:'todo'} or a made-up key like
         // filter={banana:'split'} silently passed through applyFilter (which
