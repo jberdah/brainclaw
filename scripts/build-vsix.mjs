@@ -4,14 +4,19 @@
  * Uses @vscode/vsce programmatically to avoid global install dependency.
  */
 import { execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 const extDir = join(root, 'vscode-extension');
-const outVsix = join(extDir, 'brainclaw-vscode-0.1.0.vsix');
+// Read the current extension version from its package.json so rebuilds pick
+// up bumps automatically. Previously this was hardcoded to 0.1.0, which made
+// `dist/brainclaw-vscode.vsix` stale by silently copying the oldest build on
+// disk every time the npm build ran.
+const extPkg = JSON.parse(readFileSync(join(extDir, 'package.json'), 'utf-8'));
+const outVsix = join(extDir, `brainclaw-vscode-${extPkg.version}.vsix`);
 const destDir = join(root, 'dist');
 const destVsix = join(destDir, 'brainclaw-vscode.vsix');
 
