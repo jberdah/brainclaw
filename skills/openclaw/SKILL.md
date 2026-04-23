@@ -123,7 +123,7 @@ brainclaw search "<query>"
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.0.0 — do not edit manually.
+> Managed by brainclaw v1.0.7 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -146,7 +146,37 @@ across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, and others.
 2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.
 3. Do not assume project state without reading brainclaw context first.
 
-_Escalation path (only when you orchestrate other agents):_ `bclaw_coordinate(intent)` to assign/consult/review, `bclaw_dispatch(intent)` for sequence lanes, `bclaw_loop` for multi-turn review/ideation loops.
+_Escalation path (only when you orchestrate other agents) — by goal:_
+- Start a code review / consult an agent / assign a scope → `bclaw_coordinate(intent=review|consult|assign)`
+- Parallelize execute across a sequence's lanes → `bclaw_dispatch(intent=execute)`
+- Drive a turn in a loop already assigned to you → `bclaw_loop(intent=turn|complete_turn|advance|close)`
+
+Do NOT call `bclaw_loop(intent=open)` directly — it creates a loop structure without dispatch, so the reviewer/participant never gets the work. Use the goal entries above.
+
+## brainclaw — user workflow
+
+The intended end-to-end flow, executable by a single agent:
+
+    ideation → plan (+ steps) → claim → implement → release claim → review → close step/plan → merge
+
+Multi-agent coordination is optional — use the escalation path only when delegating to another agent.
+`sequence` is optional: add it between plan and claim when you want parallelized lanes across agents.
+
+**Entity → role in the flow:**
+- `plan` — intended outcome. Create with `bclaw_create(plan, …)`, decompose with `bclaw_add_step`.
+- `step` — incremental unit inside a plan; mark done with `bclaw_complete_step` as you implement.
+- `sequence` — ordered lanes when work can be parallelized across claims/agents (optional).
+- `claim` — advisory reservation of a scope before editing; release once implementation is ready for review.
+- `handoff` — immutable snapshot of what moved to the next stage (review, merge).
+- `candidate` — proposed decision / constraint / trap awaiting review before entering durable memory.
+- `decision` / `constraint` / `trap` / `runtime_note` — captured along the way to preserve context for future sessions.
+
+**Review & Fix Loop (multi-turn delegation):**
+- Start: `bclaw_coordinate(intent=review, open_loop=true, review_mode=symmetric|asymmetric, targetAgents=[reviewer])` — opens the loop AND dispatches the first turn to the reviewer.
+- Drive: `bclaw_loop(intent=turn|complete_turn|advance|close)` for turns assigned to your slot.
+- Anti-pattern: `bclaw_loop(intent=open)` alone — creates the loop structure without any dispatch, so nothing actually runs.
+
+Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/agent-first-model.md` §3.
 
 ## brainclaw — working rules
 

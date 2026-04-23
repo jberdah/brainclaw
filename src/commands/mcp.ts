@@ -714,7 +714,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
-    description: 'Unified dispatch entry (Phase 3 slice 3d). `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send), review (review-focused dispatch — set `openLoop` for the review_loop escalation). Consolidates bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review.',
+    description: 'Unified dispatch entry for sequence-lane parallelization. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send), review (routes an EXISTING reviewable handoff to a reviewer — NOT for opening new reviews; use bclaw_coordinate(intent=review, open_loop=true) for that). Consolidates bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review.',
     annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -4973,7 +4973,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         agent: string;
         message_id: string;
         channel: 'inbox' | 'spawned_cli';
-        message_type: 'assign' | 'rfc';
+        message_type: 'assign' | 'rfc' | 'review';
         requires_ack: boolean;
         ref?: string;
         scope?: string;
@@ -4996,7 +4996,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const queueCoordinateMessage = (input: {
         agent: string;
         text: string;
-        messageType: 'assign' | 'rfc';
+        messageType: 'assign' | 'rfc' | 'review';
         ref?: string;
         scope?: string;
         requiresAck?: boolean;
@@ -5268,6 +5268,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           sideEffects: Array<{ action: string; entity: string; id: string }>;
           warnings: string[];
           partial: boolean;
+          // pln#458 stp_daffa477: invokes prepared under the lock but spawned
+          // outside it so runCoordinateExecution (async) doesn't block the
+          // idempotency window.
+          preparedReviews: PreparedInvoke[];
         };
 
         // Lazy-import the loops module once before defining performReview so
@@ -5282,6 +5286,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             sideEffects: [],
             warnings: [...preReviewWarnings],
             partial: false,
+            preparedReviews: [],
           };
 
           const candId = generateCandidateIdWithLabel(cwd);
@@ -5379,6 +5384,110 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 },
                 cwd,
               );
+
+              // pln#458 stp_daffa477: turn() is pure state mutation — it does
+              // NOT spawn the reviewer. Without the linkage below, the loop
+              // stays "assigned" forever and no work ever runs (symptom
+              // observed on lop_0a0cb84a7bf8dd92). Build the same claim +
+              // assignment + queued message chain as intent=assign so that
+              // the downstream runCoordinateExecution actually spawns.
+              try {
+                const reviewScope = `review-loop:${loop.id}`;
+                const reviewDescription =
+                  `Review loop turn for ${loop.id} slot ${slot.slot_id} phase findings. `
+                  + `Mode: ${advanced.loop.protocol?.review_mode ?? 'asymmetric'}. ${req.task}`;
+                const claimResult = createCoordinatorClaim({
+                  agent: slot.agent ?? '',
+                  scope: reviewScope,
+                  description: reviewDescription,
+                  dispatcherAgent: senderAgent,
+                  sessionId: connectionSessionId,
+                  cwd,
+                });
+                if (claimResult.worktreeWarning) out.warnings.push(claimResult.worktreeWarning);
+                out.artifacts.push({ type: 'claim', id: claimResult.claimId });
+                out.sideEffects.push({
+                  action: claimResult.reusedExisting ? 'reuse' : 'create',
+                  entity: 'claim',
+                  id: claimResult.claimId,
+                });
+
+                let reviewAssignmentId: string | undefined;
+                try {
+                  const preId = generateAssignmentId(cwd);
+                  const assignment = createAssignment({
+                    id: preId.id,
+                    short_label: preId.short_label,
+                    claim_id: claimResult.claimId,
+                    agent: slot.agent ?? '',
+                    dispatcher_agent: senderAgent,
+                    dispatcher_session_id: connectionSessionId,
+                    scope: reviewScope,
+                    description: reviewDescription,
+                    tags: ['coordinate', 'review', 'loop'],
+                  }, cwd);
+                  reviewAssignmentId = assignment.id;
+                  out.artifacts.push({ type: 'assignment', id: assignment.id });
+                } catch (asgErr) {
+                  out.warnings.push(
+                    `Review assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
+                  );
+                }
+
+                const reviewBrief = buildCoordinateBrief(slot.agent ?? '', reviewDescription, {
+                  claimId: claimResult.claimId,
+                  scope: reviewScope,
+                  worktreePath: claimResult.worktreePath,
+                  assignmentId: reviewAssignmentId,
+                });
+                const queued = queueCoordinateMessage({
+                  agent: slot.agent ?? '',
+                  text: reviewBrief,
+                  messageType: 'review',
+                  ref: loop.id,
+                  scope: reviewScope,
+                  requiresAck: true,
+                  claimId: claimResult.claimId,
+                  assignmentId: reviewAssignmentId,
+                  tags: ['coordinate', 'review', 'loop'],
+                  payload: {
+                    intent: 'review',
+                    loop_id: loop.id,
+                    slot_id: slot.slot_id,
+                    phase: 'findings',
+                    scope: reviewScope,
+                    claim_id: claimResult.claimId,
+                    ...(reviewAssignmentId ? { assignment_id: reviewAssignmentId } : {}),
+                    worktree_path: claimResult.worktreePath,
+                  },
+                  commandMode: 'worker',
+                });
+
+                if (reviewAssignmentId) {
+                  try {
+                    attachAssignmentMessageToClaim(claimResult.claimId, queued.entry.message_id, cwd);
+                    linkClaimToAssignment(claimResult.claimId, reviewAssignmentId, cwd);
+                    transitionAssignment(reviewAssignmentId, 'offered', { actor: senderAgent }, cwd);
+                    patchAssignmentMessageId(reviewAssignmentId, queued.entry.message_id, cwd);
+                    queued.entry.assignment_id = reviewAssignmentId;
+                  } catch (linkErr) {
+                    out.warnings.push(
+                      `Review assignment linkage failed for ${reviewAssignmentId}: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
+                    );
+                  }
+                }
+
+                out.preparedReviews.push({
+                  entry: queued.entry,
+                  invoke: queued.invoke,
+                  worktreePath: claimResult.worktreePath,
+                });
+              } catch (dispatchErr) {
+                out.partial = true;
+                out.warnings.push(
+                  `open_loop: reviewer dispatch linkage failed for slot ${slot.slot_id} (${dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr)}); loop remains open without spawn`,
+                );
+              }
             }
           } catch (loopErr: unknown) {
             out.partial = true;
@@ -5422,10 +5531,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         side_effects.push(...output.sideEffects);
         warnings.push(...output.warnings);
         if (output.partial) facadeStatus = 'partial';
+
+        // pln#458 stp_daffa477: spawn reviewers OUTSIDE the idempotency lock
+        // so the async spawn work doesn't widen the critical section. Skipped
+        // when there's nothing to spawn (no open_loop, or no reviewer slots).
+        let reviewExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' | undefined;
+        if (output.preparedReviews.length > 0) {
+          reviewExecStatus = await runCoordinateExecution(output.preparedReviews, {
+            autoExecute: req.autoExecute !== false,
+            senderAgent, senderAgentId, cwd, warnings,
+          });
+        }
+
         result = {
           candidate_id: output.candidateId,
           selected_targets: resolvedAgents,
           ...(output.loopId ? { loop_id: output.loopId } : {}),
+          ...(reviewExecStatus ? { execution_status: reviewExecStatus } : {}),
         };
 
       } else if (req.intent === 'reroute') {

@@ -496,6 +496,43 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(kinds.includes('turn_assigned'));
     });
 
+    it('pln#458 stp_daffa477: open_loop=true also creates a claim + assignment per reviewer so downstream spawn can actually run', async () => {
+      // Previously, intent=review + open_loop=true only created the candidate
+      // and loop and called turn() in the loop's own bookkeeping — no
+      // assignment was ever created, so runCoordinateExecution had nothing to
+      // spawn and the loop stayed "assigned" forever. The fix builds the
+      // same claim + assignment + queued message chain that intent=assign
+      // uses, so the spawn path is actually wired.
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Review the dispatch linkage',
+        scope: 'src/commands/mcp.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+      });
+
+      assert.equal(response.status, 'ok');
+
+      const claimEffects = response.side_effects.filter((e) => e.entity === 'claim');
+      assert.ok(claimEffects.length >= 1, 'at least one claim must be created for the reviewer');
+
+      const assignmentArtifacts = response.artifacts.filter((a) => a.type === 'assignment');
+      assert.ok(assignmentArtifacts.length >= 1, 'at least one assignment must be created for the reviewer');
+
+      // execution_status must surface on the result so callers know whether
+      // the spawn was attempted.
+      const result = response.result as Record<string, unknown>;
+      assert.ok(
+        result.execution_status !== undefined,
+        'execution_status must be reported on result when reviewers are dispatched',
+      );
+      assert.ok(
+        ['delivered_and_started', 'command_ready_manual', 'inbox_only'].includes(result.execution_status as string),
+        `execution_status must be a known dispatch outcome; got ${result.execution_status}`,
+      );
+    });
+
     it('open_loop with review_mode=symmetric persists protocol.review_mode on the loop', async () => {
       const response = await coordinate(workspace, {
         intent: 'review',

@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { renderBrainclawSection, renderLiveSection, type InstructionTemplateInput } from '../../src/core/instruction-templates.js';
 import { getAgentCapabilityProfile } from '../../src/core/agent-capability.js';
 import type { State } from '../../src/core/schema.js';
@@ -32,7 +35,10 @@ function makeInput(agentName: string, overrides: Partial<InstructionTemplateInpu
 function assertMinimalProtocol(content: string): void {
   assert.ok(content.includes('## brainclaw — session protocol'));
   assert.ok(content.includes('bclaw_work(intent)'));
-  assert.ok(content.includes('bclaw_coordinate(intent)'));
+  // pln#458: wording moved from bare "bclaw_coordinate(intent)" to a
+  // parameterized decision tree ("bclaw_coordinate(intent=review|consult|assign)")
+  // so agents know which intent fits which goal. Accept either form.
+  assert.ok(/bclaw_coordinate\(intent/.test(content));
   // bclaw_get_context may appear in the available-tools catalog, but the
   // protocol section itself must not instruct agents to call it directly.
   const protocolSection = content.split('## brainclaw — session protocol')[1]?.split('## brainclaw')[0] ?? '';
@@ -366,14 +372,43 @@ describe('instruction-templates', () => {
     it('marks Review & Fix Loop as implemented and other loops as planned', () => {
       const result = renderBrainclawSection(makeInput('claude-code'));
       assert.ok(result.content.includes('Review & Fix Loop'));
+      // pln#458: the section now describes the loop as the multi-turn
+      // delegation pattern and points at the right entry tool instead of
+      // flagging it with an italic "*implemented*" marker. Assert the
+      // operative content (entry tool + drive tool + anti-pattern) is
+      // present — that's the semantic contract for agents.
       assert.ok(
-        result.content.includes('Review & Fix Loop — *implemented*'),
-        'Review & Fix Loop must be marked implemented',
+        result.content.includes('bclaw_coordinate(intent=review, open_loop=true'),
+        'Review & Fix Loop must name bclaw_coordinate(intent=review, open_loop=true) as the start entry',
+      );
+      assert.ok(
+        /bclaw_loop\(intent=turn\|complete_turn\|advance\|close\)/.test(result.content),
+        'Review & Fix Loop must point at bclaw_loop for driving turns',
       );
       assert.ok(
         /Ideation.*planned/i.test(result.content),
         'Ideation loop must be marked planned',
       );
+    });
+
+    it('escalation path is goal-oriented (pln#458) — no bare bclaw_loop(intent=open) recommendation', () => {
+      const result = renderBrainclawSection(makeInput('claude-code')).content;
+      // Anti-pattern: an agent should never be told to call bclaw_loop(intent=open)
+      // directly — that opens a loop structure without dispatch, so no reviewer
+      // ever picks up the work. The surface must either not mention this form
+      // or explicitly flag it as an anti-pattern.
+      const mentionsOpenIntent = /bclaw_loop\(intent=open\)/.test(result);
+      if (mentionsOpenIntent) {
+        assert.match(
+          result,
+          /anti-pattern|do not call.*bclaw_loop\(intent=open\)|NOT.*bclaw_loop\(intent=open\)/i,
+          'If bclaw_loop(intent=open) is mentioned, it must be flagged as an anti-pattern',
+        );
+      }
+      // The goal-tree must mention the three entry tools by goal
+      assert.match(result, /bclaw_coordinate\(intent=review\|consult\|assign\)|bclaw_coordinate\(intent=(review|consult|assign)/, 'escalation path must route review/consult/assign → bclaw_coordinate');
+      assert.match(result, /bclaw_dispatch\(intent=execute\)/, 'escalation path must route sequence-lane execute → bclaw_dispatch(intent=execute)');
+      assert.match(result, /bclaw_loop\(intent=turn/, 'escalation path must route "drive your turn" → bclaw_loop(intent=turn|…)');
     });
   });
 
@@ -398,6 +433,27 @@ describe('instruction-templates', () => {
         assert.ok(!result.sectionsIncluded.includes('architecture'), `${agent} should not have architecture`);
         assert.ok(!result.sectionsIncluded.includes('instructions'), `${agent} should not have instructions`);
       }
+    });
+  });
+
+  describe('pln#458 — MCP bclaw_dispatch description warns against misuse for new reviews', () => {
+    // Source-level check on src/commands/mcp.ts: the `bclaw_dispatch` tool
+    // description must tell agents this intent routes EXISTING reviewable
+    // handoffs, not opens new reviews — otherwise agents repeat my mistake of
+    // calling `bclaw_dispatch(intent=review)` and getting 0 targets when they
+    // really wanted `bclaw_coordinate(intent=review, open_loop=true)`.
+    const thisDir = path.dirname(fileURLToPath(import.meta.url));
+    const mcpSrc = fs.readFileSync(
+      path.resolve(thisDir, '../../../src/commands/mcp.ts'),
+      'utf-8',
+    );
+
+    it('description for bclaw_dispatch references bclaw_coordinate as the entry for new reviews', () => {
+      const match = mcpSrc.match(/name: 'bclaw_dispatch',\s*description: '([^']+)'/);
+      assert.ok(match, 'bclaw_dispatch tool definition not found');
+      const description = match![1];
+      assert.match(description, /NOT for opening new reviews|not for opening new reviews/i, 'description must flag that dispatch(intent=review) is NOT for opening new reviews');
+      assert.match(description, /bclaw_coordinate/, 'description must point agents at bclaw_coordinate');
     });
   });
 });

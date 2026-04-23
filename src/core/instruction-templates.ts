@@ -249,7 +249,12 @@ function renderSessionProtocol(): string {
     '2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.',
     '3. Do not assume project state without reading brainclaw context first.',
     '',
-    '_Escalation path (only when you orchestrate other agents):_ `bclaw_coordinate(intent)` to assign/consult/review, `bclaw_dispatch(intent)` for sequence lanes, `bclaw_loop` for multi-turn review/ideation loops.',
+    '_Escalation path (only when you orchestrate other agents) — by goal:_',
+    '- Start a code review / consult an agent / assign a scope → `bclaw_coordinate(intent=review|consult|assign)`',
+    '- Parallelize execute across a sequence\'s lanes → `bclaw_dispatch(intent=execute)`',
+    '- Drive a turn in a loop already assigned to you → `bclaw_loop(intent=turn|complete_turn|advance|close)`',
+    '',
+    'Do NOT call `bclaw_loop(intent=open)` directly — it creates a loop structure without dispatch, so the reviewer/participant never gets the work. Use the goal entries above.',
   ].join('\n');
 }
 
@@ -273,9 +278,12 @@ function renderUserWorkflow(): string {
     '- `candidate` — proposed decision / constraint / trap awaiting review before entering durable memory.',
     '- `decision` / `constraint` / `trap` / `runtime_note` — captured along the way to preserve context for future sessions.',
     '',
-    '**Loops (`bclaw_loop`, advanced — delegates multi-turn work to other agents):**',
-    '- Review & Fix Loop — *implemented*. Delegates review+fix to another agent, then loops back until no blocking findings remain.',
-    '- Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/agent-first-model.md` §3.',
+    '**Review & Fix Loop (multi-turn delegation):**',
+    '- Start: `bclaw_coordinate(intent=review, open_loop=true, review_mode=symmetric|asymmetric, targetAgents=[reviewer])` — opens the loop AND dispatches the first turn to the reviewer.',
+    '- Drive: `bclaw_loop(intent=turn|complete_turn|advance|close)` for turns assigned to your slot.',
+    '- Anti-pattern: `bclaw_loop(intent=open)` alone — creates the loop structure without any dispatch, so nothing actually runs.',
+    '',
+    'Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/agent-first-model.md` §3.',
   ].join('\n');
 }
 
@@ -341,7 +349,10 @@ function renderAvailableTools(): string {
     '**Plan steps:** `bclaw_add_step`, `bclaw_complete_step`, `bclaw_update_step`, `bclaw_delete_step`',
     '**Inbox + handoffs:** `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_send_message`, `bclaw_correct_handoff`',
     '**Notes + search:** `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_search`',
-    '**Escalation (orchestrator path):** `bclaw_coordinate(intent)`, `bclaw_dispatch(intent)`, `bclaw_loop`',
+    '**Escalation (orchestrator path):**',
+    '- Review / consult / assign another agent → `bclaw_coordinate(intent=review|consult|assign)` (use `open_loop=true` on review to also dispatch the reviewer turn)',
+    '- Parallel execute across a sequence\'s lanes → `bclaw_dispatch(intent=execute)`',
+    '- Drive your turn in an already-opened loop → `bclaw_loop(intent=turn|complete_turn|advance|close)`',
     '**Setup + navigation:** `bclaw_setup`, `bclaw_bootstrap`, `bclaw_switch`, `bclaw_release_notes`',
     '',
     'Legacy per-entity tools (`bclaw_list_plans`, `bclaw_accept`, `bclaw_get_context`, `bclaw_dispatch_review`, …) were removed from the catalog at v1.0 — direct calls still succeed as a migration escape hatch but emit a redirect warning. See `docs/integrations/mcp.md` + `docs/concepts/mcp-governance.md` for the full catalog and stability contract; raw MCP clients can request advanced tools with `tools/list` params `{ catalog: "all" }`.',
