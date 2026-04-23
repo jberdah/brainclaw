@@ -147,11 +147,14 @@ describe('loops store — listLoops', () => {
     const a = openLoop({ kind: 'review', title: 'a', created_by: 'agt_test' }, cwd);
     const b = openLoop({ kind: 'ideation', title: 'b', created_by: 'agt_test' }, cwd);
 
+    // On fast CI machines both loops can land in the same millisecond, and
+    // `created_at` has only ms precision — so the sort is stable but the
+    // natural order of two same-ms loops is undefined. Assert set membership
+    // rather than order for the broad listing (the per-filter cases below
+    // remain deterministic because each filter returns a single loop).
     const all = listLoops({}, cwd);
-    assert.deepEqual(
-      all.map((l) => l.id),
-      [a.id, b.id],
-    );
+    const allIds = all.map((l) => l.id).sort();
+    assert.deepEqual(allIds, [a.id, b.id].sort());
 
     const reviews = listLoops({ kind: 'review' }, cwd);
     assert.deepEqual(
