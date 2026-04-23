@@ -353,11 +353,17 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(claimsBefore.length, 1);
       assert.equal(claimsBefore[0].agent, 'codex');
 
+      // pln#458 ci-fix: github-copilot has spawnable_cli=false (review/consult
+      // only per its profile comment), so reroute to copilot fails validation
+      // and never creates new_claim_id. Use opencode (spawnable_cli=true) as
+      // the reroute target — the reroute contract (release old claim, create
+      // new one, open inbox message) is unchanged.
+      workspace.registerAgent('opencode');
       const response = await coordinate(workspace, {
         intent: 'reroute',
         task: 'Rerouted task',
         scope: 'src/core/reroute-target.ts',
-        targetAgents: ['github-copilot'],
+        targetAgents: ['opencode'],
         agent: 'claude-code',
       });
 
@@ -366,19 +372,19 @@ describe('bclaw_coordinate — side effects', () => {
 
       const result = response.result;
       assert.equal(result.old_agent, 'codex');
-      assert.equal(result.new_agent, 'github-copilot');
+      assert.equal(result.new_agent, 'opencode');
       assert.ok(typeof result.released_claim === 'string');
       assert.ok(typeof result.new_claim_id === 'string');
 
       const allClaims = listClaims(workspace.dir);
       const activeClaims = allClaims.filter(c => c.status === 'active');
       assert.equal(activeClaims.length, 1);
-      assert.equal(activeClaims[0].agent, 'github-copilot');
+      assert.equal(activeClaims[0].agent, 'opencode');
 
       const releasedClaims = allClaims.filter(c => c.status === 'released');
       assert.ok(releasedClaims.length >= 1);
 
-      const inbox = readInbox({ agent: 'github-copilot' }, workspace.dir);
+      const inbox = readInbox({ agent: 'opencode' }, workspace.dir);
       assert.ok(inbox.messages.length >= 1, 'Expected inbox message for rerouted agent');
       const rerouteMsg = inbox.messages.find(m => m.type === 'assign');
       assert.ok(rerouteMsg?.assignment_id, 'Reroute assign message should carry assignment_id');

@@ -856,7 +856,15 @@ export function validateAgentForDispatch(
       };
     }
     const bin = profile.invoke_binary;
-    if (bin) {
+    // In test mode we skip the PATH probe: CI runners don't have external
+    // agent CLIs (codex, copilot, …) installed, and tests set BRAINCLAW_NO_SPAWN
+    // so no real spawn ever happens. Probing PATH here used to make the
+    // bclaw-coordinate suite fail on CI while passing locally whenever the
+    // developer had the binaries installed. Profile-based checks
+    // (unknown_profile, not_spawnable) still apply — they're deterministic.
+    const skipBinaryProbe = process.env.BRAINCLAW_TEST_MODE === '1'
+      || process.env.BRAINCLAW_NO_SPAWN === '1';
+    if (bin && !skipBinaryProbe) {
       const probe = process.platform === 'win32' ? 'where' : 'which';
       const result = spawnSync(probe, [bin], { encoding: 'utf-8' });
       if (result.status !== 0) {
