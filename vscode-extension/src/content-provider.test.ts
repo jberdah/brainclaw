@@ -35,8 +35,9 @@ describe('content-provider — scheme + commands', () => {
     assert.match(extensionSrc, /registerCommand\(\s*['"]brainclaw\.refreshEntityPreview['"]/);
   });
 
-  it('openEntity routes to markdown.showPreviewToSide (preview, not text editor)', () => {
-    assert.match(extensionSrc, /executeCommand\(\s*['"]markdown\.showPreviewToSide['"]/);
+  it('openEntity routes to markdown.showPreview with locked:true (preview that stacks as tabs)', () => {
+    assert.match(extensionSrc, /executeCommand\(\s*['"]markdown\.showPreview['"]/);
+    assert.match(extensionSrc, /locked:\s*true/);
   });
 
   it('both new commands are declared in package.json', () => {

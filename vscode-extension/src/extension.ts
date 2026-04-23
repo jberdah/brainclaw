@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('brainclaw.openEntity', async (args: OpenEntityArgs) => {
       if (!args || !args.entity || !args.id || !args.projectPath) return;
       const uri = buildEntityUri(args);
-      await vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+      await openEntityPreview(uri);
     }),
     vscode.commands.registerCommand('brainclaw.refreshEntityPreview', async (args: OpenEntityArgs) => {
       if (!contentProvider || !args) return;
@@ -268,6 +268,64 @@ function handleStatusSummary(summary: BrainclawStatusSummary): void {
     });
   }
   previousActionCount = summary.actions;
+}
+
+// --- Entity preview column tracking ---
+// Two VS Code quirks shape this:
+//   1. `markdown.showPreviewToSide` opens ViewColumn.Beside the active editor.
+//      Because the new preview becomes active, chained calls walk rightward
+//      (col 2 → 3 → 4…) rather than stacking tabs in one group.
+//   2. An unlocked markdown preview is *replaced* by the next preview in the
+//      same column instead of opening a new tab.
+// Fix: open each preview with `locked: true`. A locked preview refuses to be
+// reused, so the next open creates a fresh tab. We also track the column of
+// the first preview and target that column explicitly for subsequent opens so
+// everything stacks in one group. `markdown.showPreview` accepts settings as
+// its 3rd arg: {sideBySide, locked}.
+
+let brainclawPreviewColumn: vscode.ViewColumn | undefined;
+
+async function openEntityPreview(uri: vscode.Uri): Promise<void> {
+  if (brainclawPreviewColumn !== undefined) {
+    const stillExists = vscode.window.tabGroups.all.some(
+      (group) => group.viewColumn === brainclawPreviewColumn,
+    );
+    if (!stillExists) brainclawPreviewColumn = undefined;
+  }
+
+  if (brainclawPreviewColumn === undefined) {
+    await vscode.commands.executeCommand(
+      'markdown.showPreview',
+      uri,
+      undefined,
+      { sideBySide: true, locked: true },
+    );
+    brainclawPreviewColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
+    return;
+  }
+
+  const focusCommand = focusEditorGroupCommand(brainclawPreviewColumn);
+  if (focusCommand) await vscode.commands.executeCommand(focusCommand);
+  await vscode.commands.executeCommand(
+    'markdown.showPreview',
+    uri,
+    undefined,
+    { sideBySide: false, locked: true },
+  );
+}
+
+function focusEditorGroupCommand(column: vscode.ViewColumn): string | undefined {
+  switch (column) {
+    case vscode.ViewColumn.One: return 'workbench.action.focusFirstEditorGroup';
+    case vscode.ViewColumn.Two: return 'workbench.action.focusSecondEditorGroup';
+    case vscode.ViewColumn.Three: return 'workbench.action.focusThirdEditorGroup';
+    case vscode.ViewColumn.Four: return 'workbench.action.focusFourthEditorGroup';
+    case vscode.ViewColumn.Five: return 'workbench.action.focusFifthEditorGroup';
+    case vscode.ViewColumn.Six: return 'workbench.action.focusSixthEditorGroup';
+    case vscode.ViewColumn.Seven: return 'workbench.action.focusSeventhEditorGroup';
+    case vscode.ViewColumn.Eight: return 'workbench.action.focusEighthEditorGroup';
+    default: return undefined;
+  }
 }
 
 function updateStatusBar(summary: BrainclawStatusSummary): void {

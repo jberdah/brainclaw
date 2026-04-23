@@ -9,6 +9,7 @@ import {
   formatRelativeAge,
   isAutoCandidate,
   isStale,
+  priorityLetter,
   timeAgo,
   type Freshness,
 } from './tree-helpers';
@@ -24,11 +25,19 @@ export interface BoardProject {
 type TreeNodeType = 'leaf' | 'project' | 'section';
 
 export class BrainclawTreeItem extends vscode.TreeItem {
+  // label/description/iconPath are intentionally writable so _ensureSectionItem
+  // (pln#457) can refresh a cached section header in place without re-creating
+  // the instance. VS Code reads these via getTreeItem() on fire(), so mutation
+  // is safe as long as we also fire the subtree.
+  public label: string;
+  public description?: string;
+  public iconPath?: vscode.ThemeIcon | string | vscode.Uri;
+
   constructor(
-    public readonly label: string,
+    label: string,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
-    public readonly description?: string,
-    public readonly iconPath?: vscode.ThemeIcon | string | vscode.Uri,
+    description?: string,
+    iconPath?: vscode.ThemeIcon | string | vscode.Uri,
     tooltip?: string | vscode.MarkdownString,
     public readonly contextValue?: string,
     public readonly itemId?: string,
@@ -38,8 +47,9 @@ export class BrainclawTreeItem extends vscode.TreeItem {
     treeId?: string,
   ) {
     super(label, collapsibleState);
-    if (description) this.description = description;
-    if (iconPath) this.iconPath = iconPath;
+    this.label = label;
+    this.description = description;
+    this.iconPath = iconPath;
     if (tooltip !== undefined) this.tooltip = tooltip;
     if (contextValue) this.contextValue = contextValue;
     if (treeId) this.id = treeId;
@@ -237,6 +247,18 @@ const SECTION = {
   CROSS_PROJECT: 'cross-project',
 } as const;
 
+// pln#457: outcome sections rendered per project. Used by _fireChangedSections
+// to iterate and diff per-section signatures. Entity sections are legacy
+// dispatch views that aren't part of the default project layout, so they
+// refresh lazily via getChildren() and don't need per-section diffing.
+const REFRESHABLE_SECTION_IDS: readonly string[] = [
+  SECTION.ATTENTION,
+  SECTION.IN_PROGRESS,
+  SECTION.SPRINTS,
+  SECTION.BACKLOG,
+  SECTION.SYSTEM,
+];
+
 const COMMAND = {
   RETRY_PROJECT_BOARD: 'brainclaw.retryProjectBoard',
 } as const;
@@ -260,6 +282,15 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _mcpClients = new Map<string, McpClient>();
   private readonly _resolvedCmds = new Map<string, string | null>();
   private readonly _resolvingCmds = new Map<string, Promise<string | undefined>>();
+  // Incremental refresh (pln#457):
+  //   _sectionItems caches BrainclawTreeItem instances per section so that the
+  //   same reference is returned from getChildren() across refreshes — that's
+  //   what lets _onDidChangeTreeData.fire(sectionItem) resolve the node inside
+  //   VS Code's tree and invalidate only that subtree.
+  //   _sectionSignatures holds a digest of each section's rendered content;
+  //   on refresh we fire only for sections whose signature actually changed.
+  private readonly _sectionItems = new Map<string, BrainclawTreeItem>();
+  private readonly _sectionSignatures = new Map<string, string>();
   private readonly _disposables: vscode.Disposable[] = [];
 
   private _workspaceBoard: BoardData | null = null;
@@ -672,7 +703,126 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
 
     this._statusUpdate?.(this._aggregateStatusSummary());
-    this._onDidChangeTreeData.fire();
+    // pln#457: targeted fire. Diff each section's signature against the
+    // previous one and fire only for sections that actually changed. Falls
+    // back to a root-level fire when projects were added/removed, since the
+    // tree's top-level shape cannot be reconciled via stable leaf IDs alone.
+    this._fireChangedSections();
+  }
+
+  private _fireChangedSections(): void {
+    // Use the per-section signature as a gate: if NO section changed we skip
+    // firing entirely (VS Code keeps rendering the current state, no wasted
+    // getChildren calls). If any section changed we fire the root once —
+    // stable leaf IDs + the cached section item instances let VS Code
+    // reconcile every level without destroying/recreating nodes, so there is
+    // no visible flash even though the fire is root-level. Going finer-grained
+    // (fire(sectionItem) only) would leave the parent project-summary label
+    // stale ("N plans · N claims" is on the project row, not the section);
+    // fixing that would require caching project item instances too and firing
+    // both — more moving parts for marginal gain.
+    const scanned = new Set<string>();
+    let anyChanged = false;
+    let firstRender = this._sectionSignatures.size === 0;
+
+    const scan = (projectPath: string, board: BoardData | null): void => {
+      if (!board) return;
+      const normalizedPath = this._normalizePath(projectPath);
+      for (const sectionId of REFRESHABLE_SECTION_IDS) {
+        const key = this._sectionCacheKey(normalizedPath, sectionId);
+        const signature = this._computeSectionSignature(sectionId, board, normalizedPath);
+        scanned.add(key);
+        const prev = this._sectionSignatures.get(key);
+        if (prev !== signature) {
+          this._sectionSignatures.set(key, signature);
+          anyChanged = true;
+        }
+      }
+    };
+
+    if (this._rootProjectPath && this._projects.length === 0 && this._workspaceBoard) {
+      scan(this._rootProjectPath, this._workspaceBoard);
+    }
+    for (const project of this._projects) {
+      scan(project.path, this._getBoardForPath(project.path) ?? null);
+    }
+
+    // Evict signature + section-item entries for sections that dropped out of
+    // scope (e.g. a project removed from the workspace) so caches don't grow
+    // unboundedly.
+    for (const key of [...this._sectionSignatures.keys()]) {
+      if (!scanned.has(key)) {
+        this._sectionSignatures.delete(key);
+        this._sectionItems.delete(key);
+        anyChanged = true;
+      }
+    }
+
+    if (firstRender || anyChanged) {
+      this._onDidChangeTreeData.fire();
+    }
+  }
+
+  private _computeSectionSignature(sectionId: string, board: BoardData, projectPath: string): string {
+    // Hash the fields that actually drive section rendering. Missing fields
+    // collapse to empty strings so a board summary (no active_plans array)
+    // and a full board (populated array) don't trigger spurious refreshes
+    // when counts happen to agree.
+    const sectionBoard = this._getSectionBoard(projectPath, sectionId) ?? board;
+    const join = (parts: string[]): string => parts.join('|');
+
+    switch (sectionId) {
+      case SECTION.ATTENTION: {
+        const actions = activeActions(sectionBoard).map((a: any) => `act:${a.id}:${a.status}:${a.updated_at ?? a.created_at}`);
+        const cands = (sectionBoard.pending_candidates ?? [])
+          .filter((c: any) => !isAutoCandidate(c))
+          .map((c: any) => `cd:${c.id}:${c.created_at}:${c.overdue ? 1 : 0}`);
+        const blocked = activeAssignments(sectionBoard)
+          .filter((a: any) => a.status === 'blocked')
+          .map((a: any) => `ba:${a.id}:${a.last_heartbeat_at}`);
+        const stale = activeRuns(sectionBoard)
+          .filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed')
+          .map((r: any) => `sr:${r.id}:${r.status}:${r.last_event_at}`);
+        const hints = (sectionBoard.workflow_hints ?? []).slice();
+        return [join(actions), join(cands), join(blocked), join(stale), join(hints)].join('||');
+      }
+      case SECTION.IN_PROGRESS: {
+        const claims = activeClaims(sectionBoard).map((c: any) => `cl:${c.id}:${c.agent}:${c.scope}:${c.updated_at ?? c.created_at}`);
+        const asgs = activeAssignments(sectionBoard)
+          .filter((a: any) => a.status !== 'blocked')
+          .map((a: any) => `as:${a.id}:${a.status}:${a.last_heartbeat_at}`);
+        const runs = activeRuns(sectionBoard)
+          .filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed')
+          .map((r: any) => `ru:${r.id}:${r.status}:${r.attempt_index}:${r.last_event_at}`);
+        return [join(claims), join(asgs), join(runs)].join('||');
+      }
+      case SECTION.SPRINTS: {
+        const items = (sectionBoard.active_sequence?.items ?? []) as any[];
+        const fields = items.map((i: any) => `sp:${i.rank}:${i.planId}:${i.plan_status}:${String(i.plan_text ?? '').slice(0, 80)}`);
+        return join(fields);
+      }
+      case SECTION.BACKLOG: {
+        const plans = activePlans(sectionBoard)
+          .filter((p: any) => p.status === 'in_progress' || p.status === 'todo')
+          .map((p: any) => `pl:${p.id}:${p.status}:${p.priority}:${p.updated_at ?? p.created_at}:${p.steps?.length ?? 0}:${p.steps ? p.steps.filter((s: any) => s.status === 'done').length : 0}`);
+        const traps = (sectionBoard.known_traps ?? [])
+          .filter((t: any) => (t.status ?? 'active') === 'active')
+          .map((t: any) => `tp:${t.id}:${t.severity}:${t.updated_at ?? t.created_at}`);
+        return [join(plans), join(traps)].join('||');
+      }
+      case SECTION.SYSTEM: {
+        const agents = (sectionBoard.other_agents ?? []).map((a: any) => `ag:${a.id ?? a.name}:${a.last_active}:${a.claim_count ?? 0}:${a.has_open_session ? 1 : 0}`);
+        const auto = (sectionBoard.pending_candidates ?? [])
+          .filter((c: any) => isAutoCandidate(c))
+          .map((c: any) => `ac:${c.id}:${c.created_at}`);
+        const notes = (sectionBoard.runtime_notes ?? []).map((n: any) => `nt:${n.id}:${n.created_at}`);
+        const handoffs = visibleHandoffs(sectionBoard).map((h: any) => `hf:${h.id}:${h.updated_at ?? h.created_at}`);
+        const linked = (sectionBoard.linked_projects ?? []).map((l: any) => `lp:${l.name}:${l.active_plans}:${l.active_claims}:${l.available ? 1 : 0}`);
+        const signals = (sectionBoard.incoming_signals ?? []).map((s: any) => `sg:${s.id}:${s.created_at}`);
+        return [join(agents), join(auto), join(notes), join(handoffs), join(linked), join(signals)].join('||');
+      }
+      default: return '';
+    }
   }
 
   private _debouncedRefresh(): void {
@@ -1436,18 +1586,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const staleRuns = activeRuns(board).filter((r: any) => r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
     const hints = (board.workflow_hints ?? []).length;
     const attentionCount = pendingActions.length + reviewCandidates.length + blockedAssignments.length + staleRuns.length + hints;
-    sections.push(new BrainclawTreeItem(
+    sections.push(this._ensureSectionItem(
+      SECTION.ATTENTION,
+      projectPath,
       `Attention required (${attentionCount})`,
-      attentionCount > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
-      undefined,
       new vscode.ThemeIcon(attentionCount > 0 ? 'bell-dot' : 'bell'),
       undefined,
-      undefined,
-      undefined,
-      projectPath,
-      SECTION.ATTENTION,
-      'section',
-      `section:${projectPath}:${SECTION.ATTENTION}`,
+      attentionCount > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
     ));
 
     // --- Live activity ---
@@ -1501,18 +1646,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const linked = board.linked_projects ?? [];
     const signals = board.incoming_signals ?? [];
     const systemCount = agentRoster.length + autoCandidates.length + notes.length + handoffs.length + linked.length + signals.length;
-    sections.push(new BrainclawTreeItem(
-      `System`,
-      vscode.TreeItemCollapsibleState.Collapsed,
-      systemCount > 0 ? `${systemCount} item(s)` : undefined,
-      new vscode.ThemeIcon('server'),
-      undefined,
-      undefined,
-      undefined,
-      projectPath,
+    sections.push(this._ensureSectionItem(
       SECTION.SYSTEM,
-      'section',
-      `section:${projectPath}:${SECTION.SYSTEM}`,
+      projectPath,
+      `System`,
+      new vscode.ThemeIcon('server'),
+      systemCount > 0 ? `${systemCount} item(s)` : undefined,
+      vscode.TreeItemCollapsibleState.Collapsed,
     ));
 
     return sections;
@@ -1526,11 +1666,47 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     projectPath: string,
     expandWhenPopulated: boolean,
   ): BrainclawTreeItem {
-    return new BrainclawTreeItem(
+    // pln#457: reuse the cached instance so fire(sectionItem) resolves the
+    // same object VS Code already has in its tree. Expanded state is set on
+    // first build and preserved by VS Code via the treeId; we don't touch
+    // collapsibleState on subsequent rebuilds to avoid force-collapsing a
+    // section the user expanded manually.
+    return this._ensureSectionItem(
+      sectionId,
+      projectPath,
       label,
-      expandWhenPopulated && count > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
-      undefined,
       new vscode.ThemeIcon(icon),
+      undefined,
+      expandWhenPopulated && count > 0
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed,
+    );
+  }
+
+  private _ensureSectionItem(
+    sectionId: string,
+    projectPath: string,
+    label: string,
+    icon: vscode.ThemeIcon,
+    description: string | undefined,
+    initialCollapsibleState: vscode.TreeItemCollapsibleState,
+  ): BrainclawTreeItem {
+    const key = this._sectionCacheKey(projectPath, sectionId);
+    const existing = this._sectionItems.get(key);
+    if (existing) {
+      // Mutate in place: label/description/iconPath often carry live counts.
+      // collapsibleState is left alone so the user's manual expand/collapse
+      // survives a refresh.
+      existing.label = label;
+      existing.description = description;
+      existing.iconPath = icon;
+      return existing;
+    }
+    const fresh = new BrainclawTreeItem(
+      label,
+      initialCollapsibleState,
+      description,
+      icon,
       undefined,
       undefined,
       undefined,
@@ -1539,6 +1715,8 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       'section',
       `section:${projectPath}:${sectionId}`,
     );
+    this._sectionItems.set(key, fresh);
+    return fresh;
   }
 
   private _buildSectionChildren(sectionId: string, board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -1719,6 +1897,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'agent',
         agentKey,
         projectPath,
+        undefined,
+        'leaf',
+        `agent:${projectPath}:${agentKey}`,
       );
       attachEntityPreview(item, 'agent', agentKey, projectPath, summary);
       return item;
@@ -1738,6 +1919,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'candidate',
         candidate.id,
         projectPath,
+        undefined,
+        'leaf',
+        `candidate:${projectPath}:${candidate.id}`,
       );
     });
   }
@@ -1774,6 +1958,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         undefined,
         undefined,
         projectPath,
+        undefined,
+        'leaf',
+        `note:${projectPath}:${note.id}`,
       );
     });
   }
@@ -1784,15 +1971,21 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       const stepsInfo = plan.steps?.length ? ` [${plan.steps.filter((step: any) => step.status === 'done').length}/${plan.steps.length}]` : '';
       const icon = plan.status === 'in_progress' ? 'play-circle' : plan.status === 'blocked' ? 'error' : 'circle-outline';
       const summary = `[${plan.id}] ${plan.text}\nStatus: ${plan.status}\nPriority: ${plan.priority ?? 'medium'}${assignee}${stepsInfo}`;
+      const age = plan.created_at ? formatRelativeAge(plan.created_at) : '—';
+      const prio = priorityLetter(plan.priority);
+      const title = plan.text ?? plan.id;
       const item = new BrainclawTreeItem(
-        plan.text?.slice(0, 80) ?? plan.id,
+        `${age} · ${prio} · ${title}`,
         vscode.TreeItemCollapsibleState.None,
-        `${plan.status} · ${plan.priority ?? 'medium'}${assignee}${stepsInfo}`,
+        stepsInfo.trim() || undefined,
         new vscode.ThemeIcon(icon),
         summary,
         'plan',
         plan.id,
         projectPath,
+        undefined,
+        'leaf',
+        `plan:${projectPath}:${plan.id}`,
       );
       attachEntityPreview(item, 'plan', plan.id, projectPath, summary);
       return item;
@@ -1821,6 +2014,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'claim',
         claim.id,
         projectPath,
+        undefined,
+        'leaf',
+        `claim:${projectPath}:${claim.id}`,
       );
       attachEntityPreview(item, 'claim', claim.id, projectPath, summary);
       return item;
@@ -1851,6 +2047,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'assignment',
         assignment.id,
         projectPath,
+        undefined,
+        'leaf',
+        `assignment:${projectPath}:${assignment.id}`,
       );
     });
   }
@@ -1885,6 +2084,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'run',
         run.id,
         projectPath,
+        undefined,
+        'leaf',
+        `run:${projectPath}:${run.id}`,
       );
     });
   }
@@ -1927,6 +2129,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'action',
         action.id,
         projectPath,
+        undefined,
+        'leaf',
+        `action:${projectPath}:${action.id}`,
       );
     });
   }
@@ -1943,6 +2148,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         'handoff',
         handoff.id,
         projectPath,
+        undefined,
+        'leaf',
+        `handoff:${projectPath}:${handoff.id}`,
       );
       attachEntityPreview(item, 'handoff', handoff.id, projectPath, summary);
       return item;
@@ -1965,6 +2173,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         undefined,
         undefined,
         projectPath,
+        undefined,
+        'leaf',
+        `sprint-progress:${projectPath}`,
       ),
     ];
 
@@ -1982,6 +2193,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         undefined,
         undefined,
         projectPath,
+        undefined,
+        'leaf',
+        `sprint-item:${projectPath}:${item.planId ?? item.rank}`,
       ));
     }
 
@@ -1998,15 +2212,21 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return traps.map((trap: any) => {
       const icon = trap.severity === 'high' ? 'error' : trap.severity === 'medium' ? 'warning' : 'info';
       const summary = `[${trap.severity}] ${trap.text}`;
+      const age = trap.created_at ? formatRelativeAge(trap.created_at) : '—';
+      const sev = priorityLetter(trap.severity);
+      const text = trap.text ?? trap.id;
       const item = new BrainclawTreeItem(
-        trap.text?.slice(0, 80) ?? trap.id,
+        `${age} · ${sev} · ${text}`,
         vscode.TreeItemCollapsibleState.None,
-        trap.severity,
+        undefined,
         new vscode.ThemeIcon(icon),
         summary,
         'trap',
         trap.id,
         projectPath,
+        undefined,
+        'leaf',
+        `trap:${projectPath}:${trap.id}`,
       );
       attachEntityPreview(item, 'trap', trap.id, projectPath, summary);
       return item;
@@ -2033,6 +2253,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         undefined,
         undefined,
         projectPath,
+        undefined,
+        'leaf',
+        `linked-project:${projectPath}:${linkedProject.name}`,
       ));
     }
 
@@ -2048,6 +2271,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         undefined,
         undefined,
         projectPath,
+        undefined,
+        'leaf',
+        `signal:${projectPath}:${signal.id}`,
       ));
     }
 

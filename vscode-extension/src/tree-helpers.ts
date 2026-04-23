@@ -25,6 +25,16 @@ export function timeAgo(isoDate: string): string {
   return `${days}d ago`;
 }
 
+export function priorityLetter(value: string | undefined | null): string {
+  switch (String(value ?? '').toLowerCase()) {
+    case 'urgent': return 'U';
+    case 'high': return 'H';
+    case 'medium': return 'M';
+    case 'low': return 'L';
+    default: return '·';
+  }
+}
+
 export function formatRelativeAge(isoDate: string): string {
   const diff = Date.now() - Date.parse(isoDate);
   const mins = Math.floor(diff / 60000);
