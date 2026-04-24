@@ -38,6 +38,11 @@ export const BclawLoopOpenSchema = z.object({
   linked: LoopLinksSchema.optional(),
   stop_condition: StopConditionSchema.optional(),
   mode: z.enum(REVIEW_MODES).optional(),
+  // Opt-in acknowledgement that the caller will drive dispatch manually.
+  // Absent (or false) → handler rejects with a pointer to bclaw_coordinate,
+  // because a loop opened without a follow-up turn/claim/inbox never runs.
+  // See pln#461.
+  allow_orphan: z.boolean().optional(),
   ...CallerEnvelopeFields,
 });
 

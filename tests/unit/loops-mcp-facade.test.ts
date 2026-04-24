@@ -40,7 +40,7 @@ describe('bclaw_loop facade — open / get / list', () => {
   it('opens a review loop and returns a FacadeResponse envelope', () => {
     const r = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'mcp open',
         agentId: 'agt_a',
@@ -72,7 +72,7 @@ describe('bclaw_loop facade — open / get / list', () => {
 
     const first = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'idem-open',
         agentId: 'agt_a',
@@ -83,7 +83,7 @@ describe('bclaw_loop facade — open / get / list', () => {
     });
     const second = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'idem-open',
         agentId: 'agt_a',
@@ -105,7 +105,7 @@ describe('bclaw_loop facade — open / get / list', () => {
   it('open rejects reuse of the same client_request_id with a different payload', () => {
     handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'idem-mismatch-a',
         agentId: 'agt_a',
@@ -116,7 +116,7 @@ describe('bclaw_loop facade — open / get / list', () => {
 
     const r = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'idem-mismatch-b',
         agentId: 'agt_a',
@@ -138,10 +138,33 @@ describe('bclaw_loop facade — open / get / list', () => {
     assert.match(r.response.error ?? '', /validation_error/);
   });
 
+  it('rejects direct open without allow_orphan — anti-pattern gate (pln#461)', () => {
+    const r = handleBclawLoop({
+      args: {
+        intent: 'open',
+        kind: 'review',
+        title: 'orphan-attempt',
+        agentId: 'agt_hostile',
+        slots: [{ role: 'reviewer', agent_id: 'agt_rev' }],
+      },
+      cwd,
+    });
+    assert.equal(r.response.status, 'error');
+    assert.equal(r.response.intent, 'bclaw_loop.open');
+    assert.match(r.response.error ?? '', /validation_error/);
+    assert.match(r.response.error ?? '', /allow_orphan|bclaw_coordinate/);
+    // The side effect must not include loop creation
+    assert.equal(
+      r.response.side_effects.some((s) => s.action === 'create' && s.entity === 'loop'),
+      false,
+      'no loop should be created when the gate rejects the call',
+    );
+  });
+
   it('get returns the loop with computed next_expected', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'to-get',
         agentId: 'agt_a',
@@ -162,7 +185,7 @@ describe('bclaw_loop facade — open / get / list', () => {
 
   it('get with include_events returns the event journal', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'with-events', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'with-events', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -185,8 +208,8 @@ describe('bclaw_loop facade — open / get / list', () => {
   });
 
   it('list filters by kind and paginates', () => {
-    handleBclawLoop({ args: { intent: 'open', kind: 'ideation', title: 'i1', agentId: 'agt_a' }, cwd });
-    handleBclawLoop({ args: { intent: 'open', kind: 'research', title: 'r1', agentId: 'agt_a' }, cwd });
+    handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'i1', agentId: 'agt_a' }, cwd });
+    handleBclawLoop({ args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'r1', agentId: 'agt_a' }, cwd });
 
     const all = handleBclawLoop({ args: { intent: 'list' }, cwd });
     const allResult = all.response.result as { loops: LoopThread[]; total: number };
@@ -214,7 +237,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('turn flips the reviewer slot to assigned and records a loop_event', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'turn-loop',
         agentId: 'agt_a',
@@ -260,7 +283,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('complete_turn enforces slot-bound auth via caller_agent_id', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'auth-loop',
         agentId: 'agt_author',
@@ -314,7 +337,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('advance reports auto_closed=true when reviewer_green stop fires', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'auto-close',
         agentId: 'agt_a',
@@ -352,7 +375,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('advance succeeds when expected_version matches', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'advance-cas-pass', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-pass', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
@@ -373,7 +396,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('advance returns version_conflict with actual_version when expected_version mismatches', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'advance-cas-fail', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'advance-cas-fail', agentId: 'agt_a' },
       cwd,
     });
     const openedPayload = payload(opened.response.result);
@@ -396,7 +419,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('complete_turn idempotent retry returns the cached response', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'complete-idem',
         agentId: 'agt_author',
@@ -436,7 +459,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('complete_turn cached response is NOT returned to a different caller (slot-bound auth)', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'owner-match',
         agentId: 'agt_author',
@@ -481,7 +504,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('turn with client_request_id is idempotent across retries', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'turn-idem',
         agentId: 'agt_author',
@@ -509,7 +532,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('close supports expected_version CAS', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'close-cas', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'close-cas', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -533,7 +556,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
   it('failed mutation does NOT poison the idempotency cache; retry after fixing succeeds', () => {
     const opened = handleBclawLoop({
       args: {
-        intent: 'open',
+        intent: 'open', allow_orphan: true,
         kind: 'review',
         title: 'no-poison',
         agentId: 'agt_author',
@@ -584,7 +607,7 @@ describe('bclaw_loop facade — turn / complete_turn / advance', () => {
 
   it('add_artifact supports CAS via expected_version', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'artifact-cas', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'artifact-cas', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -628,7 +651,7 @@ describe('bclaw_loop facade — lock_timeout', () => {
 
   it('returns lock_timeout when a concurrent lock is already held past the backoff window', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'lock-timeout', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'lock-timeout', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -674,7 +697,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
 
   it('pause then resume round-trips the status', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'p', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'p', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -705,7 +728,7 @@ describe('bclaw_loop facade — pause / resume / close', () => {
 
   it('close transitions to the requested final_status', () => {
     const opened = handleBclawLoop({
-      args: { intent: 'open', kind: 'research', title: 'c', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'research', title: 'c', agentId: 'agt_a' },
       cwd,
     });
     const loopId = payload(opened.response.result).loop.id;
@@ -745,7 +768,7 @@ describe('bclaw_loop facade — envelope contract', () => {
 
   it('every successful response carries status=ok, intent, artifacts, side_effects, warnings', () => {
     const r = handleBclawLoop({
-      args: { intent: 'open', kind: 'ideation', title: 'env', agentId: 'agt_a' },
+      args: { intent: 'open', allow_orphan: true, kind: 'ideation', title: 'env', agentId: 'agt_a' },
       cwd,
     });
     assert.equal(r.response.status, 'ok');

@@ -322,6 +322,14 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
   try {
     switch (req.intent) {
       case 'open': {
+        if (!req.allow_orphan) {
+          return errorResponse(
+            'open',
+            'validation_error',
+            "Direct bclaw_loop(intent='open') creates a loop with no dispatch — no claim, no inbox message, no agent will pick up the work. Use bclaw_coordinate(intent='review', open_loop=true) for review loops (recommended), or pass allow_orphan: true to acknowledge that you will handle turn() + dispatch manually (advanced/test use only). See CLAUDE.md anti-pattern note and pln#461.",
+            Date.now() - startMs,
+          );
+        }
         const runOpen = (): HandleBclawLoopResult => {
           const loop = openLoop(
             {

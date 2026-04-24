@@ -8,6 +8,23 @@ guarantees this changelog follows.
 
 ---
 
+## Unreleased
+
+**Changed — `bclaw_loop(intent: 'open')` anti-pattern gate (pln#461)**
+- New optional field `allow_orphan: boolean` on `BclawLoopOpenSchema`.
+- Default (absent / `false`) — handler rejects with `validation_error`
+  and points to `bclaw_coordinate(intent: 'review', open_loop: true)`
+  as the recommended path. Prevents the "loop opened without
+  dispatch → no claim, no inbox, no agent picks it up" trap called
+  out in `CLAUDE.md`.
+- `allow_orphan: true` — explicit acknowledgement that the caller
+  will drive `turn()` + dispatch manually (advanced / test use only).
+- Internal callers (`bclaw_coordinate`, `bclaw_dispatch`) are not
+  affected — they bypass `handleBclawLoop` and invoke the core
+  `openLoop()` directly.
+
+---
+
 ## 1.0.0 (current)
 
 **Public launch candidate.** Phase 3 slice 3i of `pln_c6472192`.
