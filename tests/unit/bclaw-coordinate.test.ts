@@ -353,11 +353,11 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(claimsBefore.length, 1);
       assert.equal(claimsBefore[0].agent, 'codex');
 
-      // pln#458 ci-fix: github-copilot has spawnable_cli=false (review/consult
-      // only per its profile comment), so reroute to copilot fails validation
-      // and never creates new_claim_id. Use opencode (spawnable_cli=true) as
-      // the reroute target — the reroute contract (release old claim, create
-      // new one, open inbox message) is unchanged.
+      // Use opencode as the reroute target: it keeps this test deterministic
+      // across environments without requiring the copilot CLI on the runner.
+      // (github-copilot is now spawnable — pln#440 — but testing the reroute
+      // contract only needs any spawnable_cli=true agent; the contract is
+      // release old claim, create new one, open inbox message.)
       workspace.registerAgent('opencode');
       const response = await coordinate(workspace, {
         intent: 'reroute',

@@ -379,7 +379,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(findLatestAgentRunForAssignment(assignmentId!, testDir)!.status, 'completed');
   });
 
-  it('github-copilot: inbox-only — dispatch creates claim and message but no spawn', async () => {
+  it('github-copilot: full cycle — headless spawn via copilot -p', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -394,16 +394,15 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'github-copilot');
-    // Copilot is NOT spawnable — execution_status should be inbox_only
-    assert.equal(result.result.messages_sent[0]!.execution_status, 'inbox_only');
 
-    // Verify canSpawnAgent returns false for copilot
+    // pln#440: Copilot CLI 1.0.35+ is spawnable via --allow-all --no-ask-user
     const spawnCheck = canSpawnAgent('github-copilot');
-    assert.equal(spawnCheck.canSpawn, false, 'copilot is not spawnable');
+    assert.equal(spawnCheck.canSpawn, true, 'copilot is spawnable post pln#440');
 
-    // Verify buildInvokeCommand returns undefined (not spawnable_cli)
     const invokeCmd = buildInvokeCommand('github-copilot', 'test brief');
-    assert.equal(invokeCmd, undefined, 'copilot has no invoke command (spawnable_cli=false)');
+    assert.ok(invokeCmd, 'copilot has an invoke command');
+    assert.equal(invokeCmd.executable, 'copilot');
+    assert.equal(invokeCmd.promptDelivery, 'inline_arg', 'copilot uses inline_arg delivery');
   });
 
   it('cline: full cycle — inline_arg delivery', async () => {
@@ -447,13 +446,13 @@ describe('dispatch-e2e/scoreAgents', () => {
 
   it('ranks spawnable agents higher than non-spawnable', () => {
     const plan = makePlan({ id: 'pln_score2', text: 'Test task' });
-    const scores = scoreAgents(['claude-code', 'github-copilot'], plan, []);
+    const scores = scoreAgents(['claude-code', 'cursor'], plan, []);
 
     // claude-code: spawnable_cli=true, execute capability → capability=1.0
-    // github-copilot: spawnable_cli=false, no execute → capability=0.1
+    // cursor: spawnable_cli=false (IDE-only), no execute → capability=0.1
     const claudeScore = scores.find(s => s.agent === 'claude-code')!;
-    const copilotScore = scores.find(s => s.agent === 'github-copilot')!;
-    assert.ok(claudeScore.factors.capability > copilotScore.factors.capability,
+    const cursorScore = scores.find(s => s.agent === 'cursor')!;
+    assert.ok(claudeScore.factors.capability > cursorScore.factors.capability,
       'spawnable agent has higher capability score');
   });
 

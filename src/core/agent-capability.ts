@@ -273,17 +273,17 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     name: 'github-copilot', category: 'code-agent', workflowModel: 'interactive',
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.github/copilot-instructions.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'A',
-    // Copilot CLI lacks shell execution permissions — review/consult only, not execute.
-    // Spawning copilot -p for write tasks fails silently. Keep as inbox + review target.
-    role_capabilities: ['review', 'consult'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: true },
+    // Copilot CLI 1.0.35+ supports headless spawn via --allow-all + --no-ask-user and
+    // per-session MCP via --additional-mcp-config (validated spike pln#440, 2026-04-24
+    // on Windows: non-interactive prompt, file write, and MCP bclaw_create write path).
+    role_capabilities: ['execute', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
     max_concurrent_tasks: 1,
-    prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inbox_structured', max_inline_length: 4000 },
-    execution_env: { surface: 'extension' },
-    // Retained for manual invocation / future shell support — not used by auto-spawn.
-    invoke_template: 'copilot -p "{prompt}" --allow-all',
+    prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 4000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'copilot -p "{prompt}" --allow-all --no-ask-user',
     invoke_binary: 'copilot',
-    invoke_review_template: 'copilot -p "{prompt}" --allow-all-tools --allow-all-paths',
+    invoke_review_template: 'copilot -p "{prompt}" --allow-all --no-ask-user',
   },
 
   kilocode: {
