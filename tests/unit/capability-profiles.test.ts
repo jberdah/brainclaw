@@ -12,29 +12,43 @@ describe('getCapabilityProfile', () => {
     assert.ok(profile, 'claude-code profile must exist');
     assert.equal(profile.runtime.mcp_direct, true);
     assert.equal(profile.runtime.hooks, true);
-    assert.equal(profile.runtime.spawnable_cli, true);
+    assert.equal(profile.runtime.canBeSpawnedCli, true);
+    assert.equal(profile.runtime.canSpawnOtherCli, true);
     assert.equal(profile.runtime.inbox, true);
   });
 
-  it('codex has spawnable_cli=true and task-based workflow', () => {
+  it('codex has canBeSpawnedCli=true and task-based workflow', () => {
     const profile = getCapabilityProfile('codex');
     assert.ok(profile, 'codex profile must exist');
-    assert.equal(profile.runtime.spawnable_cli, true);
+    assert.equal(profile.runtime.canBeSpawnedCli, true);
+    assert.equal(profile.runtime.canSpawnOtherCli, false);
     assert.equal(profile.workflowModel, 'task-based');
   });
 
-  it('cursor has mcp_direct=true but spawnable_cli=false (IDE-only)', () => {
+  it('cursor has mcp_direct=true but canBeSpawnedCli=false (IDE-only)', () => {
     const profile = getCapabilityProfile('cursor');
     assert.ok(profile, 'cursor profile must exist');
     assert.equal(profile.runtime.mcp_direct, true);
-    assert.equal(profile.runtime.spawnable_cli, false);
+    assert.equal(profile.runtime.canBeSpawnedCli, false);
   });
 
-  it('nanoclaw has mcp_direct=false and spawnable_cli=true (CLI-only)', () => {
+  it('nanoclaw has mcp_direct=false and canBeSpawnedCli=true (CLI-only)', () => {
     const profile = getCapabilityProfile('nanoclaw');
     assert.ok(profile, 'nanoclaw profile must exist');
     assert.equal(profile.runtime.mcp_direct, false);
-    assert.equal(profile.runtime.spawnable_cli, true);
+    assert.equal(profile.runtime.canBeSpawnedCli, true);
+    assert.equal(profile.runtime.canSpawnOtherCli, false);
+
+  });
+
+  it('openclaw is a Tier B spawner with canSpawnOtherCli=true and invoke_template', () => {
+    const profile = getCapabilityProfile('openclaw');
+    assert.ok(profile, 'openclaw profile must exist');
+    assert.equal(profile.runtime.canBeSpawnedCli, true);
+    assert.equal(profile.runtime.canSpawnOtherCli, true);
+    assert.ok(profile.invoke_template, 'openclaw must have an invoke_template');
+    assert.ok(profile.invoke_binary, 'openclaw must have an invoke_binary');
+    assert.equal(profile.templateTier, 'B');
   });
 
   it('returns undefined for unknown agent', () => {

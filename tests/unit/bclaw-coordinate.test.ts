@@ -356,7 +356,7 @@ describe('bclaw_coordinate — side effects', () => {
       // Use opencode as the reroute target: it keeps this test deterministic
       // across environments without requiring the copilot CLI on the runner.
       // (github-copilot is now spawnable — pln#440 — but testing the reroute
-      // contract only needs any spawnable_cli=true agent; the contract is
+      // contract only needs any canBeSpawnedCli=true agent; the contract is
       // release old claim, create new one, open inbox message.)
       workspace.registerAgent('opencode');
       const response = await coordinate(workspace, {

@@ -488,7 +488,7 @@ export function resolveOrAutoRegisterAgentIdentity(
  * Ensure that a target agent is registered in the current project before dispatch.
  *
  * If the agent is already registered, returns the existing identity.
- * If not registered but has a known capability profile with spawnable_cli=true,
+ * If not registered but has a known capability profile with canBeSpawnedCli=true,
  * auto-registers it as a contributor agent with source='dispatch-auto-register'.
  *
  * Returns the identity, or undefined if the agent is unknown/not spawnable.
@@ -505,7 +505,7 @@ export function ensureAgentRegisteredForDispatch(
 
   // Check capability profile — only auto-register agents we know about
   const profile = getCapabilityProfile(normalized);
-  if (!profile || !profile.runtime.spawnable_cli) return undefined;
+  if (!profile || !profile.runtime.canBeSpawnedCli) return undefined;
 
   // Auto-register with contributor trust
   try {

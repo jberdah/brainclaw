@@ -125,7 +125,7 @@ export function checkActiveInstance(agentName: string, cwd: string): ActiveInsta
  * Check if the coordinator can spawn an agent as a CLI subprocess.
  *
  * Returns canSpawn=true when:
- * 1. The target agent has runtime.spawnable_cli = true in its profile
+ * 1. The target agent has runtime.canBeSpawnedCli = true in its profile
  * 2. The current process is NOT running inside an MCP stdio sandbox
  *    (heuristic: stdin is a TTY, or BRAINCLAW_CAN_SPAWN env is set)
  */

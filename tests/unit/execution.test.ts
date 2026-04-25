@@ -57,7 +57,7 @@ describe('canSpawnAgent', () => {
   });
 
   it('detects spawnable agents with invoke template', () => {
-    // claude-code and codex have spawnable_cli=true + invoke_template
+    // claude-code and codex have canBeSpawnedCli=true + invoke_template
     for (const agent of ['claude-code', 'codex', 'opencode']) {
       const result = canSpawnAgent(agent);
       // In test context stdin is likely not a TTY, so canSpawn may be false

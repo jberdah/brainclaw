@@ -85,7 +85,7 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     if (!profile) {
       return { canSpawn: false, reason: `unknown agent profile: ${agentName}` };
     }
-    if (!profile.runtime.spawnable_cli) {
+    if (!profile.runtime.canBeSpawnedCli) {
       return { canSpawn: false, reason: `agent ${agentName} is not CLI-spawnable` };
     }
     if (!profile.invoke_template || !profile.invoke_binary) {

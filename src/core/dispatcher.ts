@@ -29,7 +29,7 @@
  *
  * - Instruction files, hooks, MCP config remain per agent type (not per instance)
  * - Live companion refresh is global (last writer wins, deterministic)
- * - Copilot CLI is inbox/review-only (spawnable_cli=false)
+ * - Copilot CLI is inbox/review-only (canBeSpawnedCli=false)
  *
  * @module
  */
@@ -584,7 +584,7 @@ export function scoreAgents(
     // Factor 2: Capability — can this agent execute tasks?
     const profile = getCapabilityProfile(agent);
     const canExecute = profile?.role_capabilities.includes('execute') ?? false;
-    const canSpawn = profile?.runtime.spawnable_cli ?? false;
+    const canSpawn = profile?.runtime.canBeSpawnedCli ?? false;
     const capability = canExecute ? (canSpawn ? 1.0 : 0.5) : 0.1;
 
     // Factor 3: Availability — graduated by utilization (claims / max_concurrent_tasks)

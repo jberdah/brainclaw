@@ -37,7 +37,7 @@ export interface ContextOptions {
   host?: string;
   allHosts?: boolean;
   includePending?: boolean;
-  profile?: 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing';
+  profile?: 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | 'briefing' | 'claude-desktop';
   maxItems?: number;
   maxChars?: number;
   digest?: boolean;
@@ -176,7 +176,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const agent = options.agent?.trim() || currentAgentIdentity?.agent_name;
   // Profile resolution: explicit param > agent default > config default > 'dev'
   const profile = options.profile ?? currentAgentIdentity?.context_profile ?? config.profile ?? 'dev';
-  const profileMaxItems: Record<string, number> = { dense: 20, compact: 6, copilot: 5, quick: 3, briefing: 5 };
+  const profileMaxItems: Record<string, number> = { dense: 20, compact: 6, copilot: 5, quick: 3, briefing: 5, 'claude-desktop': 8 };
   const maxItems = options.maxItems ?? profileMaxItems[profile] ?? 8;
   const maxChars = options.maxChars && options.maxChars > 0 ? options.maxChars : undefined;
   // Instructions will be resolved after parent-store merge below (line ~460)
@@ -189,6 +189,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     copilot:  ['constraint', 'trap'],
     quick:    ['constraint', 'plan'],
     briefing: ['trap', 'constraint', 'decision'],
+    'claude-desktop': ['plan', 'handoff', 'candidate'],
   };
   const allowedSections = profileSections[profile] as Section[] | undefined;
 
@@ -1346,6 +1347,69 @@ export function renderContextBriefing(result: ContextResult): string {
 
   // Sequence position placeholder (populated when Sequences land)
   // lines.push(`sequence: ...`);
+
+  return lines.join('\n');
+}
+
+
+/**
+ * Render context for Claude Desktop: surface tasks, inbox items, and active plans.
+ * Excludes traps, constraints, and decisions — Claude Desktop sessions are task-oriented.
+ * Target output: < 1500 chars, actionable items only.
+ */
+export function renderContextClaudeDesktop(result: ContextResult): string {
+  const lines: string[] = [];
+
+  lines.push('# Brainclaw — Claude Desktop Session');
+  lines.push('');
+
+  // Active plans (task queue)
+  const plans = result.selected.filter(i => i.section === 'plan');
+  if (plans.length > 0) {
+    lines.push('## Tasks');
+    for (const p of plans.slice(0, 5)) {
+      const status = p.extra?.match(/\b(todo|in_progress|blocked)\b/)?.[0] ?? 'todo';
+      const text = p.text.length > 100 ? p.text.slice(0, 97) + '...' : p.text;
+      lines.push(`- [${status}] ${text} (${p.id})`);
+    }
+    lines.push('');
+  }
+
+  // Open handoffs (pending work from other agents)
+  const handoffs = result.selected.filter(i => i.section === 'handoff');
+  if (handoffs.length > 0) {
+    lines.push('## Inbox');
+    for (const h of handoffs.slice(0, 3)) {
+      const from = h.provenance?.actor ?? 'unknown';
+      const text = h.text.length > 100 ? h.text.slice(0, 97) + '...' : h.text;
+      lines.push(`- from:${from} — ${text}`);
+    }
+    lines.push('');
+  }
+
+  // Candidates (review items)
+  const candidates = result.selected.filter(i => i.section === 'candidate');
+  if (candidates.length > 0) {
+    lines.push('## Review');
+    for (const c of candidates.slice(0, 3)) {
+      const text = c.text.length > 100 ? c.text.slice(0, 97) + '...' : c.text;
+      lines.push(`- ${text} (${c.id})`);
+    }
+    lines.push('');
+  }
+
+  if (plans.length === 0 && handoffs.length === 0 && candidates.length === 0) {
+    lines.push('No pending tasks. Use `bclaw_quick_capture` to queue work for Claude Desktop.');
+  }
+
+  // Claim conflicts (always show if present)
+  if (result.claim_conflicts && result.claim_conflicts.length > 0) {
+    lines.push('## Conflicts');
+    for (const c of result.claim_conflicts.slice(0, 2)) {
+      lines.push(`- ${c.other_agent} claims ${c.other_scope}`);
+    }
+    lines.push('');
+  }
 
   return lines.join('\n');
 }

@@ -60,8 +60,10 @@ export interface AgentCapabilityProfile {
     mcp_direct: boolean;
     /** Supports lifecycle hooks (pre-prompt injection, stop cleanup) */
     hooks: boolean;
-    /** Can be spawned as a CLI subprocess */
-    spawnable_cli: boolean;
+    /** Can be spawned as a CLI subprocess by the dispatcher */
+    canBeSpawnedCli: boolean;
+    /** Can spawn other agents as CLI subprocesses (coordinator/spawner capability) */
+    canSpawnOtherCli: boolean;
     /** Can receive tasks via brainclaw inbox */
     inbox: boolean;
   };
@@ -134,7 +136,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
     instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
     role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: true, inbox: true },
     max_concurrent_tasks: 3,
     // Claude CLI: -p is a flag (print mode), prompt is positional or via stdin.
     // Use stdin_pipe to avoid shell quoting issues with long prompts.
@@ -150,7 +152,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
     instructionFile: 'CLAUDE.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'A',
     role_capabilities: ['execute', 'coordinate', 'review', 'consult'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: true, inbox: true },
     max_concurrent_tasks: 6,
     prompt_delivery: { methods: ['stdin_pipe', 'inline_arg', 'inbox_structured'], preferred: 'stdin_pipe', max_inline_length: 4000 },
     execution_env: { surface: 'cli' },
@@ -164,7 +166,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.cursor/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: false, canSpawnOtherCli: false, inbox: false },
     prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
     max_concurrent_tasks: 1,
     execution_env: { surface: 'ide' },
@@ -174,7 +176,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: false, inbox: false },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: false, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
     execution_env: { surface: 'ide' },
@@ -184,7 +186,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
     instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 3,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
@@ -197,7 +199,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
     instructionFile: '.roo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
@@ -210,7 +212,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: '.continue/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'both', templateTier: 'B',
     role_capabilities: ['execute', 'consult'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
@@ -223,7 +225,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
@@ -240,7 +242,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 5,
     // Spawned codex workers are more reliable when the compact brief is passed as
     // a direct prompt argument than via stdin piping, especially on Windows.
@@ -261,7 +263,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: 'GEMINI.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
     role_capabilities: ['execute', 'consult'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
@@ -277,7 +279,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     // per-session MCP via --additional-mcp-config (validated spike pln#440, 2026-04-24
     // on Windows: non-interactive prompt, file write, and MCP bclaw_create write path).
     role_capabilities: ['execute', 'review', 'consult'],
-    runtime: { mcp_direct: true, hooks: true, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 4000 },
     execution_env: { surface: 'cli' },
@@ -291,7 +293,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: '.kilo/rules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'B',
     role_capabilities: ['execute', 'review', 'consult'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 2,
     prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'cli' },
@@ -307,17 +309,19 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/openclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'machine', templateTier: 'B',
     role_capabilities: ['execute', 'coordinate'],
-    runtime: { mcp_direct: true, hooks: false, spawnable_cli: true, inbox: true },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: true, inbox: true },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['temp_file', 'inbox_structured'], preferred: 'temp_file' },
     execution_env: { surface: 'cli' },
+    invoke_template: 'openclaw run --auto "{prompt}"',
+    invoke_binary: 'openclaw',
   },
   nanoclaw: {
     name: 'nanoclaw', category: 'autonomous-agent', workflowModel: 'task-based',
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/nanoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
-    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: false, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
     execution_env: { surface: 'cli' },
@@ -327,7 +331,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/nemoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
-    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: false, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 2000 },
     execution_env: { surface: 'cli' },
@@ -337,7 +341,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/picoclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
-    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: false, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg', max_inline_length: 1000 },
     execution_env: { surface: 'cli' },
@@ -347,7 +351,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     hasMcp: false, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
     instructionFile: 'skills/zeroclaw/SKILL.md', sharedInstructionFile: false, mcpConfigScope: 'none', templateTier: 'C',
     role_capabilities: ['execute'],
-    runtime: { mcp_direct: false, hooks: false, spawnable_cli: true, inbox: false },
+    runtime: { mcp_direct: false, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'stdin_pipe', max_inline_length: 1000 },
     execution_env: { surface: 'cli' },
@@ -555,7 +559,7 @@ export function buildInvokeCommand(
 ): InvokeCommand | undefined {
   const profile = getCapabilityProfile(name);
   if (!profile?.invoke_template || !profile?.invoke_binary) return undefined;
-  if (!profile.runtime.spawnable_cli) return undefined;
+  if (!profile.runtime.canBeSpawnedCli) return undefined;
 
   const mode: InvokeMode = options.mode ?? 'worker';
   const isWin32 = (options.platform ?? process.platform) === 'win32';
@@ -702,7 +706,7 @@ export type BriefMode = 'full' | 'compact' | 'task_card';
  * Resolve the appropriate brief mode for an agent based on its capability profile.
  *
  * Resolution rules:
- *   1. Agent is NOT spawnable_cli (IDE-only) → 'task_card'
+ *   1. Agent is NOT canBeSpawnedCli (IDE-only) → 'task_card'
  *   2. Agent's workflowModel is 'task-based' (headless one-shot, e.g. codex) → 'compact'
  *   3. Otherwise → 'full'
  *
@@ -717,7 +721,7 @@ export function resolveBriefMode(agentName: string): BriefMode {
   const profile = getCapabilityProfile(agentName);
   if (!profile) return 'full';
 
-  if (!profile.runtime.spawnable_cli) return 'task_card';
+  if (!profile.runtime.canBeSpawnedCli) return 'task_card';
   if (profile.workflowModel === 'task-based') return 'compact';
   return 'full';
 }
@@ -770,7 +774,7 @@ export function getSpawnableAgents(): Array<{ name: string; template: DefaultInv
   ];
 
   for (const profile of allProfiles) {
-    if (profile.runtime.spawnable_cli && profile.invoke_template && profile.invoke_binary) {
+    if (profile.runtime.canBeSpawnedCli && profile.invoke_template && profile.invoke_binary) {
       result.push({
         name: profile.name,
         template: {
@@ -847,11 +851,11 @@ export function validateAgentForDispatch(
   }
 
   if (options.requireSpawnable) {
-    if (!profile.runtime.spawnable_cli) {
+    if (!profile.runtime.canBeSpawnedCli) {
       return {
         valid: false,
         code: 'not_spawnable',
-        reason: `Agent '${name}' has no CLI spawn support (runtime.spawnable_cli=false). Use a worker-capable agent for dispatch.`,
+        reason: `Agent '${name}' has no CLI spawn support (runtime.canBeSpawnedCli=false). Use a worker-capable agent for dispatch.`,
         profile,
       };
     }

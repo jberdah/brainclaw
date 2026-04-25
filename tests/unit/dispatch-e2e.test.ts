@@ -450,8 +450,8 @@ describe('dispatch-e2e/scoreAgents', () => {
     const plan = makePlan({ id: 'pln_score2', text: 'Test task' });
     const scores = scoreAgents(['claude-code', 'cursor'], plan, []);
 
-    // claude-code: spawnable_cli=true, execute capability → capability=1.0
-    // cursor: spawnable_cli=false (IDE-only), no execute → capability=0.1
+    // claude-code: canBeSpawnedCli=true, execute capability → capability=1.0
+    // cursor: canBeSpawnedCli=false (IDE-only), no execute → capability=0.1
     const claudeScore = scores.find(s => s.agent === 'claude-code')!;
     const cursorScore = scores.find(s => s.agent === 'cursor')!;
     assert.ok(claudeScore.factors.capability > cursorScore.factors.capability,
