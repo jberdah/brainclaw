@@ -123,7 +123,7 @@ brainclaw search "<query>"
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.0.13 — do not edit manually.
+> Managed by brainclaw v1.0.14 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -142,7 +142,7 @@ across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, and others.
 
 ## brainclaw — session protocol
 
-1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically.
+1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically. Returns a compact payload by default; pass `compact: false` for the full context result, or use `bclaw_context(kind="memory")` after.
 2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.
 3. Do not assume project state without reading brainclaw context first.
 
