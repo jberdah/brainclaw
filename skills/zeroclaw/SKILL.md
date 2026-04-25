@@ -52,7 +52,7 @@ brainclaw session-end --auto-release
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.0.15 — do not edit manually.
+> Managed by brainclaw v1.1.0 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -65,7 +65,7 @@ across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, and others.
 
 - **Stage:** v1.0 shipped, Phase 4 (operator maturity) complete. Private usage across a few machines; adoption-grade hardening in progress.
 - **Audience:** AI coding agents + human dev supervisors.
-- **Stack:** TypeScript, ESM (Node ≥18), zero runtime deps beyond commander/yaml/zod. MCP over stdio.
+- **Stack:** TypeScript, ESM (Node ≥20), zero runtime deps beyond commander/yaml/zod. MCP over stdio.
 - **Architecture:** File-based store (`.brainclaw/`), canonical grammar (`bclaw_work`, `bclaw_context`, `bclaw_find/get/create/update/remove/transition`), per-agent surfaces generated from a single source of truth.
 - **Current focus:** Cross-agent surface coherence (facade-first everywhere), onboarding for a fresh agent, federation groundwork.
 
