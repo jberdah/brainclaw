@@ -8,14 +8,22 @@
 
 ---
 
-Coding agents are getting better at local code generation, but they still struggle with shared project state.
-Across real projects, agents often miss active constraints, forget known traps, duplicate work, step on the same files, and lose context between sessions or tool surfaces.
+If you've ever:
+- **lost your conversation** when your agent hit credit limits mid-task,
+- returned to a project **after a week** with no idea where you left off,
+- watched two coworkers (or two agents) **edit the same files** without knowing it,
+- or **gave up running multiple agents in parallel** because keeping them in sync was a pain,
 
-brainclaw solves this by giving the workspace a shared coordination layer: project memory, explicit plans, file claims, handoffs, layered instructions, and prompt-ready context, all stored locally, versioned in Git, and readable in plain text.
+brainclaw gives you durable shared state across sessions, agents, and teammates. Plans, claims, handoffs, decisions, and traps live in `.brainclaw/`, work identically across any compatible agent (Claude Code, Codex, Copilot, Cline, OpenCode, Cursor, Windsurf, Kilocode, Roo Code, Continue, Antigravity/Gemini CLI, …), and stay accessible whether you orchestrate them in parallel or pick them up one after another.
 
-It sits alongside Copilot, Claude Code, Cursor, Codex, Windsurf, OpenCode, Antigravity/Gemini CLI and other coding agents. It does not replace them. It gives them a shared state layer they can resume from reliably across sessions.
+Use it two ways — **together or separately**:
 
-brainclaw is also starting to model other local AI work surfaces on the same machine, such as ChatGPT Desktop, Claude Desktop, Claude Cowork, and Gemini web or CLI. That makes it possible to keep a project-level queue of non-code work for those surfaces, instead of treating every task as something the active coding agent must do itself.
+- **Active orchestration** — dispatch work in parallel across multiple agent instances. Claims prevent conflicts, sequences manage lane dependencies, the dispatcher routes by capacity.
+- **Async shared state** — when an agent runs out of credits, when you return to a project after weeks, or when teammates work in parallel: the next agent (or you) resumes cleanly with the same context, plans, and constraints.
+
+The same primitives — plans, claims, handoffs, decisions, traps — serve both modes. That's the design point. brainclaw stores everything locally as plain text + JSON, versions it in Git, and asks no opinion about which agent you should use for what.
+
+It sits alongside your coding agents and gives them a shared state layer they can resume from reliably. brainclaw is also starting to model other local AI work surfaces on the same machine, such as ChatGPT Desktop, Claude Desktop, Claude Cowork, and Gemini web or CLI, to keep a project-level queue of non-code work for those surfaces.
 
 ---
 
@@ -122,22 +130,34 @@ Restart your coding agent (or reload MCP servers) so it picks up the new configu
 
 ### 4. Start working
 
-The agent can now use brainclaw. The simplest way:
-
-```
-# Tell your agent:
-"Use bclaw_work to start a session, then work on [your task]."
-```
-
-If the agent needs lower-level MCP calls after starting with the facades, the usual ones are:
+Pick one of the canonical entry points depending on what you're doing:
 
 ```text
-bclaw_get_context        → narrow or refresh project memory for a scope
-bclaw_switch             → change the active Brainclaw project in a multi-project workspace
-bclaw_read_inbox         → pick up assigned work or review requests
-bclaw_write_note         → record runtime observations during work
-bclaw_read_handoff       → inspect an existing handoff with its snapshot
-bclaw_create_candidate   → turn a durable finding into the review queue
+# Solo work — start a session, load context, claim a scope:
+bclaw_work(intent="execute", scope="src/feature")
+
+# Multi-agent — assign work, consult, or open a review:
+bclaw_coordinate(intent="assign|consult|review", task="...", targetAgents=[...])
+
+# Parallel lanes — dispatch a sequence across several agent instances:
+bclaw_dispatch(intent="execute", agents=[...])
+```
+
+Common follow-ups during work — all use the canonical CRUD grammar:
+
+```text
+bclaw_context(kind="memory", path=...)        → narrow project memory to a scope
+bclaw_find(entity="...", filter=...)          → list plans, claims, handoffs, candidates, …
+bclaw_get(entity="...", id=...)               → read one item
+bclaw_create(entity="runtime_note", data=…)   → record an observation, decision, or trap
+bclaw_read_inbox()                            → pick up assigned work or review requests
+bclaw_session_end(narrative=…)                → close cleanly, hand off context to the next agent
+```
+
+For agents without MCP (e.g. Copilot reads `.github/copilot-instructions.md`), regenerate the instruction file when project memory changes:
+
+```bash
+brainclaw export --detect --write
 ```
 
 ### 5. Verify it works
@@ -202,6 +222,7 @@ If you are integrating Brainclaw into an agent workflow, start with the agent-fa
 | `docs/concepts/memory.md` | What "memory" means in brainclaw |
 | `docs/concepts/plans-and-claims.md` | Coordination layer |
 | `docs/concepts/runtime-notes.md` | Ephemeral observations |
+| `docs/concepts/multi-agent-workflows.md` | The four common scenarios — orchestration, agent switching, project recovery, team async |
 | `docs/integrations/cursor.md` | Cursor |
 | `docs/integrations/claude-code.md` | Claude Code |
 | `docs/integrations/copilot.md` | GitHub Copilot |

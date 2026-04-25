@@ -114,16 +114,54 @@ Or let your agent drive it:
 Call bclaw_bootstrap to detect project signals, then review what was found.
 ```
 
-## Parallel work and multi-instance
+## Common scenarios
 
-brainclaw supports multiple instances of the same agent type running in parallel (e.g., 3 codex instances on 3 different tasks). Each instance gets its own worktree and claim.
+The same primitives serve multiple workflows. Pick the one that matches what you're doing — full walkthroughs in [`concepts/multi-agent-workflows.md`](concepts/multi-agent-workflows.md).
 
-The dispatcher handles this automatically via `bclaw_dispatch` — it scores agents by capacity (`max_concurrent_tasks` in agent profiles), creates separate claims per scope, and routes inbox messages by `claim_id` so each instance only sees its own assignment.
+### Active orchestration — parallel lanes across agent instances
 
-**Recommended workflow:**
-1. For sequential work: one agent at a time, hand off with `bclaw_session_end`
-2. For parallel work: use `bclaw_dispatch` or `bclaw_coordinate(assign)` — the dispatcher creates worktrees and claims automatically
-3. Scope lock is strict: only one claim per scope at a time, regardless of agent type
+```text
+brainclaw sequence create "feature-cycle" --items '[…]' --status active
+bclaw_dispatch(intent="execute", agents=[…])
+```
+
+The dispatcher creates one worktree + claim per lane and routes inbox messages by `claim_id`. Lanes with `hard_after` unblock as predecessors finish.
+
+### Agent switching — when an agent runs out of credits mid-task
+
+```text
+# On the outgoing agent:
+bclaw_session_end(narrative="Did X. Need to finish Y.")
+
+# On the next agent (same or different):
+bclaw_work(intent="resume")
+```
+
+The new agent picks up the open plans, the latest handoff narrative, and the unfinished claims it can adopt. No re-explanation needed.
+
+### Project recovery — returning after weeks away
+
+```text
+bclaw_work(intent="resume")
+```
+
+Returns active plans, decisions taken since you left, active constraints, known traps, and where the last session stopped. Use `bclaw_context(kind="memory", profile="briefing")` for a narrower scope-focused view.
+
+### Team async — humans and agents sharing the same project
+
+Capture decisions, constraints, and traps as you discover them — they propagate to every teammate's agent on the next context read:
+
+```text
+bclaw_create(entity="decision",   data={ text: "…", outcome: "approved" })
+bclaw_create(entity="constraint", data={ text: "…", category: "security" })
+bclaw_create(entity="trap",       data={ text: "…", severity: "high" })
+```
+
+Hand off work for review with `bclaw_coordinate(intent="review", scope="…")`. Reviewers pick it up via `bclaw_read_inbox()`.
+
+### One rule across all four
+
+Scope-level claim isolation is strict — only one active claim per scope at a time, regardless of agent type. That's how parallel work stays safe and async handoffs stay clean.
 
 ## Next reads
 
