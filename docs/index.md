@@ -38,6 +38,11 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [integrations/codex.md](integrations/codex.md)
 - [integrations/cursor.md](integrations/cursor.md)
 - [integrations/copilot.md](integrations/copilot.md)
+- [integrations/continue.md](integrations/continue.md)
+- [integrations/roo.md](integrations/roo.md)
+- [integrations/windsurf.md](integrations/windsurf.md)
+- [integrations/opencode.md](integrations/opencode.md)
+- [integrations/kilocode.md](integrations/kilocode.md)
 - [integrations/openclaw.md](integrations/openclaw.md)
 
 ## Audience Design Constraints
