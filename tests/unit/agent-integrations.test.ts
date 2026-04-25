@@ -33,6 +33,13 @@ describe('core/agent-integrations', () => {
     assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.roo/mcp.json'));
   });
 
+  it('kilocode declaration includes instructions, mcp, and skill surfaces', () => {
+    const declaration = buildAgentIntegrationDeclaration('kilocode', 'detected');
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'instructions' && s.path === '.kilo/rules/brainclaw.md'));
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.kilo/mcp.json'));
+    assert.ok(declaration.surfaces.some((s) => s.kind === 'skill' && s.path === '.agents/skills/brainclaw/SKILL.md'));
+  });
+
   it('continue declaration includes mcp surface', () => {
     const declaration = buildAgentIntegrationDeclaration('continue', 'detected');
     assert.ok(declaration.surfaces.some((s) => s.kind === 'mcp' && s.path === '.continue/config.json'));

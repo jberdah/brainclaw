@@ -30,6 +30,7 @@ describe('agent export registry', () => {
       ['antigravity',    'gemini-md',            'GEMINI.md'],
       ['continue',       'continue',             '.continue/rules/brainclaw.md'],
       ['roo',            'roo',                  '.roo/rules/brainclaw.md'],
+      ['kilocode',       'kilocode',             '.kilo/rules/brainclaw.md'],
     ];
     for (const [agentName, expectedFormat, expectedPath] of cases) {
       const target = resolveExportTarget(agentName);
@@ -46,7 +47,7 @@ describe('agent export registry', () => {
 
   it('AGENT_EXPORT_REGISTRY covers all known agents', () => {
     const names = AGENT_EXPORT_REGISTRY.map((t) => t.agentName);
-    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'codex', 'opencode', 'antigravity', 'continue', 'roo']) {
+    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'codex', 'opencode', 'antigravity', 'continue', 'roo', 'kilocode']) {
       assert.ok(names.includes(expected), `registry should contain ${expected}`);
     }
   });
@@ -167,6 +168,7 @@ describe('export command formats', () => {
     { format: 'cline' as const,                expectedFile: '.clinerules/brainclaw.md' },
     { format: 'agents-md' as const,            expectedFile: 'AGENTS.md' },
     { format: 'roo' as const,                  expectedFile: '.roo/rules/brainclaw.md' },
+    { format: 'kilocode' as const,             expectedFile: '.kilo/rules/brainclaw.md' },
     { format: 'continue' as const,             expectedFile: '.continue/rules/brainclaw.md' },
   ];
 
@@ -222,6 +224,12 @@ describe('export command formats', () => {
       if (format === 'roo') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.roo', 'mcp.json')), '.roo/mcp.json should be created for roo');
         assert.ok(gitignore.includes('.roo/mcp.json'));
+      }
+      if (format === 'kilocode') {
+        assert.ok(fs.existsSync(path.join(workspace.dir, '.kilo', 'mcp.json')), '.kilo/mcp.json should be created for kilocode');
+        assert.ok(fs.existsSync(path.join(workspace.dir, 'kilo.jsonc')), 'kilo.jsonc should be created for kilocode');
+        assert.ok(gitignore.includes('.kilo/mcp.json'));
+        assert.ok(gitignore.includes('kilo.jsonc'));
       }
       if (format === 'continue') {
         assert.ok(fs.existsSync(path.join(workspace.dir, '.continue', 'config.json')), '.continue/config.json should be created for continue');

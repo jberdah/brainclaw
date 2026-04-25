@@ -1349,6 +1349,7 @@ export const AgentIntegrationNameSchema = z.enum([
   'antigravity',
   'continue',
   'roo',
+  'kilocode',
   'openclaw',
   'nanoclaw',
   'nemoclaw',

@@ -27,6 +27,7 @@ import {
   ensureClaudeCodeSettings,
   ensureCursorMcpConfig,
   ensureRooMcpConfig,
+  ensureKilocodeMcpConfig,
   ensureContinueMcpConfig,
   ensureOpenCodeMcpConfig,
   ensureContinueUserPermissions,
@@ -37,6 +38,8 @@ import {
   ensureCodexMcpConfig,
   ensureUniversalBrainclawSkill,
   patchAllMcpConfigs,
+  resolveExportTarget,
+  writeExportFile,
   resetMcpCommandCache,
   writeExportCompanionFiles,
   writeDetectedAgentAutoConfig,
@@ -719,6 +722,43 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
+  it('creates Kilo Code MCP config at .kilo/mcp.json and is idempotent', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureKilocodeMcpConfig(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.kilo/mcp.json');
+
+      const filePath = path.join(dir, '.kilo', 'mcp.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        mcpServers?: { brainclaw?: { alwaysAllow?: unknown } };
+      };
+      assert.ok(content.mcpServers?.brainclaw, 'brainclaw MCP entry should be present');
+      assert.ok(Array.isArray(content.mcpServers?.brainclaw?.alwaysAllow), 'alwaysAllow should be an array');
+
+      const second = ensureKilocodeMcpConfig(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('kilocode export target writes .kilo/rules/brainclaw.md', () => {
+    const dir = tmpDir();
+    try {
+      const target = resolveExportTarget('kilocode');
+      assert.equal(target.format, 'kilocode');
+      assert.equal(target.relativePath, '.kilo/rules/brainclaw.md');
+
+      const result = writeExportFile('# Kilocode rules', target.relativePath, dir);
+      assert.equal(result.created, true);
+      assert.ok(fs.existsSync(path.join(dir, '.kilo', 'rules', 'brainclaw.md')));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('creates Continue MCP config as array entry in .continue/config.json', () => {
     const dir = tmpDir();
     try {
@@ -796,6 +836,19 @@ describe('core/agent-files — auto-config writers', () => {
       const results = writeDetectedAgentAutoConfig('roo', dir);
       assert.equal(results.length, 2);
       assert.ok(results.some((r) => r.relativePath === '.roo/mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writeDetectedAgentAutoConfig kilocode returns MCP + kilo.jsonc + universal skill', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('kilocode', dir);
+      assert.equal(results.length, 3);
+      assert.ok(results.some((r) => r.relativePath === '.kilo/mcp.json'));
+      assert.ok(results.some((r) => r.relativePath === 'kilo.jsonc'));
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1093,6 +1146,11 @@ describe('core/agent-files — auto-config writers', () => {
       const antigravity = writeExportCompanionFiles('gemini-md', dir, { HOME: homeDir });
       assert.ok(antigravity.some((r) => r.relativePath === '.gemini/antigravity/mcp_config.json'));
       assert.ok(antigravity.some((r) => r.relativePath === '.gemini/antigravity/hooks.json'));
+
+      const kilocode = writeExportCompanionFiles('kilocode', dir, { HOME: homeDir });
+      assert.ok(kilocode.some((r) => r.relativePath === '.kilo/mcp.json'));
+      assert.ok(kilocode.some((r) => r.relativePath === 'kilo.jsonc'));
+      assert.ok(kilocode.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1527,6 +1585,19 @@ describe('writeDetectedAgentAutoConfig — universal skill inclusion', () => {
       assert.ok(
         results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
         'roo should include universal skill',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('kilocode includes .agents/skills/brainclaw/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      const results = writeDetectedAgentAutoConfig('kilocode', dir);
+      assert.ok(
+        results.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'),
+        'kilocode should include universal skill',
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

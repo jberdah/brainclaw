@@ -377,6 +377,7 @@ export type ExportFormat =
   | 'windsurf'
   | 'cline'
   | 'roo'
+  | 'kilocode'
   | 'continue'
   | 'gemini-md'
   | 'board-md'
@@ -402,6 +403,7 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'codex',          format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'continue',       format: 'continue',             relativePath: '.continue/rules/brainclaw.md' },
   { agentName: 'roo',            format: 'roo',                  relativePath: '.roo/rules/brainclaw.md' },
+  { agentName: 'kilocode',       format: 'kilocode',             relativePath: '.kilo/rules/brainclaw.md' },
   { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
   { agentName: 'brainclaw',      format: 'board-md',             relativePath: 'BOARD.md' },
@@ -503,6 +505,8 @@ const CLAUDE_CODE_SETTINGS_RELATIVE_PATH = '.claude/settings.local.json';
 const CLAUDE_CODE_SESSION_MARKER_RELATIVE_PATH = '.claude/.bclaw-session';
 const CURSOR_MCP_RELATIVE_PATH = '.cursor/mcp.json';
 const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
+const KILOCODE_MCP_RELATIVE_PATH = '.kilo/mcp.json';
+const KILOCODE_CONFIG_RELATIVE_PATH = 'kilo.jsonc';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const CONTINUE_PERMISSIONS_RELATIVE_PATH = '.continue/permissions.yaml';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
@@ -520,6 +524,7 @@ const UNIVERSAL_SKILL_RELATIVE_PATH = '.agents/skills/brainclaw/SKILL.md';
  */
 export const BRAINCLAW_EXCLUSIVE_DIRECTORIES = [
   '.roo/',
+  '.kilo/',
   '.continue/',
   '.codeium/windsurf/',
   '.gemini/antigravity/',
@@ -538,6 +543,8 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   CLAUDE_CODE_SETTINGS_RELATIVE_PATH,
   CLAUDE_CODE_SESSION_MARKER_RELATIVE_PATH,
   ROO_MCP_RELATIVE_PATH,
+  KILOCODE_MCP_RELATIVE_PATH,
+  KILOCODE_CONFIG_RELATIVE_PATH,
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
   WINDSURF_MCP_RELATIVE_PATH,
@@ -566,6 +573,22 @@ function readJsonObject(filePath: string): JsonObject {
 
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return isJsonObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readJsoncObject(filePath: string): JsonObject {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const withoutBlockComments = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+    const withoutLineComments = withoutBlockComments.replace(/^\s*\/\/.*$/gm, '');
+    const parsed = JSON.parse(withoutLineComments);
     return isJsonObject(parsed) ? parsed : {};
   } catch {
     return {};
@@ -1297,6 +1320,51 @@ export function ensureRooMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
+export function ensureKilocodeConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, KILOCODE_CONFIG_RELATIVE_PATH);
+  const existing = readJsoncObject(filePath);
+  const permission = isJsonObject(existing.permission) ? { ...existing.permission } : {};
+  permission.external_directory = 'deny';
+
+  const { created, updated } = writeTextFileIfChanged(
+    filePath,
+    `${JSON.stringify({ ...existing, permission }, null, 2)}\n`,
+  );
+
+  return {
+    kind: 'permissions',
+    label: 'Kilo Code permissions (kilo.jsonc)',
+    created,
+    updated,
+    filePath,
+    relativePath: KILOCODE_CONFIG_RELATIVE_PATH,
+  };
+}
+
+export function ensureKilocodeMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, '.kilo', 'mcp.json');
+  const existing = readJsonObject(filePath);
+  const mcpServers = isJsonObject(existing.mcpServers) ? { ...existing.mcpServers } : {};
+  mcpServers.brainclaw = {
+    ...brainclawMcpEntry('kilocode', mcpServers.brainclaw, cwd),
+    alwaysAllow: getHeadlessAutoApprovedToolNames(),
+  };
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    mcpServers,
+  });
+
+  return {
+    kind: 'mcp',
+    label: 'Kilo Code MCP settings',
+    created,
+    updated,
+    filePath,
+    relativePath: KILOCODE_MCP_RELATIVE_PATH,
+  };
+}
+
 export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | null {
   const codexHome = env.CODEX_HOME?.trim() || (homeDir ? path.join(homeDir, '.codex') : null);
   if (!codexHome) return null;
@@ -1895,6 +1963,8 @@ export function writeDetectedAgentAutoConfig(
     }
     case 'roo':
       return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+    case 'kilocode':
+      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'codex': {
       const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
@@ -1968,6 +2038,8 @@ export function writeExportCompanionFiles(
     }
     case 'roo':
       return [ensureRooMcpConfig(cwd)];
+    case 'kilocode':
+      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'continue': {
       const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
       const homeDir = resolveHomeDir(env);
