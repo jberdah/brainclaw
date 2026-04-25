@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ZodType, ZodTypeDef } from 'zod';
+import type { ZodType } from 'zod';
 import YAML from 'yaml';
 import { memoryDir, memoryPath, readFileSync, writeFileAtomic, resolveEntityDir } from './io.js';
 import {
@@ -99,7 +99,7 @@ export interface MigrationCheckEntry {
 
 interface MigrationRegistryEntry<T> {
   currentVersion: number;
-  schema: ZodType<T, ZodTypeDef, unknown>;
+  schema: ZodType<T, unknown>;
   detectVersion: (raw: unknown) => number;
   migrate: (raw: unknown, fromVersion: number, toVersion: number) => unknown;
 }
@@ -136,7 +136,7 @@ const registry: Record<VersionedDocumentType, MigrationRegistryEntry<unknown>> =
   action_required: createRegistryEntry(ActionRequiredSchema),
 };
 
-function createRegistryEntry<T>(schema: ZodType<T, ZodTypeDef, unknown>): MigrationRegistryEntry<T> {
+function createRegistryEntry<T>(schema: ZodType<T, unknown>): MigrationRegistryEntry<T> {
   return {
     currentVersion: CURRENT_SCHEMA_VERSION,
     schema,

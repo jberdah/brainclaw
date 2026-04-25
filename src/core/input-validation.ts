@@ -22,7 +22,7 @@ export interface ValidationError {
 }
 
 function formatZodError(error: z.ZodError, field: string): ValidationError[] {
-  return error.errors.map((e) => ({ field, message: e.message }));
+  return error.issues.map((e) => ({ field, message: e.message }));
 }
 
 /**
@@ -57,7 +57,7 @@ export function validateCliInput(text: string, tags?: string[]): void {
 export function validateCliTtl(ttl: string): void {
   const result = TtlSchema.safeParse(ttl);
   if (!result.success) {
-    console.error(`Error: ${result.error.errors[0]?.message ?? 'Invalid TTL'}`);
+    console.error(`Error: ${result.error.issues[0]?.message ?? 'Invalid TTL'}`);
     process.exit(1);
   }
 }
