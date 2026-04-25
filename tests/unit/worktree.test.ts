@@ -187,6 +187,31 @@ describe('assertPathInWorktreesScope', () => {
     }
   });
 
+  it('accepts runtime paths when projectRoot is provided via a Windows 8.3 alias', () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-scope-proj-'));
+    const target = path.join(projectRoot, '.brainclaw', 'coordination', 'runtime', 'ack');
+    const shortProjectRoot = projectRoot.replace(/Users/i, 'USERS~1');
+    const shortTarget = path.join(shortProjectRoot, '.brainclaw', 'coordination', 'runtime', 'ack');
+    fs.mkdirSync(target, { recursive: true });
+
+    const originalNativeRealpath = fs.realpathSync.native;
+    fs.realpathSync.native = ((input: fs.PathLike) => {
+      const value = String(input);
+      if (value === shortTarget) return target;
+      if (value === path.join(shortProjectRoot, '.brainclaw', 'coordination', 'runtime')) {
+        return path.join(projectRoot, '.brainclaw', 'coordination', 'runtime');
+      }
+      return originalNativeRealpath(input);
+    }) as typeof fs.realpathSync.native;
+
+    try {
+      assert.doesNotThrow(() => assertPathInWorktreesScope(shortTarget, shortProjectRoot));
+    } finally {
+      fs.realpathSync.native = originalNativeRealpath;
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rejects paths outside brainclaw scope', () => {
     const stranger = fs.mkdtempSync(path.join(os.tmpdir(), 'stranger-'));
     try {

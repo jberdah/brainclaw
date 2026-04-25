@@ -26,6 +26,18 @@ export interface WorktreeInfo {
   user?: string;
 }
 
+function canonicalizeScopePath(target: string): string {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync.native(target);
+  } catch {
+    resolved = path.resolve(target);
+  }
+
+  const normalized = path.normalize(resolved);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 /**
  * Returns the base directory where brainclaw-managed worktrees are placed.
  * ~/.brainclaw/worktrees/<project-hash>/
@@ -332,16 +344,9 @@ function finaliseWorktree(
  *   - `<projectRoot>/.brainclaw/coordination/runtime/**` — runtime artifacts
  */
 export function assertPathInWorktreesScope(target: string, projectRoot: string): void {
-  let resolvedTarget: string;
-  try {
-    resolvedTarget = fs.realpathSync.native(target);
-  } catch {
-    // Path doesn't exist — fall back to lexical resolution
-    resolvedTarget = path.resolve(target);
-  }
-
-  const worktreesRoot = path.resolve(path.join(os.homedir(), '.brainclaw', 'worktrees'));
-  const runtimeRoot = path.resolve(projectRoot, '.brainclaw', 'coordination', 'runtime');
+  const resolvedTarget = canonicalizeScopePath(target);
+  const worktreesRoot = canonicalizeScopePath(path.join(os.homedir(), '.brainclaw', 'worktrees'));
+  const runtimeRoot = canonicalizeScopePath(path.join(projectRoot, '.brainclaw', 'coordination', 'runtime'));
 
   const isUnderWorktrees = resolvedTarget.startsWith(worktreesRoot + path.sep) || resolvedTarget === worktreesRoot;
   const isUnderRuntime = resolvedTarget.startsWith(runtimeRoot + path.sep) || resolvedTarget === runtimeRoot;
