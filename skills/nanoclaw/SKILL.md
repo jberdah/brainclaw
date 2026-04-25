@@ -46,7 +46,7 @@ brainclaw session-end --auto-release
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.0.7 — do not edit manually.
+> Managed by brainclaw v1.0.10 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -134,13 +134,6 @@ Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/ag
 7. Token/cost tracking has no enforcement (usage.ts tracks but no quotas/alerts)
 8. Tool discovery lacks trust/dependency introspection (57 tools flat, no categorization)
 9. No metrics MCP endpoint (CLI metrics exist but not exposed as MCP tools)
-- Dispatch retro (2026-04-08) — actionable fixes for brainclaw dispatch system:
-
-1. WORKTREE BRANCH ORIGIN: worktree creation must fork from coordinator's current HEAD, not repo default. When coordinator is on feat/X, dispatched agents must start from feat/X tip. File: src/core/worktree.ts
-2. BRIEF AUTO-CONTEXT: bclaw_dispatch should auto-include git log of recent commits on target branch in the generated brief, so agents know what was already changed. File: src/core/dispatcher.ts
-3. REVIEW LANE TYPE: sequence schema should support lane_type:"review" with implicit hard_after on all execution lanes. Review agents read diffs + validate against source. File: src/core/schema.ts
-4. DISPATCH→EXECUTION BRIDGE: pln_65eab326 is validated as critical. bclaw_dispatch must return bash commands the coordinator can run_in_background, not just metadata.
-5. WORKTREE AUTO-CLEANUP: merge success should auto-delete the worktree dir + prune git refs. File: src/core/worktree.ts, src/commands/worktree.ts
 - AGENT WORKTREE PERMISSIONS MODEL (2026-04-09): Each agent has its own config pattern for worktree isolation. The invoke template must include auto-approve flags AND cd into worktree.
 
 Pattern: cd /worktree && [agent-specific config write] && [agent -y "task"]
