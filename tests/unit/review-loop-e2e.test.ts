@@ -473,3 +473,377 @@ describe('review loop E2E — path B: direct bclaw_loop(open kind=review)', () =
     );
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  P1 gap tests — pre-extension safety net (pln#468)                */
+/* ------------------------------------------------------------------ */
+
+describe('P1 gap: hostile caller rejection (SLOT_BOUND_INTENTS)', () => {
+  let workspace: TestWorkspace;
+  let previousTestMode: string | undefined;
+  let restoreCwd: (() => void) | undefined;
+
+  beforeEach(() => {
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    workspace = createTestWorkspace({
+      prefix: 'hostile-caller-',
+      currentAgent: 'claude-code',
+    });
+    restoreCwd = workspace.useCwd();
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+  });
+
+  it('rejects complete_turn when caller_agent_id does not match slot.agent_id or created_by', () => {
+    const reviewer = workspace.registerAgent('codex');
+    const intruder = workspace.registerAgent('github-copilot');
+
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'Hostile caller test',
+        created_by: 'agt_author',
+        slots: [
+          { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+          { role: 'reviewer', agent: 'codex', agent_id: reviewer.agent_id },
+        ],
+      },
+      workspace.dir,
+    );
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+
+    // Advance to findings so the reviewer slot is relevant.
+    advance({ id: loop.id, actor: 'agt_author' }, workspace.dir);
+    turn(
+      { id: loop.id, slot_id: reviewerSlotId, actor: 'agt_author', assignment_id: 'asgn_hostile' },
+      workspace.dir,
+    );
+
+    // Hostile caller: intruder (copilot) tries to complete the reviewer's (codex) turn.
+    assert.throws(
+      () =>
+        complete_turn(
+          {
+            id: loop.id,
+            slot_id: reviewerSlotId,
+            outcome: 'done',
+            artifact: {
+              phase: 'findings',
+              type: 'finding',
+              body: 'Injected finding from hostile agent',
+            },
+            actor: intruder.agent_id,
+            caller_agent_id: intruder.agent_id,
+          },
+          workspace.dir,
+        ),
+      /unauthorized_slot_write/,
+    );
+
+    // Verify the legitimate owner can still complete.
+    const after = complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        artifact: {
+          phase: 'findings',
+          type: 'finding',
+          body: 'Legitimate finding from codex',
+        },
+        actor: reviewer.agent_id,
+        caller_agent_id: reviewer.agent_id,
+      },
+      workspace.dir,
+    );
+    assert.equal(after.slots.find((s) => s.role === 'reviewer')!.status, 'done');
+  });
+
+  it('allows the loop creator to complete any slot (creator bypass)', () => {
+    const reviewer = workspace.registerAgent('codex');
+
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'Creator bypass test',
+        created_by: 'agt_author',
+        slots: [
+          { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+          { role: 'reviewer', agent: 'codex', agent_id: reviewer.agent_id },
+        ],
+      },
+      workspace.dir,
+    );
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+
+    advance({ id: loop.id, actor: 'agt_author' }, workspace.dir);
+    turn(
+      { id: loop.id, slot_id: reviewerSlotId, actor: 'agt_author', assignment_id: 'asgn_creator' },
+      workspace.dir,
+    );
+
+    // The loop creator (agt_author) can complete a slot it doesn't own
+    // because of the creatorMatches check in verbs.ts.
+    const after = complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        artifact: {
+          phase: 'findings',
+          type: 'finding',
+          body: 'Creator completing on behalf of reviewer',
+        },
+        actor: 'agt_author',
+        caller_agent_id: 'agt_author',
+      },
+      workspace.dir,
+    );
+    assert.equal(after.slots.find((s) => s.role === 'reviewer')!.status, 'done');
+  });
+});
+
+describe('P1 gap: symmetric review mode e2e', () => {
+  let workspace: TestWorkspace;
+  let previousTestMode: string | undefined;
+  let restoreCwd: (() => void) | undefined;
+
+  beforeEach(() => {
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    workspace = createTestWorkspace({
+      prefix: 'symmetric-review-',
+      currentAgent: 'claude-code',
+    });
+    workspace.registerAgent('codex');
+    restoreCwd = workspace.useCwd();
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+  });
+
+  it('opens a review loop with mode=symmetric and persists protocol.review_mode', () => {
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'Symmetric mode persistence',
+        created_by: 'agt_author',
+        mode: 'symmetric',
+        slots: [
+          { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+          { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer' },
+        ],
+      },
+      workspace.dir,
+    );
+
+    assert.equal(loop.protocol?.review_mode, 'symmetric');
+
+    // Re-read from disk to ensure persistence.
+    const reloaded = getLoop(loop.id, workspace.dir)!;
+    assert.equal(reloaded.protocol?.review_mode, 'symmetric');
+  });
+
+  it('drives a symmetric review loop through a single-pass accept (reviewer applies fix + accepts in one turn)', () => {
+    // In symmetric mode, the reviewer can both fix and accept in a single
+    // turn — collapsing findings + author_response into one reviewer turn.
+    const loop = openLoop(
+      {
+        kind: 'review',
+        title: 'Symmetric single-pass',
+        created_by: 'agt_author',
+        mode: 'symmetric',
+        slots: [
+          { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+          { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer' },
+        ],
+      },
+      workspace.dir,
+    );
+    const reviewerSlotId = loop.slots.find((s) => s.role === 'reviewer')!.slot_id;
+
+    assert.equal(loop.protocol?.review_mode, 'symmetric');
+
+    // 1. Author provides change_summary.
+    add_artifact(
+      {
+        id: loop.id,
+        actor: 'agt_author',
+        artifact: {
+          phase: 'change_summary',
+          type: 'change_summary',
+          body: 'Symmetric review: refactored auth middleware.',
+        },
+      },
+      workspace.dir,
+    );
+
+    // 2. Advance to findings.
+    advance({ id: loop.id, actor: 'agt_author' }, workspace.dir);
+    turn(
+      { id: loop.id, slot_id: reviewerSlotId, actor: 'agt_author', assignment_id: 'asgn_sym_1' },
+      workspace.dir,
+    );
+
+    // 3. In symmetric mode, the reviewer produces both a fix_summary AND
+    //    finding in the findings phase — then we fast-track to followup_review
+    //    where the reviewer can issue a verdict directly.
+    complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        artifact: {
+          phase: 'findings',
+          type: 'finding',
+          body: 'Minor naming issue — fixed inline by reviewer (symmetric mode).',
+        },
+        actor: 'agt_reviewer',
+        caller_agent_id: 'agt_reviewer',
+      },
+      workspace.dir,
+    );
+
+    // 4. In symmetric mode, skip author_response — advance directly to followup_review.
+    advance({ id: loop.id, to_phase: 'followup_review', actor: 'agt_author' }, workspace.dir);
+    turn(
+      { id: loop.id, slot_id: reviewerSlotId, actor: 'agt_author', assignment_id: 'asgn_sym_2' },
+      workspace.dir,
+    );
+
+    // 5. Reviewer issues accepted verdict.
+    complete_turn(
+      {
+        id: loop.id,
+        slot_id: reviewerSlotId,
+        outcome: 'done',
+        artifact: {
+          phase: 'followup_review',
+          type: 'verdict',
+          body: 'accepted — reviewer applied fix and verified, LGTM',
+        },
+        actor: 'agt_reviewer',
+        caller_agent_id: 'agt_reviewer',
+      },
+      workspace.dir,
+    );
+
+    // 6. Advance triggers reviewer_green → auto-close.
+    const finalAdvance = advance({ id: loop.id, actor: 'agt_author' }, workspace.dir);
+    assert.equal(finalAdvance.auto_closed, true, 'reviewer_green must auto-close');
+    assert.equal(finalAdvance.loop.status, 'completed');
+    assert.equal(finalAdvance.loop.protocol?.review_mode, 'symmetric');
+
+    // Verify the abbreviated phase progression: author_response was skipped.
+    const events = listLoopEvents(loop.id, workspace.dir);
+    const phaseAdvances = events
+      .filter((e) => e.kind === 'phase_advanced')
+      .map((e) => (e as { kind: 'phase_advanced'; to_phase?: string }).to_phase)
+      .filter(Boolean);
+    assert.ok(
+      !phaseAdvances.includes('author_response'),
+      'symmetric mode skipped author_response phase',
+    );
+  });
+});
+
+describe('P1 gap: REVIEW_OPEN_LOOP_FANOUT_CAP', () => {
+  let workspace: TestWorkspace;
+  let previousTestMode: string | undefined;
+  let previousNoSpawn: string | undefined;
+  let restoreCwd: (() => void) | undefined;
+
+  beforeEach(() => {
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    process.env.BRAINCLAW_NO_SPAWN = '1';
+    workspace = createTestWorkspace({
+      prefix: 'fanout-cap-',
+      currentAgent: 'claude-code',
+    });
+    // Register 5 agents so implicit resolution yields > 3 spawnable agents.
+    workspace.registerAgent('codex');
+    workspace.registerAgent('github-copilot');
+    workspace.registerAgent('cline');
+    workspace.registerAgent('opencode');
+    workspace.registerAgent('gemini');
+    restoreCwd = workspace.useCwd();
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
+  });
+
+  it('caps implicit reviewer fan-out at 3 and emits a warning', async () => {
+    // bclaw_coordinate with intent=review, open_loop=true, no targetAgents
+    // should cap the reviewer slots to 3 even though 5 agents are registered.
+    const coord = await coordinate(workspace, {
+      intent: 'review',
+      task: 'Fanout cap test — implicit reviewers',
+      scope: 'src/core/fanout.ts',
+      agent: 'claude-code',
+      open_loop: true,
+      // No targetAgents → implicit fan-out
+    });
+    const loopId = coord.result.loop_id as string;
+    assert.ok(loopId, 'loop_id must be present');
+
+    const loop = getLoop(loopId, workspace.dir)!;
+    const reviewerSlots = loop.slots.filter((s) => s.role === 'reviewer');
+    assert.ok(
+      reviewerSlots.length <= 3,
+      `implicit fan-out must be capped at 3, got ${reviewerSlots.length}`,
+    );
+
+    // The response should contain a warning about the cap.
+    // Warnings live at the facade level (coord.warnings), not inside coord.result.
+    const warnings = (coord as unknown as { warnings?: string[] }).warnings;
+    assert.ok(
+      warnings && warnings.some((w: string) => w.includes('fan-out capped')),
+      'must emit a fan-out cap warning',
+    );
+  });
+
+  it('does NOT cap when targetAgents is explicitly provided', async () => {
+    // Explicit targetAgents bypasses the cap entirely.
+    const coord = await coordinate(workspace, {
+      intent: 'review',
+      task: 'Fanout cap bypass — explicit reviewers',
+      scope: 'src/core/fanout.ts',
+      agent: 'claude-code',
+      targetAgents: ['codex', 'github-copilot', 'cline', 'opencode'],
+      open_loop: true,
+    });
+    const loopId = coord.result.loop_id as string;
+    assert.ok(loopId, 'loop_id must be present');
+
+    const loop = getLoop(loopId, workspace.dir)!;
+    const reviewerSlots = loop.slots.filter((s) => s.role === 'reviewer');
+    assert.equal(
+      reviewerSlots.length,
+      4,
+      'explicit targetAgents must not be capped',
+    );
+
+    // No fan-out warning expected.
+    const warnings = (coord as unknown as { warnings?: string[] }).warnings;
+    const hasFanoutWarning = warnings?.some((w: string) => w.includes('fan-out capped'));
+    assert.ok(!hasFanoutWarning, 'no fan-out cap warning when targetAgents is explicit');
+  });
+});
