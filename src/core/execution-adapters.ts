@@ -56,6 +56,22 @@ export interface ExecutionAdapterStartOptions {
   worktreePath?: string;
   claimId?: string;
   agent: string;
+  /**
+   * Assignment id to wire the brief-ack file (pln#476). When set, the
+   * spawn command is wrapped to `touch` the sentinel at
+   * `.brainclaw/coordination/runtime/ack/<assignmentId>.ack` BEFORE the
+   * agent binary executes. The dispatcher's waitForAssignmentHandshake
+   * then accepts the ack file as evidence the worker is alive — needed
+   * for agents (codex) spawned without brainclaw MCP wired.
+   */
+  assignmentId?: string;
+  /**
+   * Project root used to compute the absolute ack path. Defaults to
+   * worktreePath when omitted, but the dispatcher passes the parent
+   * project cwd because the ack file lives in the project's
+   * coordination dir, not in the worktree's local store.
+   */
+  ackRoot?: string;
 }
 
 export interface ExecutionAdapter {
@@ -139,16 +155,43 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
     const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
 
-    const child = spawn(spawnExecutable, invoke.args, {
-      // Windows: detached is unreliable with shell:true — child stays in parent's process group.
-      // POSIX: detached lets the child survive parent exit.
-      detached: !isWin32,
-      shell: useShell,
-      stdio,
-      cwd: options.worktreePath,
-      env,
-      windowsHide: true,
-    });
+    // pln#476: wrap the spawn command with a brief-ack step so the worker
+    // shell touches a sentinel file BEFORE the agent binary runs.
+    // waitForAssignmentHandshake checks that file as evidence the spawn
+    // executed — needed for codex (which lacks the brainclaw MCP context
+    // to call bclaw_assignment_update). When ackRoot/assignmentId are
+    // omitted, we keep the original direct-binary spawn.
+    const useAckWrap = !!(options.assignmentId && (options.ackRoot ?? options.worktreePath));
+    let child;
+    if (useAckWrap) {
+      const ackRoot = options.ackRoot ?? options.worktreePath!;
+      const ackDir = path.join(ackRoot, '.brainclaw', 'coordination', 'runtime', 'ack');
+      const ackPath = path.join(ackDir, `${options.assignmentId!}.ack`);
+      fs.mkdirSync(ackDir, { recursive: true });
+      const ackStep = isWin32
+        ? `type nul > "${ackPath}"`
+        : `touch "${ackPath}"`;
+      const wrappedCmd = `${ackStep} && ${invoke.bashCommand}`;
+      child = spawn(wrappedCmd, [], {
+        detached: !isWin32,
+        shell: true,
+        stdio,
+        cwd: options.worktreePath,
+        env,
+        windowsHide: true,
+      });
+    } else {
+      child = spawn(spawnExecutable, invoke.args, {
+        // Windows: detached is unreliable with shell:true — child stays in parent's process group.
+        // POSIX: detached lets the child survive parent exit.
+        detached: !isWin32,
+        shell: useShell,
+        stdio,
+        cwd: options.worktreePath,
+        env,
+        windowsHide: true,
+      });
+    }
 
     // Swallowed to prevent unhandled 'error' event crash.
     // On POSIX ENOENT: pid is undefined → the throw below handles it.

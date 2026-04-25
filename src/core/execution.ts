@@ -7,6 +7,8 @@
  *
  * @module
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { appendAuditEntry } from './audit.js';
 import { loadAllSessions } from './identity.js';
@@ -35,6 +37,30 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Compute the brief-ack sentinel file path for an assignment.
+ *
+ * pln#476 — half-2 of trp#59. The dispatcher prefixes the spawn command
+ * with a shell `touch`/`type nul >` step that creates this file BEFORE
+ * the agent binary executes. Its existence proves the spawn actually
+ * started doing work — independent of whether the agent has the
+ * brainclaw MCP wired (codex spawned without MCP cannot call
+ * bclaw_assignment_update; the ack file lets us recognize a healthy
+ * spawn anyway).
+ */
+export function getAssignmentAckPath(cwd: string, assignmentId: string): string {
+  return path.join(cwd, '.brainclaw', 'coordination', 'runtime', 'ack', `${assignmentId}.ack`);
+}
+
+function isAssignmentAcked(assignmentId: string, cwd: string): boolean {
+  // Fast path: the brief-ack sentinel was written by the worker shell.
+  if (fs.existsSync(getAssignmentAckPath(cwd, assignmentId))) return true;
+  // Standard path: the worker called bclaw_assignment_update via MCP and
+  // moved the assignment past the offered/created state.
+  const assignment = loadAssignment(assignmentId, cwd);
+  return !!assignment && assignment.status !== 'created' && assignment.status !== 'offered';
+}
+
 async function waitForAssignmentHandshake(
   assignmentId: string,
   cwd: string,
@@ -42,15 +68,10 @@ async function waitForAssignmentHandshake(
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const assignment = loadAssignment(assignmentId, cwd);
-    if (!assignment) return false;
-    if (assignment.status !== 'created' && assignment.status !== 'offered') {
-      return true;
-    }
+    if (isAssignmentAcked(assignmentId, cwd)) return true;
     await sleep(100);
   }
-  const finalAssignment = loadAssignment(assignmentId, cwd);
-  return !!finalAssignment && finalAssignment.status !== 'created' && finalAssignment.status !== 'offered';
+  return isAssignmentAcked(assignmentId, cwd);
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -223,7 +244,10 @@ export async function attemptExecution(
 
   // Attempt spawn (await handles both sync and async adapters)
   try {
-    const result = await adapter.start(invoke, options);
+    // pln#476: pass ackRoot=options.cwd so the spawn wrap writes the
+    // brief-ack sentinel under the project's coordination dir (not the
+    // worktree's local store), where waitForAssignmentHandshake reads.
+    const result = await adapter.start(invoke, { ...options, ackRoot: options.cwd });
 
     if (options.assignmentId && options.cwd) {
       // pln#475: TTL bumped from 5000 → 30000ms. Real workers (claude-code,

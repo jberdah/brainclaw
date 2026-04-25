@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canSpawnAgent, attemptExecution, type ExecutionResult } from '../../src/core/execution.js';
+import { canSpawnAgent, attemptExecution, getAssignmentAckPath, type ExecutionResult } from '../../src/core/execution.js';
 import { buildInvokeCommand, type InvokeCommand } from '../../src/core/agent-capability.js';
 import { defaultExecutionAdapter } from '../../src/core/execution-adapters.js';
 import { CoordinateRequestSchema, ExecutionStatusSchema } from '../../src/core/facade-schema.js';
@@ -374,6 +374,60 @@ describe('attemptExecution with mock adapter', () => {
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  it('handshake passes when brief-ack file exists (pln#476)', async () => {
+    const testDir = createTestStore();
+    try {
+      const assignmentId = 'asgn_with_ack';
+      createAssignment({
+        id: assignmentId,
+        short_label: 'asgn#ack',
+        claim_id: 'clm_with_ack',
+        agent: 'claude-code',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/ack.ts',
+        description: 'Brief-ack test',
+      }, testDir);
+
+      // Mock adapter writes the ack file synchronously inside start() to
+      // simulate what CliExecutionAdapter does via the shell wrap.
+      const ackPath = getAssignmentAckPath(testDir, assignmentId);
+      const mockAdapter: import('../../src/core/execution-adapters.js').ExecutionAdapter = {
+        id: 'mock-ack',
+        canSpawn: () => ({ canSpawn: true, reason: 'mock' }),
+        prepareManualCommand: () => ({ command: 'fallback', shell: 'bash' }),
+        start: () => {
+          fs.mkdirSync(path.dirname(ackPath), { recursive: true });
+          fs.writeFileSync(ackPath, '');
+          return { pid: 7777, started_at: '2026-04-25T00:00:00Z', status: 'started' };
+        },
+      };
+
+      const result = await attemptExecution(invoke, {
+        agent: 'claude-code',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        assignmentId,
+        cwd: testDir,
+        handshakeTimeoutMs: 200, // small but enough for the first poll
+        adapter: mockAdapter,
+      });
+
+      // Worker NEVER called bclaw_assignment_update — assignment.status is still 'offered'.
+      // The ack file alone should satisfy the handshake.
+      assert.equal(result.execution_status, 'delivered_and_started', 'spawn accepted via ack file');
+      assert.equal(result.pid, 7777);
+      assert.ok(fs.existsSync(ackPath), 'ack file persists post-handshake');
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('getAssignmentAckPath builds correct path (pln#476)', () => {
+    const ack = getAssignmentAckPath('/proj', 'asgn_xyz');
+    assert.ok(ack.endsWith(path.join('coordination', 'runtime', 'ack', 'asgn_xyz.ack')));
+    assert.ok(ack.includes('.brainclaw'));
   });
 
   it('handshake TTL honors BRAINCLAW_HANDSHAKE_TIMEOUT_MS env var (pln#475)', async () => {
