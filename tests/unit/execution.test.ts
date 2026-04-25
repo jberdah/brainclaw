@@ -115,11 +115,14 @@ describe('defaultExecutionAdapter', () => {
     }
   });
 
-  it('builds codex invoke commands with inline prompt delivery', () => {
+  it('builds codex invoke commands with stdin_pipe delivery (pln#475)', () => {
     const invoke = buildInvokeCommand('codex', 'compact worker brief');
     assert.ok(invoke, 'codex should produce an invoke command');
-    assert.equal(invoke.promptDelivery, 'inline_arg');
-    assert.ok(invoke.args.includes('compact worker brief'));
+    // pln#475: codex switched from inline_arg to stdin_pipe to avoid Windows
+    // cmd.exe arg-parsing breaking long prompts (trp#59).
+    assert.equal(invoke.promptDelivery, 'stdin_pipe');
+    assert.equal(invoke.promptText, 'compact worker brief', 'prompt is delivered via stdin');
+    assert.ok(!invoke.args.includes('compact worker brief'), 'prompt is not in args');
   });
 });
 
@@ -369,6 +372,96 @@ describe('attemptExecution with mock adapter', () => {
       assert.equal(result.failure_kind, 'spawn_no_handshake');
       assert.equal(result.pid, 1234);
     } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('handshake TTL honors BRAINCLAW_HANDSHAKE_TIMEOUT_MS env var (pln#475)', async () => {
+    const testDir = createTestStore();
+    const prev = process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS;
+    try {
+      // Set env to a tiny TTL so the test runs fast
+      process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS = '50';
+      createAssignment({
+        id: 'asgn_env_ttl',
+        short_label: 'asgn#env',
+        claim_id: 'clm_env_ttl',
+        agent: 'claude-code',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/env-ttl.ts',
+        description: 'Env TTL test',
+      }, testDir);
+
+      const mockAdapter: import('../../src/core/execution-adapters.js').ExecutionAdapter = {
+        id: 'mock-env-ttl',
+        canSpawn: () => ({ canSpawn: true, reason: 'mock' }),
+        prepareManualCommand: () => ({ command: 'fallback', shell: 'bash' }),
+        start: () => ({ pid: 5555, started_at: '2026-04-25T00:00:00Z', status: 'started' }),
+      };
+
+      const start = Date.now();
+      const result = await attemptExecution(invoke, {
+        agent: 'claude-code',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        assignmentId: 'asgn_env_ttl',
+        cwd: testDir,
+        // No handshakeTimeoutMs override → env var path used
+        adapter: mockAdapter,
+      });
+      const elapsed = Date.now() - start;
+
+      assert.equal(result.failure_kind, 'spawn_no_handshake');
+      assert.ok(result.error?.includes('50ms'), `expected 50ms in error, got: ${result.error}`);
+      assert.ok(elapsed < 5000, `env var should yield fast timeout, got ${elapsed}ms`);
+    } finally {
+      if (prev === undefined) delete process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS;
+      else process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS = prev;
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('explicit handshakeTimeoutMs option wins over env var (pln#475)', async () => {
+    const testDir = createTestStore();
+    const prev = process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS;
+    try {
+      // Env says 60000ms but option says 50ms — option wins, test stays fast.
+      process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS = '60000';
+      createAssignment({
+        id: 'asgn_opt_ttl',
+        short_label: 'asgn#opt',
+        claim_id: 'clm_opt_ttl',
+        agent: 'claude-code',
+        dispatcher_agent: 'coordinator',
+        scope: 'src/opt-ttl.ts',
+        description: 'Option TTL test',
+      }, testDir);
+
+      const mockAdapter: import('../../src/core/execution-adapters.js').ExecutionAdapter = {
+        id: 'mock-opt-ttl',
+        canSpawn: () => ({ canSpawn: true, reason: 'mock' }),
+        prepareManualCommand: () => ({ command: 'fallback', shell: 'bash' }),
+        start: () => ({ pid: 6666, started_at: '2026-04-25T00:00:00Z', status: 'started' }),
+      };
+
+      const start = Date.now();
+      const result = await attemptExecution(invoke, {
+        agent: 'claude-code',
+        autoExecute: true,
+        dispatcherAgent: 'test',
+        assignmentId: 'asgn_opt_ttl',
+        cwd: testDir,
+        handshakeTimeoutMs: 50,
+        adapter: mockAdapter,
+      });
+      const elapsed = Date.now() - start;
+
+      assert.equal(result.failure_kind, 'spawn_no_handshake');
+      assert.ok(result.error?.includes('50ms'), `expected 50ms (option), got: ${result.error}`);
+      assert.ok(elapsed < 5000, `option should override env var, got ${elapsed}ms`);
+    } finally {
+      if (prev === undefined) delete process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS;
+      else process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS = prev;
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });

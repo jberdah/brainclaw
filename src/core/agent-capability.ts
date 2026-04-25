@@ -244,9 +244,13 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     role_capabilities: ['execute', 'review'],
     runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 5,
-    // Spawned codex workers are more reliable when the compact brief is passed as
-    // a direct prompt argument than via stdin piping, especially on Windows.
-    prompt_delivery: { methods: ['inline_arg'], preferred: 'inline_arg' },
+    // pln#475: prefer stdin_pipe to avoid Windows cmd.exe arg-parsing breaking
+    // long prompts. codex.cmd resolves through cmd shell, where embedded
+    // backticks/`#` chars made codex CLI raise "unexpected argument" (trp#59).
+    // Codex CLI reads stdin when the [PROMPT] arg is omitted (`codex exec`
+    // with no positional). The execution adapter pipes promptText to stdin.
+    // inline_arg stays as a fallback for short prompts on POSIX.
+    prompt_delivery: { methods: ['stdin_pipe', 'inline_arg'], preferred: 'stdin_pipe' },
     execution_env: { surface: 'cli' },
     invoke_template: 'codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"',
     invoke_binary: 'codex',

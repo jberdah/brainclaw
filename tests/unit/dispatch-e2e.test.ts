@@ -226,11 +226,14 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(run!.transport, 'manual_command');
     assert.equal(run!.status, 'waiting_input');
 
-    // Verify invoke command
+    // Verify invoke command — pln#475: codex now uses stdin_pipe to avoid
+    // Windows cmd arg-parsing breaking long prompts (trp#59).
     const invokeCmd = buildInvokeCommand('codex', 'test brief');
     assert.ok(invokeCmd, 'codex is invokable');
     assert.equal(invokeCmd.executable, 'codex');
-    assert.equal(invokeCmd.promptDelivery, 'inline_arg', 'codex uses inline_arg delivery');
+    assert.equal(invokeCmd.promptDelivery, 'stdin_pipe', 'codex uses stdin_pipe delivery (pln#475)');
+    assert.equal(invokeCmd.promptText, 'test brief', 'promptText is set for stdin pipe');
+    assert.ok(!invokeCmd.args.includes('test brief'), 'prompt is NOT passed as inline arg');
 
     // Verify brief mode
     assert.equal(resolveBriefMode('codex'), 'compact');

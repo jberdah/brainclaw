@@ -226,7 +226,17 @@ export async function attemptExecution(
     const result = await adapter.start(invoke, options);
 
     if (options.assignmentId && options.cwd) {
-      const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
+      // pln#475: TTL bumped from 5000 → 30000ms. Real workers (claude-code,
+      // codex) take 8–15s to load the runtime + open the inbox + call
+      // bclaw_assignment_update(accepted). 5s caused legitimate spawns to be
+      // marked failed (trp#59 — observed during P1 dispatch on 2026-04-25).
+      // Override with BRAINCLAW_HANDSHAKE_TIMEOUT_MS for very fast / very slow
+      // environments. options.handshakeTimeoutMs (programmatic) wins over env.
+      const envTimeout = process.env.BRAINCLAW_HANDSHAKE_TIMEOUT_MS;
+      const parsedEnvTimeout = envTimeout ? Number.parseInt(envTimeout, 10) : NaN;
+      const handshakeTimeoutMs =
+        options.handshakeTimeoutMs ??
+        (Number.isFinite(parsedEnvTimeout) && parsedEnvTimeout > 0 ? parsedEnvTimeout : 30_000);
       const handshakeOk = await waitForAssignmentHandshake(options.assignmentId, options.cwd, handshakeTimeoutMs);
       if (!handshakeOk) {
         appendAuditEntry({
