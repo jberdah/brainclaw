@@ -2379,10 +2379,46 @@ function createMissingWorkerToolErrorResponse(handlerName: string, missingPath: 
   );
 }
 
-function isMissingWorkerFailure(error: unknown, missingPath: string): boolean {
+function normalizeMissingModuleSpecifier(specifier: string): string {
+  const trimmed = specifier.trim();
+  if (trimmed.startsWith('file://')) {
+    try {
+      return fileURLToPath(trimmed).replace(/\\/g, '/').toLowerCase();
+    } catch {
+      // Fall through to string normalization.
+    }
+  }
+  return trimmed.replace(/\\/g, '/').toLowerCase();
+}
+
+function extractMissingModuleSpecifiers(message: string): string[] {
+  const specifiers: string[] = [];
+  const quotedPattern = /Cannot find (?:module|package)\s+['"]([^'"]+)['"]/g;
+  for (const match of message.matchAll(quotedPattern)) {
+    specifiers.push(match[1]);
+  }
+  return specifiers;
+}
+
+export function isMissingWorkerFailure(error: unknown, missingPath: string): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes('mcp-worker.js')
-    || (message.includes('Cannot find module') && message.includes(path.basename(missingPath)));
+  const code = typeof (error as { code?: unknown } | undefined)?.code === 'string'
+    ? (error as { code: string }).code
+    : undefined;
+
+  if (code && code !== 'MODULE_NOT_FOUND' && code !== 'ERR_MODULE_NOT_FOUND') {
+    return false;
+  }
+
+  const normalizedMissingPath = normalizeMissingModuleSpecifier(missingPath);
+  const missingBasename = path.posix.basename(normalizedMissingPath);
+
+  return extractMissingModuleSpecifiers(message).some((specifier) => {
+    const normalizedSpecifier = normalizeMissingModuleSpecifier(specifier);
+    return normalizedSpecifier === normalizedMissingPath
+      || normalizedSpecifier === missingBasename
+      || normalizedSpecifier.endsWith(`/${missingBasename}`);
+  });
 }
 
 async function resolveMissingWorkerExecution(

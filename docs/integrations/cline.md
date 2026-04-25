@@ -13,6 +13,7 @@ Manual regeneration:
 
 ```bash
 brainclaw export --format cline --write
+brainclaw export --format cline --write --include-live
 ```
 
 ## MCP configuration
@@ -47,7 +48,8 @@ Cline supports per-server `alwaysAllow` for auto-approving specific tools:
 ## Instruction files
 
 - `.clinerules/brainclaw.md` — Cline-specific rules (auto-discovered, project-scoped)
-- Static content stays behavioural and lightweight; live state (plans, claims, traps) flows through MCP
+- `.clinerules/live.md` — optional local live companion with current plans, claims, traps, candidates, and handoffs. Write it with `brainclaw export --format cline --write --include-live`; it remains gitignored.
+- Static content stays behavioural and lightweight. By default, live state flows through MCP; the live companion is an optional parity/backstop file.
 
 ## SKILL.md discovery
 

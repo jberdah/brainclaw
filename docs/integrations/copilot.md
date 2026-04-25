@@ -13,6 +13,7 @@ Manual regeneration:
 
 ```bash
 brainclaw export --format copilot-instructions --write
+brainclaw export --format copilot-instructions --write --include-live
 ```
 
 ## MCP configuration
@@ -34,7 +35,9 @@ For per-session overrides (typical when spawning Copilot from a dispatcher), pas
 
 ## Instruction files
 
-- `.github/copilot-instructions.md` — Copilot reads this automatically. Keep it lightweight and behavioural; live state (plans, claims, traps) flows through MCP.
+- `.github/copilot-instructions.md` — Copilot reads this automatically. Keep it lightweight and behavioural.
+- `.github/copilot-instructions.live.md` — optional local live companion with current plans, claims, traps, candidates, and handoffs. Write it with `brainclaw export --format copilot-instructions --write --include-live`; it stays gitignored even when the main instruction file is shared/versioned.
+- By default, live state flows through MCP. The live companion is parity/backstop context for native-file workflows.
 
 ## Headless invocation
 

@@ -50,6 +50,11 @@ export function runExport(options: ExportOptions): void {
     process.exit(1);
   }
 
+  if (options.shared && (!options.write || !options.format || options.all || options.detect || options.output)) {
+    console.error('Error: --shared requires --format <format> --write and cannot be used with --all, --detect, or --output.');
+    process.exit(1);
+  }
+
   if (options.all) {
     runExportAll(cwd, options);
     return;

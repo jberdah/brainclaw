@@ -277,6 +277,44 @@ describe('export command formats', () => {
     assert.ok(gitignore.includes('.claude/settings.local.json'));
   });
 
+  it('--shared + --include-live keeps the stable file versionable and the live companion local', () => {
+    runExport({ format: 'cline', write: true, shared: true, includeLive: true, cwd: workspace.dir });
+
+    const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+    assert.ok(!gitignore.includes('.clinerules/brainclaw.md'));
+    assert.ok(gitignore.includes('.clinerules/live.md'));
+    assert.ok(fs.existsSync(path.join(workspace.dir, '.clinerules', 'brainclaw.md')));
+    assert.ok(fs.existsSync(path.join(workspace.dir, '.clinerules', 'live.md')));
+  });
+
+  it('--shared rejects ambiguous multi-target export modes', () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    const originalExit = process.exit;
+    let exitCode: number | undefined;
+
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(' '));
+    };
+    process.exit = ((code?: number) => {
+      exitCode = code;
+      throw new Error(`process.exit:${code ?? 0}`);
+    }) as typeof process.exit;
+
+    try {
+      assert.throws(
+        () => runExport({ all: true, write: true, shared: true, cwd: workspace.dir }),
+        /process\.exit:1/,
+      );
+    } finally {
+      console.error = originalError;
+      process.exit = originalExit;
+    }
+
+    assert.equal(exitCode, 1);
+    assert.ok(errors.some((line) => line.includes('--shared requires --format <format> --write')));
+  });
+
   it('--include-live writes native live companions for parity agents', () => {
     const cases: Array<{ format: 'copilot-instructions' | 'cursor-rules' | 'windsurf' | 'cline' | 'continue'; liveFile: string }> = [
       { format: 'copilot-instructions', liveFile: '.github/copilot-instructions.live.md' },
