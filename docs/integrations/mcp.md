@@ -22,9 +22,9 @@ That now also includes Brainclaw's own install channel state: `bclaw_context({ k
 
 The default dynamic workflow is:
 
-1. `bclaw_work` to start the session and load the relevant context in one call
+1. `bclaw_work` to start the session and load the relevant context in one call (returns compact payload by default — pass `compact: false` for the full context result)
 2. `bclaw_context({ kind: "execution" })` early when the agent needs local tooling signals or package update visibility
-3. `bclaw_context({ kind: "memory" })`, `bclaw_context({ kind: "board" })`, or `bclaw_context({ kind: "delta" })` when the target path changes or the agent needs a narrower refresh than the facade returned
+3. `bclaw_context({ kind: "memory" })`, `bclaw_context({ kind: "board" })`, or `bclaw_context({ kind: "delta" })` when the target path changes or full memory is needed beyond the compact summary
 4. `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` for entity reads and writes
 5. `bclaw_coordinate`, `bclaw_dispatch`, or `bclaw_loop` for assign, consult, review, reroute, summarize, dispatch, or multi-turn loop flows
 6. `bclaw_read_inbox` when resuming delegated work
@@ -63,7 +63,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 
 | Tool | Category | Purpose |
 |---|---|---|
-| `bclaw_work` | session | Start session + load context + optionally claim a scope in one call |
+| `bclaw_work` | session | Start session + load context + optionally claim a scope in one call (compact payload by default) |
 | `bclaw_context` | context | Unified context read for memory, execution, board, board summary, and deltas |
 | `bclaw_coordinate` | coordination | Assign, consult, review, reroute, or summarize across agents |
 | `bclaw_dispatch` | coordination | Analyze, execute, or review dispatch work through one intent-based entry point |

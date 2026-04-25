@@ -13,6 +13,7 @@ export const WorkRequestSchema = z.object({
   task: z.string().optional(),
   messageId: z.string().optional(),
   contextTarget: z.string().optional(),
+  compact: z.boolean().optional().default(true),
 });
 
 export const CoordinateRequestSchema = z.object({

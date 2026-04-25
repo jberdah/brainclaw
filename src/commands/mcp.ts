@@ -985,6 +985,7 @@ const MCP_WRITE_TOOLS = [
         contextTarget: { type: 'string', description: 'Optional path passed to bclaw_get_context to filter memory.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
+        compact: { type: 'boolean', description: 'Return a compact payload (default true). Set to false to include the full context result. Compact mode avoids exceeding MCP token limits on projects with large memory.', default: true },
       },
       required: ['intent'],
     },
@@ -4292,6 +4293,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
       }
       const workReq = parseResult.data;
+      const useCompact = workReq.compact !== false; // default true
       const warnings: string[] = [];
 
       // Step 1: implicit session start (handles auto-registration internally)
@@ -4370,10 +4372,50 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
       }
 
+      // Build the full context result, then compact it if requested.
+      // Compact mode (default) strips the heavy ContextResult down to a
+      // minimal summary that fits within MCP token limits (~25k chars).
+      // The full payload remains available via bclaw_context(kind='memory').
+      let resultPayload: unknown = contextResult ?? null;
+      if (useCompact && contextResult) {
+        const planItems = contextResult.selected
+          .filter((item: { section: string }) => item.section === 'plan')
+          .slice(0, 5)
+          .map((item: { id: string; text: string; extra?: string; plan_id?: string }) => ({
+            id: item.id,
+            short_label: item.text.slice(0, 120),
+            status: item.extra ?? 'unknown',
+            plan_id: item.plan_id,
+          }));
+
+        const staleTop3 = (contextResult.stale_warnings ?? []).slice(0, 3).map(
+          (w: { id: string; entity: string; text: string; age_days: number }) => ({
+            id: w.id,
+            entity: w.entity,
+            text: w.text.slice(0, 80),
+            age_days: w.age_days,
+          }),
+        );
+
+        resultPayload = {
+          context_schema: contextResult.context_schema,
+          profile: contextResult.profile,
+          memory_version: contextResult.memory_version,
+          memory_density: contextResult.memory_density,
+          plan_summary: planItems,
+          stale_warnings: staleTop3,
+          workflow_hints: (contextResult.workflow_hints ?? []).slice(0, 3),
+          claim_conflicts: contextResult.claim_conflicts ?? [],
+          open_work: contextResult.open_work ?? null,
+          _compact: true,
+          _full_context_hint: 'Use bclaw_context(kind="memory") for the full payload.',
+        };
+      }
+
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: workReq.intent,
-        result: contextResult ?? null,
+        result: resultPayload,
         artifacts: [],
         side_effects: claimId ? [{ action: claimStatus === 'created' ? 'create' : 'reuse', entity: 'claim', id: claimId }] : [],
         claim_status: claimStatus,
@@ -4384,6 +4426,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
       const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];
       if (claimId) summaryParts.push(`claim=${claimId} (${claimStatus})`);
+      if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
       if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 
       return {

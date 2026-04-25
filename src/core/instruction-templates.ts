@@ -245,7 +245,7 @@ function renderSessionProtocol(): string {
   return [
     '## brainclaw — session protocol',
     '',
-    '1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically.',
+    '1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically. Returns a compact payload by default; pass `compact: false` for the full context result, or use `bclaw_context(kind="memory")` after.',
     '2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.',
     '3. Do not assume project state without reading brainclaw context first.',
     '',
@@ -334,7 +334,7 @@ function renderAvailableTools(): string {
     '',
     'The default MCP catalog is intentionally small. Start with `bclaw_work`, then use the canonical grammar for reads/writes on any entity. Coordination facades below are an **escalation path** for agents that orchestrate other agents — not the default loop.',
     '',
-    '**Entry facades:** `bclaw_work(intent)`, `bclaw_context(kind)`',
+    '**Entry facades:** `bclaw_work(intent, compact?)`, `bclaw_context(kind)` — bclaw_work defaults to compact:true (minimal payload); use compact:false or bclaw_context for full memory',
     '**Canonical grammar (standard tier) — your main tool for working with memory:**',
     '- `bclaw_find(entity, filter?)` — list by type',
     '- `bclaw_get(entity, id)` — read one',
