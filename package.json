@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.0.15",
+  "version": "1.1.0",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
@@ -19,7 +19,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "clean:build": "node scripts/clean-build.mjs dist dist-test",
@@ -53,12 +53,12 @@
   "license": "BUSL-1.1",
   "homepage": "https://brainclaw.dev",
   "dependencies": {
-    "commander": "^13.1.0",
+    "commander": "^14.0.3",
     "yaml": "^2.7.1",
     "zod": "^3.24.4"
   },
   "devDependencies": {
-    "@types/node": "^22.15.3",
+    "@types/node": "^24.12.2",
     "c8": "^11.0.0",
     "typescript": "^6.0.3"
   }
