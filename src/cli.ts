@@ -629,6 +629,7 @@ program
   .option('--migration-check', 'Report versioned documents that need schema migration')
   .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
   .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
+  .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .action((options) => {
     runDoctor({ ...options, afterMigration: options.afterMigration });

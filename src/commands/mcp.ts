@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
@@ -92,6 +93,7 @@ export type JsonRpcId = string | number | null;
 export const SCHEMA_VERSION = '1.0.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
+const MCP_RUNTIME_REPAIR_COMMAND = 'brainclaw doctor --repair';
 
 export interface McpToolResponse {
   content: Array<{ type: 'text'; text: string }>;
@@ -2245,6 +2247,14 @@ export function runMcp(): void {
     process.exit(1);
   }
 
+  const missingWorkerPath = resolveMcpWorkerEntryPath();
+  if (!fs.existsSync(missingWorkerPath)) {
+    console.error(
+      `Warning: MCP runtime corrupted (mcp-worker.js missing). Read-only handlers remain available in-process; ` +
+      `handlers requiring the worker are disabled until you run "${MCP_RUNTIME_REPAIR_COMMAND}". Missing path: ${missingWorkerPath}`,
+    );
+  }
+
   const transport = new StdioTransport(
     () => {}, // placeholder, replaced below
     () => connection.close(),
@@ -2262,6 +2272,7 @@ export function runMcp(): void {
   const connection = new McpServerConnection({
     cwd,
     send: adaptiveSend,
+    executeTool: createWorkerToolExecutor(),
   });
 
   transport.onMessage = (line: string) => connection.handleLine(line);
@@ -2269,10 +2280,26 @@ export function runMcp(): void {
 }
 
 function createWorkerToolExecutor(): McpToolExecutor {
+  const missingWorkerPath = resolveMcpWorkerEntryPath();
   return (payload, signal) => new Promise<McpToolExecutionOutcome>((resolve, reject) => {
-    const worker = new Worker(new URL('./mcp-worker.js', import.meta.url), {
-      workerData: payload,
-    });
+    if (!fs.existsSync(missingWorkerPath)) {
+      void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+      return;
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./mcp-worker.js', import.meta.url), {
+        workerData: payload,
+      });
+    } catch (error: unknown) {
+      if (isMissingWorkerFailure(error, missingWorkerPath)) {
+        void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+        return;
+      }
+      reject(error);
+      return;
+    }
     let settled = false;
 
     const cleanup = (): void => {
@@ -2304,6 +2331,12 @@ function createWorkerToolExecutor(): McpToolExecutor {
     });
 
     worker.on('error', (error) => {
+      if (isMissingWorkerFailure(error, missingWorkerPath)) {
+        settle(() => {
+          void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+        });
+        return;
+      }
       settle(() => {
         reject(error);
       });
@@ -2320,6 +2353,53 @@ function createWorkerToolExecutor(): McpToolExecutor {
 
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function resolveMcpWorkerEntryPath(): string {
+  return fileURLToPath(new URL('./mcp-worker.js', import.meta.url));
+}
+
+function isReadOnlyInProcessTool(name: string): boolean {
+  return MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name);
+}
+
+function createMissingWorkerToolErrorResponse(handlerName: string, missingPath: string): McpToolResponse {
+  return createToolErrorResponse(
+    'runtime_corrupted',
+    `MCP runtime corrupted (mcp-worker.js missing) — run "${MCP_RUNTIME_REPAIR_COMMAND}" to rebuild dist/. Handler: ${handlerName}. Missing path: ${missingPath}.`,
+    {
+      'handler-name': handlerName,
+      'missing-path': missingPath,
+      'repair-command': MCP_RUNTIME_REPAIR_COMMAND,
+      handler_name: handlerName,
+      missing_path: missingPath,
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+    },
+  );
+}
+
+function isMissingWorkerFailure(error: unknown, missingPath: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('mcp-worker.js')
+    || (message.includes('Cannot find module') && message.includes(path.basename(missingPath)));
+}
+
+async function resolveMissingWorkerExecution(
+  payload: McpToolExecutionPayload,
+  signal: AbortSignal,
+  missingPath: string,
+): Promise<McpToolExecutionOutcome> {
+  if (signal.aborted) {
+    throw new Error('Task cancelled');
+  }
+
+  if (isReadOnlyInProcessTool(payload.name)) {
+    return executeMcpToolCall(payload);
+  }
+
+  return {
+    response: createMissingWorkerToolErrorResponse(payload.name, missingPath),
+  };
 }
 
 export function normaliseFormat(value: unknown): ContextFormat {
