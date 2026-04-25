@@ -2,11 +2,9 @@
 
 brainclaw integrates with Kilo Code through MCP tools and instruction files, providing shared memory, plans, and coordination. Kilo Code is a fork of the Cline/Roo family with its own config paths.
 
-> **Note:** Kilo Code support in brainclaw depends on pln#464. Config paths below reflect current documentation and may be refined once the writer is implemented.
-
 ## Auto-setup
 
-Once supported, `brainclaw init` will detect Kilo Code and write `.kilo/instructions.md` automatically. Until then, configure manually.
+`brainclaw init` detects Kilo Code and writes `.kilo/rules/brainclaw.md` automatically (per the writer in `src/core/agent-files.ts`). The MCP config at `.kilo/mcp.json` is also generated when applicable.
 
 ## MCP configuration
 
@@ -46,7 +44,7 @@ Individual tools can also use `permission: { tool: "allow" | "ask" | "deny" }` s
 ## Instruction files
 
 - `AGENTS.md` — standard instruction file (shared with Codex, OpenCode)
-- `.kilo/instructions.md` — Kilo-specific instructions
+- `.kilo/rules/brainclaw.md` — Kilo-specific brainclaw rules (auto-written)
 
 ## SKILL.md discovery
 
@@ -68,7 +66,6 @@ kilo /path/to/project
 
 ## Caveats
 
-- **Not yet in brainclaw**: Kilo Code is not in `SUPPORTED_AGENT_INTEGRATION_NAMES` yet — depends on pln#464 for writer implementation.
 - **Cline/Roo family fork**: Config patterns are similar to Cline and Roo but paths differ (`.kilo/` vs `.cline/` vs `.roo/`).
 - **JSONC format**: Config files use JSONC (comments allowed), not plain JSON. Parsers must handle this.
 - **No hooks**: Hook support is tracked in issue #5827 but not yet public.
