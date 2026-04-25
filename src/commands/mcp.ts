@@ -11,7 +11,7 @@ import { loadConfig } from '../core/config.js';
 import { loadState, persistState, saveState } from '../core/state.js';
 import { generateIdWithLabel } from '../core/ids.js';
 import { memoryExists } from '../core/io.js';
-import { generateCandidateIdWithLabel, saveCandidate } from '../core/candidates.js';
+import { generateCandidateIdWithLabel, loadCandidate, saveCandidate } from '../core/candidates.js';
 import {
   createEntity,
   getEntity,
@@ -1271,6 +1271,20 @@ export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
   'bclaw_get_context',
 ]);
 
+const LEGACY_READ_TOOL_HANDLERS = new Set<string>([
+  'bclaw_get_context',
+  'bclaw_get_execution_context',
+  'bclaw_get_agent_board',
+  'bclaw_get_agent_board_summary',
+  'bclaw_list_plans',
+  'bclaw_list_candidates',
+  'bclaw_list_claims',
+  'bclaw_list_actions',
+  'bclaw_list_assignments',
+  'bclaw_list_runs',
+  'bclaw_read_handoff',
+]);
+
 /** All tools minus the v1.0 removal set. Used by every tools/list branch and governance guards. */
 export const PUBLISHED_TOOLS = ALL_TOOLS.filter((tool) => !REMOVED_IN_V1_TOOLS.has(tool.name));
 
@@ -1457,6 +1471,16 @@ function isLegacyMcpToolFacadeDisabled(name: string): boolean {
 
 function createLegacyMcpToolDisabledResponse(): McpToolResponse {
   return createToolErrorResponse('disabled', 'This tool is disabled. Use bclaw_work or bclaw_coordinate instead.');
+}
+
+function createLegacyToolExecutionErrorResponse(error: unknown): McpToolResponse {
+  if (error instanceof AgentIdentityResolutionError) {
+    return createToolErrorResponse(error.kind, error.message, error.details);
+  }
+  if (error instanceof AgentTrustError) {
+    return createToolErrorResponse(error.kind, error.message, error.details);
+  }
+  return createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error));
 }
 
 function appendLegacyMcpToolWarning(response: McpToolResponse, name: string): McpToolResponse {
@@ -2366,24 +2390,17 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
   const { name, args, cwd, connectionSessionId } = payload;
 
   try {
+    if (isLegacyMcpToolFacadeDisabled(name)) {
+      return { response: createLegacyMcpToolDisabledResponse() };
+    }
+
     // Async read: bclaw_check_security (requires network call to Socket MCP)
     if (name === 'bclaw_check_security') {
       const { handleCheckSecurity } = await import('./check-security-mcp.js');
       return { response: toolResponse(await handleCheckSecurity(args, cwd)) };
     }
 
-    // Early intercept: tools removed at v1.0 return an error with migration guidance.
-    // Handlers for 5 of these still exist internally (used by bclaw_context / bclaw_dispatch),
-    // but direct MCP calls are no longer accepted.
-    const removedRedirect = REMOVED_TOOL_REDIRECTS[name];
-    if (removedRedirect) {
-      return { response: createToolErrorResponse('tool_removed', removedRedirect) };
-    }
-
-    if (MCP_READ_TOOLS.some((tool) => tool.name === name)) {
-      if (isLegacyMcpToolFacadeDisabled(name)) {
-        return { response: createLegacyMcpToolDisabledResponse() };
-      }
+    if (MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name)) {
       return {
         response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd })), name),
       };
@@ -2694,10 +2711,185 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       };
     }
 
-    if (name === 'bclaw_claim') {
-      if (isLegacyMcpToolFacadeDisabled(name)) {
-        return { response: createLegacyMcpToolDisabledResponse() };
+    if (name === 'bclaw_create_plan') {
+      const crossProjectError = blockCrossProjectExecution('plan', args);
+      if (crossProjectError) {
+        return { response: crossProjectError };
       }
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+
+      const planText = String(args.text ?? '').trim();
+      if (!planText) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      }
+
+      try {
+        const created = createPlan({
+          text: planText,
+          author: resolved.identity!.agent_name,
+          type: args.type as PlanType | undefined,
+          priority: args.priority as Priority | undefined,
+          assignee: args.assignee as string | undefined,
+          project: args.project as string | undefined,
+          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
+          relatedPaths: Array.isArray(args.related_paths) ? args.related_paths as string[] : undefined,
+          dependsOn: Array.isArray(args.depends_on) ? args.depends_on as string[] : undefined,
+          estimatedEffort: typeof args.estimate === 'number'
+            ? args.estimate
+            : typeof args.estimated_effort === 'number'
+              ? args.estimated_effort
+              : undefined,
+        }, cwd);
+        appendAuditEntry({
+          actor: resolved.identity!.agent_name,
+          actor_id: resolved.identity!.agent_id,
+          action: 'create',
+          item_id: created.id,
+          item_type: 'plan',
+        }, cwd);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Plan added: [${created.shortLabel}] ${created.text}` }],
+            plan_id: created.id,
+            short_label: created.shortLabel,
+            text: created.text,
+          }),
+        };
+      } catch (error: unknown) {
+        return { response: createLegacyToolExecutionErrorResponse(error) };
+      }
+    }
+
+    if (name === 'bclaw_create_candidate') {
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+
+      const candidateText = String(args.text ?? '').trim();
+      if (!candidateText) {
+        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      }
+
+      const candidateType = String(args.type ?? '').trim();
+      if (!['constraint', 'decision', 'trap', 'handoff'].includes(candidateType)) {
+        return { response: createToolErrorResponse('validation_error', 'type must be one of: constraint, decision, trap, handoff') };
+      }
+
+      try {
+        const created = createEntity('candidate', {
+          text: candidateText,
+          type: candidateType,
+          author: resolved.identity!.agent_name,
+          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
+          source: 'agent',
+          ...(typeof args.origin === 'string' ? { origin: String(args.origin) } : {}),
+          ...(typeof args.severity === 'string' ? { severity: String(args.severity) } : {}),
+          ...(typeof args.from === 'string' ? { from: String(args.from) } : {}),
+          ...(typeof args.to === 'string' ? { to: String(args.to) } : {}),
+          ...(typeof args.narrative === 'string' ? { narrative: String(args.narrative) } : {}),
+          ...(Array.isArray(args.related_paths) ? { related_paths: args.related_paths as string[] } : {}),
+          ...(typeof args.plan_id === 'string' ? { plan_id: String(args.plan_id) } : {}),
+        }, cwd);
+        appendAuditEntry({
+          actor: resolved.identity!.agent_name,
+          actor_id: resolved.identity!.agent_id,
+          action: 'create',
+          item_id: created.id,
+          item_type: 'candidate',
+        }, cwd);
+
+        const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
+        if (targetProjectArg) {
+          const signal = writeCrossProjectSignal(
+            resolveCrossProjectWritableTarget(targetProjectArg, 'candidate', cwd),
+            'candidate',
+            loadCandidate(created.id, cwd),
+            cwd,
+          );
+          return {
+            response: toolResponse({
+              content: [{ type: 'text', text: `✔ Candidate created [${created.id}] and signaled to '${signal.target_project.name}' [${signal.id}]` }],
+              candidate_id: created.id,
+              short_label: created.short_label,
+              signal_id: signal.id,
+              entity_type: signal.entity_type,
+              target_project: signal.target_project.name,
+              target_path: signal.target_project.path,
+            }),
+          };
+        }
+
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Candidate created [${created.id}]` }],
+            candidate_id: created.id,
+            short_label: created.short_label,
+          }),
+        };
+      } catch (error: unknown) {
+        return { response: createLegacyToolExecutionErrorResponse(error) };
+      }
+    }
+
+    if (name === 'bclaw_accept') {
+      const resolved = ensureTrust(args, { nameField: 'by', idField: 'byId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const id = String(args.id ?? '').trim();
+        if (!id) {
+          return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+        }
+        const result = acceptCandidate(id, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Promoted to ${result.candidate_type} [${result.promoted_item_id}]` }],
+            candidate_id: result.candidate_id,
+            candidate_type: result.candidate_type,
+            promoted_item_id: result.promoted_item_id,
+            actor: result.actor,
+          }),
+        };
+      } catch (error: unknown) {
+        return { response: createLegacyToolExecutionErrorResponse(error) };
+      }
+    }
+
+    if (name === 'bclaw_reject') {
+      const resolved = ensureTrust(args, { nameField: 'by', idField: 'byId' }, 'trusted', cwd, connectionSessionId);
+      if (resolved.error) {
+        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+      }
+      try {
+        const id = String(args.id ?? '').trim();
+        if (!id) {
+          return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
+        }
+        const result = rejectCandidate(
+          id,
+          typeof args.reason === 'string' ? args.reason : undefined,
+          resolved.identity!.agent_name,
+          cwd,
+          resolved.identity!.agent_id,
+        );
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ Candidate rejected [${result.candidate_id}]` }],
+            candidate_id: result.candidate_id,
+            actor: result.actor,
+          }),
+        };
+      } catch (error: unknown) {
+        return { response: createLegacyToolExecutionErrorResponse(error) };
+      }
+    }
+
+    if (name === 'bclaw_claim') {
       const crossProjectError = blockCrossProjectExecution('claim', args);
       if (crossProjectError) {
         return { response: crossProjectError };
@@ -5366,6 +5558,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       } catch (error: unknown) {
         return { response: createToolErrorResponse('validation_error', (error as Error).message) };
       }
+    }
+
+    const removedRedirect = REMOVED_TOOL_REDIRECTS[name];
+    if (removedRedirect) {
+      return { response: createToolErrorResponse('tool_removed', removedRedirect) };
     }
 
     return {

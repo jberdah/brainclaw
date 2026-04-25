@@ -187,6 +187,59 @@ export function handleMcpReadToolCall(
     };
   }
 
+  if (name === 'bclaw_read_handoff') {
+    const handoffId = String(args.id ?? '').trim();
+    if (!handoffId) {
+      throw new Error('Missing required argument: id');
+    }
+
+    const state = loadState(cwd);
+    const handoff = state.open_handoffs.find((item) => item.id === handoffId || item.short_label === handoffId);
+    if (!handoff) {
+      return {
+        content: [{ type: 'text', text: `Handoff not found: ${handoffId}` }],
+        structuredContent: { handoff_id: handoffId, found: false, schema_version: SCHEMA_VERSION },
+      };
+    }
+
+    const lines = [
+      `Handoff ${handoff.short_label ?? handoff.id}`,
+      `From: ${handoff.from}`,
+      `To: ${handoff.to}`,
+      `Status: ${handoff.status}`,
+      `Created: ${handoff.created_at}`,
+      '',
+      handoff.text,
+    ];
+
+    if (handoff.narrative) {
+      lines.push('', 'Narrative:', handoff.narrative);
+    }
+
+    if (handoff.review) {
+      lines.push('', 'Review:');
+      if (handoff.review.reviewer) lines.push(`Reviewer: ${handoff.review.reviewer}`);
+      if (handoff.review.verdict) lines.push(`Verdict: ${handoff.review.verdict}`);
+      if (handoff.review.reviewed_by) lines.push(`Reviewed by: ${handoff.review.reviewed_by}`);
+      if (handoff.review.summary) lines.push(`Summary: ${handoff.review.summary}`);
+      for (const issue of handoff.review.blocking_issues ?? []) {
+        lines.push(`Blocking issue: ${issue}`);
+      }
+      for (const suggestion of handoff.review.suggestions ?? []) {
+        lines.push(`Suggestion: ${suggestion}`);
+      }
+    }
+
+    if (handoff.snapshot?.diff) {
+      lines.push('', 'Uncommitted Git Diff:', handoff.snapshot.diff);
+    }
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { handoff, schema_version: SCHEMA_VERSION },
+    };
+  }
+
   if (name === 'bclaw_bootstrap') {
     const interviewAnswers = normalizeBootstrapInterviewAnswersArg(args.interviewAnswers);
     if (args.apply && args.uninstall) {

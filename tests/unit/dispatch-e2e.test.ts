@@ -125,7 +125,7 @@ function setupAllAgents(dir: string): void {
 
 // ── Per-Agent-Type Dispatch Cycle ─────────────────────────────────────────
 
-describe('dispatch-e2e/per-agent-cycle', () => {
+describe('dispatch-e2e/per-agent-cycle', { concurrency: false }, () => {
   let testDir: string;
   let previousNoSpawn: string | undefined;
 
@@ -239,7 +239,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(resolveBriefMode('codex'), 'compact');
   });
 
-  it('codex: spawned process without assignment handshake fails the assignment and run', async () => {
+  it('codex: brief-ack wrapper keeps the assignment offered until the worker accepts', async () => {
     const restorePath = installFakeAgentBinary(testDir, 'codex');
     const currentNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
     delete process.env.BRAINCLAW_NO_SPAWN;
@@ -257,23 +257,23 @@ describe('dispatch-e2e/per-agent-cycle', () => {
       const result = (await dispatch({
         dispatcherAgent: 'coordinator',
         agents: ['codex'],
-        handshakeTimeoutMs: 50,
+        handshakeTimeoutMs: 200,
       }, testDir))!;
 
       assert.equal(result.result.messages_sent.length, 1);
-      assert.ok(result.result.warnings.some((warning) => warning.includes('did not acknowledge')));
       const entry = result.result.messages_sent[0]!;
-      assert.equal(entry.execution_status, 'command_ready_manual');
+      assert.ok(!result.result.warnings.some((warning) => warning.includes('did not acknowledge')));
+      assert.equal(entry.execution_status, 'delivered_and_started');
       assert.ok(entry.pid, 'spawn pid is retained for diagnostics');
 
       const assignment = loadAssignment(entry.assignment_id!, testDir);
-      assert.equal(assignment?.status, 'failed');
-      assert.ok(assignment?.error_message?.includes('did not acknowledge'));
+      assert.equal(assignment?.status, 'offered');
+      assert.equal(assignment?.error_message, undefined);
 
       const run = findLatestAgentRunForAssignment(entry.assignment_id!, testDir);
-      assert.ok(run, 'failed run is recorded');
+      assert.ok(run, 'run is recorded');
       assert.equal(run!.transport, 'cli_spawn');
-      assert.equal(run!.status, 'failed');
+      assert.equal(run!.status, 'running');
       assert.equal(run!.pid, entry.pid);
     } finally {
       restorePath();
@@ -439,7 +439,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
 
 // ── 4-Factor Scoring ──────────────────────────────────────────────────────
 
-describe('dispatch-e2e/scoreAgents', () => {
+describe('dispatch-e2e/scoreAgents', { concurrency: false }, () => {
   it('prefers plan assignee over other agents', () => {
     const plan = makePlan({ id: 'pln_score1', text: 'Test task', assignee: 'codex' });
     const scores = scoreAgents(['claude-code', 'codex', 'cline'], plan, []);
@@ -520,7 +520,7 @@ describe('dispatch-e2e/scoreAgents', () => {
 
 // ── Check Before Spawn Guard ──────────────────────────────────────────────
 
-describe('dispatch-e2e/checkActiveInstance', () => {
+describe('dispatch-e2e/checkActiveInstance', { concurrency: false }, () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -587,7 +587,7 @@ describe('dispatch-e2e/checkActiveInstance', () => {
 
 // ── generateDispatchBrief ─────────────────────────────────────────────────
 
-describe('dispatch-e2e/generateDispatchBrief', () => {
+describe('dispatch-e2e/generateDispatchBrief', { concurrency: false }, () => {
   it('generates brief with task and protocol for full-mode agents', () => {
     const brief = generateDispatchBrief({
       task: 'Implement the login page',
@@ -638,7 +638,7 @@ describe('dispatch-e2e/generateDispatchBrief', () => {
 
 // ── buildProtocolSection ──────────────────────────────────────────────────
 
-describe('dispatch-e2e/buildProtocolSection', () => {
+describe('dispatch-e2e/buildProtocolSection', { concurrency: false }, () => {
   it('protocol with claim+worktree includes cd step', () => {
     const protocol = buildProtocolSection({ claimId: 'clm_1', worktreePath: '/wt/branch' });
     assert.ok(protocol.includes('cd into the worktree'), 'has cd step');
@@ -661,7 +661,7 @@ describe('dispatch-e2e/buildProtocolSection', () => {
 
 // ── Review Findings Coverage ──────────────────────────────────────────────
 
-describe('dispatch-e2e/review-findings', () => {
+describe('dispatch-e2e/review-findings', { concurrency: false }, () => {
   let testDir: string;
   let previousNoSpawn: string | undefined;
 
@@ -794,7 +794,7 @@ describe('dispatch-e2e/review-findings', () => {
 
 // ── P4.2 Multi-Instance E2E Tests ─────────────────────────────────────────
 
-describe('dispatch-e2e/multi-instance', () => {
+describe('dispatch-e2e/multi-instance', { concurrency: false }, () => {
   let testDir: string;
   let previousNoSpawn: string | undefined;
 

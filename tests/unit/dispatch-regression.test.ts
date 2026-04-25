@@ -422,14 +422,14 @@ describe('dispatch-regression/buildInvokeCommand', () => {
     assert.ok(result.bashCommand.includes('Read') || result.bashCommand.includes('Grep'), 'consult uses read-only tools');
   });
 
-  it('codex worker: produces codex exec with approval_policy override, workspace-write sandbox, and inline_arg delivery', () => {
+  it('codex worker: produces codex exec with approval_policy override, workspace-write sandbox, and stdin_pipe delivery', () => {
     const result = buildInvokeCommand('codex', 'Implement the feature', { mode: 'worker' });
     assert.ok(result, 'should return InvokeCommand');
     assert.ok(result.bashCommand.includes('codex'), 'command includes codex');
     assert.ok(result.bashCommand.includes('approval_policy'), 'overrides approval policy');
     assert.ok(result.bashCommand.includes('--sandbox'), 'uses --sandbox flag');
     assert.ok(result.bashCommand.includes('workspace-write'), 'uses workspace-write sandbox');
-    assert.equal(result.promptDelivery, 'inline_arg', 'codex uses inline_arg delivery');
+    assert.equal(result.promptDelivery, 'stdin_pipe', 'codex uses stdin_pipe delivery');
     assert.equal(result.executable, 'codex');
   });
 

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { memoryDir } from '../io.js';
+import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
 import {
   DEFAULT_PROTOCOLS,
@@ -48,10 +48,7 @@ function eventsPath(id: string, cwd?: string): string {
 }
 
 function writeAtomic(filePath: string, contents: string): void {
-  const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
-  fs.writeFileSync(tmp, contents);
-  fs.renameSync(tmp, filePath);
+  writeFileAtomic(filePath, contents);
 }
 
 function randomIdSegment(): string {
