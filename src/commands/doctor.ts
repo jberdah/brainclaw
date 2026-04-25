@@ -357,6 +357,20 @@ export function resolveMcpWorkerMissingPath(cwd?: string): string {
   return resolveDoctorPath(MCP_WORKER_RELATIVE_PATH, cwd);
 }
 
+export function isBrainclawRepoCwd(cwd?: string): boolean {
+  // dist/ runtime checks resolve paths relative to cwd; that only makes sense
+  // when cwd is the brainclaw source/install root. For every other cwd (a
+  // user's project, a test workspace), dist/ does not and should not exist.
+  const effectiveCwd = cwd ?? process.cwd();
+  if (fs.existsSync(path.join(effectiveCwd, 'src', 'commands', 'mcp.ts'))) {
+    return true;
+  }
+  if (fs.existsSync(path.join(effectiveCwd, 'dist', 'commands', 'mcp.js'))) {
+    return true;
+  }
+  return false;
+}
+
 export function getMcpRuntimeHealth(cwd?: string): McpRuntimeHealth {
   const effectiveCwd = cwd ?? process.cwd();
   const manifestPath = resolveDoctorPath(DIST_BUILD_MANIFEST_RELATIVE_PATH, effectiveCwd);
@@ -728,33 +742,35 @@ export function runDoctor(options: DoctorOptions = {}): void {
     }
   }
 
-  const mcpRuntimeHealth = getMcpRuntimeHealth(options.cwd);
-  if (mcpRuntimeHealth.ok) {
-    checks.push({
-      name: 'mcp_runtime',
-      status: 'ok',
-      message: mcpRuntimeHealth.message,
-      details: mcpRuntimeHealth,
-    });
-    if (!options.json) {
-      console.log('✔ MCP runtime: dist/ is healthy');
-    }
-  } else {
-    checks.push({
-      name: 'mcp_runtime',
-      status: mcpRuntimeHealth.status === 'missing' ? 'error' : 'warn',
-      message: mcpRuntimeHealth.message,
-      details: mcpRuntimeHealth,
-    });
-    if (!options.json) {
-      const glyph = mcpRuntimeHealth.status === 'missing' ? '✗' : '⚠';
-      console.warn(`${glyph} MCP runtime: ${mcpRuntimeHealth.message}`);
-      if (mcpRuntimeHealth.missing_path) {
-        console.warn(`  Missing path: ${toRelativeDoctorPath(mcpRuntimeHealth.missing_path, options.cwd)}`);
+  if (isBrainclawRepoCwd(options.cwd)) {
+    const mcpRuntimeHealth = getMcpRuntimeHealth(options.cwd);
+    if (mcpRuntimeHealth.ok) {
+      checks.push({
+        name: 'mcp_runtime',
+        status: 'ok',
+        message: mcpRuntimeHealth.message,
+        details: mcpRuntimeHealth,
+      });
+      if (!options.json) {
+        console.log('✔ MCP runtime: dist/ is healthy');
       }
-      console.warn(`  Repair: ${mcpRuntimeHealth.repair_command}`);
+    } else {
+      checks.push({
+        name: 'mcp_runtime',
+        status: mcpRuntimeHealth.status === 'missing' ? 'error' : 'warn',
+        message: mcpRuntimeHealth.message,
+        details: mcpRuntimeHealth,
+      });
+      if (!options.json) {
+        const glyph = mcpRuntimeHealth.status === 'missing' ? '✗' : '⚠';
+        console.warn(`${glyph} MCP runtime: ${mcpRuntimeHealth.message}`);
+        if (mcpRuntimeHealth.missing_path) {
+          console.warn(`  Missing path: ${toRelativeDoctorPath(mcpRuntimeHealth.missing_path, options.cwd)}`);
+        }
+        console.warn(`  Repair: ${mcpRuntimeHealth.repair_command}`);
+      }
+      hasIssues = true;
     }
-    hasIssues = true;
   }
 
   // Validate state

@@ -10,6 +10,15 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — JSON Schema generation shift (pln#486, zod 4 migration)**
+- Migration from zod 3.24 → 4.3.6 changes the introspection output that
+  feeds `tools/list`. Schemas are semantically equivalent but the emitted
+  JSON differs in incidental shape (key order, optional-property
+  encoding). MCP clients that snapshot or hash schemas should re-pin.
+- Public surface fingerprint moves from `sha256:a479f710ff043ef6` (zod 3)
+  to `sha256:860fbaa30a486093` (zod 4). No tool was added, removed,
+  renamed, or had its required arguments change.
+
 **Changed — `bclaw_loop(intent: 'open')` anti-pattern gate (pln#461)**
 - New optional field `allow_orphan: boolean` on `BclawLoopOpenSchema`.
 - Default (absent / `false`) — handler rejects with `validation_error`
@@ -73,7 +82,7 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:a479f710ff043ef6`
+- MCP public surface fingerprint: `sha256:860fbaa30a486093`
 
 See `docs/integrations/mcp.md` for the full canonical surface + an
 example gallery per verb. See `docs/concepts/mcp-governance.md` for
