@@ -13,7 +13,7 @@
  */
 
 import type { AgentCapabilityProfile } from './agent-capability.js';
-import type { State, Constraint, Decision, Trap, PlanItem, Claim, Candidate } from './schema.js';
+import type { State, Constraint, Decision, Trap, PlanItem, Claim, Candidate, Handoff } from './schema.js';
 
 export interface InstructionTemplateInput {
   profile: AgentCapabilityProfile;
@@ -65,19 +65,24 @@ export function renderStableSection(input: InstructionTemplateInput): Instructio
 }
 
 /**
- * Render LIVE companion content: traps, plans, decisions, claims, sequences.
+ * Render LIVE companion content: traps, plans, claims, candidates, handoffs,
+ * and (for tier C) recent decisions.
  * This is the gitignored file refreshed on plan/claim/sequence mutations.
  *
- * Returns undefined for Tier A (live content delivered via hooks/MCP).
+ * Returns undefined when the profile does not emit a filesystem live
+ * companion.
  */
 export function renderLiveSection(input: InstructionTemplateInput): InstructionTemplateOutput | undefined {
-  const { profile } = input;
+  const tier = resolveLiveCompanionTier(input.profile);
+  if (!tier) return undefined;
 
-  switch (profile.templateTier) {
-    case 'A': return undefined; // hooks deliver live content
-    case 'B': return renderLiveTierB(input);
-    case 'C': return renderLiveTierC(input);
-  }
+  return renderLiveCompanion(input, {
+    tier,
+    maxTraps: tier === 'C' ? input.maxTraps ?? 10 : input.maxTraps ?? 5,
+    maxPlans: tier === 'C' ? input.maxPlans ?? 10 : input.maxPlans ?? 5,
+    maxHandoffs: tier === 'C' ? 10 : 5,
+    includeDecisions: tier === 'C',
+  });
 }
 
 // ─── Tier A: Stable only ────────────────────────────────────────────────────
@@ -138,17 +143,41 @@ function renderStableTierB(input: InstructionTemplateInput): InstructionTemplate
   return { content: sections.join('\n\n'), tier: 'B', sectionsIncluded: included };
 }
 
-function renderLiveTierB(input: InstructionTemplateInput): InstructionTemplateOutput {
+interface LiveCompanionRenderOptions {
+  tier: 'B' | 'C';
+  maxTraps: number;
+  maxPlans: number;
+  maxHandoffs: number;
+  includeDecisions: boolean;
+}
+
+const LIVE_COMPANION_TIER_B_AGENTS = new Set([
+  'cursor',
+  'cline',
+  'windsurf',
+  'github-copilot',
+]);
+
+function resolveLiveCompanionTier(profile: AgentCapabilityProfile): 'B' | 'C' | undefined {
+  if (profile.templateTier === 'C') return 'C';
+  if (profile.templateTier === 'B') return 'B';
+  return LIVE_COMPANION_TIER_B_AGENTS.has(profile.name) ? 'B' : undefined;
+}
+
+function renderLiveCompanion(
+  input: InstructionTemplateInput,
+  options: LiveCompanionRenderOptions,
+): InstructionTemplateOutput {
   const sections: string[] = [];
   const included: string[] = [];
 
   sections.push(renderLiveHeader(input));
   included.push('live-header');
 
-  const traps = renderTopTraps(input.state, input.maxTraps ?? 5);
+  const traps = renderTopTraps(input.state, options.maxTraps);
   if (traps) { sections.push(traps); included.push('traps'); }
 
-  const plans = renderActivePlans(input.state, input.maxPlans ?? 5);
+  const plans = renderActivePlans(input.state, options.maxPlans);
   if (plans) { sections.push(plans); included.push('plans'); }
 
   const claims = renderActiveClaimsFromInput(input);
@@ -157,7 +186,15 @@ function renderLiveTierB(input: InstructionTemplateInput): InstructionTemplateOu
   const candidates = renderPendingCandidates(input);
   if (candidates) { sections.push(candidates); included.push('candidates'); }
 
-  return { content: sections.join('\n\n'), tier: 'B', sectionsIncluded: included };
+  const handoffs = renderOpenHandoffs(input.state, options.maxHandoffs);
+  if (handoffs) { sections.push(handoffs); included.push('handoffs'); }
+
+  if (options.includeDecisions) {
+    const decisions = renderRecentDecisions(input.state);
+    if (decisions) { sections.push(decisions); included.push('decisions'); }
+  }
+
+  return { content: sections.join('\n\n'), tier: options.tier, sectionsIncluded: included };
 }
 
 // ─── Tier C: Stable + Live (richer) ─────────────────────────────────────────
@@ -186,31 +223,6 @@ function renderStableTierC(input: InstructionTemplateInput): InstructionTemplate
 
   const instructions = renderInstructions(input.resolvedInstructions);
   if (instructions) { sections.push(instructions); included.push('instructions'); }
-
-  return { content: sections.join('\n\n'), tier: 'C', sectionsIncluded: included };
-}
-
-function renderLiveTierC(input: InstructionTemplateInput): InstructionTemplateOutput {
-  const sections: string[] = [];
-  const included: string[] = [];
-
-  sections.push(renderLiveHeader(input));
-  included.push('live-header');
-
-  const traps = renderTopTraps(input.state, input.maxTraps ?? 10);
-  if (traps) { sections.push(traps); included.push('traps'); }
-
-  const plans = renderActivePlans(input.state, input.maxPlans ?? 10);
-  if (plans) { sections.push(plans); included.push('plans'); }
-
-  const claims = renderActiveClaimsFromInput(input);
-  if (claims) { sections.push(claims); included.push('claims'); }
-
-  const candidates = renderPendingCandidates(input);
-  if (candidates) { sections.push(candidates); included.push('candidates'); }
-
-  const decisions = renderRecentDecisions(input.state);
-  if (decisions) { sections.push(decisions); included.push('decisions'); }
 
   return { content: sections.join('\n\n'), tier: 'C', sectionsIncluded: included };
 }
@@ -245,7 +257,7 @@ function renderSessionProtocol(): string {
   return [
     '## brainclaw — session protocol',
     '',
-    '1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically.',
+    '1. Call `bclaw_work(intent)` to start working — it handles session, context, and claims automatically. Returns a compact payload by default; pass `compact: false` for the full context result, or use `bclaw_context(kind="memory")` after.',
     '2. Use the canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`) to work with memory objects (plans, decisions, constraints, traps, handoffs, claims, candidates, runtime_notes, …). Read `## brainclaw — working with memory` below for the full map.',
     '3. Do not assume project state without reading brainclaw context first.',
     '',
@@ -334,7 +346,7 @@ function renderAvailableTools(): string {
     '',
     'The default MCP catalog is intentionally small. Start with `bclaw_work`, then use the canonical grammar for reads/writes on any entity. Coordination facades below are an **escalation path** for agents that orchestrate other agents — not the default loop.',
     '',
-    '**Entry facades:** `bclaw_work(intent)`, `bclaw_context(kind)`',
+    '**Entry facades:** `bclaw_work(intent, compact?)`, `bclaw_context(kind)` — bclaw_work defaults to compact:true (minimal payload); use compact:false or bclaw_context for full memory',
     '**Canonical grammar (standard tier) — your main tool for working with memory:**',
     '- `bclaw_find(entity, filter?)` — list by type',
     '- `bclaw_get(entity, id)` — read one',
@@ -417,6 +429,23 @@ function renderPendingCandidates(input: InstructionTemplateInput): string | unde
     '## brainclaw — open candidates',
     '',
     ...candidates.slice(0, 5).map((c: Candidate) => `- [${c.type}] ${c.text} (by ${c.author ?? 'unknown'})`),
+  ].join('\n');
+}
+
+function renderOpenHandoffs(state: State, limit: number): string | undefined {
+  const handoffs = state.open_handoffs
+    .filter((h: Handoff) => !h.status || h.status === 'open')
+    .slice(-limit)
+    .reverse();
+  if (handoffs.length === 0) return undefined;
+
+  return [
+    '## brainclaw â€” open handoffs',
+    '',
+    ...handoffs.map((h: Handoff) => {
+      const plan = h.plan_id ? ` (${h.plan_id})` : '';
+      return `- ${h.from ?? 'unknown'} -> ${h.to ?? 'unknown'}${plan}: ${h.text}`;
+    }),
   ].join('\n');
 }
 

@@ -629,6 +629,7 @@ program
   .option('--migration-check', 'Report versioned documents that need schema migration')
   .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
   .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
+  .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .action((options) => {
     runDoctor({ ...options, afterMigration: options.afterMigration });
@@ -1359,6 +1360,7 @@ program
   .option('--detect', 'Auto-detect agent environment and write to its native file')
   .option('--all', 'Write all known agent instruction files at once (claude-md, agents-md, copilot-instructions, cursor-rules, etc.)')
   .option('--write', 'Write to canonical file path instead of stdout (when --format is given); local files are gitignored by default')
+  .option('--include-live', 'Also write the native live companion file when the target agent supports one')
   .option('--shared', 'Keep the main exported instruction file versionable instead of auto-ignoring it (companions remain local)')
   .option('--output <file>', 'Write to a specific file path instead of stdout')
   .option('--project <project>', 'Project namespace filter')

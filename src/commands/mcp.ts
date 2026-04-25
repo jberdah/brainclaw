@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
@@ -92,6 +93,7 @@ export type JsonRpcId = string | number | null;
 export const SCHEMA_VERSION = '1.0.0';
 export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-11-05'];
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
+const MCP_RUNTIME_REPAIR_COMMAND = 'brainclaw doctor --repair';
 
 export interface McpToolResponse {
   content: Array<{ type: 'text'; text: string }>;
@@ -985,6 +987,7 @@ const MCP_WRITE_TOOLS = [
         contextTarget: { type: 'string', description: 'Optional path passed to bclaw_get_context to filter memory.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
+        compact: { type: 'boolean', description: 'Return a compact payload (default true). Set to false to include the full context result. Compact mode avoids exceeding MCP token limits on projects with large memory.', default: true },
       },
       required: ['intent'],
     },
@@ -2245,6 +2248,14 @@ export function runMcp(): void {
     process.exit(1);
   }
 
+  const missingWorkerPath = resolveMcpWorkerEntryPath();
+  if (!fs.existsSync(missingWorkerPath)) {
+    console.error(
+      `Warning: MCP runtime corrupted (mcp-worker.js missing). Read-only handlers remain available in-process; ` +
+      `handlers requiring the worker are disabled until you run "${MCP_RUNTIME_REPAIR_COMMAND}". Missing path: ${missingWorkerPath}`,
+    );
+  }
+
   const transport = new StdioTransport(
     () => {}, // placeholder, replaced below
     () => connection.close(),
@@ -2262,6 +2273,7 @@ export function runMcp(): void {
   const connection = new McpServerConnection({
     cwd,
     send: adaptiveSend,
+    executeTool: createWorkerToolExecutor(),
   });
 
   transport.onMessage = (line: string) => connection.handleLine(line);
@@ -2269,10 +2281,26 @@ export function runMcp(): void {
 }
 
 function createWorkerToolExecutor(): McpToolExecutor {
+  const missingWorkerPath = resolveMcpWorkerEntryPath();
   return (payload, signal) => new Promise<McpToolExecutionOutcome>((resolve, reject) => {
-    const worker = new Worker(new URL('./mcp-worker.js', import.meta.url), {
-      workerData: payload,
-    });
+    if (!fs.existsSync(missingWorkerPath)) {
+      void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+      return;
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./mcp-worker.js', import.meta.url), {
+        workerData: payload,
+      });
+    } catch (error: unknown) {
+      if (isMissingWorkerFailure(error, missingWorkerPath)) {
+        void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+        return;
+      }
+      reject(error);
+      return;
+    }
     let settled = false;
 
     const cleanup = (): void => {
@@ -2304,6 +2332,12 @@ function createWorkerToolExecutor(): McpToolExecutor {
     });
 
     worker.on('error', (error) => {
+      if (isMissingWorkerFailure(error, missingWorkerPath)) {
+        settle(() => {
+          void resolveMissingWorkerExecution(payload, signal, missingWorkerPath).then(resolve, reject);
+        });
+        return;
+      }
       settle(() => {
         reject(error);
       });
@@ -2320,6 +2354,53 @@ function createWorkerToolExecutor(): McpToolExecutor {
 
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function resolveMcpWorkerEntryPath(): string {
+  return fileURLToPath(new URL('./mcp-worker.js', import.meta.url));
+}
+
+function isReadOnlyInProcessTool(name: string): boolean {
+  return MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name);
+}
+
+function createMissingWorkerToolErrorResponse(handlerName: string, missingPath: string): McpToolResponse {
+  return createToolErrorResponse(
+    'runtime_corrupted',
+    `MCP runtime corrupted (mcp-worker.js missing) — run "${MCP_RUNTIME_REPAIR_COMMAND}" to rebuild dist/. Handler: ${handlerName}. Missing path: ${missingPath}.`,
+    {
+      'handler-name': handlerName,
+      'missing-path': missingPath,
+      'repair-command': MCP_RUNTIME_REPAIR_COMMAND,
+      handler_name: handlerName,
+      missing_path: missingPath,
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+    },
+  );
+}
+
+function isMissingWorkerFailure(error: unknown, missingPath: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('mcp-worker.js')
+    || (message.includes('Cannot find module') && message.includes(path.basename(missingPath)));
+}
+
+async function resolveMissingWorkerExecution(
+  payload: McpToolExecutionPayload,
+  signal: AbortSignal,
+  missingPath: string,
+): Promise<McpToolExecutionOutcome> {
+  if (signal.aborted) {
+    throw new Error('Task cancelled');
+  }
+
+  if (isReadOnlyInProcessTool(payload.name)) {
+    return executeMcpToolCall(payload);
+  }
+
+  return {
+    response: createMissingWorkerToolErrorResponse(payload.name, missingPath),
+  };
 }
 
 export function normaliseFormat(value: unknown): ContextFormat {
@@ -4292,6 +4373,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
       }
       const workReq = parseResult.data;
+      const useCompact = workReq.compact !== false; // default true
       const warnings: string[] = [];
 
       // Step 1: implicit session start (handles auto-registration internally)
@@ -4370,10 +4452,50 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
       }
 
+      // Build the full context result, then compact it if requested.
+      // Compact mode (default) strips the heavy ContextResult down to a
+      // minimal summary that fits within MCP token limits (~25k chars).
+      // The full payload remains available via bclaw_context(kind='memory').
+      let resultPayload: unknown = contextResult ?? null;
+      if (useCompact && contextResult) {
+        const planItems = contextResult.selected
+          .filter((item: { section: string }) => item.section === 'plan')
+          .slice(0, 5)
+          .map((item: { id: string; text: string; extra?: string; plan_id?: string }) => ({
+            id: item.id,
+            short_label: item.text.slice(0, 120),
+            status: item.extra ?? 'unknown',
+            plan_id: item.plan_id,
+          }));
+
+        const staleTop3 = (contextResult.stale_warnings ?? []).slice(0, 3).map(
+          (w: { id: string; entity: string; text: string; age_days: number }) => ({
+            id: w.id,
+            entity: w.entity,
+            text: w.text.slice(0, 80),
+            age_days: w.age_days,
+          }),
+        );
+
+        resultPayload = {
+          context_schema: contextResult.context_schema,
+          profile: contextResult.profile,
+          memory_version: contextResult.memory_version,
+          memory_density: contextResult.memory_density,
+          plan_summary: planItems,
+          stale_warnings: staleTop3,
+          workflow_hints: (contextResult.workflow_hints ?? []).slice(0, 3),
+          claim_conflicts: contextResult.claim_conflicts ?? [],
+          open_work: contextResult.open_work ?? null,
+          _compact: true,
+          _full_context_hint: 'Use bclaw_context(kind="memory") for the full payload.',
+        };
+      }
+
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: workReq.intent,
-        result: contextResult ?? null,
+        result: resultPayload,
         artifacts: [],
         side_effects: claimId ? [{ action: claimStatus === 'created' ? 'create' : 'reuse', entity: 'claim', id: claimId }] : [],
         claim_status: claimStatus,
@@ -4384,6 +4506,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
       const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];
       if (claimId) summaryParts.push(`claim=${claimId} (${claimStatus})`);
+      if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
       if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 
       return {

@@ -394,6 +394,12 @@ export interface AgentExportTarget {
   relativePath: string;
 }
 
+export interface AgentLiveCompanionTarget {
+  agentName: string;
+  /** Path to write, relative to project root */
+  relativePath: string;
+}
+
 export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'github-copilot', format: 'copilot-instructions', relativePath: '.github/copilot-instructions.md' },
   { agentName: 'claude-code',    format: 'claude-md',            relativePath: 'CLAUDE.md' },
@@ -420,6 +426,15 @@ export const FALLBACK_EXPORT_TARGET: AgentExportTarget = {
   relativePath: 'AGENTS.md',
 };
 
+export const LIVE_COMPANION_EXPORT_REGISTRY: AgentLiveCompanionTarget[] = [
+  { agentName: 'cursor', relativePath: '.cursor/live.md' },
+  { agentName: 'cline', relativePath: '.clinerules/live.md' },
+  { agentName: 'windsurf', relativePath: '.windsurf/rules/live.md' },
+  { agentName: 'github-copilot', relativePath: '.github/copilot-instructions.live.md' },
+  { agentName: 'continue', relativePath: '.continue/live.md' },
+  { agentName: 'antigravity', relativePath: 'GEMINI.live.md' },
+];
+
 export function resolveExportTarget(agentName: string): AgentExportTarget {
   return AGENT_EXPORT_REGISTRY.find((t) => t.agentName === agentName) ?? FALLBACK_EXPORT_TARGET;
 }
@@ -445,6 +460,39 @@ export function writeExportFile(
   }
   fs.writeFileSync(fullPath, next, 'utf-8');
   return { created: !existed, updated: existed, filePath: fullPath };
+}
+
+function defaultLiveCompanionPath(stableRelativePath: string): string {
+  const ext = path.extname(stableRelativePath);
+  if (!ext) return `${stableRelativePath}.live`;
+  const base = stableRelativePath.slice(0, -ext.length);
+  return `${base}.live${ext}`;
+}
+
+export function resolveLiveCompanionPath(agentName: string, stableRelativePath: string): string {
+  return LIVE_COMPANION_EXPORT_REGISTRY.find((target) => target.agentName === agentName)?.relativePath
+    ?? defaultLiveCompanionPath(stableRelativePath);
+}
+
+export function writeLiveCompanionFile(
+  content: string,
+  agentName: string,
+  stableRelativePath: string,
+  cwd: string,
+): { created: boolean; updated: boolean; filePath: string; relativePath: string } {
+  const relativePath = resolveLiveCompanionPath(agentName, stableRelativePath);
+  const fullPath = path.join(cwd, relativePath);
+  const dir = path.dirname(fullPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const existed = fs.existsSync(fullPath);
+  const existing = existed ? fs.readFileSync(fullPath, 'utf-8') : '';
+  if (existing === content) {
+    return { created: false, updated: false, filePath: fullPath, relativePath };
+  }
+
+  fs.writeFileSync(fullPath, content, 'utf-8');
+  return { created: !existed, updated: existed, filePath: fullPath, relativePath };
 }
 
 export interface AutoConfigWriteResult {

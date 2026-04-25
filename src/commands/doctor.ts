@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -38,6 +39,10 @@ import { runPostMigrationHealthCheck } from '../core/upgrades/health-check.js';
 
 const BACKLOG_KEYWORDS = /\b(TODO|NEXT|backlog|next[\s-]step|action[\s-]item|prochaine?s?\s+étapes?|à\s+faire)\b/i;
 const NON_MESSAGE_INBOX_SUBDIRS = new Set(['accepted', 'rejected', 'cross-project']);
+export const MCP_RUNTIME_REPAIR_COMMAND = 'brainclaw doctor --repair';
+export const MCP_WORKER_RELATIVE_PATH = 'dist/commands/mcp-worker.js';
+const DIST_CLI_RELATIVE_PATH = 'dist/cli.js';
+const DIST_BUILD_MANIFEST_RELATIVE_PATH = 'dist/.brainclaw-build.json';
 const ACTIONABLE_BACKLOG_LINE_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: 'unchecked_task', re: /^\s*(?:[-*•]\s*)?\[\s*\]\s+.+$/i },
   { name: 'todo_line', re: /^\s*(?:[-*•]\s*)?TODO\b.*$/i },
@@ -114,6 +119,7 @@ export interface DoctorOptions {
   migrationCheck?: boolean;
   fixAgentIgnore?: boolean;
   fix?: boolean;
+  repair?: boolean;
   /**
    * Run the post-migration health check (v1.0 schema upgrade invariants)
    * and exit non-zero on any failure. Skips the normal doctor suite.
@@ -126,6 +132,38 @@ interface DoctorCheck {
   status: 'ok' | 'warn' | 'error';
   message: string;
   details?: unknown;
+}
+
+interface DistBuildManifest {
+  schema_version: 1;
+  generated_at: string;
+  src_hash: string;
+  dist_hash: string;
+}
+
+export interface McpRuntimeHealth {
+  ok: boolean;
+  status: 'ok' | 'missing' | 'stale';
+  message: string;
+  repair_command: string;
+  missing_path?: string;
+  missing_files: string[];
+  src_hash?: string;
+  dist_hash?: string;
+  manifest_src_hash?: string;
+  manifest_dist_hash?: string;
+  manifest_path: string;
+}
+
+interface DoctorRepairResult {
+  ok: boolean;
+  repaired: boolean;
+  reason: 'ok' | 'missing' | 'stale';
+  repair_command: string;
+  missing_path?: string;
+  missing_files: string[];
+  manifest_path: string;
+  cli_version?: string;
 }
 
 /**
@@ -193,6 +231,310 @@ function normalizeInboxAgentName(agent: string): string {
 
 function toRelativeDoctorPath(filepath: string, cwd?: string): string {
   return path.relative(cwd ?? process.cwd(), filepath).replace(/\\/g, '/');
+}
+
+function resolveDoctorPath(relativePath: string, cwd?: string): string {
+  return path.resolve(cwd ?? process.cwd(), ...relativePath.split('/'));
+}
+
+function listFilesForHash(rootPath: string, includeFile: (filepath: string) => boolean): string[] {
+  if (!fs.existsSync(rootPath)) {
+    return [];
+  }
+
+  const files: string[] = [];
+  const walk = (currentPath: string): void => {
+    const entries = fs.readdirSync(currentPath, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (entry.isFile() && includeFile(fullPath)) {
+        files.push(fullPath);
+      }
+    }
+  };
+
+  walk(rootPath);
+  return files;
+}
+
+function hashFiles(rootPath: string, files: string[]): string | undefined {
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  const hash = crypto.createHash('sha256');
+  for (const file of files) {
+    hash.update(path.relative(rootPath, file).replace(/\\/g, '/'));
+    hash.update('\0');
+    hash.update(fs.readFileSync(file));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function computeSourceTreeHash(cwd?: string): string | undefined {
+  const effectiveCwd = cwd ?? process.cwd();
+  const rootFiles = [path.join(effectiveCwd, 'tsconfig.json'), path.join(effectiveCwd, 'package.json')]
+    .filter((filepath) => fs.existsSync(filepath));
+  const srcFiles = listFilesForHash(path.join(effectiveCwd, 'src'), (filepath) => filepath.endsWith('.ts'));
+  const scriptFiles = [path.join(effectiveCwd, 'scripts', 'copy-default-profiles.mjs')]
+    .filter((filepath) => fs.existsSync(filepath));
+  return hashFiles(effectiveCwd, [...rootFiles, ...srcFiles, ...scriptFiles]);
+}
+
+function getLatestMtimeMs(files: string[]): number {
+  return files.reduce((latest, filepath) => {
+    try {
+      return Math.max(latest, fs.statSync(filepath).mtimeMs);
+    } catch {
+      return latest;
+    }
+  }, 0);
+}
+
+function collectSourceTreeFiles(cwd?: string): string[] {
+  const effectiveCwd = cwd ?? process.cwd();
+  const rootFiles = [path.join(effectiveCwd, 'tsconfig.json'), path.join(effectiveCwd, 'package.json')]
+    .filter((filepath) => fs.existsSync(filepath));
+  const srcFiles = listFilesForHash(path.join(effectiveCwd, 'src'), (filepath) => filepath.endsWith('.ts'));
+  const scriptFiles = [path.join(effectiveCwd, 'scripts', 'copy-default-profiles.mjs')]
+    .filter((filepath) => fs.existsSync(filepath));
+  return [...rootFiles, ...srcFiles, ...scriptFiles];
+}
+
+function computeDistTreeHash(cwd?: string): string | undefined {
+  const distRoot = path.join(cwd ?? process.cwd(), 'dist');
+  const distFiles = listFilesForHash(distRoot, (filepath) => {
+    const rel = path.relative(distRoot, filepath).replace(/\\/g, '/');
+    return !rel.startsWith('.')
+      && (filepath.endsWith('.js') || filepath.endsWith('.d.ts') || filepath.endsWith('.yaml'));
+  });
+  return hashFiles(distRoot, distFiles);
+}
+
+function collectDistTreeFiles(cwd?: string): string[] {
+  const distRoot = path.join(cwd ?? process.cwd(), 'dist');
+  return listFilesForHash(distRoot, (filepath) => {
+    const rel = path.relative(distRoot, filepath).replace(/\\/g, '/');
+    return !rel.startsWith('.')
+      && (filepath.endsWith('.js') || filepath.endsWith('.d.ts') || filepath.endsWith('.yaml'));
+  });
+}
+
+function readDistBuildManifest(cwd?: string): DistBuildManifest | undefined {
+  const manifestPath = resolveDoctorPath(DIST_BUILD_MANIFEST_RELATIVE_PATH, cwd);
+  if (!fs.existsSync(manifestPath)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as DistBuildManifest;
+    if (parsed && parsed.schema_version === 1 && typeof parsed.src_hash === 'string' && typeof parsed.dist_hash === 'string') {
+      return parsed;
+    }
+  } catch {
+    // ignored — invalid manifest means stale runtime and will be rebuilt
+  }
+  return undefined;
+}
+
+function writeDistBuildManifest(cwd: string, srcHash: string, distHash: string): void {
+  const manifestPath = resolveDoctorPath(DIST_BUILD_MANIFEST_RELATIVE_PATH, cwd);
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    src_hash: srcHash,
+    dist_hash: distHash,
+  }, null, 2));
+}
+
+export function resolveMcpWorkerMissingPath(cwd?: string): string {
+  return resolveDoctorPath(MCP_WORKER_RELATIVE_PATH, cwd);
+}
+
+export function getMcpRuntimeHealth(cwd?: string): McpRuntimeHealth {
+  const effectiveCwd = cwd ?? process.cwd();
+  const manifestPath = resolveDoctorPath(DIST_BUILD_MANIFEST_RELATIVE_PATH, effectiveCwd);
+  const cliPath = resolveDoctorPath(DIST_CLI_RELATIVE_PATH, effectiveCwd);
+  const workerPath = resolveMcpWorkerMissingPath(effectiveCwd);
+  const missingFiles = [cliPath, workerPath].filter((filepath) => !fs.existsSync(filepath));
+  const srcHash = computeSourceTreeHash(effectiveCwd);
+  const distHash = computeDistTreeHash(effectiveCwd);
+  const manifest = readDistBuildManifest(effectiveCwd);
+  const latestSourceMtime = getLatestMtimeMs(collectSourceTreeFiles(effectiveCwd));
+  const latestDistMtime = getLatestMtimeMs(collectDistTreeFiles(effectiveCwd));
+
+  if (missingFiles.length > 0 || !distHash) {
+    return {
+      ok: false,
+      status: 'missing',
+      message: `dist/ runtime is missing required artifacts. Run "${MCP_RUNTIME_REPAIR_COMMAND}" to rebuild dist/.`,
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+      missing_path: missingFiles[0],
+      missing_files: missingFiles.map((filepath) => toRelativeDoctorPath(filepath, effectiveCwd)),
+      src_hash: srcHash,
+      dist_hash: distHash,
+      manifest_src_hash: manifest?.src_hash,
+      manifest_dist_hash: manifest?.dist_hash,
+      manifest_path: toRelativeDoctorPath(manifestPath, effectiveCwd),
+    };
+  }
+
+  if (!manifest) {
+    if (latestSourceMtime > latestDistMtime) {
+      return {
+        ok: false,
+        status: 'stale',
+        message: `dist/ appears older than src/. Run "${MCP_RUNTIME_REPAIR_COMMAND}" to rebuild dist/.`,
+        repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+        missing_files: [],
+        src_hash: srcHash,
+        dist_hash: distHash,
+        manifest_path: toRelativeDoctorPath(manifestPath, effectiveCwd),
+      };
+    }
+
+    return {
+      ok: true,
+      status: 'ok',
+      message: 'dist/ runtime is healthy (legacy build without hash manifest)',
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+      missing_files: [],
+      src_hash: srcHash,
+      dist_hash: distHash,
+      manifest_path: toRelativeDoctorPath(manifestPath, effectiveCwd),
+    };
+  }
+
+  if (!srcHash || manifest.src_hash !== srcHash || manifest.dist_hash !== distHash) {
+    return {
+      ok: false,
+      status: 'stale',
+      message: `dist/ is stale relative to src/. Run "${MCP_RUNTIME_REPAIR_COMMAND}" to rebuild dist/.`,
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+      missing_files: [],
+      src_hash: srcHash,
+      dist_hash: distHash,
+      manifest_src_hash: manifest.src_hash,
+      manifest_dist_hash: manifest.dist_hash,
+      manifest_path: toRelativeDoctorPath(manifestPath, effectiveCwd),
+    };
+  }
+
+  return {
+    ok: true,
+    status: 'ok',
+    message: 'dist/ runtime is healthy',
+    repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+    missing_files: [],
+    src_hash: srcHash,
+    dist_hash: distHash,
+    manifest_src_hash: manifest.src_hash,
+    manifest_dist_hash: manifest.dist_hash,
+    manifest_path: toRelativeDoctorPath(manifestPath, effectiveCwd),
+  };
+}
+
+function spawnRepairCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  options: { json?: boolean },
+): { ok: boolean; stdout: string; stderr: string; status: number | null; errorCode?: string } {
+  const result = childProcess.spawnSync(command, args, {
+    cwd,
+    encoding: 'utf-8',
+    stdio: options.json ? 'pipe' : 'inherit',
+  });
+
+  return {
+    ok: result.status === 0,
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    status: result.status,
+    errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+  };
+}
+
+function readLocalPackageVersion(cwd: string): string {
+  const packageJsonPath = path.join(cwd, 'package.json');
+  const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as { version?: string };
+  return parsed.version ?? 'unknown';
+}
+
+function repairDistRuntime(options: DoctorOptions = {}): DoctorRepairResult {
+  const cwd = options.cwd ?? process.cwd();
+  const before = getMcpRuntimeHealth(cwd);
+  if (before.ok) {
+    const manifestPath = resolveDoctorPath(DIST_BUILD_MANIFEST_RELATIVE_PATH, cwd);
+    if (!fs.existsSync(manifestPath)) {
+      const srcHash = computeSourceTreeHash(cwd);
+      const distHash = computeDistTreeHash(cwd);
+      if (srcHash && distHash) {
+        writeDistBuildManifest(cwd, srcHash, distHash);
+      }
+    }
+    const versionResult = spawnRepairCommand(process.execPath, [DIST_CLI_RELATIVE_PATH, '--version'], cwd, { json: true });
+    if (!versionResult.ok && versionResult.errorCode !== 'EPERM') {
+      throw new Error(versionResult.stderr.trim() || versionResult.stdout.trim() || 'dist/cli.js --version failed');
+    }
+    const cliVersion = versionResult.ok ? versionResult.stdout.trim() : readLocalPackageVersion(cwd);
+    return {
+      ok: true,
+      repaired: false,
+      reason: 'ok',
+      repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+      missing_path: before.missing_path,
+      missing_files: before.missing_files,
+      manifest_path: before.manifest_path,
+      cli_version: cliVersion,
+    };
+  }
+
+  const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const tscResult = spawnRepairCommand(npxCommand, ['tsc'], cwd, options);
+  if (!tscResult.ok) {
+    throw new Error(tscResult.stderr.trim() || tscResult.stdout.trim() || 'npx tsc failed');
+  }
+
+  const copyProfilesResult = spawnRepairCommand(process.execPath, ['scripts/copy-default-profiles.mjs'], cwd, options);
+  if (!copyProfilesResult.ok) {
+    throw new Error(copyProfilesResult.stderr.trim() || copyProfilesResult.stdout.trim() || 'copy-default-profiles.mjs failed');
+  }
+
+  const versionResult = spawnRepairCommand(process.execPath, [DIST_CLI_RELATIVE_PATH, '--version'], cwd, { json: true });
+  if (!versionResult.ok && versionResult.errorCode !== 'EPERM') {
+    throw new Error(versionResult.stderr.trim() || versionResult.stdout.trim() || 'dist/cli.js --version failed');
+  }
+  const cliVersion = versionResult.ok ? versionResult.stdout.trim() : readLocalPackageVersion(cwd);
+
+  const srcHash = computeSourceTreeHash(cwd);
+  const distHash = computeDistTreeHash(cwd);
+  if (!srcHash || !distHash) {
+    throw new Error('Rebuild completed but runtime hash could not be computed');
+  }
+  writeDistBuildManifest(cwd, srcHash, distHash);
+
+  const after = getMcpRuntimeHealth(cwd);
+  if (!after.ok) {
+    throw new Error(after.message);
+  }
+
+  return {
+    ok: true,
+    repaired: true,
+    reason: before.status,
+    repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+    missing_path: before.missing_path,
+    missing_files: before.missing_files,
+    manifest_path: after.manifest_path,
+    cli_version: cliVersion,
+  };
 }
 
 /**
@@ -276,6 +618,35 @@ function auditInboxMessages(cwd?: string): InboxMessageAudit {
 }
 
 export function runDoctor(options: DoctorOptions = {}): void {
+  if (options.repair) {
+    try {
+      const result = repairDistRuntime(options);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.repaired) {
+        console.log(`✔ Rebuilt dist/ (${result.reason})`);
+        console.log(`✔ Verified runtime: ${result.cli_version ?? 'unknown version'}`);
+        console.log(`✔ Updated hash manifest: ${result.manifest_path}`);
+      } else {
+        console.log(`✔ dist/ runtime already healthy (${result.cli_version ?? 'unknown version'})`);
+      }
+      return;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) {
+        console.log(JSON.stringify({
+          ok: false,
+          repaired: false,
+          repair_command: MCP_RUNTIME_REPAIR_COMMAND,
+          error: message,
+        }, null, 2));
+      } else {
+        console.error(`✗ Repair failed: ${message}`);
+      }
+      process.exit(1);
+    }
+  }
+
   if (!memoryExists(options.cwd)) {
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
@@ -355,6 +726,35 @@ export function runDoctor(options: DoctorOptions = {}): void {
         console.log(`✔ Added generated local agent files to .gitignore: ${agentGitHygieneFixed.join(', ')}`);
       }
     }
+  }
+
+  const mcpRuntimeHealth = getMcpRuntimeHealth(options.cwd);
+  if (mcpRuntimeHealth.ok) {
+    checks.push({
+      name: 'mcp_runtime',
+      status: 'ok',
+      message: mcpRuntimeHealth.message,
+      details: mcpRuntimeHealth,
+    });
+    if (!options.json) {
+      console.log('✔ MCP runtime: dist/ is healthy');
+    }
+  } else {
+    checks.push({
+      name: 'mcp_runtime',
+      status: mcpRuntimeHealth.status === 'missing' ? 'error' : 'warn',
+      message: mcpRuntimeHealth.message,
+      details: mcpRuntimeHealth,
+    });
+    if (!options.json) {
+      const glyph = mcpRuntimeHealth.status === 'missing' ? '✗' : '⚠';
+      console.warn(`${glyph} MCP runtime: ${mcpRuntimeHealth.message}`);
+      if (mcpRuntimeHealth.missing_path) {
+        console.warn(`  Missing path: ${toRelativeDoctorPath(mcpRuntimeHealth.missing_path, options.cwd)}`);
+      }
+      console.warn(`  Repair: ${mcpRuntimeHealth.repair_command}`);
+    }
+    hasIssues = true;
   }
 
   // Validate state
