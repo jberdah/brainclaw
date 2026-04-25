@@ -164,32 +164,6 @@ interface QuickCaptureClassification {
 
 export const MCP_READ_TOOLS = [
   {
-    name: 'bclaw_get_context',
-    description: 'Get project memory context for a specific file or path.',
-    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'The file path or glob pattern to filter memory by.' },
-        project: { type: 'string', description: 'Optional explicit project namespace for instruction resolution.' },
-        agent: { type: 'string', description: 'Optional agent name for agent-layer instruction resolution.' },
-        host: { type: 'string', description: 'Optional host identifier used to include machine-local runtime context.' },
-        allHosts: { type: 'boolean', description: 'Include machine-local runtime context from all hosts.' },
-        profile: { type: 'string', description: 'Optional profile override: dev (default), dense (all sections, max items), compact (plans+constraints), copilot (constraints+traps), quick (minimal), briefing (ultra-compact scope briefing < 500 chars), openclaw, ops, research.' },
-        includePending: { type: 'boolean', description: 'Include pending candidates in the context.' },
-        maxItems: { type: 'number', description: 'Maximum number of ranked items to return.' },
-        maxChars: { type: 'number', description: 'Approximate character budget applied after ranking.' },
-        digest: { type: 'boolean', description: 'Include a short deterministic digest for the selected context.' },
-        since_session: { type: 'string', description: 'Include a compact memory diff since the given session started.' },
-        bootstrap: { type: 'boolean', description: 'Enable brownfield bootstrap fallback when memory is sparse.' },
-        refreshBootstrap: { type: 'boolean', description: 'Refresh the brownfield bootstrap profile before building context.' },
-        format: { type: 'string', description: 'Output format: markdown, json, or template.' },
-        explain: { type: 'boolean', description: 'Include ranking reasons in markdown output.' },
-        compactTemplate: { type: 'boolean', description: 'Use compact template format when format=template.' },
-      },
-    },
-  },
-  {
     name: 'bclaw_bootstrap',
     description: 'Derive brownfield bootstrap signals, adaptive interview prompts for CLI or IDE chat agents, and an import proposal from repository docs, manifests, native agent files, and git history.',
     annotations: { tier: 'standard', category: 'context' , headlessApproval: 'prompt' },
@@ -211,63 +185,12 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
-    name: 'bclaw_get_execution_context',
-    description: 'Inspect the local execution environment, installable Brainclaw update channel, and optionally agent tooling signals.',
-    annotations: { tier: 'standard', category: 'context' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        includeAgentTooling: { type: 'boolean', description: 'Include AGENTS.md, skills, and local MCP inventory.' },
-      },
-    },
-  },
-  {
     name: 'bclaw_release_notes',
     description: 'Return the agent-first release notes for the latest installable Brainclaw version from the configured update source. Returns structured highlights, breaking risk, and action recommendation when available.',
     annotations: { tier: 'standard', category: 'context' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {},
-    },
-  },
-  {
-    name: 'bclaw_read_handoff',
-    description: 'Read an open handoff ticket with its captured git diff and state snapshot.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'The handoff ID.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'bclaw_get_agent_board',
-    description: 'Get an agent collaboration board with active plans, claims, handoffs, and resolved instructions.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        agent: { type: 'string', description: 'Optional agent name to filter claims and handoffs.' },
-        project: { type: 'string', description: 'Optional project namespace.' },
-        path: { type: 'string', description: 'Optional target path used to infer project scope.' },
-        host: { type: 'string', description: 'Optional host identifier used to include machine-local runtime notes.' },
-        allHosts: { type: 'boolean', description: 'Include machine-local runtime notes from all hosts.' },
-        includeReputation: { type: 'boolean', description: 'Include bounded reputation summaries for board consumers.' },
-        includeSessionMeta: { type: 'boolean', description: 'Include session_start/session_end runtime notes (excluded by default to reduce noise).' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_get_agent_board_summary',
-    description: 'Get a lightweight counts-only summary of the agent board (~500 bytes). Returns attention_required, in_progress claims, plan counts by status, trap counts by severity, agent/session counts, and active sequence name. Use this for extension activation and polling — call bclaw_get_agent_board only when full detail is needed.',
-    annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        agent: { type: 'string', description: 'Optional agent name override (defaults to current agent).' },
-      },
     },
   },
   {
@@ -337,26 +260,6 @@ export const MCP_READ_TOOLS = [
     },
   },
   {
-    name: 'bclaw_list_plans',
-    description: 'List plan items with optional filters on status, type, assignee, and project.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        all: { type: 'boolean', description: 'Include done and dropped plans.' },
-        status: { type: 'string', description: 'Filter by status: todo, in_progress, blocked, done, dropped.' },
-        type: { type: 'string', description: 'Filter by plan type.' },
-        assignee: { type: 'string', description: 'Filter by assignee name.' },
-        project: { type: 'string', description: 'Filter by project namespace.' },
-        id: { type: 'string', description: 'Get a single plan by ID (exact match).' },
-        limit: { type: 'number', description: 'Maximum number of plans to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of plans to skip (for pagination).' },
-        recursive: { type: 'boolean', description: 'Include plans from descendant brainclaw projects. Shows aggregated view with provenance.' },
-        compact: { type: 'boolean', description: 'Return only key fields (id, short_label, text, status, priority) to reduce output size.' },
-      },
-    },
-  },
-  {
     name: 'bclaw_list_sequences',
     description: 'List coordination sequences with optional filters on status and id.',
     annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'auto' },
@@ -368,62 +271,6 @@ export const MCP_READ_TOOLS = [
         limit: { type: 'number', description: 'Maximum number of sequences to return (default: 20).' },
         offset: { type: 'number', description: 'Number of sequences to skip (for pagination).' },
         compact: { type: 'boolean', description: 'Return only key fields (id, name, status) to reduce output size.' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_list_claims',
-    description: 'List work claims with optional filters on project, plan, and agent.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        all: { type: 'boolean', description: 'Include released claims.' },
-        project: { type: 'string', description: 'Filter by project namespace.' },
-        plan: { type: 'string', description: 'Filter by linked plan id.' },
-        agent: { type: 'string', description: 'Filter by agent name.' },
-        limit: { type: 'number', description: 'Maximum number of claims to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of claims to skip (for pagination).' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_list_assignments',
-    description: 'List assignment runtime records with optional filters on status, agent, claim, plan, sequence, or id.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', description: 'Filter by assignment status: created, offered, accepted, started, completed, failed, blocked, timed_out, expired, retrying, rerouted.' },
-        agent: { type: 'string', description: 'Filter by assigned agent name.' },
-        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
-        planId: { type: 'string', description: 'Filter by linked plan ID.' },
-        sequenceId: { type: 'string', description: 'Filter by linked sequence ID.' },
-        id: { type: 'string', description: 'Get a single assignment by ID or short label.' },
-        limit: { type: 'number', description: 'Maximum number of assignments to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of assignments to skip (for pagination).' },
-        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_list_runs',
-    description: 'List AgentRun execution attempts with optional filters on status, transport, agent, assignment, claim, plan, sequence, or id.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', description: 'Filter by run status: created, launching, waiting_input, running, blocked, completed, failed, cancelled, timed_out, interrupted.' },
-        transport: { type: 'string', description: 'Filter by transport: cli_spawn, manual_command, inbox_only.' },
-        agent: { type: 'string', description: 'Filter by assigned agent name.' },
-        assignmentId: { type: 'string', description: 'Filter by linked assignment ID.' },
-        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
-        planId: { type: 'string', description: 'Filter by linked plan ID.' },
-        sequenceId: { type: 'string', description: 'Filter by linked sequence ID.' },
-        id: { type: 'string', description: 'Get a single run by ID or short label.' },
-        limit: { type: 'number', description: 'Maximum number of runs to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of runs to skip (for pagination).' },
-        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
       },
     },
   },
@@ -443,26 +290,6 @@ export const MCP_READ_TOOLS = [
         id: { type: 'string', description: 'Get a single runtime event by ID.' },
         limit: { type: 'number', description: 'Maximum number of events to return (default: 20).' },
         offset: { type: 'number', description: 'Number of events to skip (for pagination).' },
-        compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_list_actions',
-    description: 'List pending or resolved ActionRequired items for runtime approvals, questions, and clarifications.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', description: 'Filter by action status: pending, resolved, rejected, cancelled.' },
-        kind: { type: 'string', description: 'Filter by action kind: approval, user_input, clarification, plan_approval.' },
-        agent: { type: 'string', description: 'Filter by agent name.' },
-        assignmentId: { type: 'string', description: 'Filter by linked assignment ID.' },
-        runId: { type: 'string', description: 'Filter by linked run ID.' },
-        claimId: { type: 'string', description: 'Filter by linked claim ID.' },
-        id: { type: 'string', description: 'Get a single action by ID or short label.' },
-        limit: { type: 'number', description: 'Maximum number of actions to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of actions to skip (for pagination).' },
         compact: { type: 'boolean', description: 'Return only key fields to reduce output size.' },
       },
     },
@@ -493,24 +320,6 @@ export const MCP_READ_TOOLS = [
         path: { type: 'string', description: 'Infer project namespace from a target path when strategy=folder.' },
         limit: { type: 'number', description: 'Maximum number of instructions to return (default: 20).' },
         offset: { type: 'number', description: 'Number of instructions to skip (for pagination).' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_list_candidates',
-    description: 'List review candidates across pending, accepted, rejected, or all queues.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        status: { type: 'string', description: 'Candidate bucket: pending, accepted, rejected, or all.' },
-        type: { type: 'string', description: 'Filter by candidate type.' },
-        assignee: { type: 'string', description: 'Filter pending candidates by assignee tag (assignee:<name>).' },
-        source: { type: 'string', enum: ['auto', 'agent', 'human'], description: 'Filter by candidate source: auto (session-end auto-reflect), agent (intentional agent action), human (human-created or legacy).' },
-        auto_generated: { type: 'boolean', description: 'When false, exclude auto-generated candidates (source=auto). When true, show only auto-generated candidates.' },
-        limit: { type: 'number', description: 'Maximum number of candidates to return (default: 20).' },
-        offset: { type: 'number', description: 'Number of candidates to skip (for pagination).' },
-        compact: { type: 'boolean', description: 'Return only key fields (id, type, text, status) to reduce output size.' },
       },
     },
   },
@@ -698,17 +507,6 @@ export const MCP_READ_TOOLS = [
       required: ['thread_id'],
     },
   },
-  {
-    name: 'bclaw_dispatch_analysis',
-    description: 'Analyze the active sequence and show lane status: which items are ready (all hard deps met), active (claimed by an agent), blocked (waiting on deps), or done. Shows available agents. Use this before bclaw_dispatch to preview assignments.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        lanes: { type: 'array', items: { type: 'string' }, description: 'Only show specific lanes.' },
-      },
-    },
-  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
@@ -732,23 +530,6 @@ const MCP_WRITE_TOOLS = [
         openLoop: { type: 'boolean', description: 'intent=review: open a review_loop alongside the inbox message (default true).' },
         reviewMode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'intent=review: loop mode when openLoop=true.' },
         // Common
-        agent: { type: 'string', description: 'Dispatcher agent name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-      },
-    },
-  },
-  {
-    name: 'bclaw_dispatch_review',
-    description: 'Dispatch code reviews for completed handoffs. Auto-detects handoffs ready for review (linked plan done, no existing review). Generates a structured review brief with diff, narrative, contract, and criteria. Sends to a reviewer agent via inbox AND opens a review Loop (author + reviewer slots, handoff linked as change_summary, advance to findings) unless openLoop=false. Requires trusted trust level.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        handoffId: { type: 'string', description: 'Specific handoff ID to review. Default: auto-detect all reviewable handoffs.' },
-        reviewer: { type: 'string', description: 'Specific reviewer agent. Default: any available agent that is not the author.' },
-        dryRun: { type: 'boolean', description: 'Preview without sending.' },
-        openLoop: { type: 'boolean', description: 'Open a review Loop alongside the inbox message (default true). Pass false for legacy inbox-only dispatch.' },
-        reviewMode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review Loop mode when openLoop is true. Default asymmetric.' },
         agent: { type: 'string', description: 'Dispatcher agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
       },
@@ -843,59 +624,6 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
-    name: 'bclaw_create_candidate',
-    description: 'Create a memory candidate for review. Trusted/curator agents write through directly. Use targetProject to push a candidate signal to a linked project.',
-    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Candidate content.' },
-        type: { type: 'string', description: 'Type: constraint, decision, trap, handoff.' },
-        agent: { type: 'string', description: 'Author agent name.' },
-        agentId: { type: 'string', description: 'Registered author agent id.' },
-        tags: { type: 'array', items: { type: 'string' } },
-        category: { type: 'string', description: 'Category for constraints: architecture, performance, security, reliability, compatibility, process, other.' },
-        outcome: { type: 'string', description: 'Outcome for decisions: approved, rejected, deferred, pending.' },
-        severity: { type: 'string', description: 'Severity for traps: low, medium, high.' },
-        planId: { type: 'string', description: 'Optional plan item ID this decision or trap relates to.' },
-        scope: { type: 'string', description: 'Memory scope: project (default), machine, or user. Machine-scoped items apply to all projects on this machine.' },
-        store: { type: 'string', description: 'Target store level: local (default), repo, workspace, user. Use "user" to write to ~/.brainclaw/ (visible across all projects).' },
-        targetProject: { type: 'string', description: 'Push this candidate as a cross-project signal to a linked project (name or path).' },
-        target_project: { type: 'string', description: 'Snake_case alias of targetProject.' },
-      },
-      required: ['text', 'type'],
-    },
-  },
-  {
-    name: 'bclaw_accept',
-    description: 'Accept a pending candidate into canonical memory. Requires trusted or curator trust level.',
-    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Candidate ID to accept.' },
-        by: { type: 'string', description: 'Reviewer identity.' },
-        byId: { type: 'string', description: 'Reviewer agent id.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'bclaw_reject',
-    description: 'Reject a pending candidate. Requires trusted or curator trust level.',
-    annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Candidate ID to reject.' },
-        reason: { type: 'string', description: 'Reason for rejection.' },
-        by: { type: 'string', description: 'Reviewer identity.' },
-        byId: { type: 'string', description: 'Reviewer agent id.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
     name: 'bclaw_claim',
     description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim. Requires contributor trust level or above.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
@@ -968,25 +696,6 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
-    name: 'bclaw_create_plan',
-    description: 'Create a new plan item. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Plan item description.' },
-        type: { type: 'string', description: 'Plan type: feat, fix, chore, spike, doc.' },
-        agent: { type: 'string', description: 'Agent name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-        priority: { type: 'string', description: 'Priority: low, medium, high, critical.' },
-        estimate: { type: 'number', description: 'Estimated effort in minutes (positive integer).' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for the plan item.' },
-        assignee: { type: 'string', description: 'Assignee agent or person name.' },
-      },
-      required: ['text'],
-    },
-  },
-  {
     name: 'bclaw_create_sequence',
     description: 'Create a coordination sequence shared by agents.',
     annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
@@ -1021,24 +730,6 @@ const MCP_WRITE_TOOLS = [
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional replacement tags.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'bclaw_update_plan',
-    description: 'Update the status, effort, or other fields of a plan item. Requires contributor trust level or above.',
-    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Plan item ID.' },
-        agent: { type: 'string', description: 'Agent name.' },
-        agentId: { type: 'string', description: 'Registered agent id.' },
-        status: { type: 'string', description: 'New status: todo, in_progress, done, blocked, cancelled.' },
-        actualEffort: { type: 'string', description: 'Actual effort (e.g. "45min", "2h").' },
-        priority: { type: 'string', description: 'New priority: low, medium, high, critical.' },
-        assignee: { type: 'string', description: 'New assignee.' },
       },
       required: ['id'],
     },
@@ -2681,6 +2372,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       return { response: toolResponse(await handleCheckSecurity(args, cwd)) };
     }
 
+    // Early intercept: tools removed at v1.0 return an error with migration guidance.
+    // Handlers for 5 of these still exist internally (used by bclaw_context / bclaw_dispatch),
+    // but direct MCP calls are no longer accepted.
+    const removedRedirect = REMOVED_TOOL_REDIRECTS[name];
+    if (removedRedirect) {
+      return { response: createToolErrorResponse('tool_removed', removedRedirect) };
+    }
+
     if (MCP_READ_TOOLS.some((tool) => tool.name === name)) {
       if (isLegacyMcpToolFacadeDisabled(name)) {
         return { response: createLegacyMcpToolDisabledResponse() };
@@ -2992,172 +2691,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           },
         }),
         nextConnectionSessionId: undefined,
-      };
-    }
-
-    if (name === 'bclaw_create_candidate') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const candidateText = String(args.text ?? '');
-      const candidateTags = (args.tags as string[] | undefined) ?? [];
-      const candidateValidation = validateMcpInput(candidateText, candidateTags);
-      if (!candidateValidation.ok) {
-        return { response: createToolErrorResponse('validation_error', candidateValidation.errors[0]?.message ?? 'Invalid input', candidateValidation.errors) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
-        agentId: resolvedIdentity.agent_id,
-        sessionId: connectionSessionId,
-      });
-      const type = String(args.type ?? 'decision') as CandidateType;
-      const candidatePlanId = args.planId as string | undefined;
-      const candidateScope = args.scope as string | undefined;
-      const targetStore = args.store as string | undefined;
-
-      // Cross-project report: write candidate signal in a linked project inbox
-      const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
-      if (targetProjectArg) {
-        try {
-          const targetLink = resolveCrossProjectWritableTarget(targetProjectArg, 'candidate', cwd);
-          const candId = generateCandidateIdWithLabel(cwd);
-          const candidate: any = {
-            id: candId.id, short_label: candId.short_label, type, text: candidateText,
-            created_at: nowISO(),
-            author: identity.agent, author_id: identity.agent_id,
-            project_id: identity.project_id, host_id: identity.host_id, session_id: identity.session_id,
-            source: `cross-project:${loadConfig(cwd).project_name ?? 'unknown'}`,
-            tags: [...candidateTags, 'cross-project-report'],
-            status: 'pending' as const,
-            severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
-            plan_id: candidatePlanId, scope: candidateScope,
-            model: currentModel,
-            star_count: 0, starred_by: [], usage_count: 0, usage_events: [],
-          };
-          const signal = writeCrossProjectSignal(targetLink, 'candidate', candidate, cwd);
-          appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: signal.id, item_type: 'candidate' }, cwd);
-          return {
-            response: toolResponse({
-              content: [{ type: 'text', text: `✔ Cross-project candidate signal [${signal.id}] sent to ${targetLink.projectName}` }],
-              signal_id: signal.id,
-              candidate_id: candId.id,
-              target_project: targetLink.projectName,
-              target_path: targetLink.absolutePath,
-              write_through: false,
-            }),
-            nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
-          };
-        } catch (error: unknown) {
-          return { response: createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error)) };
-        }
-      }
-
-      const candId = generateCandidateIdWithLabel(cwd);
-      const writeThrough = agentCanWriteDirect(identity.agent_id ?? resolvedIdentity.agent_id, cwd);
-      const effectiveCwd = targetStore ? resolveTargetStore(cwd, targetStore as StoreTarget) : cwd;
-      const candidate: any = {
-        id: candId.id,
-        short_label: candId.short_label,
-        type,
-        text: candidateText,
-        created_at: nowISO(),
-        author: identity.agent,
-        author_id: identity.agent_id,
-        project_id: identity.project_id,
-        host_id: identity.host_id,
-        session_id: identity.session_id,
-        tags: candidateTags,
-        status: 'pending' as const,
-        severity: type === 'trap' ? ((args.severity as 'low' | 'medium' | 'high' | undefined) ?? 'medium') : undefined,
-        category: type === 'constraint' ? (args.category as string | undefined) : undefined,
-        outcome: type === 'decision' ? (args.outcome as string | undefined) : undefined,
-        scope: candidateScope,
-        plan_id: candidatePlanId,
-        model: currentModel,
-        star_count: 0,
-        starred_by: [],
-        usage_count: 0,
-        usage_events: [],
-      };
-      const planPrompt = (type === 'decision' || type === 'trap') && !candidatePlanId
-        ? `\n💡 Does this ${type} relate to an active plan item? If so, re-run with planId: 'pln_xxx' to link it.`
-        : '';
-      const storeLabel = targetStore && targetStore !== 'local' ? ` [store: ${targetStore}]` : '';
-      if (writeThrough) {
-        saveCandidate(candidate, effectiveCwd);
-        const accepted = acceptCandidate(candId.id, resolvedIdentity.agent_name, effectiveCwd, resolvedIdentity.agent_id);
-        appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'promote_direct', item_id: candId.id, item_type: type }, effectiveCwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Direct write [${candId.short_label}] (trusted agent)${storeLabel}${planPrompt}` }],
-            candidate_id: candId.id,
-            promoted_item_id: accepted.promoted_item_id,
-            write_through: true,
-            store: targetStore ?? 'local',
-            scope: candidateScope,
-          }),
-          nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
-        };
-      }
-      saveCandidate(candidate, effectiveCwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: candId.id, item_type: type }, effectiveCwd);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Candidate created [${candId.short_label}] (pending review)${planPrompt}` }],
-          candidate_id: candId.id,
-          write_through: false,
-        }),
-        nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
-      };
-    }
-
-    if (name === 'bclaw_accept') {
-      const resolved = ensureTrust(
-        { ...args, by: args.by ?? args.agent, byId: args.byId ?? args.agentId },
-        { nameField: 'by', idField: 'byId' },
-        'trusted',
-        cwd,
-        connectionSessionId,
-      );
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const candId = String(args.id ?? '').trim();
-      if (!candId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      }
-      const accepted = acceptCandidate(candId, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Accepted [${candId}]` }],
-          candidate_id: candId,
-          promoted_item_id: accepted.promoted_item_id,
-        }),
-      };
-    }
-
-    if (name === 'bclaw_reject') {
-      const resolved = ensureTrust(
-        { ...args, by: args.by ?? args.agent, byId: args.byId ?? args.agentId },
-        { nameField: 'by', idField: 'byId' },
-        'trusted',
-        cwd,
-        connectionSessionId,
-      );
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const candId = String(args.id ?? '').trim();
-      if (!candId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      }
-      rejectCandidate(candId, args.reason as string | undefined, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Rejected [${candId}]` }],
-          candidate_id: candId,
-        }),
       };
     }
 
@@ -3868,64 +3401,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
     }
 
-    if (name === 'bclaw_dispatch_review') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      try {
-        const result = dispatchReview({
-          handoffId: args.handoffId as string | undefined,
-          reviewer: args.reviewer as string | undefined,
-          dryRun: args.dryRun as boolean | undefined,
-          openLoop: args.openLoop as boolean | undefined,
-          reviewMode: args.reviewMode as 'asymmetric' | 'symmetric' | undefined,
-          dispatcherAgent: resolved.identity!.agent_name,
-          dispatcherAgentId: resolved.identity!.agent_id,
-          sessionId: connectionSessionId,
-        }, cwd);
-
-        const lines: string[] = [];
-        if (args.dryRun) {
-          lines.push('🔍 Review dispatch dry run:');
-        } else {
-          lines.push('✔ Review dispatch complete:');
-        }
-
-        if (result.reviews_sent.length > 0) {
-          for (const r of result.reviews_sent) {
-            lines.push(`  → ${r.reviewer} reviewing ${r.handoff_id}${r.plan_id ? ` (${r.plan_id})` : ''} [inbox]`);
-          }
-        } else {
-          lines.push('  No handoffs ready for review.');
-        }
-
-        if (result.skipped.length > 0) {
-          lines.push('  Skipped:');
-          for (const s of result.skipped) {
-            lines.push(`    - ${s.handoff_id}: ${s.reason}`);
-          }
-        }
-
-        appendAuditEntry({
-          actor: resolved.identity!.agent_name,
-          actor_id: resolved.identity!.agent_id,
-          action: 'create',
-          item_type: 'review',
-          scope: `${result.reviews_sent.length} reviews`,
-        }, cwd);
-
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: lines.join('\n') }],
-            ...result,
-          }),
-        };
-      } catch (err: unknown) {
-        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
-      }
-    }
-
     if (name === 'bclaw_assignment_action') {
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4053,53 +3528,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
     }
 
-    if (name === 'bclaw_create_plan') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const planText = String(args.text ?? '').trim();
-      if (!planText) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
-      }
-      const textCheck = validateMcpField(planText, 'text');
-      if (!textCheck.ok) {
-        return { response: createToolErrorResponse('validation_error', textCheck.message) };
-      }
-      let estimatedEffort: number | undefined;
-      if (args.estimate !== undefined) {
-        const n = Number(args.estimate);
-        if (!Number.isInteger(n) || n <= 0) {
-          return { response: createToolErrorResponse('validation_error', 'estimate must be a positive integer (minutes)') };
-        }
-        estimatedEffort = n;
-      }
-      try {
-        const result = createPlan({
-          text: planText,
-          author: resolved.identity!.agent_name,
-          type: args.type as PlanType | undefined,
-          priority: (args.priority as Priority) ?? 'medium',
-          assignee: args.assignee as string | undefined,
-          tags: (args.tags as string[]) ?? [],
-          estimatedEffort,
-        }, cwd);
-        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: result.id, item_type: 'plan' }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Plan item added: [${result.id}] ${planText}` }],
-            plan_id: result.id,
-          }),
-        };
-      } catch (err: unknown) {
-        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
-      }
-    }
-
     if (name === 'bclaw_create_sequence') {
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4157,44 +3585,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Sequence updated: [${result.id}] ${result.name}` }],
             sequence_id: result.id,
-            status: result.status,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
-    }
-
-    if (name === 'bclaw_update_plan') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const planId = String(args.id ?? '').trim();
-      if (!planId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      }
-      try {
-        const result = updatePlanOp({
-          id: planId,
-          status: args.status as PlanStatus | undefined,
-          assignee: args.assignee as string | undefined,
-          priority: args.priority as Priority | undefined,
-          actualEffort: args.actualEffort as string | undefined,
-        }, cwd);
-        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'plan' }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Plan item updated: [${result.id}] ${result.text}` }],
-            plan_id: result.id,
             status: result.status,
           }),
         };

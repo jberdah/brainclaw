@@ -23,6 +23,7 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set<AgentIntegrationName>([
   'antigravity',
   'continue',
   'roo',
+  'kilocode',
   'openclaw',
   'nanoclaw',
   'nemoclaw',
@@ -86,6 +87,11 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   'roo': [
     { kind: 'instructions', location: 'workspace', path: '.roo/rules/brainclaw.md' },
     { kind: 'mcp',          location: 'workspace', path: '.roo/mcp.json' },
+    { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
+  ],
+  'kilocode': [
+    { kind: 'instructions', location: 'workspace', path: '.kilo/rules/brainclaw.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.kilo/mcp.json' },
     { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
   ],
   'openclaw': [

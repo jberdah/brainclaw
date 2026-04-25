@@ -463,6 +463,7 @@ function formatForAgent(agentName: string): string {
     case 'windsurf': return 'windsurf';
     case 'cline': return 'cline';
     case 'roo': return 'roo';
+    case 'kilocode': return 'kilocode';
     case 'continue': return 'continue';
     default: return 'agents-md';
   }

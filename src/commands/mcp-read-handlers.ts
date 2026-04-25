@@ -338,46 +338,6 @@ export function handleMcpReadToolCall(
     };
   }
 
-  if (name === 'bclaw_read_handoff') {
-    const state = loadState(cwd);
-    const handoff = state.open_handoffs.find((entry) => entry.id === args.id);
-    let text = `Handoff not found: ${String(args.id)}`;
-    if (handoff) {
-      text = `From: ${handoff.from}\nTo: ${handoff.to}\nTask: ${handoff.text}\n`;
-      if (handoff.plan_id) text += `Plan: ${handoff.plan_id}\n`;
-      if (handoff.narrative) text += `\n--- Narrative ---\n${handoff.narrative}\n`;
-      if (handoff.contract) {
-        const c = handoff.contract;
-        text += '\n--- Contract ---\n';
-        if (c.files_touched?.length) text += `Files touched:\n${c.files_touched.map(f => `  - ${f}`).join('\n')}\n`;
-        if (c.pre_conditions?.length) text += `Pre-conditions:\n${c.pre_conditions.map(p => `  - ${p}`).join('\n')}\n`;
-        if (c.post_conditions?.length) text += `Post-conditions:\n${c.post_conditions.map(p => `  - ${p}`).join('\n')}\n`;
-        if (c.tests_to_verify?.length) text += `Tests to verify:\n${c.tests_to_verify.map(t => `  - ${t}`).join('\n')}\n`;
-        if (c.linked_plans?.length) text += `Linked plans:\n${c.linked_plans.map(l => `  - ${l}`).join('\n')}\n`;
-      }
-      if (handoff.review) {
-        const review = handoff.review;
-        text += '\n--- Review ---\n';
-        if (review.requester) text += `Requester: ${review.requester}\n`;
-        if (review.reviewer) text += `Reviewer: ${review.reviewer}\n`;
-        if (review.requested_at) text += `Requested at: ${review.requested_at}\n`;
-        if (review.thread_id) text += `Thread: ${review.thread_id}\n`;
-        if (review.message_id) text += `Review message: ${review.message_id}\n`;
-        if (review.verdict) text += `Verdict: ${review.verdict}\n`;
-        if (review.reviewed_by) text += `Reviewed by: ${review.reviewed_by}\n`;
-        if (review.reviewed_at) text += `Reviewed at: ${review.reviewed_at}\n`;
-        if (review.summary) text += `Summary: ${review.summary}\n`;
-        if (review.blocking_issues?.length) text += `Blocking issues:\n${review.blocking_issues.map((issue) => `  - ${issue}`).join('\n')}\n`;
-        if (review.suggestions?.length) text += `Suggestions:\n${review.suggestions.map((suggestion) => `  - ${suggestion}`).join('\n')}\n`;
-      }
-      text += '\n';
-      if (handoff.snapshot?.diff) {
-        text += `--- Uncommitted Git Diff ---\n\`\`\`diff\n${handoff.snapshot.diff}\n\`\`\`\n`;
-      }
-    }
-    return { content: [{ type: 'text', text }] };
-  }
-
   if (name === 'bclaw_get_agent_board_summary') {
     const config = loadConfig(cwd);
     const state = loadState(cwd);

@@ -11,6 +11,7 @@
  *        - AGENTS.md, CLAUDE.md, .cursor/rules/brainclaw.md, .windsurfrules,
  *          .clinerules/brainclaw.md, .github/copilot-instructions.md,
  *          .continue/rules/brainclaw.md, .roo/rules/brainclaw.md,
+ *          .kilo/rules/brainclaw.md,
  *          GEMINI.md all carry the facade-first session protocol.
  *        - No CLI verb appears as the *primary* instruction before a facade
  *          (CLI is explicitly a fallback).
@@ -115,6 +116,7 @@ describe('fresh-agent onboarding e2e (Codex P5)', () => {
       '.clinerules/brainclaw.md',
       '.continue/rules/brainclaw.md',
       '.roo/rules/brainclaw.md',
+      '.kilo/rules/brainclaw.md',
       'GEMINI.md',
     ];
 
