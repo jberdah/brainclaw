@@ -20,7 +20,6 @@ import {
   checkActiveInstance,
 } from '../../src/core/dispatcher.js';
 import { buildInvokeCommand, resolveBriefMode } from '../../src/core/agent-capability.js';
-import { canSpawnAgent } from '../../src/core/execution.js';
 import { loadAssignment, transitionAssignment, recordProgress } from '../../src/core/assignments.js';
 import { listAgentRuns, findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
 import { saveSequence } from '../../src/core/sequence.js';
@@ -340,7 +339,7 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     }
   });
 
-  it('assignment lifecycle also works for inbox-oriented profiles', async () => {
+  it('assignment lifecycle works end-to-end for github-copilot', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -353,8 +352,10 @@ describe('dispatch-e2e/per-agent-cycle', () => {
 
     const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'] }, testDir))!;
     const assignmentId = result.result.messages_sent[0]!.assignment_id;
-    assert.ok(assignmentId, 'inbox-oriented dispatch still creates an assignment');
-    assert.equal(result.result.messages_sent[0]!.execution_status, 'inbox_only');
+    assert.ok(assignmentId, 'dispatch creates an assignment');
+    // pln#440: copilot is now spawnable; in tests BRAINCLAW_NO_SPAWN=1 forces
+    // the fallback to command_ready_manual (we still validate the lifecycle).
+    assert.equal(result.result.messages_sent[0]!.execution_status, 'command_ready_manual');
 
     transitionAssignment(assignmentId!, 'accepted', {
       actor: 'github-copilot',
@@ -395,12 +396,13 @@ describe('dispatch-e2e/per-agent-cycle', () => {
     assert.equal(result.result.messages_sent.length, 1);
     assert.equal(result.result.messages_sent[0]!.agent, 'github-copilot');
 
-    // pln#440: Copilot CLI 1.0.35+ is spawnable via --allow-all --no-ask-user
-    const spawnCheck = canSpawnAgent('github-copilot');
-    assert.equal(spawnCheck.canSpawn, true, 'copilot is spawnable post pln#440');
-
+    // pln#440: Copilot CLI 1.0.35+ is spawnable via --allow-all --no-ask-user.
+    // We verify this through the profile-based buildInvokeCommand (which mirrors
+    // the cline assertion below). canSpawnAgent() can't be used here: the suite
+    // sets BRAINCLAW_NO_SPAWN=1 in beforeEach, which short-circuits canSpawn to
+    // false regardless of the profile flag.
     const invokeCmd = buildInvokeCommand('github-copilot', 'test brief');
-    assert.ok(invokeCmd, 'copilot has an invoke command');
+    assert.ok(invokeCmd, 'copilot has an invoke command (spawnable post pln#440)');
     assert.equal(invokeCmd.executable, 'copilot');
     assert.equal(invokeCmd.promptDelivery, 'inline_arg', 'copilot uses inline_arg delivery');
   });
