@@ -12,6 +12,8 @@ import {
   isBareRepo,
   hasGitLock,
   detectSharedCheckoutRisk,
+  assertPathInWorktreesScope,
+  safeRemoveWorktreeDir,
 } from '../../src/core/worktree.js';
 
 describe('worktreesBaseDir', () => {
@@ -159,5 +161,100 @@ describe('createWorktree reset guard', () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(externalWorktree, { recursive: true, force: true });
     }
+  });
+});
+
+// pln#477 — worktree GC scope hardening
+describe('assertPathInWorktreesScope', () => {
+  it('accepts paths under ~/.brainclaw/worktrees/', () => {
+    const target = path.join(os.homedir(), '.brainclaw', 'worktrees', 'abc123', 'feat_x');
+    fs.mkdirSync(target, { recursive: true });
+    try {
+      assert.doesNotThrow(() => assertPathInWorktreesScope(target, '/some/project'));
+    } finally {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts paths under <projectRoot>/.brainclaw/coordination/runtime/', () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-scope-proj-'));
+    const target = path.join(projectRoot, '.brainclaw', 'coordination', 'runtime', 'ack');
+    fs.mkdirSync(target, { recursive: true });
+    try {
+      assert.doesNotThrow(() => assertPathInWorktreesScope(target, projectRoot));
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects paths outside brainclaw scope', () => {
+    const stranger = fs.mkdtempSync(path.join(os.tmpdir(), 'stranger-'));
+    try {
+      assert.throws(
+        () => assertPathInWorktreesScope(stranger, '/some/project'),
+        /Refusing to remove path outside brainclaw worktree scope/,
+      );
+    } finally {
+      fs.rmSync(stranger, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects symlinks that resolve out of scope (defense against junction-escape)', () => {
+    // Create a real out-of-scope target, then a symlink under worktrees pointing
+    // to it. realpath should resolve to the out-of-scope target → rejected.
+    const realTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'real-out-of-scope-'));
+    const fakeWorktree = path.join(os.homedir(), '.brainclaw', 'worktrees', 'test-junction-escape');
+    fs.mkdirSync(fakeWorktree, { recursive: true });
+    const link = path.join(fakeWorktree, 'escape-link');
+    try {
+      fs.symlinkSync(realTarget, link, 'dir');
+      assert.throws(
+        () => assertPathInWorktreesScope(link, '/some/project'),
+        /Refusing to remove path outside brainclaw worktree scope/,
+      );
+    } finally {
+      try { fs.unlinkSync(link); } catch { /* may already be gone */ }
+      fs.rmSync(fakeWorktree, { recursive: true, force: true });
+      fs.rmSync(realTarget, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('safeRemoveWorktreeDir', () => {
+  it('removes a regular directory tree without surprise', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-saferm-'));
+    fs.mkdirSync(path.join(dir, 'sub'));
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'hello');
+    fs.writeFileSync(path.join(dir, 'sub', 'b.txt'), 'world');
+
+    safeRemoveWorktreeDir(dir);
+
+    assert.equal(fs.existsSync(dir), false);
+  });
+
+  it('does NOT follow symlinks — preserves the symlink target (regression for trap_merge_wipes_node_modules)', () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-target-'));
+    const importantFile = path.join(target, 'important.txt');
+    fs.writeFileSync(importantFile, 'must-survive');
+
+    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-worktree-'));
+    const linkInside = path.join(worktreeDir, 'symlink-to-target');
+    fs.symlinkSync(target, linkInside, 'dir');
+
+    safeRemoveWorktreeDir(worktreeDir);
+
+    // The worktree dir is gone, but the symlink target tree is INTACT.
+    assert.equal(fs.existsSync(worktreeDir), false, 'worktree dir removed');
+    assert.equal(fs.existsSync(target), true, 'symlink target dir survived');
+    assert.equal(fs.existsSync(importantFile), true, 'file under target survived');
+    assert.equal(fs.readFileSync(importantFile, 'utf-8'), 'must-survive');
+
+    // Cleanup
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('handles a missing path silently (idempotent)', () => {
+    const phantom = path.join(os.tmpdir(), 'bclaw-saferm-phantom-' + Date.now());
+    assert.doesNotThrow(() => safeRemoveWorktreeDir(phantom));
   });
 });

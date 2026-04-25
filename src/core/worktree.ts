@@ -317,6 +317,94 @@ function finaliseWorktree(
  * Passes `--force` only if `force` is explicitly set, to avoid accidentally
  * removing worktrees with uncommitted changes.
  */
+/**
+ * pln#477 — Path-prefix gate for the worktree GC.
+ *
+ * Worktree cleanup operations call `fs.rmSync(recursive: true)` which on
+ * Windows can follow directory junctions into the main repo and wipe
+ * `node_modules/` or `dist/` (trap_merge_wipes_node_modules). Defense
+ * in depth: refuse to operate on any path outside the brainclaw-managed
+ * scope. Resolves symlinks via `realpath` so a junction pointing OUT of
+ * scope is also caught.
+ *
+ * Allowed roots:
+ *   - `<userHome>/.brainclaw/worktrees/**`     — brainclaw-managed worktrees
+ *   - `<projectRoot>/.brainclaw/coordination/runtime/**` — runtime artifacts
+ */
+export function assertPathInWorktreesScope(target: string, projectRoot: string): void {
+  let resolvedTarget: string;
+  try {
+    resolvedTarget = fs.realpathSync.native(target);
+  } catch {
+    // Path doesn't exist — fall back to lexical resolution
+    resolvedTarget = path.resolve(target);
+  }
+
+  const worktreesRoot = path.resolve(path.join(os.homedir(), '.brainclaw', 'worktrees'));
+  const runtimeRoot = path.resolve(projectRoot, '.brainclaw', 'coordination', 'runtime');
+
+  const isUnderWorktrees = resolvedTarget.startsWith(worktreesRoot + path.sep) || resolvedTarget === worktreesRoot;
+  const isUnderRuntime = resolvedTarget.startsWith(runtimeRoot + path.sep) || resolvedTarget === runtimeRoot;
+
+  if (!isUnderWorktrees && !isUnderRuntime) {
+    throw new Error(
+      `Refusing to remove path outside brainclaw worktree scope: ${target} (resolves to ${resolvedTarget}). ` +
+      `Allowed roots: ${worktreesRoot}, ${runtimeRoot}`,
+    );
+  }
+}
+
+/**
+ * pln#477 — Safe recursive directory removal that does NOT follow symlinks
+ * or directory junctions. Required because brainclaw worktrees contain
+ * `node_modules` and `dist` as junctions to the main repo — a naive
+ * `fs.rmSync(recursive: true)` would wipe those targets.
+ *
+ * Walks via `lstat` so links are detached without descending into them.
+ */
+export function safeRemoveWorktreeDir(dirPath: string): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(dirPath);
+  } catch {
+    return; // Already gone
+  }
+
+  // Symlink (file or directory): unlink only, do not follow.
+  if (stat.isSymbolicLink()) {
+    try {
+      fs.unlinkSync(dirPath);
+    } catch {
+      // Windows directory symlinks/junctions sometimes need rmdir
+      try { fs.rmdirSync(dirPath); } catch { /* best effort */ }
+    }
+    return;
+  }
+
+  // Regular directory: recurse via readdir + lstat-based dispatch.
+  if (stat.isDirectory()) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      safeRemoveWorktreeDir(path.join(dirPath, entry.name));
+    }
+    try {
+      fs.rmdirSync(dirPath);
+    } catch {
+      // Last-ditch: try unlink for stubborn junction parents.
+      try { fs.unlinkSync(dirPath); } catch { /* best effort */ }
+    }
+    return;
+  }
+
+  // Regular file
+  try { fs.unlinkSync(dirPath); } catch { /* best effort */ }
+}
+
 export function removeWorktree(
   mainWorktreePath: string,
   worktreePath: string,
@@ -330,11 +418,13 @@ export function removeWorktree(
     throw new Error(`git worktree remove failed: ${result.stderr.trim()}`);
   }
 
-  // Remove brainclaw metadata directory if it sits under ~/.brainclaw/worktrees
-  // (safety: only delete managed paths, never arbitrary dirs)
+  // Remove brainclaw metadata directory if it sits under ~/.brainclaw/worktrees.
+  // pln#477: use safeRemoveWorktreeDir to avoid following junctions into the
+  // main repo (node_modules / dist symlinks created at worktree birth).
   const base = path.join(os.homedir(), '.brainclaw', 'worktrees');
   if (worktreePath.startsWith(base) && fs.existsSync(worktreePath)) {
-    fs.rmSync(worktreePath, { recursive: true, force: true });
+    assertPathInWorktreesScope(worktreePath, mainWorktreePath);
+    safeRemoveWorktreeDir(worktreePath);
   }
 }
 
@@ -451,7 +541,10 @@ function cleanOrphanWorktreeDirs(
       result.removed.push(dirPath);
     } else {
       try {
-        fs.rmSync(dirPath, { recursive: true, force: true });
+        // pln#477: scope gate + junction-safe walk avoid wiping the main
+        // repo's node_modules/dist via junction-following.
+        assertPathInWorktreesScope(dirPath, mainWorktreePath);
+        safeRemoveWorktreeDir(dirPath);
         result.removed.push(dirPath);
       } catch {
         result.skipped.push({ path: dirPath, reason: 'orphan dir removal failed' });
