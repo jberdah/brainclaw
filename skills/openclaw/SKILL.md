@@ -123,7 +123,7 @@ brainclaw search "<query>"
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.1.0 — do not edit manually.
+> Managed by brainclaw v1.2.0 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
