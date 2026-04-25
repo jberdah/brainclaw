@@ -419,7 +419,7 @@ export const InboxMessageSchema = z.object({
   /** Reference to a plan, sequence, handoff, or RFC thread */
   ref: z.string().optional(),
   /** Structured payload — brief, context, criteria, or any structured data */
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
   /** File scope relevant to this message */
   scope: z.string().optional(),
   /** Whether the recipient must acknowledge */
@@ -489,8 +489,8 @@ export type PreinstallWeights = z.infer<typeof PreinstallWeightsSchema>;
 export const PreinstallConfigSchema = z.object({
   enabled: z.boolean().default(false),
   mode: z.enum(['advisory', 'enforced']).default('advisory'),
-  thresholds: PreinstallThresholdsSchema.default({}),
-  weights: PreinstallWeightsSchema.default({}),
+  thresholds: PreinstallThresholdsSchema.prefault({}),
+  weights: PreinstallWeightsSchema.prefault({}),
   cache_ttl_hours: z.number().positive().default(24),
   fallback_on_error: z.enum(['warn', 'pass', 'block']).default('warn'),
   allowlist: z.array(z.string()).default([]),
@@ -844,7 +844,7 @@ export type ActionRequiredStatus = z.infer<typeof ActionRequiredStatusSchema>;
 export const ActionRequiredResponseSchema = z.object({
   outcome: z.enum(['resolved', 'rejected', 'cancelled']),
   text: z.string().optional(),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
   responded_by: z.string(),
   responded_by_id: z.string().optional(),
   responded_at: z.string(),
@@ -870,7 +870,7 @@ export const ActionRequiredSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   options: z.array(z.string()).default([]),
-  response_schema: z.record(z.unknown()).optional(),
+  response_schema: z.record(z.string(), z.unknown()).optional(),
   created_at: z.string(),
   updated_at: z.string(),
   expires_at: z.string().optional(),
@@ -1001,7 +1001,7 @@ export const RuntimeEventSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   related_paths: z.array(z.string()).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   model: z.string().optional(),
 });
 export type RuntimeEvent = z.infer<typeof RuntimeEventSchema>;
@@ -1073,7 +1073,7 @@ export const AgentInvokeSchema = z.object({
   /** Max execution time in seconds (default: 600 = 10min) */
   timeout: z.number().int().positive().default(600),
   /** Environment variables to set when spawning */
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
 }).strict();
 export type AgentInvoke = z.infer<typeof AgentInvokeSchema>;
 
@@ -1485,6 +1485,6 @@ export const ConfigSchema = z.object({
   auto_refresh_live: z.boolean().default(true),
   claims: z.object({
     auto_release_after_hours: z.number().default(24),
-  }).default({}),
+  }).prefault({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;

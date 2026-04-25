@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { type ZodType, type ZodTypeDef } from 'zod';
+import { type ZodType } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
 import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
@@ -24,7 +24,7 @@ export function emptyState(): State {
 
 function loadDirectoryItems<T>(
   dirPath: string,
-  schema: ZodType<T, ZodTypeDef, unknown>,
+  schema: ZodType<T, unknown>,
   documentType: VersionedDocumentType,
 ): T[] {
   if (!fs.existsSync(dirPath)) return [];
@@ -67,7 +67,7 @@ function syncDirectory<T extends { id: string }>(
   dirPath: string,
   items: T[],
   documentType: VersionedDocumentType,
-  schema: ZodType<T, ZodTypeDef, unknown>,
+  schema: ZodType<T, unknown>,
 ) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -141,7 +141,7 @@ function cleanupLegacyDir<T extends { id: string }>(
   currentIds: Set<string>,
   cwd: string,
   documentType: VersionedDocumentType,
-  schema: ZodType<T, ZodTypeDef, unknown>,
+  schema: ZodType<T, unknown>,
 ): void {
   const writeDir = resolveEntityDir(entityName, cwd, 'write');
   const readDir = resolveEntityDir(entityName, cwd, 'read');
@@ -178,13 +178,13 @@ function writeStateDirectories(state: State, cwd?: string): void {
     name: string;
     items: { id: string }[];
     docType: VersionedDocumentType;
-    schema: ZodType<{ id: string }, ZodTypeDef, unknown>;
+    schema: ZodType<{ id: string }, unknown>;
   }> = [
-    { name: 'constraints', items: state.active_constraints, docType: 'constraint', schema: ConstraintSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
-    { name: 'decisions', items: state.recent_decisions, docType: 'decision', schema: DecisionSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
-    { name: 'traps', items: state.known_traps, docType: 'trap', schema: TrapSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
-    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff', schema: HandoffSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
-    { name: 'plans', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, ZodTypeDef, unknown> },
+    { name: 'constraints', items: state.active_constraints, docType: 'constraint', schema: ConstraintSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'decisions', items: state.recent_decisions, docType: 'decision', schema: DecisionSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'traps', items: state.known_traps, docType: 'trap', schema: TrapSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff', schema: HandoffSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'plans', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, unknown> },
   ];
 
   for (const { name, items, docType, schema } of entities) {

@@ -57,7 +57,7 @@ export const ProvenanceRolloutLogSchema = z.object({
   stamped_at: z.string().datetime(),
   reason: z.string(),
   count: z.number().int().nonnegative(),
-  counts_by_kind: z.record(z.number().int().nonnegative()),
+  counts_by_kind: z.record(z.string(), z.number().int().nonnegative()),
   entries: z.array(ProvenanceRolloutEntrySchema),
 });
 export type ProvenanceRolloutLog = z.infer<typeof ProvenanceRolloutLogSchema>;

@@ -20,7 +20,7 @@ describe('core/input-validation', () => {
     it('rejects an empty string', () => {
       const result = TextInputSchema.safeParse('');
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes('empty'));
+      assert.ok(result.error.issues[0]!.message.includes('empty'));
     });
 
     it('rejects a string that is only whitespace', () => {
@@ -41,7 +41,7 @@ describe('core/input-validation', () => {
       const text = 'a'.repeat(TEXT_MAX_LENGTH + 1);
       const result = TextInputSchema.safeParse(text);
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes(`${TEXT_MAX_LENGTH}`));
+      assert.ok(result.error.issues[0]!.message.includes(`${TEXT_MAX_LENGTH}`));
     });
   });
 
@@ -59,14 +59,14 @@ describe('core/input-validation', () => {
     it('rejects an array with an empty string tag', () => {
       const result = TagArraySchema.safeParse(['auth', '']);
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes('empty'));
+      assert.ok(result.error.issues[0]!.message.includes('empty'));
     });
 
     it('rejects an array with a tag exceeding max length', () => {
       const longTag = 'a'.repeat(TAG_MAX_LENGTH + 1);
       const result = TagArraySchema.safeParse([longTag]);
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes(`${TAG_MAX_LENGTH}`));
+      assert.ok(result.error.issues[0]!.message.includes(`${TAG_MAX_LENGTH}`));
     });
 
     it('accepts a tag at exactly the max length', () => {
@@ -79,7 +79,7 @@ describe('core/input-validation', () => {
       const tags = Array.from({ length: TAG_MAX_COUNT + 1 }, (_, i) => `tag${i}`);
       const result = TagArraySchema.safeParse(tags);
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes(`${TAG_MAX_COUNT}`));
+      assert.ok(result.error.issues[0]!.message.includes(`${TAG_MAX_COUNT}`));
     });
 
     it('accepts an array at exactly the max tag count', () => {
@@ -115,7 +115,7 @@ describe('core/input-validation', () => {
     it('rejects invalid format: text', () => {
       const result = TtlSchema.safeParse('invalid');
       assert.equal(result.success, false);
-      assert.ok(result.error.errors[0]!.message.includes('TTL'));
+      assert.ok(result.error.issues[0]!.message.includes('TTL'));
     });
 
     it('rejects empty string', () => {
