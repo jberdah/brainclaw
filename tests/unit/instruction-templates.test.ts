@@ -149,13 +149,30 @@ describe('instruction-templates', () => {
     });
   });
 
-  describe('tier A agents reclassified from B', () => {
+  describe('hook-capable agents keep lightweight stable instructions', () => {
     for (const agent of ['cursor', 'windsurf', 'cline', 'codex', 'github-copilot']) {
       it(`${agent} is now tier A`, () => {
         const result = renderBrainclawSection(makeInput(agent));
         assert.equal(result.tier, 'A', `${agent} should be tier A`);
         assert.ok(!result.sectionsIncluded.includes('traps'), `${agent} tier A should not have static traps`);
         assert.ok(!result.sectionsIncluded.includes('working-rules'), `${agent} tier A should not have working rules`);
+      });
+    }
+  });
+
+  describe('live companions for hook-capable parity agents', () => {
+    for (const agent of ['cursor', 'windsurf', 'cline', 'github-copilot']) {
+      it(`${agent} gets a Tier B-shaped live companion`, () => {
+        const state = makeState({
+          known_traps: [{ id: 'trp_1', text: 'Trap', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' }] as any,
+          plan_items: [{ id: 'pln_1', text: 'Plan', status: 'todo', tags: [], created_at: '', created_by: '' }] as any,
+          open_handoffs: [{ id: 'hnd_1', from: 'alice', to: 'bob', text: 'Review auth flow', status: 'open', tags: [], created_at: '', author: 'alice' }] as any,
+        });
+        const live = renderLiveSection(makeInput(agent, { state }));
+        assert.ok(live, `${agent} should get a live companion`);
+        assert.equal(live!.tier, 'B');
+        assert.ok(live!.sectionsIncluded.includes('handoffs'));
+        assert.ok(live!.content.includes('Review auth flow'));
       });
     }
   });
@@ -194,19 +211,22 @@ describe('instruction-templates', () => {
       assert.ok(!result.sectionsIncluded.includes('decisions'));
     });
 
-    it('live companion includes traps and plans, excludes machine-visibility', () => {
+    it('live companion includes traps, plans, and open handoffs; excludes machine-visibility', () => {
       const state = makeState({
         known_traps: [
           { id: 'trp_1', text: 'Flaky test', severity: 'high', visibility: 'shared', tags: [], created_at: '', created_by: '' },
           { id: 'trp_2', text: 'Machine-only', severity: 'medium', visibility: 'machine', tags: [], created_at: '', created_by: '' },
         ] as any,
         plan_items: [{ id: 'pln_1', text: 'Plan', status: 'todo', tags: [], created_at: '', created_by: '' }] as any,
+        open_handoffs: [{ id: 'hnd_1', from: 'alice', to: 'bob', text: 'Review auth flow', status: 'open', tags: [], created_at: '', author: 'alice' }] as any,
       });
       const live = renderLiveSection(makeInput('roo', { state }));
       assert.ok(live, 'Tier B should have a live companion');
       assert.ok(live!.content.includes('Flaky test'));
       assert.ok(!live!.content.includes('Machine-only'));
       assert.ok(live!.sectionsIncluded.includes('plans'));
+      assert.ok(live!.sectionsIncluded.includes('handoffs'));
+      assert.ok(live!.content.includes('Review auth flow'));
     });
 
     it('live companion limits traps to maxTraps', () => {

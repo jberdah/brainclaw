@@ -11,6 +11,7 @@ import {
   upsertBrainclawSection,
   BRAINCLAW_SECTION_START,
   BRAINCLAW_SECTION_END,
+  resolveLiveCompanionPath,
 } from '../../src/core/agent-files.js';
 import { runExport } from '../../src/commands/export.js';
 import { loadConfig } from '../../src/core/config.js';
@@ -43,6 +44,20 @@ describe('agent export registry', () => {
     const target = resolveExportTarget('some-unknown-agent');
     assert.equal(target.format, FALLBACK_EXPORT_TARGET.format);
     assert.equal(target.relativePath, FALLBACK_EXPORT_TARGET.relativePath);
+  });
+
+  it('resolves native live companion paths for parity agents', () => {
+    const cases: [string, string, string][] = [
+      ['cursor', '.cursor/rules/brainclaw.md', '.cursor/live.md'],
+      ['cline', '.clinerules/brainclaw.md', '.clinerules/live.md'],
+      ['windsurf', '.windsurfrules', '.windsurf/rules/live.md'],
+      ['github-copilot', '.github/copilot-instructions.md', '.github/copilot-instructions.live.md'],
+      ['continue', '.continue/rules/brainclaw.md', '.continue/live.md'],
+      ['antigravity', 'GEMINI.md', 'GEMINI.live.md'],
+    ];
+    for (const [agentName, stablePath, livePath] of cases) {
+      assert.equal(resolveLiveCompanionPath(agentName, stablePath), livePath);
+    }
   });
 
   it('AGENT_EXPORT_REGISTRY covers all known agents', () => {
@@ -260,6 +275,26 @@ describe('export command formats', () => {
     assert.ok(gitignore.includes('.mcp.json'));
     assert.ok(gitignore.includes('.claude/commands/brainclaw.md'));
     assert.ok(gitignore.includes('.claude/settings.local.json'));
+  });
+
+  it('--include-live writes native live companions for parity agents', () => {
+    const cases: Array<{ format: 'copilot-instructions' | 'cursor-rules' | 'windsurf' | 'cline' | 'continue'; liveFile: string }> = [
+      { format: 'copilot-instructions', liveFile: '.github/copilot-instructions.live.md' },
+      { format: 'cursor-rules', liveFile: '.cursor/live.md' },
+      { format: 'windsurf', liveFile: '.windsurf/rules/live.md' },
+      { format: 'cline', liveFile: '.clinerules/live.md' },
+      { format: 'continue', liveFile: '.continue/live.md' },
+    ];
+
+    for (const { format, liveFile } of cases) {
+      runExport({ format, write: true, includeLive: true, cwd: workspace.dir });
+      const livePath = path.join(workspace.dir, liveFile);
+      assert.ok(fs.existsSync(livePath), `${liveFile} should exist`);
+      const content = fs.readFileSync(livePath, 'utf-8');
+      assert.ok(content.includes('Brainclaw live state'), `${liveFile} should contain live header`);
+      const gitignore = fs.readFileSync(path.join(workspace.dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes(liveFile), `${liveFile} should be gitignored`);
+    }
   });
 
   it('--detect with BRAINCLAW_AGENT env writes to correct file', () => {

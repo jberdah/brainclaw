@@ -1359,6 +1359,7 @@ program
   .option('--detect', 'Auto-detect agent environment and write to its native file')
   .option('--all', 'Write all known agent instruction files at once (claude-md, agents-md, copilot-instructions, cursor-rules, etc.)')
   .option('--write', 'Write to canonical file path instead of stdout (when --format is given); local files are gitignored by default')
+  .option('--include-live', 'Also write the native live companion file when the target agent supports one')
   .option('--shared', 'Keep the main exported instruction file versionable instead of auto-ignoring it (companions remain local)')
   .option('--output <file>', 'Write to a specific file path instead of stdout')
   .option('--project <project>', 'Project namespace filter')

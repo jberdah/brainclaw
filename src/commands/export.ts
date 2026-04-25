@@ -11,6 +11,7 @@ import {
   resolveExportTarget,
   resolveExportTargetByFormat,
   writeExportFile,
+  writeLiveCompanionFile,
   buildHygieneSection,
   describeAutoConfigWrite,
   writeExportCompanionFiles,
@@ -24,7 +25,7 @@ import { listClaims } from '../core/claims.js';
 import { listCandidates } from '../core/candidates.js';
 import { logger } from '../core/logger.js';
 import { getAgentCapabilityProfile } from '../core/agent-capability.js';
-import { renderBrainclawSection, renderLiveSection } from '../core/instruction-templates.js';
+import { renderBrainclawSection, renderLiveSection, type InstructionTemplateInput } from '../core/instruction-templates.js';
 import { getInstalledBrainclawVersion } from '../core/brainclaw-version.js';
 
 export type { ExportFormat };
@@ -36,6 +37,7 @@ export interface ExportOptions {
   agent?: string;
   detect?: boolean;
   write?: boolean;
+  includeLive?: boolean;
   shared?: boolean;
   all?: boolean;
   cwd?: string;
@@ -62,6 +64,17 @@ export function runExport(options: ExportOptions): void {
     return;
   }
 
+  if (options.includeLive) {
+    if (options.output) {
+      console.error('Error: --include-live cannot be used with --output. Use --write, --detect, or --all.');
+      process.exit(1);
+    }
+    if (!options.write) {
+      console.error('Error: --include-live requires --write, --detect, or --all.');
+      process.exit(1);
+    }
+  }
+
   if (!options.format) {
     console.error('Error: --format, --detect, or --all is required.');
     process.exit(1);
@@ -72,13 +85,19 @@ export function runExport(options: ExportOptions): void {
   if (options.write) {
     const target = resolveExportTargetByFormat(options.format);
     const result = writeExportFile(content, target.relativePath, cwd);
+    const liveResult = options.includeLive ? writeLiveCompanionForTarget(target, options, cwd) : undefined;
     const autoConfigs = writeExportCompanionFiles(options.format, cwd);
     const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs, {
       includeTarget: !options.shared,
     });
+    if (liveResult) gitignoreEntries.push(liveResult.relativePath);
     ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
     declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
     console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+    if (liveResult) {
+      const status = liveResult.created ? 'created' : liveResult.updated ? 'updated' : 'unchanged';
+      console.log(`Written live companion to ${liveResult.relativePath} (${status})`);
+    }
     if (options.shared) {
       console.log(`✔ Left ${target.relativePath} versionable (--shared); local companion config remains gitignored`);
     } else if (gitignoreEntries.length > 0) {
@@ -105,13 +124,19 @@ function runExportDetect(cwd: string, options: ExportOptions): void {
   const target = detected ? resolveExportTarget(detected.name) : resolveExportTarget('unknown');
   const content = generateExport(target.format, options, cwd);
   const result = writeExportFile(content, target.relativePath, cwd);
+  const liveResult = options.includeLive ? writeLiveCompanionForTarget(target, options, cwd) : undefined;
   const autoConfigs = writeExportCompanionFiles(target.format, cwd);
   const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
+  if (liveResult) gitignoreEntries.push(liveResult.relativePath);
   ensureGitignoreEntries(cwd, [...gitignoreEntries, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
   declareAgentIntegrationFromTarget(cwd, target.agentName, detected ? 'detected' : 'manual');
   const source = detected ? `${detected.name} [${detected.detection_source}]` : 'fallback (no agent detected)';
   console.log(`✔ Detected: ${source}`);
   console.log(`✔ Written to ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+  if (liveResult) {
+    const status = liveResult.created ? 'created' : liveResult.updated ? 'updated' : 'unchanged';
+    console.log(`Written live companion to ${liveResult.relativePath} (${status})`);
+  }
   if (gitignoreEntries.length > 0) {
     console.log('✔ Added generated local agent files to .gitignore');
   }
@@ -140,11 +165,17 @@ function runExportAll(cwd: string, options: ExportOptions): void {
     try {
       const content = generateExport(target.format, options, cwd);
       const result = writeExportFile(content, target.relativePath, cwd);
+      const liveResult = options.includeLive ? writeLiveCompanionForTarget(target, options, cwd) : undefined;
       const autoConfigs = writeExportCompanionFiles(target.format, cwd);
       const gitignoreEntries = collectExportGitignoreEntries(cwd, target.relativePath, autoConfigs);
       allGitignoreEntries.push(...gitignoreEntries);
+      if (liveResult) allGitignoreEntries.push(liveResult.relativePath);
       declareAgentIntegrationFromTarget(cwd, target.agentName, 'manual');
       console.log(`✔ ${target.relativePath} (${result.created ? 'created' : 'updated'})`);
+      if (liveResult) {
+        const status = liveResult.created ? 'created' : liveResult.updated ? 'updated' : 'unchanged';
+        console.log(`Written live companion to ${liveResult.relativePath} (${status})`);
+      }
       written++;
     } catch (err) {
       logger.debug(`Failed to export ${target.format}:`, err);
@@ -162,9 +193,8 @@ function runExportAll(cwd: string, options: ExportOptions): void {
 }
 
 /**
- * Refresh live companion files for all agents.
- * These are gitignored files with current state (plans, claims, traps, sequences).
- * Only Tier B/C agents get live companions; Tier A receives live context via hooks/MCP.
+ * Refresh live companion files for agents that emit a filesystem live view.
+ * These are gitignored files with current state (plans, claims, traps, candidates, handoffs).
  */
 /**
  * Refresh live companion files silently. Returns count of files written.
@@ -219,17 +249,11 @@ export function refreshLiveCompanions(cwd?: string): { written: number; errors: 
         const live = renderLiveSection(input);
         if (!live) continue; // Tier A — no live companion needed
 
-        const livePath = toLivePath(target.relativePath);
-        const fullPath = path.join(effectiveCwd, livePath);
-        const dir = path.dirname(fullPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-        const existing = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : '';
-        if (existing !== live.content) {
-          fs.writeFileSync(fullPath, live.content, 'utf-8');
+        const writeResult = writeLiveCompanionFile(live.content, target.agentName, target.relativePath, effectiveCwd);
+        if (writeResult.created || writeResult.updated) {
           written++;
         }
-        liveGitignoreEntries.push(livePath);
+        liveGitignoreEntries.push(writeResult.relativePath);
       } catch (err) {
         errors.push(`${target.agentName}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -269,12 +293,6 @@ export function runRefresh(cwd?: string): void {
  * Convert a stable export path to its live companion path.
  * e.g. CLAUDE.md → CLAUDE.live.md, .cursor/rules/brainclaw.md → .cursor/rules/brainclaw.live.md
  */
-function toLivePath(stablePath: string): string {
-  const ext = path.extname(stablePath);
-  const base = stablePath.slice(0, -ext.length);
-  return `${base}.live${ext}`;
-}
-
 export function writeAgentExportForAgent(
   agentName: string,
   cwd: string,
@@ -393,6 +411,42 @@ function generateAdaptiveExport(agentName: string, options: ExportOptions, cwd: 
   });
 
   return result.content;
+}
+
+function buildLiveTemplateInput(
+  target: { agentName: string },
+  options: ExportOptions,
+  cwd: string,
+): InstructionTemplateInput | undefined {
+  const profile = getAgentCapabilityProfile(target.agentName);
+  if (!profile) return undefined;
+
+  const config = loadConfig(cwd);
+  return {
+    profile,
+    state: loadState(cwd),
+    projectName: config.project_name,
+    brainclawVersion: getInstalledBrainclawVersion(),
+    resolvedInstructions: getInstructionText(options, cwd),
+    projectVision: readProjectVision(cwd),
+    activeClaims: listClaims(cwd).filter((claim) => claim.status === 'active'),
+    pendingCandidates: listCandidates('pending', cwd),
+  };
+}
+
+function writeLiveCompanionForTarget(
+  target: { agentName: string; relativePath: string },
+  options: ExportOptions,
+  cwd: string,
+): { relativePath: string; created: boolean; updated: boolean } | undefined {
+  const input = buildLiveTemplateInput(target, options, cwd);
+  if (!input) return undefined;
+
+  const live = renderLiveSection(input);
+  if (!live) return undefined;
+
+  const result = writeLiveCompanionFile(live.content, target.agentName, target.relativePath, cwd);
+  return { relativePath: result.relativePath, created: result.created, updated: result.updated };
 }
 
 function getInstructionText(options: ExportOptions, cwd: string): string[] {
