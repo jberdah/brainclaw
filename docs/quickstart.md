@@ -10,7 +10,7 @@ If you're about to cut a release that changes the CLI, MCP, or context surface, 
 npm install -g brainclaw
 ```
 
-Requires Node.js 18+. Verify with `brainclaw --version`.
+Requires Node.js 20+. Verify with `brainclaw --version`.
 
 ## Step 2: Initialize your project
 
