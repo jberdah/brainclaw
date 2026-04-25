@@ -22,6 +22,7 @@ import {
   getCapabilityProfile,
 } from '../../src/core/agent-capability.js';
 import { loadAssignment, transitionAssignment, recordProgress } from '../../src/core/assignments.js';
+import { findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
 import { saveSequence } from '../../src/core/sequence.js';
 import { saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { persistState } from '../../src/core/state.js';

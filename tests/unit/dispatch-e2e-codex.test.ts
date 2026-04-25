@@ -391,8 +391,8 @@ describe('dispatch-e2e-codex/mcp-write-path', () => {
     // The profile uses workspace-write (not read-only) specifically so that
     // the spawned codex can write to .brainclaw/ paths via MCP.
     const profile = getCapabilityProfile('codex');
-    assert.ok(profile!.invoke_template.includes('workspace-write'));
-    assert.ok(!profile!.invoke_template.includes('read-only'),
+    assert.ok(profile!.invoke_template!.includes('workspace-write'));
+    assert.ok(!profile!.invoke_template!.includes('read-only'),
       'read-only sandbox blocks MCP filesystem writes — workspace-write is required');
     // Review template must also use workspace-write
     assert.ok(profile!.invoke_review_template!.includes('workspace-write'));
