@@ -190,18 +190,30 @@ See `docs/quickstart.md` for the full walkthrough, `docs/integrations/overview.m
 
 ---
 
-## Current Limitation
+## Current state
 
-For now, avoid having multiple coding agents edit the same project in parallel in the same checkout.
+Recent releases have moved a lot of multi-agent parallel work from "risky" to "supported":
 
-brainclaw already helps one agent resume or review another agent's work with better shared context, plans, claims, handoffs, and dedicated Git worktree support. But concurrent edits are still only safe when each session uses its own worktree and the team follows strict claim and handoff discipline. Shared-checkout parallelism can still create Git conflicts, overwritten local state, or confusing transitions.
+- **Per-claim auto-worktree** — each dispatched lane gets its own isolated git worktree; the coordinator integrates with an octopus merge.
+- **Sequenced parallel execute** — `bclaw_dispatch(intent="execute")` fans out independent lanes across several agent instances and integrates the result.
+- **Symmetric review-fix loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions.
+- **Cross-platform spawn** — OS-aware prompt delivery (stdin pipe / inline arg) plus a brief-ack file handshake, so spawned workers can be detected and timed out reliably on Windows and Unix.
+- **Worktree GC is scope-bounded** — symlinks and junctions are no longer followed during cleanup, so post-merge sweeps can't wipe `node_modules` or other neighboring directories.
+- **MCP runtime self-heal** — when the runtime is corrupted, the server logs an actionable repair pointer; `brainclaw doctor --repair` rebuilds dist in one step.
+
+Still sharp:
+
+1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
+2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
+3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
+4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
 Recommended use today:
 
-1. let one agent work at a time in a given checkout
-2. if you need stronger isolation, use a dedicated worktree per session or agent
-3. use handoffs when switching from one agent to another
-4. use shared plans, claims, and context to preserve continuity
+1. for parallel work, dispatch a sequence with `bclaw_dispatch(intent="execute")` — each lane gets its own worktree
+2. for sequential work in the same project, let one agent claim at a time and rely on handoffs
+3. when reviewing or fixing across agents, prefer symmetric review loops over manual ping-pong
+4. keep multi-machine workflows on a single source of truth until federation lands
 
 ---
 
