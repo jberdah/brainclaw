@@ -109,7 +109,7 @@ brainclaw claim release <id>
 
 ### Automatic claim release
 
-Claims are automatically released after a `git merge` if the post-merge hook is installed (default since `brainclaw init` v0.25.3+). The hook matches merged file paths against active claim scopes and releases overlapping claims.
+Claims are automatically released after a `git merge` if the post-merge hook is installed (installed by default by `brainclaw init`). The hook matches merged file paths against active claim scopes and releases overlapping claims.
 
 You can also install or reinstall the hook manually:
 

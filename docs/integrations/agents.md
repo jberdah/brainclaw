@@ -118,10 +118,10 @@ When a workspace contains multiple brainclaw-initialized child projects, agents 
 An operator or agent sets the active project once, and all subsequent commands resolve against it:
 
 ```bash
-brainclaw switch apps/lodestar    # set active project
-brainclaw plan list               # targets lodestar
-bclaw_get_context()               # MCP also targets lodestar
-brainclaw switch --clear          # back to workspace root
+brainclaw switch apps/lodestar         # set active project
+brainclaw plan list                    # targets lodestar
+bclaw_context(kind="memory")           # MCP also targets lodestar
+brainclaw switch --clear               # back to workspace root
 ```
 
 ### 2. `BRAINCLAW_PROJECT` environment variable
@@ -149,17 +149,15 @@ brainclaw --cwd apps/lodestar plan list
 ### Starting work
 
 ```
-bclaw_session_start → identify yourself, see the board
-bclaw_get_context(target: "src/auth/") → load relevant memory
-bclaw_get_execution_context → check for brainclaw updates
+bclaw_work(intent="execute", scope="src/auth/")          → start session, load context, claim scope in one call
+bclaw_context(kind="execution")                          → check local tooling and brainclaw updates
 ```
 
 ### During work
 
 ```
-bclaw_claim(scope: "src/auth/") → signal what you're editing
-bclaw_write_note("Found a race condition in AuthService") → record observations
-bclaw_create_plan("Fix race condition", estimate: 30) → track work
+bclaw_write_note("Found a race condition in AuthService")            → record observations
+bclaw_create(entity="plan", data={ text: "Fix race condition", estimated_effort: 30 })  → track work
 ```
 
 ### Finishing work

@@ -4,9 +4,9 @@ The CLI is Brainclaw's explicit operator, scripting, release, and fallback surfa
 
 For capable coding agents, prefer MCP for dynamic runtime state:
 
-- `bclaw_bootstrap` instead of manual bootstrap polling
-- `bclaw_get_context` instead of repeated raw CLI context calls
-- `bclaw_list_plans` / `bclaw_list_claims` / `bclaw_get_agent_board` for live coordination views
+- `bclaw_work(intent)` to start working — handles session, context, and claim creation in one call
+- `bclaw_context(kind)` for memory / execution / board reads instead of repeated raw CLI context calls
+- `bclaw_find(entity, filter?)` / `bclaw_get(entity, id)` for plans, claims, candidates, handoffs, and other entities (legacy `bclaw_list_*` / `bclaw_get_context` still work via a redirect warning)
 - `bclaw_claim`, `bclaw_write_note`, and `bclaw_session_end` for session continuity
 
 Use the CLI when a human operator is driving the workflow, when you are scripting setup or release operations, or when MCP is not the integration path.
@@ -56,7 +56,7 @@ brainclaw switch --clear             # clear, revert to cwd
 brainclaw --cwd /other/path status   # one-off override without switching
 ```
 
-**MCP usage:** The active project also affects MCP tools. When `bclaw_get_context()` is called without an explicit path, it resolves context from the active project's store. Agents can also use `BRAINCLAW_PROJECT=<name>` environment variable for the same effect.
+**MCP usage:** The active project also affects MCP tools. When `bclaw_context(kind="memory")` is called without an explicit path, it resolves context from the active project's store. Agents can also use the `BRAINCLAW_PROJECT=<name>` environment variable for the same effect.
 
 ---
 
@@ -1792,56 +1792,43 @@ brainclaw mcp
 
 #### Available MCP tools
 
-**Read tools** (no trust requirement):
+The default catalog is intentionally small and centred on the canonical grammar. The full live tool list is the source of truth — see [`docs/integrations/mcp.md`](integrations/mcp.md) and [`docs/concepts/mcp-governance.md`](concepts/mcp-governance.md) for the complete catalog, tier rules, and stability contract.
 
-| Tool | Description |
+**Entry facades** — start here:
+
+| Tool | Purpose |
 |---|---|
-| `bclaw_get_context` | Full workspace context (constraints, decisions, traps, plans, handoffs) |
-| `bclaw_bootstrap` | Derive brownfield bootstrap signals from repo docs and git history |
-| `bclaw_get_execution_context` | Inspect local execution environment and agent tooling signals |
-| `bclaw_read_handoff` | Read an open handoff ticket with git diff and state snapshot |
-| `bclaw_get_agent_board` | Live plan + claim board with active sessions |
-| `bclaw_search` | Full-text BM25 search across all memory items |
-| `bclaw_estimation_report` | Estimation accuracy report for completed plans |
-| `bclaw_list_plans` | List plan items with filters, pagination (`limit`/`offset`), `compact` mode, and direct `id` lookup |
-| `bclaw_list_claims` | List claims with the same filters as `brainclaw claim list` |
-| `bclaw_list_agents` | List registered agents, optionally with bounded reputation summaries |
-| `bclaw_list_instructions` | List raw or resolved shared instructions |
-| `bclaw_list_candidates` | List pending or archived review candidates |
-| `bclaw_check_policy` | Pre-execution policy check: verify claims, constraints, traps for a scope |
-| `bclaw_audit` | View audit log or generate governance posture report (`governance: true`) |
-| `bclaw_history` | Full mutation history of a memory item |
-| `bclaw_doctor` | Health checks (JSON output) |
-| `bclaw_get_discovery` | Scan workspace for MCP configs, skills, hooks, agent integrations |
-| `bclaw_conflict_check` | Check for overlapping claims between agents |
-| `bclaw_who` | List active agent sessions on this workspace |
-| `bclaw_get_capabilities` | List registered project capabilities |
-| `bclaw_list_tools` | List registered project tools |
-| `bclaw_search_tools` | Search tools by name or description |
+| `bclaw_work(intent)` | Start a session, load context, and (for `intent="execute"`) claim a scope in one call. Returns a compact payload by default (pass `compact: false` for the full context). |
+| `bclaw_context(kind)` | Unified context read: `kind` is one of `memory`, `execution`, `board`, `board_summary`, or `delta`. |
 
-**Write tools** (contributor trust or above):
+**Canonical grammar** — your main tool for working with memory entities (plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run):
 
-| Tool | Description |
+| Tool | Purpose |
 |---|---|
-| `bclaw_write_note` | Add a runtime note (supports TTL and auto-reflect) |
-| `bclaw_create_candidate` | Create a memory candidate (decision, constraint, trap, handoff) |
-| `bclaw_accept` | Accept a pending candidate into canonical memory |
-| `bclaw_reject` | Reject a pending candidate |
-| `bclaw_claim` | Claim a work scope (advisory lock, auto-runs policy warnings) |
-| `bclaw_release_claim` | Release a claim, optionally updating the linked plan status |
-| `bclaw_session_start` | Start an agent session and register identity |
-| `bclaw_session_end` | End session, optionally auto-reflect notes as candidates |
-| `bclaw_create_plan` | Create a new plan item |
-| `bclaw_update_plan` | Update plan status, actual effort, priority, or assignee |
-| `bclaw_add_step` | Add a sub-step to a plan item |
-| `bclaw_complete_step` | Mark a plan sub-step as done |
-| `bclaw_switch` | Change the active project for subsequent tool calls |
-| `bclaw_setup` | Agent-driven onboarding wizard |
-| `bclaw_delete_memory` | Delete a memory item by ID |
-| `bclaw_update_memory` | Update a memory item's text or metadata |
-| `bclaw_update_handoff` | Update a handoff status or add narrative |
-| `bclaw_add_capability` | Register a project capability |
-| `bclaw_add_tool` | Register a project tool |
+| `bclaw_find(entity, filter?)` | List entities of a given type with optional filters and pagination. |
+| `bclaw_get(entity, id)` | Read a single entity by id. |
+| `bclaw_create(entity, data)` | Create a new entity (plan, decision, constraint, trap, handoff, candidate, runtime_note, …). |
+| `bclaw_update(entity, id, patch)` | Edit an entity in place. |
+| `bclaw_remove(entity, id, purge?)` | Soft-delete (or purge) an entity. |
+| `bclaw_transition(entity, id, to)` | Change an entity's status (e.g. plan `todo` → `in_progress` → `done`, candidate `pending` → `accepted`). |
+
+**Multi-agent coordination** (escalation path when delegating to other agents):
+
+| Tool | Purpose |
+|---|---|
+| `bclaw_coordinate(intent)` | Assign, consult, review, reroute, or summarize across agents. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn. |
+| `bclaw_dispatch(intent)` | Parallelize execute across a sequence's lanes (analysis / execute / review). |
+| `bclaw_loop(intent)` | Drive a turn in an existing multi-turn loop (`turn`, `complete_turn`, `advance`, `close`). Do not call `bclaw_loop(intent="open")` directly without dispatch — use `bclaw_coordinate(intent="review", open_loop: true)` instead. |
+
+**Session, claims, plans, handoffs**:
+
+`bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`, `bclaw_add_step`, `bclaw_complete_step`, `bclaw_update_step`, `bclaw_delete_step`, `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_send_message`, `bclaw_correct_handoff`.
+
+**Notes, search, setup, navigation**:
+
+`bclaw_write_note`, `bclaw_quick_capture`, `bclaw_search`, `bclaw_setup`, `bclaw_bootstrap`, `bclaw_switch`, `bclaw_release_notes`, `bclaw_doctor`.
+
+**Legacy per-entity tools** (`bclaw_list_plans`, `bclaw_get_context`, `bclaw_create_plan`, `bclaw_accept`, `bclaw_dispatch_review`, …) were removed from the discoverable catalog at v1.0. Direct calls still succeed as a migration escape hatch but emit a redirect warning pointing at the canonical grammar. Raw MCP clients can request the full advanced catalog with `tools/list` params `{ catalog: "all" }`.
 
 ---
 
