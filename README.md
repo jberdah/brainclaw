@@ -261,41 +261,43 @@ npm run test:coverage      # with coverage report
 
 ## Changelog
 
-### v0.20.0
+For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
-- **Onboarding rework** : nouveau parcours d'installation en 2-3 étapes au lieu de 4, avec choix explicites (type de projet, topologie mémoire) au lieu de termes techniques
-- **Agent capability profiles** : chaque agent (10 supportés) a un profil de capacité (MCP, hooks, auto-approve, skills, rules) qui détermine le contenu de ses fichiers d'instructions
-- **Templates adaptatifs** : les fichiers d'instructions (CLAUDE.md, AGENTS.md, etc.) sont générés selon 3 tiers — Full (léger, hooks font le reste), Standard (directif, top traps inclus), Limited (riche, tout en statique)
-- **Séparation core/run** : les fichiers statiques ne contiennent plus que le protocole, les contraintes et instructions. Les traps, plans, decisions et claims sont exclusivement dans le contexte dynamique MCP
-- **Bootstrap enrichi** : scan des workflows CI/CD, ADR, CONTRIBUTING, Docker, .env.example, branches actives et tags git
-- **Quick setup MCP** : `bclaw_setup` détecte le repo courant et propose un init rapide au lieu de forcer le scan multi-repo
-- **`brainclaw uninstall`** : nouvelle commande pour retirer brainclaw d'un projet (`--project`) ou d'une machine (`--machine`)
-- **Traps machine-scoped** : nouveau champ `platform_scope` sur les traps — les traps machine ne polluent plus les fichiers d'instructions statiques
-- **Init sans setup préalable** : `brainclaw init` crée automatiquement le user store si absent, plus besoin de `brainclaw setup` d'abord
-- **Docs réécrites** : intégrations, quickstart et README avec niveaux Full/Standard/Limited et matrice agent factuelle
+### v1.2.0
 
-### v0.9.10
+- **zod 3 → 4 migration** (pln#486) — schemas are semantically equivalent but the JSON Schema emitted by `tools/list` shifted shape; downstream MCP clients that snapshot schemas should re-pin. See `docs/mcp-schema-changelog.md` for the public surface fingerprint.
 
-- **OpenCode** : détection et auto-config MCP workspace via `opencode.json`; l'export réutilise `AGENTS.md`
-- **Antigravity / Gemini CLI** : détection et export `gemini-md` vers `GEMINI.md`, avec MCP machine-level sous `.gemini/antigravity/mcp_config.json`
-- **Workflow export** : la doc export couvre désormais explicitement les nouveaux formats et fichiers générés
+### v1.1.0
 
-### v0.7.2
+- **Node 20+ baseline** (pln#485) — `engines.node` is now `>=20.0.0` (Node 18 reached EOL in April 2025). CI matrix runs Node 20, 22, and 24 on Linux; Windows on Node 24.
+- **commander 13 → 14** (requires Node 20+).
+- **@types/node 22 → 24** (LTS-aligned).
 
-- **UserPromptSubmit hook** : correction du format — `brainclaw context` (texte markdown) au lieu de `--json` pour injection correcte dans le contexte Claude Code
+### v1.0.15
 
-### v0.7.1
+- **TypeScript 5.8 → 6.0** (pln#484) — migration to `module: "nodenext"` (`Node16` is deprecated in TS 6, scheduled for removal in TS 7); explicit `types: ["node"]` since TS 6 changed the default to `[]`.
 
-- **Cross-platform `npx` fix** : `brainclaw init` et `brainclaw export` ajoutent désormais brainclaw en `devDependency` du projet cible — `npx brainclaw` fonctionne dans les hooks Claude Code sans dépendre du PATH global (résout Windows WSL/Git Bash)
+### v1.0.14
 
-### v0.7.0
+- **`bclaw_work` compact payload by default** (pln#483) — avoids exceeding the ~25k MCP token cap on projects with substantial memory. Pass `compact: false` for the full payload, or call `bclaw_context(kind="memory")` after.
+- **MCP runtime self-heal + `doctor --repair`** (pln#478) — when `dist/mcp-worker.js` is missing, the server logs an actionable repair pointer and read-only handlers keep serving in-process. `brainclaw doctor --repair` rebuilds dist in one step.
+- **Tier B/C native live companions** (pln#471) — `.cursor/live.md`, `.clinerules/live.md`, `.windsurf/rules/live.md`, `.github/copilot-instructions.live.md`, `.continue/live.md`, `GEMINI.live.md` regenerated on session-end and handoff. Opt-in via `brainclaw export --include-live --write`.
 
-- **Claude Code** : intégration native complète — MCP (`.mcp.json`), slash command (`.claude/commands/brainclaw.md`), hooks de session (`UserPromptSubmit` + `Stop`) dans `.claude/settings.local.json`
-- **Cursor** : config MCP machine-level (`~/.cursor/mcp.json`) ajoutée à l'auto-config
-- **Roo Code** : config MCP workspace (`.roo/mcp.json`)
-- **Continue** : config MCP workspace (`.continue/config.json`, format array)
-- **Hygiene section** renforcée : workflow plan/claim/session-end inclus dans toutes les instructions générées
-- **Canal de mise à jour local** (`brainclaw version --publish-local`) : tarball + manifeste `.releases/`
+### v1.0.13
+
+- **Worktree GC scope hardening** (pln#477) — `safeRemoveWorktreeDir` no longer follows symlinks/junctions during cleanup. Closes a class of post-merge wipes that previously destroyed `node_modules` and other neighboring directories on Windows.
+
+### v1.0.10–v1.0.12
+
+- **GitHub Copilot CLI is spawnable** (pln#440) — Copilot CLI 1.0.35+ supports `-p "<prompt>" --allow-all --no-ask-user`; tier promoted to A.
+- **Codex spawn on Windows: stdin pipe + 30s handshake TTL** (pln#475) — fixes embedded backticks/`#`/multi-line content getting mis-parsed by `cmd.exe` when a prompt is passed as an inline argument.
+- **Brief-ack file handshake** (pln#476) — `.brainclaw/coordination/runtime/ack/<assignmentId>.ack` proves a spawned worker started, decoupling the handshake from MCP availability inside the worker (important for Codex in `--sandbox workspace-write`).
+- **`bclaw_loop(intent="open")` orphan-gate** (pln#461) — refuses to open a loop without dispatch unless `allow_orphan: true` is explicit. Use `bclaw_coordinate(intent="review", open_loop: true)` instead.
+- **Kilocode** — Tier B integration with native MCP config and live companion (pln#464).
+
+### v1.0.0
+
+- **Canonical grammar promoted to standard tier** — `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition`, plus the entry facades `bclaw_work` and `bclaw_context`, the multi-agent facades `bclaw_coordinate` and `bclaw_dispatch`, and the loop facade `bclaw_loop`. Legacy per-entity tools removed from the discoverable surface (still callable as a migration escape hatch). See `docs/concepts/mcp-governance.md` for tier rules and the deprecation policy.
 
 ---
 
