@@ -150,12 +150,11 @@ Policy warnings are also **automatically included** in the `bclaw_claim` respons
 ## Recommended workflow
 
 1. create a plan item
-2. claim the target scope (policy warnings are surfaced automatically)
-3. create a feature branch (`git checkout -b feat/<name>`) or use a dedicated worktree when stronger isolation is needed
-4. work on the implementation
-5. update the plan status
-6. release the claim when done or blocked
-7. create a handoff if another actor should continue
+2. claim the target scope — `bclaw_claim` (or `bclaw_work(intent="execute", scope=…, planId=…)`) creates an isolated git worktree under `~/.brainclaw/worktrees/<project-hash>/` automatically; policy warnings are surfaced as part of the response
+3. work on the implementation inside the worktree
+4. update the plan status (`bclaw_transition(entity="plan", id, to="in_progress" | "done")`)
+5. commit and merge back; release the claim when done or blocked
+6. create a handoff if another actor should continue
 
 ## Session hygiene
 

@@ -75,9 +75,9 @@ Semver interpretation:
 | **minor** (`x.Y.0`) | Non-breaking additions (new tools, optional args, new response fields). `advanced`-tier breaking changes *with* a deprecation window. | Changelog entry under "Added" / "Changed". Deprecation warnings for `advanced` changes. |
 | **major** (`X.0.0`) | Breaking changes on `facade`/`standard` tiers. Removal of any deprecated tool. Schema rename/rework. | Changelog entry under "Removed" / "Breaking". Migration guide. Clients expect to update. |
 
-Pre-1.0, minor bumps may break internally. Public stability guarantees
-apply from `1.0.0` onward. The Phase 3 canonical grammar refactor
-(`pln_c6472192`) is the target for `1.0.0`.
+Public stability guarantees apply from `1.0.0` onward (the Phase 3
+canonical grammar refactor, `pln_c6472192`). Subsequent v1.x releases
+follow the rules above strictly.
 
 ## Deprecation policy
 
