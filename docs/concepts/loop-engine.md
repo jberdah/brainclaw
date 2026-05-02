@@ -288,7 +288,7 @@ The phase sequence stays the same (`findings → author_response → followup_re
 
 Selector: `mode: 'symmetric' | 'asymmetric'` on the `open_loop` call (or directly on `bclaw_loop(intent='open', kind='review', mode:…)`). Defaults to `asymmetric` for safety. On `open`, the server persists the resolved selection to `loop.protocol.review_mode` so resume/turn handlers do not depend on the original request envelope. If `symmetric` is requested but the active slot is human-operated or lacks write authority to the reviewed artifact, that turn degrades gracefully to asymmetric behavior for that slot: findings/verdicts are still allowed, `changes_applied` is omitted, and the loop proceeds without protocol error. Implementation-loops and security reviews typically stay asymmetric; RFC and doc reviews benefit most from symmetric.
 
-The operator never copy-pastes. They see status in the board (`bclaw_get_agent_board`) and can `get` the loop for detail.
+The operator never copy-pastes. They see status in the board (`bclaw_context(kind="board")`) and can `bclaw_loop(intent="get", loop_id=…)` for detail.
 
 ## Persistence
 
