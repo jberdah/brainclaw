@@ -259,7 +259,9 @@ Likely persisted fields:
 
 This should stay clearly separate from canonical memory items such as decisions and constraints.
 
-## Current Implementation (v0.23.0)
+## Implementation snapshot (v0.23.0, kept for design reference)
+
+> This section reflects what was shipped at the time the proposal was written (v0.23.0). For the implemented multi-project navigation surface today, refer to [docs/cli.md](../cli.md) (`brainclaw switch`, `brainclaw projects`, `BRAINCLAW_PROJECT`, `--cwd`).
 
 `brainclaw switch` provides the first layer of project navigation:
 

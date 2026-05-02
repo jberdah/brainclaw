@@ -1,6 +1,6 @@
 # Context Format
 
-`brainclaw context` and `bclaw_get_context` expose a versioned public contract for agent consumers.
+`brainclaw context` (CLI) and `bclaw_context` (MCP) expose a versioned public contract for agent consumers.
 
 Current version: `1.2`
 
@@ -26,7 +26,7 @@ Current version: `1.2`
 
 ## `1.2` additions over `1.1`
 
-- `context_diff` is available for session-aware deltas through `brainclaw context --since-session` and `bclaw_get_context`.
+- `context_diff` is available for session-aware deltas through `brainclaw context --since-session` (CLI) and `bclaw_context(kind="delta", since=<session_id>)` (MCP).
 - `context_schema: 1.2` is emitted across JSON, markdown, template, and MCP structured content.
 
 ## `1.1` additions over `1.0`

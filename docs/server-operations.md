@@ -41,12 +41,10 @@ The goal is to avoid writing memory into the wrong store when the operator is la
 
 For MCP-capable agents:
 
-1. `bclaw_session_start`
-2. `bclaw_get_execution_context`
-3. `bclaw_get_context`
-4. `bclaw_claim`
-5. `bclaw_write_note`
-6. `bclaw_session_end`
+1. `bclaw_work(intent="execute", scope=...)` — opens a session, loads context, and claims the scope (with a per-claim git worktree) in a single call. Returns a compact payload by default; pass `compact: false` for the full memory dump or call `bclaw_context(kind="memory")` after.
+2. `bclaw_context(kind="execution")` — when local tooling / brainclaw version visibility is needed (already loaded implicitly by `bclaw_work`).
+3. `bclaw_write_note` / `bclaw_create(entity=...)` / `bclaw_update(entity=...)` — record observations, plans, decisions, or traps via the canonical grammar.
+4. `bclaw_session_end(narrative=..., auto_release: true)` — close cleanly; releases active claims and hands off the session record.
 
 For direct CLI operation:
 
