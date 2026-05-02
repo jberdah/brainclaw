@@ -14,7 +14,7 @@ IT and compliance teams who manage organizational policies across many AI agents
 
 These rules apply to any feature that touches this audience:
 
-1. **MCP is the integration contract.** External tools integrate through MCP (57 tools: 27 read, 30 write), not by reading `.brainclaw/` files directly. The file-based store is an internal implementation detail. If an integration need cannot be met through MCP, the gap is a bug, not a reason to expose internals.
+1. **MCP is the integration contract.** External tools integrate through MCP (~60 published tools today; the canonical grammar — `bclaw_work`, `bclaw_context`, `bclaw_find/get/create/update/remove/transition` plus the multi-agent facades — is the stable surface), not by reading `.brainclaw/` files directly. The file-based store is an internal implementation detail. If an integration need cannot be met through MCP, the gap is a bug, not a reason to expose internals.
 
 2. **The MCP schema is a public API.** Breaking changes to tool signatures, context format, or response shapes require versioning and changelog entries (`docs/context-format-changelog.md`, `docs/mcp-schema-changelog.md`). Integrators depend on stability — every schema change has downstream cost. The context schema is versioned (`context_schema` field in every response).
 
@@ -39,10 +39,11 @@ These rules apply to any feature that touches this audience:
 ## Key Features for This Audience
 
 ### MCP Surface (primary integration point)
-- MCP server (`brainclaw mcp`) — 57 tools over stdio
-- `bclaw_work` — facade: session + context + claim in one call (simplified entry point)
-- `bclaw_coordinate` — facade: assign/review/reroute across agents
-- `bclaw_get_context` — prompt-ready context with 9 profiles and budget enforcement (maxItems, maxChars)
+- MCP server (`brainclaw mcp`) — ~60 published tools over stdio (canonical grammar in the default catalog; the full advanced catalog available via `tools/list { catalog: "all" }`)
+- `bclaw_work(intent)` — entry facade: session + context + claim in one call (returns a compact payload by default to stay under MCP token caps)
+- `bclaw_context(kind)` — unified context read: `memory` / `execution` / `board` / `board_summary` / `delta`
+- `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` — canonical CRUD across all entities
+- `bclaw_coordinate(intent)` / `bclaw_dispatch(intent)` / `bclaw_loop(intent)` — multi-agent facades for assign / review / reroute / parallel execute / multi-turn loops
 - Context format contract versioned via `context_schema` field
 
 ### Agent Detection & Configuration
@@ -51,7 +52,7 @@ These rules apply to any feature that touches this audience:
 - 3-tier capability system with runtime degradation assessment
 - 14+ agent profiles with per-agent invoke templates and role capabilities
 - `bclaw_get_discovery` — scan workspace for MCP configs, skills, hooks, integrations
-- `bclaw_get_execution_context` — platform, shell, git, toolchains, env signals snapshot
+- `bclaw_context(kind="execution")` — platform, shell, git, toolchains, env signals snapshot
 
 ### Agent Profiles (reusable invocation templates)
 - YAML profiles in `default-profiles/`: doctor, janitor, onboarder, reviewer

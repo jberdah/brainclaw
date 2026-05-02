@@ -37,16 +37,17 @@ Short and focused:
 - Active constraints and instructions
 - Version check reminder
 
-### For agents with MCP but no hooks (Cursor, Codex, OpenCode, etc.)
+### For agents with MCP but no hooks (Cursor, Codex, Cline, Copilot, Windsurf, Continue, Kilocode, OpenCode, Roo, Gemini CLI, etc.)
 
 More directive:
 - Same core sections as above, with stronger language ("REQUIRED", "MUST")
 - The top 5 most critical traps (the agent won't see them otherwise)
 - Explicit step-by-step protocol with all MCP calls listed
+- For Tier B/C agents that lack hooks, an opt-in `.live.md` companion (regenerated on session-end and handoff) carries plans, claims, traps, candidates, and handoffs as a parity backstop — write with `brainclaw export --include-live --write`
 
-### For agents without MCP (Copilot, autonomous agents)
+### For agents without MCP (autonomous agents only)
 
-Full static context via instruction file or SKILL.md:
+Full static context via SKILL.md:
 - All of the above
 - Active plans with status and assignees
 - All shared traps
@@ -90,11 +91,11 @@ brainclaw export --detect --write          # auto-detect and write all formats
 When brainclaw memory changes (new constraints, resolved traps, updated plans), regenerate instruction files:
 
 ```bash
-brainclaw export --all              # all 15 agent formats at once
+brainclaw export --all              # all known agent formats at once (17 targets today)
 brainclaw export --detect --write   # only the detected agent
 ```
 
-For agents without MCP (Copilot), this is especially important — the instruction file is their only source of project context.
+For agents without MCP (autonomous agents), this is especially important — the instruction file or SKILL.md is their only source of project context.
 
 ## Generated files are local
 
@@ -172,4 +173,4 @@ Always estimate duration in minutes when creating a plan or step. When completin
 
 ## Version awareness
 
-Agents should call `bclaw_get_execution_context` at session start. If a newer brainclaw version is available, it tells the agent, who can then inform the developer and suggest updating. Updates may include new features, new MCP tools, and improved coordination.
+Agents should call `bclaw_context(kind="execution")` at session start (or `bclaw_work` which loads it implicitly). If a newer brainclaw version is available, it tells the agent, who can then inform the developer and suggest updating. Updates may include new features, new MCP tools, and improved coordination.

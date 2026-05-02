@@ -42,21 +42,22 @@ These rules apply to any feature that touches this audience:
 ## Key Features for This Audience
 
 ### Coordination & Claims
-- `bclaw_claim` / `bclaw_list_claims` / `bclaw_release_claim` — file-level advisory locks with auto-worktree
+- `bclaw_claim` / `bclaw_release_claim` — file-level advisory locks with auto-worktree per claim
+- `bclaw_find(entity="claim", filter?)` / `bclaw_get(entity="claim", id)` — list and read claims via the canonical grammar
 - `bclaw_conflict_check` — pre-edit conflict detection between agents
 - `bclaw_check_policy` — scope compliance with glob matching, returns blocks + warnings
 - `bclaw_who` — list all active agent sessions on the workspace
 
 ### Planning & Sequencing
-- `bclaw_create_plan` / `bclaw_list_plans` / `bclaw_update_plan` — shared work planning with priority/effort/assignee
-- `bclaw_add_step` / `bclaw_complete_step` — plan sub-steps for granular tracking
+- `bclaw_create(entity="plan", data)` / `bclaw_update(entity="plan", id, patch)` / `bclaw_transition(entity="plan", id, to)` — shared work planning with priority/effort/assignee/status
+- `bclaw_find(entity="plan", filter?)` — list plans
+- `bclaw_add_step` / `bclaw_complete_step` / `bclaw_update_step` / `bclaw_delete_step` — plan sub-steps for granular tracking
 - `bclaw_create_sequence` / `bclaw_list_sequences` / `bclaw_update_sequence` — multi-step coordination sequences with lane analysis
 
 ### Multi-Agent Dispatch
-- `bclaw_dispatch` — run dispatch cycle, generate agent briefs, assign to lanes
-- `bclaw_dispatch_analysis` — analyze active sequence: ready/active/blocked/done per lane
-- `bclaw_dispatch_review` — dispatch code reviews for completed handoffs
-- `bclaw_coordinate` — facade for assignment/review/reroute across agents
+- `bclaw_dispatch(intent)` — `analysis` analyses an active sequence (ready/active/blocked/done per lane), `execute` fans out parallel work across lanes, `review` dispatches code reviews for completed handoffs
+- `bclaw_coordinate(intent)` — facade for `assign` / `consult` / `review` / `reroute` / `summarize`. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn (the recommended path).
+- `bclaw_loop(intent)` — drive a turn in an existing multi-turn loop (`turn`, `complete_turn`, `advance`, `close`)
 - Delivery channels: spawn (CLI subprocess) or inbox (structured messages)
 - Dry-run mode for previewing assignments
 
@@ -66,15 +67,16 @@ These rules apply to any feature that touches this audience:
 - CLI: `brainclaw inbox list/ack/archive/send/thread`
 
 ### Visibility & Governance
-- `bclaw_get_agent_board` — active plans, claims by agent, open handoffs, sequences, resolved instructions
+- `bclaw_context(kind="board")` / `bclaw_context(kind="board_summary")` — active plans, claims by agent, open handoffs, sequences, resolved instructions (full or compact form)
 - `bclaw_audit` — governance posture report (constitution, red-lines, claim activity, recommendations)
 - `bclaw_history` — full mutation history per memory item with before/after snapshots
 - Reputation signals — 4 scores: contribution_quality, review_reliability, continuity_hygiene, internal_trust
 - `bclaw_estimation_report` — estimation accuracy for completed plans
 
 ### Handoffs & Review
-- `bclaw_read_handoff` / `bclaw_update_handoff` — structured agent transitions with git diff and state snapshot
-- `bclaw_create_candidate` / `bclaw_accept` / `bclaw_reject` — review workflow with candidate promotion
+- `bclaw_get(entity="handoff", id)` / `bclaw_update(entity="handoff", id, patch)` — structured agent transitions with git diff and state snapshot
+- `bclaw_create(entity="candidate", data)` / `bclaw_transition(entity="candidate", id, to="accepted"|"rejected")` — review workflow with candidate promotion
+- `bclaw_coordinate(intent="review", open_loop: true, review_mode: "symmetric")` — open a multi-turn review-and-fix loop in one call (the recommended way to dispatch a reviewer)
 - `brainclaw review` — reflective review from CLI
 
 ### Worktree Management
