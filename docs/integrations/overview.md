@@ -45,15 +45,15 @@ The agent gets dynamic context injected at every prompt. The instruction file ca
 
 ### Standard integration (MCP, no hooks)
 
-The agent can call brainclaw tools but doesn't get automatic context injection. The instruction file is more directive — it tells the agent it MUST call specific tools before working, and includes the most critical traps statically.
+The agent can call brainclaw tools but doesn't get automatic context injection. The instruction file is more directive — it tells the agent it MUST call specific tools before working, and includes the most critical traps statically. For agents without hooks, an opt-in `.live.md` companion (regenerated on session-end and handoff) carries plans, claims, traps, candidates, and handoffs as a parity backstop.
 
-**Today:** Cursor, Windsurf, Cline, Roo, Continue, OpenCode, Codex, Antigravity/Gemini CLI
+**Today:** Cursor, Windsurf, Cline, Roo, Continue, Kilocode, OpenCode, Codex, GitHub Copilot, Antigravity/Gemini CLI
 
 ### Limited integration (no MCP)
 
-The agent cannot call brainclaw tools at all. The instruction file becomes the only source of project context, so it includes everything: constraints, traps, active plans, recent decisions.
+The agent cannot call brainclaw tools at all. The instruction file or SKILL.md becomes the only source of project context, so it includes everything: constraints, traps, active plans, recent decisions.
 
-**Today:** GitHub Copilot (uses skills as a partial workaround)
+**Today:** Autonomous agents only (OpenClaw, NanoClaw, NemoClaw, PicoClaw, ZeroClaw — wired via `skills/<agent>/SKILL.md`).
 
 ## Agent integration matrix
 
@@ -65,10 +65,11 @@ The agent cannot call brainclaw tools at all. The instruction file becomes the o
 | **Cline** | ✔ project | .clinerules/ | — | ✔ autoApprove | — |
 | **Roo** | ✔ project | .roo/rules/ | — | ✔ alwaysAllow | — |
 | **Continue** | ✔ both | .continue/rules/ | — | — | — |
+| **Kilocode** | ✔ both | .kilo/rules/ + AGENTS.md | — | ✔ alwaysAllow | — |
 | **OpenCode** | ✔ project | AGENTS.md | — | — | — |
 | **Codex** | ✔ global | AGENTS.md | — | — | — |
 | **Gemini CLI** | ✔ global | GEMINI.md | — | — | — |
-| **Copilot** | — | .github/copilot-instructions.md | — | — | ✔ brainclaw-context |
+| **GitHub Copilot** | ✔ global + project | .github/copilot-instructions.md | — | manual (per-call) | ✔ brainclaw-context |
 | **OpenClaw** | — | — | — | — | ✔ brainclaw skill |
 
 **Legend:** ✔ = fully supported, ◐ = partial (static trigger, not dynamic injection), — = not available
@@ -85,11 +86,17 @@ That's why brainclaw activates **all available surfaces** by default during setu
 
 The developer can dial back individual surfaces if needed, but the default is full integration because that's what works.
 
-## Sequential collaboration, not parallel editing
+## Parallel and sequential collaboration
 
-brainclaw's store mutations are serialized (MCP single-writer queue + file-based lock), so memory writes are safe even under contention. However, running multiple agents in parallel on the same checkout can still cause Git conflicts and confusing file-level state.
+brainclaw's store mutations are serialized (MCP single-writer queue + file-based lock), so memory writes are safe even under contention.
 
-For now, brainclaw works best when one agent works at a time in a given checkout. The next agent can pick up where the previous one stopped, using shared plans, claims, handoffs, and memory. Dedicated Git worktrees are available for stronger isolation, but shared-checkout parallel editing is still the riskier path and should not be the default team workflow.
+For **parallel work**, dispatch a sequence with `bclaw_dispatch(intent="execute")` — each lane gets its own auto-worktree under `~/.brainclaw/worktrees/<project-hash>/`, and the coordinator integrates with an octopus merge. For **review-fix loops**, `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions. These are the supported parallel paths today.
+
+For **sequential work** in the same project, let one agent claim at a time and rely on handoffs to keep continuity across sessions.
+
+What is **still risky**: running two agents in the *same* working tree without per-claim worktrees. That path can still produce Git conflicts and confusing file-level state — use the dispatch path (auto-worktree per claim) instead.
+
+See the README's "Current state" section for the full list of what works today and the residual sharp edges.
 
 ## Next reads
 
@@ -102,6 +109,7 @@ For now, brainclaw works best when one agent works at a time in a given checkout
 - [continue.md](continue.md)
 - [roo.md](roo.md)
 - [windsurf.md](windsurf.md)
-- [opencode.md](opencode.md)
+- [cline.md](cline.md)
 - [kilocode.md](kilocode.md)
+- [opencode.md](opencode.md)
 - [openclaw.md](openclaw.md)

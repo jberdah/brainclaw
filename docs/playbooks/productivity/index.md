@@ -41,10 +41,10 @@ These rules apply to any feature that touches this audience:
 ## Key Features for This Audience
 
 ### Session & Context (core loop)
-- `bclaw_session_start` / `bclaw_session_end` — session lifecycle with auto-reflect
-- `bclaw_get_context` — prompt-ready context with profile selection (9 profiles)
-- Context diff — incremental delta since last session (`since_session` parameter)
-- `bclaw_work` — facade: session + context + claim in one call
+- `bclaw_work(intent)` — entry facade: session + context + claim in one call (compact payload by default to stay under MCP token caps; pass `compact: false` for the full memory dump)
+- `bclaw_session_start` / `bclaw_session_end` — explicit session lifecycle with auto-reflect (when finer control is needed)
+- `bclaw_context(kind)` — unified context read with profile selection (9 profiles): `memory` / `execution` / `board` / `board_summary` / `delta`
+- Context diff via `bclaw_context(kind="delta", since=…)` — incremental delta since the last session
 
 ### Memory (persistence across sessions)
 - `bclaw_write_note` — persistent runtime observations
@@ -56,13 +56,13 @@ These rules apply to any feature that touches this audience:
 ### Onboarding & Discovery
 - `brainclaw init` / `brainclaw setup` / `bclaw_setup` — onboarding path
 - `bclaw_bootstrap` — brownfield auto-scan with interview and profile caching
-- `bclaw_get_execution_context` — workspace detection, toolchains, git status
+- `bclaw_context(kind="execution")` — workspace detection, toolchains, git status
 - `bclaw_release_notes` — agent-first version notes (breaking risk, highlights)
 - Native agent file generation (CLAUDE.md, AGENTS.md, .cursor/rules/, .windsurfrules, GEMINI.md, etc.)
 
 ### Multi-Agent Handoffs (power-users)
-- `bclaw_read_handoff` / `bclaw_update_handoff` — structured agent transitions with git diff
-- `bclaw_create_plan` / `bclaw_update_plan` — shared work that survives agent switches
+- `bclaw_get(entity="handoff", id)` / `bclaw_update(entity="handoff", id, patch)` — structured agent transitions with git diff
+- `bclaw_create(entity="plan", data)` / `bclaw_update(entity="plan", id, patch)` / `bclaw_transition(entity="plan", id, to)` — shared work that survives agent switches
 - `bclaw_claim` / `bclaw_release_claim` — scope reservation before editing
 
 ## Known Gaps
@@ -70,7 +70,7 @@ These rules apply to any feature that touches this audience:
 Features this audience would naturally expect but that are not yet implemented:
 
 ### Session continuity diff not auto-surfaced on start
-`bclaw_session_start` returns a full context snapshot but does not auto-include "here's what changed since your last session". The diff logic exists (`context-diff.ts`, `since_session` parameter) but the agent must explicitly request it via `bclaw_get_context --sinceSession <id>`. For solo devs resuming next morning, the agent should get the delta automatically.
+`bclaw_session_start` returns a full context snapshot but does not auto-include "here's what changed since your last session". The diff logic exists (`context-diff.ts`, `since_session` parameter) but the agent must explicitly request it via `bclaw_context(kind="delta", since=<sess_id>)`. For solo devs resuming next morning, the agent should get the delta automatically.
 **Impact:** Solo devs re-read stale context instead of focusing on what changed.
 
 ### No fuzzy search or typo tolerance
