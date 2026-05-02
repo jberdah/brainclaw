@@ -1828,7 +1828,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 
 `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_search`, `bclaw_setup`, `bclaw_bootstrap`, `bclaw_switch`, `bclaw_release_notes`, `bclaw_doctor`.
 
-**Legacy per-entity tools** (`bclaw_list_plans`, `bclaw_get_context`, `bclaw_create_plan`, `bclaw_accept`, `bclaw_dispatch_review`, …) were removed from the discoverable catalog at v1.0. Direct calls still succeed as a migration escape hatch but emit a redirect warning pointing at the canonical grammar. Raw MCP clients can request the full advanced catalog with `tools/list` params `{ catalog: "all" }`.
+**Legacy per-entity tools** (`bclaw_list_plans` / `bclaw_list_claims` / `bclaw_list_candidates` / `bclaw_list_sequences`, `bclaw_get_context` / `bclaw_get_execution_context` / `bclaw_get_agent_board`, `bclaw_create_plan` / `bclaw_create_candidate`, `bclaw_update_plan` / `bclaw_update_handoff` / `bclaw_update_memory`, `bclaw_read_handoff` / `bclaw_delete_memory`, `bclaw_accept` / `bclaw_reject`, `bclaw_dispatch_analysis` / `bclaw_dispatch_review`, and others) were removed from the discoverable catalog at v1.0. Direct calls still succeed as a migration escape hatch but emit a redirect warning pointing at the canonical grammar. The full removal list and replacement map lives in [`docs/mcp-schema-changelog.md`](mcp-schema-changelog.md) under the v1.0 "Removed" section. Raw MCP clients can request the full advanced catalog with `tools/list` params `{ catalog: "all" }`.
 
 ---
 
