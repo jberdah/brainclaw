@@ -40,7 +40,7 @@ function createStrictAjv(): Ajv {
 }
 
 const NESTED_MAP_KEYS = ['properties', 'patternProperties', 'definitions', '$defs'] as const;
-const NESTED_LIST_KEYS = ['allOf', 'anyOf', 'oneOf'] as const;
+const NESTED_LIST_KEYS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const;
 const NESTED_SINGLE_KEYS = ['items', 'additionalProperties', 'not', 'if', 'then', 'else', 'contains'] as const;
 
 /**
@@ -83,6 +83,59 @@ function findArraysMissingItems(schema: unknown, pathParts: string[] = []): stri
 
   return errors;
 }
+
+describe('findArraysMissingItems — walker self-test (trp#180 regression fixture)', () => {
+  it('detects bare type:array at root', () => {
+    assert.deepEqual(findArraysMissingItems({ type: 'array' }), ['#/']);
+  });
+
+  it('detects bare array nested in properties (the trp#180 shape)', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        intent: { type: 'string' },
+        phases: { type: 'array' }, // missing items — the actual trp#180 bug
+        slots: { type: 'array' },  // missing items — the actual trp#180 bug
+      },
+    };
+    assert.deepEqual(findArraysMissingItems(schema), [
+      '#/properties/phases',
+      '#/properties/slots',
+    ]);
+  });
+
+  it('accepts type:array with items', () => {
+    assert.deepEqual(
+      findArraysMissingItems({ type: 'array', items: { type: 'object' } }),
+      [],
+    );
+  });
+
+  it('accepts type:array with prefixItems (tuple form)', () => {
+    assert.deepEqual(
+      findArraysMissingItems({ type: 'array', prefixItems: [{ type: 'string' }] }),
+      [],
+    );
+  });
+
+  it('walks into prefixItems contents (would catch bare array inside tuple)', () => {
+    const schema = {
+      type: 'array',
+      prefixItems: [{ type: 'array' }], // outer ok, inner missing items
+    };
+    assert.deepEqual(findArraysMissingItems(schema), ['#/prefixItems/0']);
+  });
+
+  it('walks into anyOf branches', () => {
+    const schema = {
+      anyOf: [
+        { type: 'string' },
+        { type: 'array' }, // missing items
+      ],
+    };
+    assert.deepEqual(findArraysMissingItems(schema), ['#/anyOf/1']);
+  });
+});
 
 describe('MCP tool inputSchemas — cross-validator conformance', () => {
   for (const tool of ALL_TOOLS as readonly McpToolDescriptor[]) {

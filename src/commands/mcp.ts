@@ -1018,6 +1018,12 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_loop',
     description: 'Loop engine facade: open/turn/complete_turn/advance/add_artifact/pause/resume/close/get/list multi-turn work loops (review, ideation, implementation, research, debug). Returns a FacadeResponse with the loop thread, the newly-appended event, and a next_expected hint describing the natural next intent. Experimental — schema may evolve; gate production callers behind MCP versioning (pln#392).',
+    // schemaSource is informational for now — grep target so future migrators
+    // can locate zod-derived tools quickly. The parity test in
+    // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)
+    // pairs explicitly; it does NOT enumerate by this annotation. If that
+    // test ever moves to annotation-driven enrollment, validate the
+    // annotation against a closed enum then.
     annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true, schemaSource: 'zod-derived' },
     inputSchema: {
       type: 'object',
