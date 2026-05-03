@@ -126,13 +126,19 @@ export function memoryExists(cwd?: string, preferredDirName?: string): boolean {
  * 2. .brainclaw/project.md first non-header paragraph (legacy project.md export)
  * Returns undefined if no vision is found.
  */
-export function readProjectVision(cwd: string = process.cwd()): string | undefined {
+export function readProjectVision(cwd: string = process.cwd(), thresholdLines: number = 20): string | undefined {
   // 1. PROJECT.md at workspace root — canonical source
   const projectMdPath = path.join(cwd, 'PROJECT.md');
   if (fs.existsSync(projectMdPath)) {
     try {
       const content = fs.readFileSync(projectMdPath, 'utf-8').trim();
-      if (content) return content;
+      if (content) {
+        const lines = content.split('\n');
+        if (lines.length <= thresholdLines) {
+          return content;
+        }
+        return `> **Project Domain Rules**\n> This project maintains detailed domain rules and architecture externally to avoid context bloat.\n> You MUST read \`PROJECT.md\` in the workspace root to understand the project constraints, tech stack, and conventions before coding.`;
+      }
     } catch { /* fall through */ }
   }
 
