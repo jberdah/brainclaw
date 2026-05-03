@@ -29,6 +29,7 @@
     "build:cli": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs",
     "dev": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node dist/cli.js",
     "dev:mcp": "tsc && node scripts/copy-default-profiles.mjs",
+    "build:mcp-schemas": "tsc && node scripts/build-mcp-schemas.mjs",
     "dev:link": "npm link && echo 'Symlink created: global brainclaw → local repo. MCP agents now use dist/ directly.'",
     "build:test": "npm run build && npm run clean:dist-test && tsc -p tsconfig.test.json",
     "pack:check": "node scripts/check-pack.mjs",
