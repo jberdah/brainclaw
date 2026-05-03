@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'yaml';
 import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
+import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 
 /**
  * Resolve the brainclaw command for MCP configs.
@@ -410,6 +411,7 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'continue',       format: 'continue',             relativePath: '.continue/rules/brainclaw.md' },
   { agentName: 'roo',            format: 'roo',                  relativePath: '.roo/rules/brainclaw.md' },
   { agentName: 'kilocode',       format: 'kilocode',             relativePath: '.kilo/rules/brainclaw.md' },
+  { agentName: 'mistral-vibe',   format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
   { agentName: 'brainclaw',      format: 'board-md',             relativePath: 'BOARD.md' },
@@ -433,6 +435,7 @@ export const LIVE_COMPANION_EXPORT_REGISTRY: AgentLiveCompanionTarget[] = [
   { agentName: 'github-copilot', relativePath: '.github/copilot-instructions.live.md' },
   { agentName: 'continue', relativePath: '.continue/live.md' },
   { agentName: 'antigravity', relativePath: 'GEMINI.live.md' },
+  { agentName: 'mistral-vibe', relativePath: '.vibe/live.md' },
 ];
 
 export function resolveExportTarget(agentName: string): AgentExportTarget {
@@ -555,6 +558,7 @@ const CURSOR_MCP_RELATIVE_PATH = '.cursor/mcp.json';
 const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
 const KILOCODE_MCP_RELATIVE_PATH = '.kilo/mcp.json';
 const KILOCODE_CONFIG_RELATIVE_PATH = 'kilo.jsonc';
+const MISTRAL_VIBE_CONFIG_RELATIVE_PATH = '.vibe/config.toml';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const CONTINUE_PERMISSIONS_RELATIVE_PATH = '.continue/permissions.yaml';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
@@ -593,6 +597,7 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   ROO_MCP_RELATIVE_PATH,
   KILOCODE_MCP_RELATIVE_PATH,
   KILOCODE_CONFIG_RELATIVE_PATH,
+  MISTRAL_VIBE_CONFIG_RELATIVE_PATH,
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
   WINDSURF_MCP_RELATIVE_PATH,
@@ -1413,6 +1418,83 @@ export function ensureKilocodeMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
+/**
+ * Mistral Vibe MCP config writer (pln#489). Mistral Vibe reads
+ * `.vibe/config.toml` (project-level, prioritaire) or `~/.vibe/config.toml`
+ * (user-level fallback). The MCP server registry uses TOML array-of-tables
+ * `[[mcp_servers]]` with `name`, `transport`, `command`, `args`.
+ *
+ * Idempotent: if the file already declares a `[[mcp_servers]]` block whose
+ * `name = "brainclaw"`, this function leaves it alone (no overwrite, preserves
+ * any user-customized command/args/env). Otherwise it appends our block to
+ * the end of the file. Other `[[mcp_servers]]` entries are preserved.
+ *
+ * Why a minimal TOML writer rather than a full parser/round-trip merge?
+ * The MCP entry is append-only and our heuristic detection in
+ * `tomlArrayTableHasEntry` covers the realistic file shapes Vibe writes (one
+ * `name = "..."` field as the first key after each `[[mcp_servers]]` header).
+ * If the user has hand-edited the file in unusual ways, they keep what they
+ * wrote — this writer never deletes user content.
+ */
+export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, MISTRAL_VIBE_CONFIG_RELATIVE_PATH);
+  const mcpCmd = getBrainclawMcpCommand();
+
+  let existing = '';
+  let existed = false;
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, 'utf-8');
+    existed = true;
+  }
+
+  if (existed && tomlArrayTableHasEntry(existing, 'mcp_servers', 'brainclaw')) {
+    // Already wired. No-op.
+    return {
+      kind: 'mcp',
+      label: 'Mistral Vibe MCP settings',
+      created: false,
+      updated: false,
+      filePath,
+      relativePath: MISTRAL_VIBE_CONFIG_RELATIVE_PATH,
+    };
+  }
+
+  const brainclawBlock = renderToml({
+    arrayTables: [{
+      name: 'mcp_servers',
+      entries: [{
+        name: 'brainclaw',
+        transport: 'stdio',
+        command: mcpCmd.command,
+        args: mcpCmd.args,
+      }],
+    }],
+  });
+
+  // Append (preserves any user-written content above) — separated by a blank
+  // line if the file is non-empty and doesn't already end with one.
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  let next: string;
+  if (!existed || existing.length === 0) {
+    next = brainclawBlock;
+  } else {
+    const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
+    next = existing + sep + brainclawBlock;
+  }
+
+  fs.writeFileSync(filePath, next, 'utf-8');
+
+  return {
+    kind: 'mcp',
+    label: 'Mistral Vibe MCP settings',
+    created: !existed,
+    updated: existed,
+    filePath,
+    relativePath: MISTRAL_VIBE_CONFIG_RELATIVE_PATH,
+  };
+}
+
 export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | null {
   const codexHome = env.CODEX_HOME?.trim() || (homeDir ? path.join(homeDir, '.codex') : null);
   if (!codexHome) return null;
@@ -2013,6 +2095,8 @@ export function writeDetectedAgentAutoConfig(
       return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'kilocode':
       return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+    case 'mistral-vibe':
+      return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'codex': {
       const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
