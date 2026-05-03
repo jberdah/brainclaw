@@ -228,13 +228,15 @@ If you are integrating Brainclaw into an agent workflow, start with the agent-fa
 | `docs/index.md` | Documentation index grouped by getting started, guides, reference, and design |
 | `docs/integrations/overview.md` | Start here for agent integrations |
 | `docs/integrations/mcp.md` | MCP runtime path for capable agents |
-| `docs/quickstart.md` | Setup paths, including operator and brownfield flows |
+| `docs/quickstart.md` | First-time setup on a new project (greenfield) |
+| `docs/quickstart-existing-project.md` | Joining a project that already has `.brainclaw/` |
 | `docs/server-operations.md` | Operator and remote-server workflow guide |
 | `docs/cli.md` | CLI reference for operators, scripts, and fallback use |
 | `docs/concepts/memory.md` | What "memory" means in brainclaw |
 | `docs/concepts/plans-and-claims.md` | Coordination layer |
 | `docs/concepts/runtime-notes.md` | Ephemeral observations |
 | `docs/concepts/multi-agent-workflows.md` | The four common scenarios — orchestration, agent switching, project recovery, team async |
+| `docs/concepts/troubleshooting.md` | Runbook for degraded coordination state — stale claims, missing dist, octopus failures, etc. |
 | `docs/integrations/cursor.md` | Cursor |
 | `docs/integrations/claude-code.md` | Claude Code |
 | `docs/integrations/copilot.md` | GitHub Copilot |
