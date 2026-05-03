@@ -2,6 +2,8 @@
 
 Get brainclaw running in your project in under 5 minutes.
 
+> **Joining a project that already has `.brainclaw/`?** Use [quickstart-existing-project.md](quickstart-existing-project.md) instead — this page is for setting up a new project from scratch.
+
 If you're about to cut a release that changes the CLI, MCP, or context surface, run the checklist in [release-maintenance.md](release-maintenance.md) before publishing a local pack or npm build.
 
 ## Step 1: Install

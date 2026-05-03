@@ -4,7 +4,8 @@ Use this page as the entry point into the packaged Markdown documentation.
 
 ## Getting Started
 
-- [quickstart.md](quickstart.md) — fastest onboarding path for agents and operators
+- [quickstart.md](quickstart.md) — fastest onboarding path for a new project (greenfield)
+- [quickstart-existing-project.md](quickstart-existing-project.md) — joining a project that already has `.brainclaw/`
 - [server-operations.md](server-operations.md) — remote server, DGX, SSH, and multi-project operator workflow
 - [integrations/overview.md](integrations/overview.md) — integration model by agent surface
 
@@ -23,7 +24,12 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [concepts/plans-and-claims.md](concepts/plans-and-claims.md)
 - [concepts/runtime-notes.md](concepts/runtime-notes.md)
 - [concepts/coordination.md](concepts/coordination.md)
+- [concepts/multi-agent-workflows.md](concepts/multi-agent-workflows.md)
 - [concepts/workspace-bootstrapping.md](concepts/workspace-bootstrapping.md)
+- [concepts/troubleshooting.md](concepts/troubleshooting.md) — runbook for degraded coordination state
+- [concepts/memory-staleness.md](concepts/memory-staleness.md)
+- [concepts/loop-engine.md](concepts/loop-engine.md)
+- [concepts/mcp-governance.md](concepts/mcp-governance.md)
 
 ## Reference
 
