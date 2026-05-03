@@ -1220,7 +1220,13 @@ const MCP_WRITE_TOOLS = [
   },
 ] as const;
 
-const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
+/**
+ * Combined catalog of every brainclaw MCP tool descriptor (read + write).
+ * Exposed so tests can iterate inputSchemas (e.g. mcp-input-schema-strict.test.ts
+ * runs ajv strict over each entry to prevent Copilot/Cursor-incompatible drift —
+ * see trp#180 + pln#494).
+ */
+export const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
 
 /**
  * Canonical list of all brainclaw MCP tool names, derived from ALL_TOOLS.
