@@ -14,7 +14,7 @@ If you've ever:
 - watched two coworkers (or two agents) **edit the same files** without knowing it,
 - or **gave up running multiple agents in parallel** because keeping them in sync was a pain,
 
-brainclaw gives you durable shared state across sessions, agents, and teammates. Plans, claims, handoffs, decisions, and traps live in `.brainclaw/`, work identically across any compatible agent (Claude Code, Codex, Copilot, Cline, OpenCode, Cursor, Windsurf, Kilocode, Roo Code, Continue, Antigravity/Gemini CLI, …), and stay accessible whether you orchestrate them in parallel or pick them up one after another.
+brainclaw gives you durable shared state across sessions, agents, and teammates. Plans, claims, handoffs, decisions, and traps live in `.brainclaw/`, work identically across any compatible agent (Claude Code, Codex, Copilot, Cline, OpenCode, Cursor, Windsurf, Kilocode, Roo Code, Continue, Mistral Vibe, Antigravity/Gemini CLI, …), and stay accessible whether you orchestrate them in parallel or pick them up one after another.
 
 Use it two ways — **together or separately**:
 
@@ -175,7 +175,7 @@ To configure brainclaw for all your repos and agents at once:
 brainclaw setup --yes
 ```
 
-This scans your projects, detects installed agents (Claude Code, Codex, Cursor, Copilot, Cline, etc.), and writes MCP configs for each.
+This scans your projects, detects installed agents (Claude Code, Codex, Cursor, Copilot, Cline, Mistral Vibe, etc.), and writes MCP configs for each.
 
 ### Existing projects
 
@@ -206,7 +206,7 @@ Still sharp:
 1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
 2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
 3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
-4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
+4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue, Kilocode, Mistral Vibe) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
 Recommended use today:
 

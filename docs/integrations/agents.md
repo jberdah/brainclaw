@@ -37,7 +37,7 @@ Short and focused:
 - Active constraints and instructions
 - Version check reminder
 
-### For agents with MCP but no hooks (Cursor, Codex, Cline, Copilot, Windsurf, Continue, Kilocode, OpenCode, Roo, Gemini CLI, etc.)
+### For agents with MCP but no hooks (Cursor, Codex, Cline, Copilot, Windsurf, Continue, Kilocode, OpenCode, Roo, Mistral Vibe, Gemini CLI, etc.)
 
 More directive:
 - Same core sections as above, with stronger language ("REQUIRED", "MUST")

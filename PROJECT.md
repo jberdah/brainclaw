@@ -2,7 +2,7 @@
 
 Multi-agent coordination tool for AI coding agents.
 CLI + MCP server providing shared memory, claims, plans, and handoffs
-across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, and others.
+across Claude Code, Copilot, Codex, Cursor, Windsurf, Cline, Mistral Vibe, and others.
 
 - **Stage:** v1.0 shipped, Phase 4 (operator maturity) complete. Private usage across a few machines; adoption-grade hardening in progress.
 - **Audience:** AI coding agents + human dev supervisors.
