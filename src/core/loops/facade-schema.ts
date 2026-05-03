@@ -22,19 +22,24 @@ const CallerEnvelopeFields = {
   client_request_id: z.string().min(1).optional(),
 };
 
+/**
+ * Slot input shape for `bclaw_loop(intent='open')`. Loosens the persisted
+ * `LoopSlotSchema` (which requires server-assigned fields like `slot_id`
+ * and `status`) so callers only need to supply `role` plus any optional
+ * hints. Exported so it can be consumed both by `BclawLoopOpenSchema`
+ * below AND by the build-time MCP schema generator (pln#494 phase 2).
+ */
+export const LoopSlotInputSchema = LoopSlotSchema.partial().extend({
+  role: z.string().min(1),
+});
+
 export const BclawLoopOpenSchema = z.object({
   intent: z.literal('open'),
   kind: z.enum(LOOP_KINDS),
   title: z.string().min(1),
   goal: z.string().optional(),
   phases: z.array(LoopPhaseSchema).optional(),
-  slots: z
-    .array(
-      LoopSlotSchema.partial().extend({
-        role: z.string().min(1),
-      }),
-    )
-    .optional(),
+  slots: z.array(LoopSlotInputSchema).optional(),
   linked: LoopLinksSchema.optional(),
   stop_condition: StopConditionSchema.optional(),
   mode: z.enum(REVIEW_MODES).optional(),

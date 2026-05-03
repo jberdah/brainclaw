@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
+import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
@@ -1017,7 +1018,13 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_loop',
     description: 'Loop engine facade: open/turn/complete_turn/advance/add_artifact/pause/resume/close/get/list multi-turn work loops (review, ideation, implementation, research, debug). Returns a FacadeResponse with the loop thread, the newly-appended event, and a next_expected hint describing the natural next intent. Experimental — schema may evolve; gate production callers behind MCP versioning (pln#392).',
-    annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true },
+    // schemaSource is informational for now — grep target so future migrators
+    // can locate zod-derived tools quickly. The parity test in
+    // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)
+    // pairs explicitly; it does NOT enumerate by this annotation. If that
+    // test ever moves to annotation-driven enrollment, validate the
+    // annotation against a closed enum then.
+    annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true, schemaSource: 'zod-derived' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -1030,8 +1037,8 @@ const MCP_WRITE_TOOLS = [
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
         title: { type: 'string', description: 'Human-readable title (open).' },
         goal: { type: 'string', description: 'Optional goal statement (open).' },
-        phases: { type: 'array', description: 'Optional phase list override (open). Each item is { name, advance_when? }.' },
-        slots: { type: 'array', description: 'Optional initial slot specs (open). Each item carries at least { role }.' },
+        phases: { type: 'array', items: generatedSchemas.LoopPhase, description: 'Optional phase list override (open). Items derived from LoopPhaseSchema (zod source) — see mcp-schemas.generated.ts.' },
+        slots: { type: 'array', items: generatedSchemas.LoopSlotInput, description: 'Optional initial slot specs (open). Items derived from LoopSlotInputSchema (zod source). Each item carries at least { role }.' },
         linked: { type: 'object', description: 'Optional top-level plan/sequence refs (open).' },
         stop_condition: { type: 'object', description: 'Optional stop_condition override (open). Composite any/all supported.' },
         mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review mode selector for open (review kind only).' },
@@ -1220,7 +1227,13 @@ const MCP_WRITE_TOOLS = [
   },
 ] as const;
 
-const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
+/**
+ * Combined catalog of every brainclaw MCP tool descriptor (read + write).
+ * Exposed so tests can iterate inputSchemas (e.g. mcp-input-schema-strict.test.ts
+ * runs ajv strict over each entry to prevent Copilot/Cursor-incompatible drift —
+ * see trp#180 + pln#494).
+ */
+export const ALL_TOOLS = [...MCP_READ_TOOLS, ...MCP_WRITE_TOOLS];
 
 /**
  * Canonical list of all brainclaw MCP tool names, derived from ALL_TOOLS.
