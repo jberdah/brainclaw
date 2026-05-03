@@ -110,6 +110,7 @@ export type AgentName =
   | 'antigravity'
   | 'github-copilot'
   | 'kilocode'
+  | 'mistral-vibe'
   | 'openclaw'
   | 'nanoclaw'
   | 'nemoclaw'
@@ -122,6 +123,8 @@ const AGENT_ALIASES: Record<string, AgentName> = {
   'copilot': 'github-copilot',
   'gh-copilot': 'github-copilot',
   'gemini': 'antigravity',
+  'mistral': 'mistral-vibe',
+  'vibe': 'mistral-vibe',
 };
 
 /** Resolve an alias to its canonical agent name, or return the input unchanged. */
@@ -305,6 +308,30 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'kilo',
     invoke_review_template: 'kilo run --auto "{prompt}"',
     invoke_consult_template: 'kilo run --auto "{prompt}"',
+  },
+
+  // Mistral Vibe (pln#489) — Tier B: MCP via TOML config + skills + CLI spawn,
+  // but no hooks (BeforePrompt feature request #531 still open) and no native
+  // rules file equivalent to CLAUDE.md. Reuses AGENTS.md as the static
+  // instruction surface and the universal .agents/skills/brainclaw/SKILL.md
+  // for skill discovery (auto-discovered by Mistral Vibe alongside .vibe/skills/).
+  // Strategic value: EU/FR data sovereignty (Mistral Paris-based, not subject
+  // to US CLOUD Act; Apache 2.0 open-source CLI; open-weight models). Caveats:
+  // CLI freezes documented on current version, Windows Git Bash unsupported
+  // (issue #135), max_concurrent_tasks set conservatively to 2.
+  'mistral-vibe': {
+    name: 'mistral-vibe', category: 'code-agent', workflowModel: 'task-based',
+    hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: true, hasRules: false,
+    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'both', templateTier: 'B',
+    role_capabilities: ['execute', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
+    max_concurrent_tasks: 2,
+    prompt_delivery: { methods: ['inline_arg', 'stdin_pipe'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'vibe --prompt "{prompt}" --auto-approve --max-turns 5',
+    invoke_binary: 'vibe',
+    invoke_review_template: 'vibe --prompt "{prompt}" --auto-approve --max-turns 5',
+    invoke_consult_template: 'vibe --prompt "{prompt}" --auto-approve --max-turns 3',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---

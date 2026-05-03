@@ -172,6 +172,19 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     };
   }
 
+  // Mistral Vibe — no dedicated session env var documented (per pln#489 research).
+  // Detect via the user-level config dir (~/.vibe/) which Mistral creates on first
+  // run, or via VIBE_HOME override. Tested last so other agents with dedicated
+  // session env vars take precedence.
+  if (env.VIBE_HOME || fs.existsSync(path.join(homeDir, '.vibe'))) {
+    return {
+      name: 'mistral-vibe',
+      kind: 'agent',
+      trust_level: 'trusted',
+      detection_source: env.VIBE_HOME ? 'VIBE_HOME env var' : '~/.vibe directory',
+    };
+  }
+
   return undefined;
 }
 

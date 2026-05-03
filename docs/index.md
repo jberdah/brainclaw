@@ -49,6 +49,7 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [integrations/windsurf.md](integrations/windsurf.md)
 - [integrations/opencode.md](integrations/opencode.md)
 - [integrations/kilocode.md](integrations/kilocode.md)
+- [integrations/mistral-vibe.md](integrations/mistral-vibe.md)
 - [integrations/openclaw.md](integrations/openclaw.md)
 
 ## Audience Design Constraints
