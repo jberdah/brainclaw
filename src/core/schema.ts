@@ -1486,5 +1486,9 @@ export const ConfigSchema = z.object({
   claims: z.object({
     auto_release_after_hours: z.number().default(24),
   }).prefault({}),
+  worktree: z.object({
+    shared_paths: z.array(z.string()).default([]),
+    exclude_shared: z.array(z.string()).default([]),
+  }).optional(),
 });
 export type Config = z.infer<typeof ConfigSchema>;

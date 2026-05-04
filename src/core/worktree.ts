@@ -9,6 +9,37 @@ function gitPath(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
+/**
+ * Stack marker → shared directories mapping.
+ * Maven/Gradle/Cargo intentionally excluded — their dep caches live
+ * machine-globally (~/.m2, ~/.gradle/caches, ~/.cargo/registry).
+ */
+const STACK_MARKERS: Array<{ markers: string[]; paths: string[] }> = [
+  { markers: ['package.json'], paths: ['node_modules'] },
+  { markers: ['requirements.txt', 'pyproject.toml', 'Pipfile'], paths: ['venv', '.venv'] },
+  { markers: ['Gemfile'], paths: ['vendor/bundle'] },
+  { markers: ['go.mod'], paths: ['vendor'] },
+  { markers: ['composer.json'], paths: ['vendor'] },
+  { markers: ['mix.exs'], paths: ['deps'] },
+];
+
+/**
+ * Detects which directories should be symlinked into worktrees based on
+ * stack markers found in `projectRoot`.
+ *
+ * Returns a deduplicated list of relative directory names.
+ */
+export function detectStackSharedPaths(projectRoot: string): string[] {
+  const result = new Set<string>();
+  for (const { markers, paths } of STACK_MARKERS) {
+    const hasMarker = markers.some((m) => fs.existsSync(path.join(projectRoot, m)));
+    if (hasMarker) {
+      for (const p of paths) result.add(p);
+    }
+  }
+  return [...result];
+}
+
 export interface WorktreeInfo {
   /** Absolute path to the worktree root. */
   path: string;
@@ -149,6 +180,10 @@ export function createWorktree(
     baseRef?: string;
     /** Reset an existing local branch to baseRef before adding the worktree. */
     resetExistingBranch?: boolean;
+    /** Additional paths to symlink (additive to auto-detected). */
+    sharedPaths?: string[];
+    /** Paths to exclude from symlinking even if auto-detected. */
+    excludeShared?: string[];
   } = {},
 ): string {
   const trySymlinkSharedPath = (entryName: string): void => {
@@ -160,6 +195,11 @@ export function createWorktree(
     }
 
     try {
+      // Ensure parent dir exists for nested paths like vendor/bundle
+      const parentDir = path.dirname(linkPath);
+      if (parentDir !== targetPath) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
       fs.symlinkSync(sourcePath, linkPath, 'junction');
     } catch {
       // Non-fatal - shared paths are an optimization for agent worktrees
@@ -226,8 +266,16 @@ export function createWorktree(
     // Non-fatal - safe.directory may already be set or not needed
   }
 
-  trySymlinkSharedPath('node_modules');
-  trySymlinkSharedPath('dist');
+  // pln#480: auto-detect shared paths from stack markers + config overrides.
+  // `dist` intentionally excluded — build outputs must be per-worktree
+  // (EBUSY during clean:dist when MCP/extension holds a handle on junction target).
+  const detected = detectStackSharedPaths(mainWorktreePath);
+  const extra = options.sharedPaths ?? [];
+  const excluded = new Set(options.excludeShared ?? []);
+  const sharedPaths = [...new Set([...detected, ...extra])].filter((p) => !excluded.has(p));
+  for (const entry of sharedPaths) {
+    trySymlinkSharedPath(entry);
+  }
   // NOTE: .brainclaw/ is intentionally NOT symlinked.
   // Symlinking .brainclaw/ causes hooks and session_start to trigger on the
   // shared store, creating session conflicts and potentially blocking agents

@@ -217,6 +217,33 @@ Recommended use today:
 
 ---
 
+## Multi-stack worktree
+
+When brainclaw creates an agent worktree, it auto-detects which dependency directories to symlink from the main worktree based on stack markers present in the project root:
+
+| Stack marker | Symlinked directories |
+|---|---|
+| `package.json` | `node_modules` |
+| `requirements.txt` / `pyproject.toml` / `Pipfile` | `venv`, `.venv` |
+| `Gemfile` | `vendor/bundle` |
+| `go.mod` | `vendor` |
+| `composer.json` | `vendor` |
+| `mix.exs` | `deps` |
+
+Maven, Gradle, and Cargo are intentionally excluded — their dependency caches are machine-global (`~/.m2`, `~/.gradle/caches`, `~/.cargo/registry`) and found automatically by the toolchain.
+
+Build outputs like `dist` are **not** symlinked — they must be per-worktree to avoid EBUSY errors when other processes hold handles on the output directory.
+
+Override detection in `.brainclaw/config.yaml`:
+
+```yaml
+worktree:
+  shared_paths: [".cache"]        # additive to auto-detected
+  exclude_shared: ["node_modules"] # opt-out a detected entry
+```
+
+---
+
 ## Documentation
 
 The npm package includes the Markdown docs below under `docs/`. Public web docs on `brainclaw.dev` are still being rolled out, so the npm README does not depend on private GitHub links.
