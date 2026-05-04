@@ -144,6 +144,109 @@ block. It catches contract drift in CI and local validation without
 preventing operators from using `brainclaw doctor` during active
 development.
 
+## Schema source-of-truth — zod-derived inputSchemas
+
+MCP tool `inputSchema` blocks in `src/commands/mcp.ts` are JSON Schema.
+The runtime validation that actually rejects bad calls lives in zod
+schemas elsewhere (e.g. `src/core/loops/types.ts`,
+`src/core/loops/facade-schema.ts`). When the same shape is expressed
+twice — once as zod, once as hand-written JSON Schema — the two drift,
+silently. The class is the same one flagged by
+`feedback_cross_agent_patterns` rule 2 ("catalog source-of-truth >
+hardcoded constants"); it produced `trp#180` in May 2026 (Copilot
+rejected `bclaw_loop` because `phases`/`slots` arrays had no `items`,
+which Claude Code's permissive validator had silently accepted).
+
+The fix is to derive the JSON Schema from the zod source at build time
+and commit the generated artifact. Hand-written schemas remain for tools
+without a zod backing (intent-polymorphic dispatchers, etc.) and stay
+protected by the strict CI test in
+`tests/unit/mcp-input-schema-strict.test.ts`.
+
+### How it works
+
+1. Zod schemas are exported from their owning module (e.g.
+   `LoopPhaseSchema`, `LoopSlotInputSchema`).
+2. `scripts/build-mcp-schemas.mjs` reads the compiled zod from `dist/`
+   and emits `src/commands/mcp-schemas.generated.ts` via zod v4's
+   native `z.toJSONSchema()`.
+3. `src/commands/mcp.ts` imports `generatedSchemas` and uses the
+   generated objects inline as `items:` / sub-schemas inside the tool's
+   `inputSchema`.
+4. The migrated tool descriptor carries
+   `annotations.schemaSource: 'zod-derived'` as a grep-target marker.
+5. `tests/unit/mcp-zod-parity.test.ts` re-runs `z.toJSONSchema()` at
+   test time and deep-compares against the committed generated file.
+   Drift fails CI with a one-line fix instruction.
+
+The generated file is committed (protobuf pattern). Developers run
+`npm run build:mcp-schemas` after editing a zod schema and commit the
+regen alongside their source change. CI then verifies parity.
+
+### How to migrate a tool to zod-derived schemas
+
+Use this checklist when you touch a tool's source for any reason. Do
+**not** mass-migrate in a dedicated PR — the regression risk on the
+combined diff outweighs the cleanup benefit.
+
+1. **Identify the zod schema.** Locate the existing zod that the
+   handler validates against (or extract a partial form for input-only
+   shapes — see `LoopSlotInputSchema` for the precedent).
+2. **Export it** as a named symbol so the build script can import it
+   from `dist/`.
+3. **Add the generation entry** in `scripts/build-mcp-schemas.mjs`
+   under the `SCHEMAS` map.
+4. **Run** `npm run build:mcp-schemas`. Inspect the diff in
+   `src/commands/mcp-schemas.generated.ts` — it must be small,
+   readable, and free of unwanted `$schema` / `$id` / `$defs` headers
+   for sub-schemas you intend to inline.
+5. **Replace the hand-written sub-schema** in `mcp.ts` with the
+   generated reference (e.g. `items: generatedSchemas.LoopPhase`).
+6. **Tag** the tool descriptor with
+   `annotations.schemaSource: 'zod-derived'`. The annotation is
+   informational today (see comment in `mcp.ts`); the parity test
+   currently hardcodes its (tool, schema) pairs explicitly.
+7. **Add an entry** to `tests/unit/mcp-zod-parity.test.ts` mirroring
+   the pattern of `LoopPhase` / `LoopSlotInput`. The test exists to
+   catch silent regen drift; it must include every newly migrated
+   shape.
+8. **Run the strict + parity tests** locally
+   (`node --test dist-test/tests/unit/mcp-input-schema-strict.test.js
+   dist-test/tests/unit/mcp-zod-parity.test.js`). Both must pass.
+
+### When to skip the migration
+
+Some inputSchemas should stay hand-written:
+
+- **Intent-polymorphic surfaces.** Tools whose `inputSchema` is a flat
+  union of intents (`bclaw_work`, `bclaw_coordinate`) where each
+  intent permits a different field set. zod can express this via
+  `discriminatedUnion`, but `z.toJSONSchema()` produces verbose
+  `oneOf` blocks that are harder to read than the hand-written
+  flat-properties form. The strict CI test (Phase 1) still protects
+  these.
+- **Tools without a zod handler at all.** Some adapters and admin
+  utilities validate manually. Migrating them just to satisfy the
+  pattern would add zod definitions for shapes that have no other
+  consumer.
+- **Build-time-only or developer-only tools.** No external client
+  reads their schema; drift cost is bounded.
+
+### Adding a new tool
+
+For tools added _after_ Phase 2 of `pln#494`, the default is
+zod-derived. Skip the hand-written sub-schemas entirely:
+
+1. Define the zod input schema in the owning module.
+2. Export it.
+3. Add it to the `SCHEMAS` map in `scripts/build-mcp-schemas.mjs`.
+4. Run `npm run build:mcp-schemas` and reference the generated entry
+   in your tool descriptor.
+5. Add the parity test entry.
+
+The strict CI test still runs and validates the generated output —
+defense in depth.
+
 ## Changelog → code cross-check
 
 Quick command to verify `SCHEMA_VERSION` matches the changelog:
