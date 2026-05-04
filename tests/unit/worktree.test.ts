@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import {
   createWorktree,
+  detectStackSharedPaths,
   findWorktreePathForBranch,
   worktreesBaseDir,
   resolveWorktreePath,
@@ -281,5 +282,213 @@ describe('safeRemoveWorktreeDir', () => {
   it('handles a missing path silently (idempotent)', () => {
     const phantom = path.join(os.tmpdir(), 'bclaw-saferm-phantom-' + Date.now());
     assert.doesNotThrow(() => safeRemoveWorktreeDir(phantom));
+  });
+});
+
+// pln#480 — Multi-stack worktree shared_paths
+describe('detectStackSharedPaths', () => {
+  it('detects node_modules for package.json', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-node-'));
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['node_modules']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects venv/.venv for requirements.txt', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-py-'));
+    fs.writeFileSync(path.join(dir, 'requirements.txt'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['venv', '.venv']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects venv/.venv for pyproject.toml', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-pyp-'));
+    fs.writeFileSync(path.join(dir, 'pyproject.toml'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['venv', '.venv']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects venv/.venv for Pipfile', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-pip-'));
+    fs.writeFileSync(path.join(dir, 'Pipfile'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['venv', '.venv']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects vendor/bundle for Gemfile (Ruby)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-ruby-'));
+    fs.writeFileSync(path.join(dir, 'Gemfile'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['vendor/bundle']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects vendor for go.mod (Go)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-go-'));
+    fs.writeFileSync(path.join(dir, 'go.mod'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['vendor']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects vendor for composer.json (PHP)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-php-'));
+    fs.writeFileSync(path.join(dir, 'composer.json'), '{}');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['vendor']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects deps for mix.exs (Elixir)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-elixir-'));
+    fs.writeFileSync(path.join(dir, 'mix.exs'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['deps']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('deduplicates vendor when both go.mod and composer.json exist', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-multi-'));
+    fs.writeFileSync(path.join(dir, 'go.mod'), '');
+    fs.writeFileSync(path.join(dir, 'composer.json'), '{}');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['vendor']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns empty for a directory with no stack markers', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-empty-'));
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects multiple stacks (Node + Python)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-stack-mixed-'));
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'requirements.txt'), '');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.deepStrictEqual(result, ['node_modules', 'venv', '.venv']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pln#480 — dist is NOT in default shared paths', () => {
+  it('detectStackSharedPaths never includes dist', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-nodist-'));
+    // Even with package.json (Node stack), dist must not appear
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+    try {
+      const result = detectStackSharedPaths(dir);
+      assert.ok(!result.includes('dist'), 'dist must not be in shared paths');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pln#480 — config override (additive + exclude)', () => {
+  it('additive: sharedPaths adds extra entries', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cfg-add-'));
+    const targetPath = resolveWorktreePath(repo, 'feat/cfg-add');
+
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=test@example.com', '-c', 'user.name=Test User', 'commit', '--allow-empty', '-m', 'init']);
+
+      // Create package.json (Node) + a custom shared dir
+      fs.writeFileSync(path.join(repo, 'package.json'), '{}');
+      fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true });
+      fs.mkdirSync(path.join(repo, '.cache'), { recursive: true });
+
+      const result = createWorktree(repo, 'feat/cfg-add', {
+        sharedPaths: ['.cache'],
+      });
+
+      // node_modules should be symlinked (auto-detected) + .cache (additive)
+      const nmLink = path.join(result, 'node_modules');
+      const cacheLink = path.join(result, '.cache');
+      assert.ok(fs.existsSync(nmLink), 'node_modules symlink created');
+      assert.ok(fs.existsSync(cacheLink), '.cache symlink created');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('exclude: excludeShared removes auto-detected entries', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cfg-excl-'));
+    const targetPath = resolveWorktreePath(repo, 'feat/cfg-excl');
+
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=test@example.com', '-c', 'user.name=Test User', 'commit', '--allow-empty', '-m', 'init']);
+
+      fs.writeFileSync(path.join(repo, 'package.json'), '{}');
+      fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true });
+
+      const result = createWorktree(repo, 'feat/cfg-excl', {
+        excludeShared: ['node_modules'],
+      });
+
+      const nmLink = path.join(result, 'node_modules');
+      assert.ok(!fs.existsSync(nmLink), 'node_modules excluded — no symlink');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
