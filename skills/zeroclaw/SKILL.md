@@ -107,6 +107,54 @@ Multi-agent coordination is optional — use the escalation path only when deleg
 
 Ideation / Debug / Research / Planning loops — *planned*. See `docs/product/agent-first-model.md` §3.
 
+## brainclaw — autonomous workflow contract
+
+When a brainclaw protocol prescribes the next action after the one you just
+completed, **execute it. Do not ask for permission.** brainclaw's coordination
+promise depends on this — every avoidable pause forces the human back into the
+synchronization loop, which is exactly what brainclaw is built to eliminate.
+
+**Protocol-defined transitions you MUST execute autonomously:**
+
+- IF you completed a review (assigned via `bclaw_coordinate(intent=review)` or
+  inbox `review_request` message) → produce findings → **send the reply with
+  your verdict via `bclaw_send_message(type="reply", thread_id=…)`**. Do not
+  ask whether to send.
+- IF you receive a reply with an `LGTM` verdict AND you are the requester →
+  **close the loop and merge the branch yourself** (when you own the merge).
+  Do not pass the merge to the human.
+- IF the reviewer reply contains findings → **apply the symmetric fixes you
+  can make**, commit on the same branch, then reroute via
+  `bclaw_send_message(type="reply", …)` for re-review. Do not stop after the
+  fixes.
+- IF you have an active claim and your work is complete → call
+  `bclaw_release_claim(id=…, planStatus="done")`. Do not leave the claim
+  active for someone else to clean up.
+- IF you have an `assignment_id` (you were dispatched via `bclaw_coordinate` /
+  `bclaw_dispatch`) → at end of work, call
+  `bclaw_assignment_update(assignment_id=…, status="completed", artifacts=[…])`.
+  The coordinator depends on this lifecycle event; without it, the loop never
+  converges and the supervisor cannot tell success from silent failure.
+
+**Legitimate reasons to pause and ask the human:**
+
+1. The action would be **destructive AND irreversible AND outside the
+   protocol** (e.g. `git push --force` on a public branch, dropping a
+   production database, deleting a non-empty memory cluster). Protocol-
+   defined merges to a local branch are NOT in this category.
+2. The protocol genuinely **does not specify** the next action (e.g. a
+   verdict that splits the dispatched work into two new plans — needs
+   scoping judgement only the human owns).
+3. The user has **explicitly told you to confirm** before specific actions
+   in this session.
+
+Asking *"should I send the reply?"* on a protocol-defined send is a UX bug,
+not safety. If the next step appears in the workflow above — do it. The
+empirical cost of skipping the contract: in May 2026, multi-agent review
+threads systematically stalled at "should I send this reply?" / "should I
+merge?", forcing the human supervisor to manually carry context between
+agents. Stop reproducing that pattern.
+
 ## brainclaw — working rules
 
 - Ship-per-feature workflow: claim -> branch -> implement -> test -> commit -> merge -> bump -> publish -> export --all -> release claim -> push. One feature = one branch = one merge commit.
