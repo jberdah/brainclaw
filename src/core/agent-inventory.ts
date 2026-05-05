@@ -4,6 +4,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
 import { MEMORY_DIR } from './io.js';
+import {
+  detectHostExecutionProfile,
+  type ExecutionProfile,
+  type ResolvedExecutionProfile,
+} from './execution-profile.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -40,12 +45,29 @@ export interface AgentInventoryEntry {
   hooks_support: boolean;
   /** Instruction file pattern (e.g. 'CLAUDE.md') */
   instruction_file?: string;
+  /**
+   * Optional execution-profile override for this agent (pln#496 step
+   * stp_0339a439). Fields not specified fall through to the inventory's
+   * `host_execution_profile` and then to module defaults via
+   * `resolveExecutionProfile`. Inventories written before this field
+   * existed deserialize cleanly because every key is optional.
+   */
+  execution_profile?: ExecutionProfile;
 }
 
 export interface AgentInventory {
   schema_version: number;
   generated_at: string;
   agents: AgentInventoryEntry[];
+  /**
+   * Host-level execution profile (pln#496 step stp_0339a439). Auto-
+   * detected once at inventory build time from process.platform + $SHELL
+   * + COMSPEC + process.execPath. Each agent's `execution_profile`
+   * overrides individual fields here. Optional for backward compatibility
+   * with inventories written before this field existed — `resolveExecution
+   * Profile` falls back to module defaults.
+   */
+  host_execution_profile?: ResolvedExecutionProfile;
 }
 
 // ── Agent Definitions (static knowledge) ───────────────────────────────────────
@@ -390,6 +412,7 @@ export function buildAgentInventory(
     schema_version: 1,
     generated_at: new Date().toISOString(),
     agents,
+    host_execution_profile: detectHostExecutionProfile({ env, platform: process.platform }),
   };
 }
 
