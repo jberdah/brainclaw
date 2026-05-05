@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
+import { reconcileAllOpenRuns } from '../core/agentrun-reconciler.js';
+import { loadAgentRun } from '../core/agentruns.js';
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { buildReputationSummary } from '../core/reputation.js';
@@ -125,6 +127,15 @@ export interface DoctorOptions {
    * and exit non-zero on any failure. Skips the normal doctor suite.
    */
   afterMigration?: boolean;
+  /**
+   * Dispatch-health diagnostic (pln#496 step stp_8c072d75). Reconciles every
+   * open agent_run via the lazy reconciler and reports stuck runs, inferred
+   * completions, silent failures, and unverified spawns. Skips the normal
+   * doctor suite. Exits non-zero only if at least one run was inferred as
+   * `failed` (silent_termination_no_evidence) — inferred completions and
+   * unverified flags are informational, not blocking.
+   */
+  dispatch?: boolean;
 }
 
 interface DoctorCheck {
@@ -631,7 +642,138 @@ function auditInboxMessages(cwd?: string): InboxMessageAudit {
   return result;
 }
 
+/**
+ * Dispatch-health diagnostic (pln#496 step stp_8c072d75).
+ *
+ * Reconciles every non-terminal agent_run via the lazy reconciler and
+ * categorises the outcomes:
+ *   - inferred_completed → run was unblocked from `running` because evidence
+ *     of completion exists (commit on branch / claim released / assignment
+ *     marked completed). Counts as silent-completion recovery.
+ *   - health_check_unverified → run is past the 60s grace window with no
+ *     life-sign yet. Informational, not failure.
+ *   - inferred_failed → run is past the 30 min stale threshold with a dead
+ *     process and no evidence. Real failure.
+ *   - no_op → run still in grace window OR already terminal.
+ *
+ * Returns the structured report so the JSON path can mirror it without
+ * re-running the reconciliation.
+ */
+export interface DispatchHealthReport {
+  generated_at: string;
+  total: number;
+  inferred_completed: ReconcileResultSummary[];
+  health_check_unverified: ReconcileResultSummary[];
+  inferred_failed: ReconcileResultSummary[];
+  no_op_open: number;
+  exit_code: 0 | 1;
+}
+
+export interface ReconcileResultSummary {
+  run_id: string;
+  agent: string;
+  assignment_id: string;
+  claim_id: string;
+  scope: string;
+  age_ms: number;
+  reason: string;
+  previous_status: string;
+  current_status: string;
+}
+
+export function runDispatchHealthCheck(options: DoctorOptions = {}): DispatchHealthReport {
+  const results = reconcileAllOpenRuns(options.cwd);
+  const inferred_completed: ReconcileResultSummary[] = [];
+  const health_check_unverified: ReconcileResultSummary[] = [];
+  const inferred_failed: ReconcileResultSummary[] = [];
+  let no_op_open = 0;
+
+  for (const result of results) {
+    const run = loadAgentRun(result.run_id, options.cwd);
+    if (!run) {
+      // Run was deleted between list and load — skip.
+      continue;
+    }
+    const summary: ReconcileResultSummary = {
+      run_id: result.run_id,
+      agent: run.agent,
+      assignment_id: run.assignment_id,
+      claim_id: run.claim_id,
+      scope: run.scope,
+      age_ms: result.evidence.age_ms,
+      reason: result.reason,
+      previous_status: result.previous_status,
+      current_status: result.current_status,
+    };
+    switch (result.action) {
+      case 'inferred_completed': inferred_completed.push(summary); break;
+      case 'health_check_unverified': health_check_unverified.push(summary); break;
+      case 'inferred_failed': inferred_failed.push(summary); break;
+      case 'no_op': no_op_open += 1; break;
+    }
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    total: results.length,
+    inferred_completed,
+    health_check_unverified,
+    inferred_failed,
+    no_op_open,
+    exit_code: inferred_failed.length > 0 ? 1 : 0,
+  };
+}
+
+function renderDispatchHealthHumanReport(report: DispatchHealthReport): string {
+  const lines: string[] = [];
+  lines.push(`Dispatch health — ${report.total} open agent_run(s) examined at ${report.generated_at}`);
+  lines.push('');
+
+  if (report.inferred_failed.length > 0) {
+    lines.push(`✗ ${report.inferred_failed.length} silent failure(s) — process dead, no completion evidence:`);
+    for (const r of report.inferred_failed) {
+      lines.push(`  - ${r.run_id} ${r.agent} (${r.scope}) — ${r.reason}`);
+    }
+    lines.push('');
+  }
+
+  if (report.inferred_completed.length > 0) {
+    lines.push(`⟳ ${report.inferred_completed.length} silent completion(s) recovered (run transitioned ${report.inferred_completed[0]?.previous_status ?? '?'} → completed):`);
+    for (const r of report.inferred_completed) {
+      lines.push(`  - ${r.run_id} ${r.agent} (${r.scope}) — ${r.reason}`);
+    }
+    lines.push('');
+  }
+
+  if (report.health_check_unverified.length > 0) {
+    lines.push(`⏳ ${report.health_check_unverified.length} unverified spawn(s) past grace window (no life-sign yet):`);
+    for (const r of report.health_check_unverified) {
+      lines.push(`  - ${r.run_id} ${r.agent} (${r.scope}) — age=${Math.round(r.age_ms / 1000)}s — ${r.reason}`);
+    }
+    lines.push('');
+  }
+
+  if (report.inferred_failed.length === 0 && report.inferred_completed.length === 0 && report.health_check_unverified.length === 0) {
+    lines.push(`✔ No dispatch issues detected (${report.no_op_open} open run(s) within grace window or already healthy).`);
+  } else {
+    lines.push(`(${report.no_op_open} other open run(s) within grace window or already healthy.)`);
+  }
+
+  return lines.join('\n');
+}
+
 export function runDoctor(options: DoctorOptions = {}): void {
+  if (options.dispatch) {
+    const report = runDispatchHealthCheck(options);
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(renderDispatchHealthHumanReport(report));
+    }
+    if (report.exit_code !== 0) process.exit(report.exit_code);
+    return;
+  }
+
   if (options.repair) {
     try {
       const result = repairDistRuntime(options);
