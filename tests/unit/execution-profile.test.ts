@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildClaimEnvPrefix,
   detectHostExecutionProfile,
   resolveExecutionProfile,
   renderEnvSet,
@@ -149,6 +150,47 @@ describe('execution-profile/renderEnvSet', () => {
 
   it('cmd uses set KEY=VALUE (no quotes)', () => {
     assert.equal(renderEnvSet('cmd', 'BRAINCLAW_CLAIM_ID', 'clm_x'), 'set BRAINCLAW_CLAIM_ID=clm_x');
+  });
+});
+
+// ── buildClaimEnvPrefix ────────────────────────────────────────────────────
+
+describe('execution-profile/buildClaimEnvPrefix', () => {
+  it('bash uses inline KEY="VALUE" then space', () => {
+    assert.equal(
+      buildClaimEnvPrefix('clm_x', { shell: 'bash' }),
+      'BRAINCLAW_CLAIM_ID="clm_x" ',
+    );
+  });
+
+  it('zsh inherits the bash form', () => {
+    assert.equal(buildClaimEnvPrefix('clm_x', { shell: 'zsh' }), 'BRAINCLAW_CLAIM_ID="clm_x" ');
+  });
+
+  it('cmd uses set KEY=VALUE && (Windows shell:true default)', () => {
+    assert.equal(
+      buildClaimEnvPrefix('clm_x', { shell: 'cmd' }),
+      'set BRAINCLAW_CLAIM_ID=clm_x && ',
+    );
+  });
+
+  it('pwsh uses $env:KEY="VALUE"; (statement separator)', () => {
+    assert.equal(
+      buildClaimEnvPrefix('clm_x', { shell: 'pwsh' }),
+      '$env:BRAINCLAW_CLAIM_ID="clm_x"; ',
+    );
+  });
+
+  it('returns empty string when claimId is undefined / empty / dry-run sentinel', () => {
+    assert.equal(buildClaimEnvPrefix(undefined), '');
+    assert.equal(buildClaimEnvPrefix(''), '');
+    assert.equal(buildClaimEnvPrefix('(dry-run)'), '');
+  });
+
+  it('falls back to host detection when shell is not provided', () => {
+    const result = buildClaimEnvPrefix('clm_y');
+    assert.ok(result.length > 0, 'should produce a prefix');
+    assert.match(result, /BRAINCLAW_CLAIM_ID/);
   });
 });
 

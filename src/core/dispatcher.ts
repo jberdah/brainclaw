@@ -33,6 +33,7 @@
  *
  * @module
  */
+import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
@@ -142,16 +143,13 @@ export interface DispatchResult {
 const MAX_INLINE_BRIEF_LENGTH = 4000;
 
 /**
- * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID.
- * POSIX: `BRAINCLAW_CLAIM_ID=clm_xxx `
- * Windows (cmd): `set BRAINCLAW_CLAIM_ID=clm_xxx && `
+ * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID. Delegates to
+ * the centralised buildClaimEnvPrefix in src/core/execution-profile.ts
+ * (pln#496 step stp_a9afe59d) which speaks all five shells. The prior
+ * Windows/POSIX-only branch lives there now as a hard-detected default.
  */
 function buildEnvPrefix(claimId: string): string {
-  if (!claimId || claimId === '(dry-run)') return '';
-  if (process.platform === 'win32') {
-    return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
-  }
-  return `BRAINCLAW_CLAIM_ID=${claimId} `;
+  return buildClaimEnvPrefix(claimId);
 }
 
 // ── Lane Analysis ───────────────────────────────────────────

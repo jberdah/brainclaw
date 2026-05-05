@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildClaimEnvPrefix } from '../core/execution-profile.js';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { generatedSchemas } from './mcp-schemas.generated.js';
@@ -4784,10 +4785,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const invoke = buildInvokeCommand(input.agent, input.text, {
           mode: input.commandMode ?? 'worker',
         });
-        // Build env prefix for claim routing (cross-platform)
-        const claimEnvPrefix = input.claimId
-          ? (process.platform === 'win32' ? `set BRAINCLAW_CLAIM_ID=${input.claimId} && ` : `BRAINCLAW_CLAIM_ID=${input.claimId} `)
-          : '';
+        // Build env prefix for claim routing — centralised in
+        // execution-profile.ts:buildClaimEnvPrefix as of pln#496 step
+        // stp_a9afe59d (handles all five shells, not just Windows/POSIX).
+        const claimEnvPrefix = buildClaimEnvPrefix(input.claimId);
         const resolvedShell = process.platform === 'win32' ? 'cmd' : (invoke?.shell ? 'bash' : 'sh');
         const commandHint = invoke
           ? {
