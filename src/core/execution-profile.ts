@@ -265,32 +265,51 @@ export function renderEnvSet(shell: Shell, key: string, value: string): string {
  * mcp.ts spawn dispatch were duplicating before pln#496 step
  * stp_a9afe59d.
  *
- * Output by shell:
- *   bash / zsh / sh : `BRAINCLAW_CLAIM_ID="clm_xxx" `   (inline env-set)
+ * Output by shell (legacy bytes preserved for bash and cmd — see codex
+ * review findings on commit 87a9f73, asgn_02c3c742):
+ *   bash / zsh / sh : `BRAINCLAW_CLAIM_ID=clm_xxx `      (unquoted, legacy)
  *   pwsh            : `$env:BRAINCLAW_CLAIM_ID="clm_xxx"; `
  *   cmd             : `set BRAINCLAW_CLAIM_ID=clm_xxx && `
+ *
+ * The unquoted bash form matches the pre-pln#496 dispatcher.ts:buildEnvPrefix
+ * output exactly, so any caller string-matching the legacy bytes keeps
+ * working. `renderEnvSet` still emits the quoted form for general use.
  *
  * Returns an empty string when claimId is empty or the dry-run sentinel —
  * callers use the prefix as `${prefix}<command>` so concatenation stays
  * safe.
  *
- * Defaults: when `shell` is omitted, the host shell is detected via
- * detectHostExecutionProfile(). This preserves the pre-pln#496 behaviour
- * (Windows → cmd, POSIX → bash) because Windows hosts without
- * PSModulePath resolve to cmd in detectShell, and POSIX without $SHELL
- * resolves to bash.
+ * Defaults: when `shell` is omitted:
+ *   - On Windows hosts → `cmd`. The historical brainclaw behaviour
+ *     unconditionally used `set X=Y && ` on Windows regardless of whether
+ *     pwsh was available. Picking pwsh based on PSModulePath sniffing
+ *     would be a regression for hosts whose dispatch pipeline runs
+ *     through child_process.spawn(shell:true) — Windows resolves that
+ *     to cmd, not pwsh, so a pwsh prefix would not parse. Pwsh becomes
+ *     opt-in via explicit `{ shell: 'pwsh' }` (used by Phase 3 app-server
+ *     integrations that already speak pwsh natively).
+ *   - On POSIX hosts → host detection (bash / zsh / sh / default bash).
  */
 export function buildClaimEnvPrefix(claimId: string | undefined, options?: { shell?: Shell }): string {
   if (!claimId || claimId === '(dry-run)') return '';
-  const shell = options?.shell ?? detectHostExecutionProfile().shell;
-  const assignment = renderEnvSet(shell, 'BRAINCLAW_CLAIM_ID', claimId);
+  let shell: Shell;
+  if (options?.shell) {
+    shell = options.shell;
+  } else {
+    // Pre-pln#496 default: Windows always emits cmd syntax. The smart
+    // detector exists for explicit callers (Phase 3 app-server) that
+    // know they want pwsh. See codex review on commit 87a9f73 — the
+    // PSModulePath sniff was a regression when used as the host
+    // default for the legacy spawn pipeline.
+    shell = process.platform === 'win32' ? 'cmd' : detectHostExecutionProfile().shell;
+  }
   switch (shell) {
-    case 'cmd':  return `${assignment} && `;
-    case 'pwsh': return `${assignment}; `;
+    case 'cmd':  return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
+    case 'pwsh': return `$env:BRAINCLAW_CLAIM_ID="${claimId}"; `;
     case 'bash':
     case 'zsh':
     case 'sh':
-    default:     return `${assignment} `;
+    default:     return `BRAINCLAW_CLAIM_ID=${claimId} `;
   }
 }
 
