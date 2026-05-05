@@ -256,6 +256,44 @@ export function renderEnvSet(shell: Shell, key: string, value: string): string {
   }
 }
 
+// ── Spawn prefix (used by dispatcher + execution adapters) ─────────────────
+
+/**
+ * Build a shell-correct prefix for an inline env-var set followed by a
+ * command. Centralises what dispatcher.ts:buildEnvPrefix,
+ * execution-adapters.ts:buildManualEnvPrefix, and the inline branch in
+ * mcp.ts spawn dispatch were duplicating before pln#496 step
+ * stp_a9afe59d.
+ *
+ * Output by shell:
+ *   bash / zsh / sh : `BRAINCLAW_CLAIM_ID="clm_xxx" `   (inline env-set)
+ *   pwsh            : `$env:BRAINCLAW_CLAIM_ID="clm_xxx"; `
+ *   cmd             : `set BRAINCLAW_CLAIM_ID=clm_xxx && `
+ *
+ * Returns an empty string when claimId is empty or the dry-run sentinel —
+ * callers use the prefix as `${prefix}<command>` so concatenation stays
+ * safe.
+ *
+ * Defaults: when `shell` is omitted, the host shell is detected via
+ * detectHostExecutionProfile(). This preserves the pre-pln#496 behaviour
+ * (Windows → cmd, POSIX → bash) because Windows hosts without
+ * PSModulePath resolve to cmd in detectShell, and POSIX without $SHELL
+ * resolves to bash.
+ */
+export function buildClaimEnvPrefix(claimId: string | undefined, options?: { shell?: Shell }): string {
+  if (!claimId || claimId === '(dry-run)') return '';
+  const shell = options?.shell ?? detectHostExecutionProfile().shell;
+  const assignment = renderEnvSet(shell, 'BRAINCLAW_CLAIM_ID', claimId);
+  switch (shell) {
+    case 'cmd':  return `${assignment} && `;
+    case 'pwsh': return `${assignment}; `;
+    case 'bash':
+    case 'zsh':
+    case 'sh':
+    default:     return `${assignment} `;
+  }
+}
+
 // ── Verification helper (used by setup / doctor) ───────────────────────────
 
 /**

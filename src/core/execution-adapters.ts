@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { nowISO } from './ids.js';
 
@@ -86,11 +87,10 @@ export interface ExecutionAdapter {
 }
 
 function buildManualEnvPrefix(claimId?: string): string {
-  if (!claimId) return '';
-  if (process.platform === 'win32') {
-    return `set BRAINCLAW_CLAIM_ID=${claimId} && `;
-  }
-  return `BRAINCLAW_CLAIM_ID=${claimId} `;
+  // pln#496 step stp_a9afe59d: the cross-platform / cross-shell logic
+  // now lives in execution-profile.ts:buildClaimEnvPrefix. Keep this
+  // wrapper for symmetry with the dispatcher's buildEnvPrefix.
+  return buildClaimEnvPrefix(claimId);
 }
 
 export class CliExecutionAdapter implements ExecutionAdapter {
