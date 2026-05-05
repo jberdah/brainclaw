@@ -23,6 +23,7 @@ import type { CandidateSource } from '../core/schema.js';
 import { listClaims, assessClaimLiveness } from '../core/claims.js';
 import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
+import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import { listActionRequired } from '../core/actions.js';
 import { queryRuntimeEvents } from '../core/events.js';
 import { listSequences, getActiveSequence } from '../core/sequence.js';
@@ -905,6 +906,28 @@ export function handleMcpReadToolCall(
     const offset = Math.max(0, Number(args.offset) || 0);
     const limit = Math.max(1, Number(args.limit) || 20);
     const compact = args.compact === true;
+
+    // pln#496 Phase 2 (steps stp_344f99b3 + stp_e2b4429c): reconcile any
+    // non-terminal runs in the query scope before reading events. Targeted —
+    // we only reconcile when the caller is asking about a specific run /
+    // assignment / claim, never in the broad-list-all case (too aggressive
+    // and rarely actionable). This converges silent-completion cases (codex
+    // committed but never called bclaw_assignment_update) and surfaces
+    // delivered_but_unverified for spawns past the 60s grace with no
+    // life-sign — see runtime_note run_77e65e77 for the empirical case.
+    try {
+      if (runId) {
+        reconcileAgentRun(runId, cwd);
+      } else if (assignmentId) {
+        for (const run of listAgentRuns(cwd, { assignment_id: assignmentId })) {
+          reconcileAgentRun(run.id, cwd);
+        }
+      } else if (claimId) {
+        for (const run of listAgentRuns(cwd, { claim_id: claimId })) {
+          reconcileAgentRun(run.id, cwd);
+        }
+      }
+    } catch { /* defensive: never block events query on reconcile failure */ }
 
     let events = queryRuntimeEvents({
       ...(id ? { id } : {}),

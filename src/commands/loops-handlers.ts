@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 import type { FacadeResponse } from '../core/facade-schema.js';
+import { listAgentRuns } from '../core/agentruns.js';
+import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import {
   add_artifact,
   advance,
@@ -376,15 +378,40 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
         if (!loop) {
           return errorResponse('get', 'not_found', `unknown loop_id ${req.loop_id}`, Date.now() - startMs);
         }
+
+        // pln#496 Phase 2: reconcile each slot's assigned run before
+        // returning the loop. Catches the silent-completion case where a
+        // dispatched reviewer committed work / released their claim but
+        // never emitted run_completed — the loop appeared stuck on
+        // 'assigned' slots forever in May 2026 (lop_3b2068e25166e183 +
+        // lop_ea5852302acb8cbb). Targeted to slots with assignment_id so
+        // we never run a broad scan here.
+        try {
+          for (const slot of loop.slots ?? []) {
+            const slotStatus = (slot as { status?: string }).status;
+            const assignmentId = (slot as { assignment_id?: string }).assignment_id;
+            if (!assignmentId) continue;
+            if (slotStatus === 'done' || slotStatus === 'failed' || slotStatus === 'cancelled') continue;
+            for (const run of listAgentRuns(options.cwd, { assignment_id: assignmentId })) {
+              reconcileAgentRun(run.id, options.cwd);
+            }
+          }
+        } catch { /* defensive: never block loop reads on reconcile errors */ }
+
+        // Re-load the loop after reconciliation so any slot transitions
+        // triggered by the reconciler (e.g. via assignment lifecycle hooks)
+        // are reflected in the response. Cheap (fs read).
+        const reconciledLoop = getLoop(req.loop_id, options.cwd) ?? loop;
+
         const events = req.include_events ? listLoopEvents(req.loop_id, options.cwd) : undefined;
         return successResponse(
           'get',
-          { loop, events, next_expected: computeNextExpected(loop) },
-          [loopArtifactEntry(loop.id)],
+          { loop: reconciledLoop, events, next_expected: computeNextExpected(reconciledLoop) },
+          [loopArtifactEntry(reconciledLoop.id)],
           [],
           [],
           Date.now() - startMs,
-          summarizeLoop(loop),
+          summarizeLoop(reconciledLoop),
         );
       }
 
