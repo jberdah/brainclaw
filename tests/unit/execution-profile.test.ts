@@ -156,15 +156,26 @@ describe('execution-profile/renderEnvSet', () => {
 // ── buildClaimEnvPrefix ────────────────────────────────────────────────────
 
 describe('execution-profile/buildClaimEnvPrefix', () => {
-  it('bash uses inline KEY="VALUE" then space', () => {
+  // Bash/zsh/sh use the LEGACY unquoted form — byte-identical to the pre-
+  // pln#496 dispatcher.ts:buildEnvPrefix output. This is intentional: codex
+  // review of commit 87a9f73 (asgn_02c3c742) flagged the quoted variant as
+  // a POSIX output drift versus the consolidated call sites; preserving
+  // the legacy bytes keeps any downstream string-match safe.
+  it('bash uses unquoted KEY=VALUE (legacy byte-identical)', () => {
     assert.equal(
       buildClaimEnvPrefix('clm_x', { shell: 'bash' }),
-      'BRAINCLAW_CLAIM_ID="clm_x" ',
+      'BRAINCLAW_CLAIM_ID=clm_x ',
     );
   });
 
-  it('zsh inherits the bash form', () => {
-    assert.equal(buildClaimEnvPrefix('clm_x', { shell: 'zsh' }), 'BRAINCLAW_CLAIM_ID="clm_x" ');
+  it('zsh inherits the bash unquoted form', () => {
+    assert.equal(buildClaimEnvPrefix('clm_x', { shell: 'zsh' }), 'BRAINCLAW_CLAIM_ID=clm_x ');
+  });
+
+  it('sh inherits the bash unquoted form', () => {
+    // Explicit sh case requested by codex review on 87a9f73 — the previous
+    // matrix grouped sh under bash/zsh defaults but never asserted it.
+    assert.equal(buildClaimEnvPrefix('clm_x', { shell: 'sh' }), 'BRAINCLAW_CLAIM_ID=clm_x ');
   });
 
   it('cmd uses set KEY=VALUE && (Windows shell:true default)', () => {
@@ -174,7 +185,7 @@ describe('execution-profile/buildClaimEnvPrefix', () => {
     );
   });
 
-  it('pwsh uses $env:KEY="VALUE"; (statement separator)', () => {
+  it('pwsh uses $env:KEY="VALUE"; (statement separator, opt-in via override)', () => {
     assert.equal(
       buildClaimEnvPrefix('clm_x', { shell: 'pwsh' }),
       '$env:BRAINCLAW_CLAIM_ID="clm_x"; ',
@@ -185,6 +196,22 @@ describe('execution-profile/buildClaimEnvPrefix', () => {
     assert.equal(buildClaimEnvPrefix(undefined), '');
     assert.equal(buildClaimEnvPrefix(''), '');
     assert.equal(buildClaimEnvPrefix('(dry-run)'), '');
+  });
+
+  it('host default on Windows is cmd (legacy parity, NOT pwsh-via-PSModulePath)', () => {
+    // Codex review finding: PSModulePath sniff making pwsh the default on
+    // modern Windows hosts was a regression because the legacy spawn
+    // pipeline runs through child_process.spawn(shell:true) which Windows
+    // resolves to cmd. The fix locks the no-shell-override path to cmd
+    // on Windows, so pwsh becomes opt-in via explicit { shell: 'pwsh' }.
+    if (process.platform === 'win32') {
+      const result = buildClaimEnvPrefix('clm_y');
+      assert.match(result, /^set BRAINCLAW_CLAIM_ID=clm_y && $/);
+    } else {
+      // On non-Windows runners (CI Linux), no host override → bash form.
+      const result = buildClaimEnvPrefix('clm_y');
+      assert.match(result, /^BRAINCLAW_CLAIM_ID=clm_y $/);
+    }
   });
 
   it('falls back to host detection when shell is not provided', () => {
