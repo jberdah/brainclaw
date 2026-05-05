@@ -738,8 +738,23 @@ export type BriefMode = 'full' | 'compact' | 'task_card';
  *
  * Resolution rules:
  *   1. Agent is NOT canBeSpawnedCli (IDE-only) → 'task_card'
- *   2. Agent's workflowModel is 'task-based' (headless one-shot, e.g. codex) → 'compact'
+ *   2. Agent is task-based AND has NO MCP access → 'compact'
+ *      (brief skips the Protocol section because the agent cannot call
+ *      bclaw_assignment_update / bclaw_release_claim anyway)
  *   3. Otherwise → 'full'
+ *
+ * Rule 2 was previously `workflowModel === 'task-based'` regardless of MCP
+ * capability (pln#496 Phase 1.b). That forced codex (task-based + hasMcp:
+ * true) onto 'compact' mode, which strips the Protocol section that
+ * contains `bclaw_assignment_update(status: …)` lifecycle instructions.
+ * Empirically validated 2026-05-04: every codex review in May 2026
+ * silently stayed `run_running` forever because codex never received the
+ * 'when done, call bclaw_assignment_update(status: completed)' line —
+ * last 'successful' review (lop_950a51aef0bb8263) had assignment
+ * status='offered', completed_at=null. The hasMcp check fixes this for
+ * codex and mistral-vibe (both task-based + MCP) without changing
+ * behaviour for genuinely MCP-less agents (nanoclaw / nemoclaw /
+ * zeroclaw).
  *
  * Note: stdin_pipe as prompt delivery is an optimization used by several
  * interactive agents (claude-code, cline prefer it for long prompts) and
@@ -753,7 +768,7 @@ export function resolveBriefMode(agentName: string): BriefMode {
   if (!profile) return 'full';
 
   if (!profile.runtime.canBeSpawnedCli) return 'task_card';
-  if (profile.workflowModel === 'task-based') return 'compact';
+  if (profile.workflowModel === 'task-based' && !profile.hasMcp) return 'compact';
   return 'full';
 }
 

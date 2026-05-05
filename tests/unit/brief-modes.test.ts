@@ -67,8 +67,25 @@ describe('brief-modes/resolveBriefMode', () => {
     assert.equal(resolveBriefMode('claude-code'), 'full');
   });
 
-  it('codex → compact (stdin_pipe)', () => {
-    assert.equal(resolveBriefMode('codex'), 'compact');
+  it('codex → full (task-based but has MCP — pln#496 Phase 1.b)', () => {
+    // Pre-pln#496: codex was forced to 'compact' because workflowModel ===
+    // 'task-based'. That stripped the Protocol section, so codex briefs
+    // never instructed the worker to call bclaw_assignment_update(status:
+    // 'completed'). The new rule keeps 'compact' for task-based agents
+    // WITHOUT MCP (nanoclaw / nemoclaw / zeroclaw); codex (task-based +
+    // hasMcp:true) gets 'full'.
+    assert.equal(resolveBriefMode('codex'), 'full');
+  });
+
+  it('mistral-vibe → full (task-based but has MCP — pln#496 Phase 1.b)', () => {
+    assert.equal(resolveBriefMode('mistral-vibe'), 'full');
+  });
+
+  it('nanoclaw → compact (task-based AND no MCP)', () => {
+    // Regression guard: agents that genuinely lack MCP must still get
+    // 'compact' so they don't receive Protocol instructions they can't
+    // execute.
+    assert.equal(resolveBriefMode('nanoclaw'), 'compact');
   });
 
   it('cursor → task_card (IDE-only)', () => {

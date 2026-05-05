@@ -156,8 +156,16 @@ describe('dispatch-e2e-codex/profile', () => {
     assert.deepEqual(profile.role_capabilities, ['execute', 'review']);
   });
 
-  it('brief mode is compact (omits protocol section)', () => {
-    assert.equal(resolveBriefMode('codex'), 'compact');
+  it('brief mode is full (codex has MCP — pln#496 Phase 1.b)', () => {
+    // Pre-pln#496: codex was forced to 'compact' on the assumption that
+    // task-based agents couldn't reach MCP. Empirically wrong: codex has
+    // hasMcp:true and runtime.mcp_direct:true. Forcing 'compact' stripped
+    // the Protocol section, so codex briefs never told the worker to call
+    // bclaw_assignment_update(status: 'completed') — leaving every codex
+    // review in `running` forever (verified 2026-05-04 on
+    // lop_950a51aef0bb8263 etc.). The new rule resolves codex to 'full'
+    // so the lifecycle instructions land in the brief.
+    assert.equal(resolveBriefMode('codex'), 'full');
   });
 
   it('invoke_binary is codex', () => {
@@ -185,7 +193,7 @@ describe('dispatch-e2e-codex/dispatch-cycle', () => {
     else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
   });
 
-  it('dispatch creates claim + assignment + compact inbox brief', async () => {
+  it('dispatch creates claim + assignment + brief INCLUDING protocol section (pln#496 Phase 1.b)', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
@@ -203,12 +211,21 @@ describe('dispatch-e2e-codex/dispatch-cycle', () => {
     assert.ok(result.result.messages_sent[0]!.claim_id);
     assert.ok(result.result.messages_sent[0]!.assignment_id);
 
-    // Compact brief: no protocol section
     const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
     const assignMsg = inbox.messages.find(m => m.type === 'assign');
     assert.ok(assignMsg);
     assert.ok(assignMsg!.text.includes('Write unit tests for auth'));
-    assert.ok(!assignMsg!.text.includes('## Protocol'), 'compact mode omits protocol');
+    // pln#496 Phase 1.b: codex now receives the full Protocol section so it
+    // actually calls bclaw_assignment_update(status: 'completed') at end of
+    // work. The pre-fix assertion was `!includes('## Protocol')`; the fact
+    // that this test was happily verifying the absence of a section that
+    // codex needed is exactly the behaviour that produced the May 2026
+    // silent-completion class — see runtime_note run_77e65e77.
+    assert.ok(assignMsg!.text.includes('## Protocol'), 'codex now gets the Protocol section (pln#496 Phase 1.b)');
+    assert.ok(
+      assignMsg!.text.includes('bclaw_assignment_update'),
+      'codex brief must instruct lifecycle calls so run_completed event fires',
+    );
   });
 
   // NOTE: spawn handshake tests live in dispatch-e2e.test.ts (the original
@@ -368,7 +385,7 @@ describe('dispatch-e2e-codex/mcp-write-path', () => {
     assert.equal(profile.runtime.mcp_direct, true, 'MCP direct connection available');
   });
 
-  it('dispatch brief for codex is compact but still contains assignment_id for MCP routing', async () => {
+  it('dispatch brief for codex contains assignment_id for MCP routing (and full mode after pln#496)', async () => {
     persistState({
       version: 1, write_version: 1,
       active_constraints: [], recent_decisions: [], known_traps: [],
