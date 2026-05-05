@@ -631,8 +631,9 @@ program
   .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
   .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
+  .option('--dispatch', 'Run dispatch-health diagnostic only: reconcile open agent_runs and report stuck/unverified/silent failures (pln#496 step stp_8c072d75)')
   .action((options) => {
-    runDoctor({ ...options, afterMigration: options.afterMigration });
+    runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch });
   });
 
 // --- repair (Phase 4 Sprint 2 Lane C / pln#397) ---
