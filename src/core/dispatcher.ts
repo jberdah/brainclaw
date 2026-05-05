@@ -287,8 +287,15 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
  * Protocol + Available tools section, shared between generateBrief (plan-based)
  * and generateDispatchBrief (task-based / coordinate).
  *
- * Only emitted for 'full' briefMode — compact/task_card agents run in sandboxes
- * without MCP access, so the protocol section would be noise.
+ * Only emitted for 'full' briefMode — agents in 'compact' or 'task_card' mode
+ * either lack MCP access entirely (nanoclaw / nemoclaw / zeroclaw) or are
+ * IDE-only (Cursor / Windsurf / Roo) where the human pastes the task. Both
+ * cases ignore the protocol-side instructions, so emitting them is noise.
+ *
+ * pln#496 Phase 1.b note: codex and mistral-vibe USED TO get 'compact'
+ * because they are task-based, but they also have hasMcp=true, so the
+ * Protocol section IS useful to them — `resolveBriefMode` was updated to
+ * return 'full' for that combination.
  */
 export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
@@ -462,8 +469,13 @@ export function generateBrief(
     }
   }
 
-  // Protocol and Available tools — only for 'full' mode
-  // Compact mode agents (Codex) run in sandboxes without MCP access
+  // Protocol and Available tools — only for 'full' mode.
+  // Compact mode is now reserved for task-based agents WITHOUT MCP access
+  // (nanoclaw / nemoclaw / zeroclaw). Codex and Mistral Vibe — both
+  // task-based with MCP — receive the full Protocol section since
+  // pln#496 Phase 1.b, so they actually call
+  // bclaw_assignment_update(status: 'completed') at end and the loop
+  // converges. See agent-capability.ts:resolveBriefMode for the rule.
   if (mode === 'full') {
     parts.push(buildProtocolSection(options));
   }
