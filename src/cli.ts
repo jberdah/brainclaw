@@ -89,6 +89,7 @@ import { runAuditCommand } from './commands/audit.js';
 import { runHistory } from './commands/history.js';
 import { runContextDiff } from './commands/context-diff.js';
 import { runCapability } from './commands/capability.js';
+import { runLink } from './commands/link.js';
 import { runTool } from './commands/tool.js';
 import { runExplore } from './commands/explore.js';
 import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
@@ -1628,6 +1629,30 @@ program
     runCapability(subcommand, args, {
       tag: options.tag,
       author: options.author,
+      store: options.store,
+    });
+  });
+
+program
+  .command('link <subcommand> [args...]')
+  .description('Manage cross-project federation links (add, list, remove)')
+  .option('--name <slug>', 'Override the auto-derived link name')
+  .option('--role <role>', 'Link role: publisher (push signals out) or subscriber (default)')
+  .option(
+    '--channels <list>',
+    'Comma-separated allow-list of channels: candidate,handoff,runtime_note',
+    (val: string) => val.split(',').map((s) => s.trim()).filter(Boolean),
+  )
+  .option('--force', 'Replace an existing link of the same name/path')
+  .option('--json', 'Output as JSON')
+  .option('--store <target>', 'Store level: local (default), repo, workspace, user')
+  .action((subcommand: string, args: string[], options) => {
+    runLink(subcommand, args, {
+      name: options.name,
+      role: options.role,
+      channels: options.channels,
+      force: options.force,
+      json: options.json,
       store: options.store,
     });
   });

@@ -1641,6 +1641,50 @@ brainclaw federation status
 
 ---
 
+## Cross-project links
+
+The `link` command group manages local cross-project federation peers — entries stored under `cross_project_links` in `.brainclaw/config.yaml`. These are the targets used by `bclaw_write_note --crossProject`, `bclaw_create(entity='handoff', targetProject=…)`, and the runtime cross-project signal writers in `src/core/cross-project.ts`.
+
+The same entity surface is available through the canonical grammar: `bclaw_create / find / get / update / remove(entity='cross_project_link')`.
+
+### `brainclaw link add <path>`
+
+Register a sibling project as a federation peer. The path is validated to point at an existing brainclaw-initialised directory; the link `name` is auto-derived from the linked project's `project_name` (or its basename) unless `--name` is passed.
+
+| Option | Description |
+|---|---|
+| `--name <slug>` | Override the auto-derived name |
+| `--role <role>` | `publisher` (push signals out) or `subscriber` (default, read-only) |
+| `--channels <list>` | Comma-separated allow-list: `candidate,handoff,runtime_note` |
+| `--force` | Replace an existing link of the same name/path |
+| `--json` | Emit the resulting link entry as JSON |
+
+```bash
+brainclaw link add ../brainclaw-cloud
+brainclaw link add ../brainclaw-site --role publisher --channels candidate,handoff
+brainclaw link add ../brainclaw-cloud --role publisher --force
+```
+
+### `brainclaw link list`
+
+Show every configured cross-project link with its resolved absolute path, role, and availability marker (`✓` if the target directory exists and is brainclaw-initialised).
+
+```bash
+brainclaw link list
+brainclaw link list --json
+```
+
+### `brainclaw link remove <name|path>`
+
+Drop a link from the config. Matches by name, exact `path`, resolved absolute path, or basename of the resolved path — the same matcher used by `resolveCrossProjectTarget`.
+
+```bash
+brainclaw link remove brainclaw-cloud
+brainclaw link remove ../brainclaw-site
+```
+
+---
+
 ## Monitoring and Maintenance
 
 ### `brainclaw watch`

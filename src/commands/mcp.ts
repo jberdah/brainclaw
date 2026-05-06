@@ -1152,7 +1152,7 @@ const MCP_WRITE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run. Others not yet wired.' },
+        entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
         filter: { type: 'object', description: 'Filter keys: status, tag, author, plan_id, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6).' },
       },
       required: ['entity'],

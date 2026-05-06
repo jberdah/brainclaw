@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadConfig } from './config.js';
+import { loadConfig, saveConfig } from './config.js';
 import { loadState } from './state.js';
 import { generateId, nowISO } from './ids.js';
 import { memoryExists, resolveEntityDir } from './io.js';
-import type { CrossProjectLink } from './schema.js';
+import { CrossProjectLinkSchema, type CrossProjectLink } from './schema.js';
 import type { Candidate, Handoff, State, RuntimeNote } from './schema.js';
 
 export type CrossProjectSignalEntity = 'candidate' | 'handoff' | 'runtime_note';
@@ -213,5 +213,100 @@ export function resolveCrossProjectTarget(nameOrPath: string, cwd?: string): Res
   if (!match) {
     throw new Error(`No cross_project_link found matching: '${nameOrPath}'. Check your config.yaml cross_project_links.`);
   }
+  return match;
+}
+
+export interface AddCrossProjectLinkInput {
+  path: string;
+  name?: string;
+  role?: CrossProjectLink['role'];
+  channels?: string[];
+  cwd?: string;
+  force?: boolean;
+}
+
+/**
+ * Add a new cross_project_link entry to config.yaml.
+ *
+ * - Resolves a relative input path against `cwd` for the existence check, but
+ *   stores it as-given (relative paths are friendly for shared configs).
+ * - Validates the target directory exists and is brainclaw-initialised.
+ * - Derives `name` from the linked project's project_name when possible,
+ *   else from the basename of the resolved path.
+ * - Refuses duplicates by `name` or `path` unless `force: true`.
+ */
+export function addCrossProjectLink(input: AddCrossProjectLinkInput): CrossProjectLink {
+  const baseCwd = path.resolve(input.cwd ?? process.cwd());
+  const inputPath = input.path.trim();
+  if (!inputPath) {
+    throw new Error('path is required');
+  }
+  const absolutePath = path.isAbsolute(inputPath) ? inputPath : path.resolve(baseCwd, inputPath);
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`Target path does not exist: ${absolutePath}`);
+  }
+  if (!memoryExists(absolutePath)) {
+    throw new Error(`Target is not brainclaw-initialised (no .brainclaw/ found): ${absolutePath}`);
+  }
+
+  let derivedName = input.name?.trim();
+  if (!derivedName) {
+    try {
+      derivedName = loadConfig(absolutePath).project_name;
+    } catch { /* fall through to basename */ }
+  }
+  derivedName = derivedName ?? path.basename(absolutePath);
+
+  const config = loadConfig(input.cwd);
+  const existing = config.cross_project_links ?? [];
+
+  const conflict = existing.find(
+    (l) => l.name === derivedName ||
+           l.path === inputPath ||
+           path.resolve(baseCwd, l.path) === absolutePath,
+  );
+  if (conflict && !input.force) {
+    throw new Error(
+      `Cross-project link already exists (name='${conflict.name ?? path.basename(conflict.path)}', path='${conflict.path}'). Use force: true to replace.`,
+    );
+  }
+
+  const link: CrossProjectLink = CrossProjectLinkSchema.parse({
+    path: inputPath,
+    name: derivedName,
+    role: input.role ?? 'subscriber',
+    ...(input.channels?.length ? { channels: input.channels } : {}),
+  });
+
+  const next = conflict
+    ? existing.map((l) => (l === conflict ? link : l))
+    : [...existing, link];
+
+  saveConfig({ ...config, cross_project_links: next }, input.cwd);
+  return link;
+}
+
+/**
+ * Remove a cross_project_link entry from config.yaml.
+ *
+ * Matches by `name`, exact `path`, resolved absolute path, or basename of
+ * the resolved path — same matching rules as `resolveCrossProjectTarget`.
+ */
+export function removeCrossProjectLink(nameOrPath: string, cwd?: string): CrossProjectLink {
+  const baseCwd = path.resolve(cwd ?? process.cwd());
+  const config = loadConfig(cwd);
+  const links = config.cross_project_links ?? [];
+  const match = links.find((l) => {
+    const abs = path.isAbsolute(l.path) ? l.path : path.resolve(baseCwd, l.path);
+    return l.name === nameOrPath
+      || l.path === nameOrPath
+      || abs === nameOrPath
+      || path.basename(abs) === nameOrPath;
+  });
+  if (!match) {
+    throw new Error(`No cross_project_link found matching: '${nameOrPath}'`);
+  }
+  const next = links.filter((l) => l !== match);
+  saveConfig({ ...config, cross_project_links: next }, cwd);
   return match;
 }

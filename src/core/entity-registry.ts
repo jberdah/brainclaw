@@ -23,6 +23,7 @@ import {
   CandidateSchema,
   ClaimSchema,
   ConstraintSchema,
+  CrossProjectLinkSchema,
   CurrentSessionStateSchema,
   DecisionSchema,
   HandoffSchema,
@@ -55,7 +56,8 @@ export type EntityName =
   | 'instruction'
   | 'assignment'
   | 'agent_run'
-  | 'action';
+  | 'action'
+  | 'cross_project_link';
 
 export interface EntitySpec {
   /** Canonical name used in bclaw_<verb>(entity='<name>'). */
@@ -370,11 +372,30 @@ const action: EntitySpec = {
   },
 };
 
+/**
+ * Cross-project link — federation peer entry stored in config.yaml
+ * (cross_project_links). Stateless: identified by `name`, no lifecycle.
+ * Storage is YAML-in-config rather than a per-entity directory, so the
+ * `bclaw_create/find/remove` ops route through `src/core/cross-project.ts`
+ * helpers (addCrossProjectLink / resolveCrossProjectLinks /
+ * removeCrossProjectLink).
+ */
+const cross_project_link: EntitySpec = {
+  name: 'cross_project_link',
+  shortLabelPrefix: 'xpl',
+  schema: CrossProjectLinkSchema,
+  updatable: ['name', 'role', 'channels'],
+  transitions: {},
+  terminal: [],
+  sideEffects: {},
+};
+
 export const ENTITY_REGISTRY: Readonly<Record<EntityName, EntitySpec>> = {
   plan, step, claim, session, handoff,
   decision, constraint, trap, candidate, runtime_note, sequence,
   inbox_message, instruction,
   assignment, agent_run, action,
+  cross_project_link,
 };
 
 export const ENTITY_NAMES: readonly EntityName[] = Object.keys(ENTITY_REGISTRY) as EntityName[];

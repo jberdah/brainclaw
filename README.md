@@ -245,6 +245,33 @@ worktree:
 
 ---
 
+## Cross-project links
+
+Link a sibling brainclaw project so that signals (candidates, handoffs, runtime notes) can flow between them. Stored under `cross_project_links` in `.brainclaw/config.yaml`.
+
+```bash
+# Subscribe to incoming signals from a peer (default role)
+brainclaw link add ../brainclaw-cloud
+
+# Publish candidates only to a peer
+brainclaw link add ../brainclaw-site --role publisher --channels candidate
+
+# Replace an existing entry of the same name/path
+brainclaw link add ../brainclaw-cloud --role publisher --force
+
+# Inspect what's wired
+brainclaw link list
+
+# Drop a link by name, path, or basename
+brainclaw link remove brainclaw-cloud
+```
+
+`role: publisher` is required to push signals out (`bclaw_write_note --crossProject`, `bclaw_create(entity='handoff', targetProject=…)`, etc.). `role: subscriber` (the default) marks the link as readable only.
+
+The same surface is available through the canonical grammar for agents: `bclaw_create/find/get/update/remove(entity='cross_project_link')`.
+
+---
+
 ## Documentation
 
 The npm package includes the Markdown docs below under `docs/`. Public web docs on `brainclaw.dev` are still being rolled out, so the npm README does not depend on private GitHub links.
