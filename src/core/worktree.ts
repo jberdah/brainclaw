@@ -458,11 +458,54 @@ export function safeRemoveWorktreeDir(dirPath: string): void {
   try { fs.unlinkSync(dirPath); } catch { /* best effort */ }
 }
 
+/**
+ * pln#498 — Detach top-level symlinks/junctions from a worktree before any
+ * recursive removal. On Windows, `git worktree remove` performs its own
+ * recursive rm and historically (git ≤ 2.38) followed NTFS junctions into
+ * the main repo, wiping `node_modules`. Unlinking the junction entries
+ * first leaves git only regular files/dirs to walk.
+ *
+ * Only top-level entries are inspected — that's where shared paths are
+ * symlinked at worktree birth (see createWorktree.trySymlinkSharedPath).
+ */
+export function detachWorktreeJunctions(worktreePath: string): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(worktreePath, { withFileTypes: true });
+  } catch {
+    return; // worktree already gone or unreadable
+  }
+
+  for (const entry of entries) {
+    const child = path.join(worktreePath, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(child);
+    } catch {
+      continue;
+    }
+    if (!stat.isSymbolicLink()) continue;
+    try {
+      fs.unlinkSync(child);
+    } catch {
+      try { fs.rmdirSync(child); } catch { /* best effort */ }
+    }
+  }
+}
+
 export function removeWorktree(
   mainWorktreePath: string,
   worktreePath: string,
   options: { force?: boolean } = {},
 ): void {
+  // pln#498: detach junctions BEFORE git's own recursive rm runs. On Windows
+  // (git ≤ 2.38) `git worktree remove` follows NTFS junctions into the main
+  // repo and wipes node_modules. Removing the symlink entries first means
+  // git only walks regular files and dirs.
+  if (fs.existsSync(worktreePath)) {
+    detachWorktreeJunctions(worktreePath);
+  }
+
   const args = ['worktree', 'remove', worktreePath];
   if (options.force) args.push('--force');
 
