@@ -56,6 +56,19 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
       return thread.artifacts.some(
         (artifact) => artifact.phase === condition.phase && artifact.type === condition.type,
       );
+    case 'min_artifacts_by_type': {
+      // pln#492 — count artifacts of `type` in the requested scope. Phase 1
+      // semantics: phase scope counts artifacts whose phase matches the
+      // thread's current_phase (across all iterations to date); loop scope
+      // counts across all phases. Iteration-window-aware refinement lives
+      // in the phase 2 gate engine, not here.
+      const matches = thread.artifacts.filter((artifact) => {
+        if (artifact.type !== condition.type) return false;
+        if (condition.scope === 'phase') return artifact.phase === thread.current_phase;
+        return true;
+      });
+      return matches.length >= condition.n;
+    }
     case 'manual':
       return false;
     case 'any':
