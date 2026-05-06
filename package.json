@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
@@ -56,7 +56,7 @@
   "dependencies": {
     "commander": "^14.0.3",
     "yaml": "^2.7.1",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.12.2",
