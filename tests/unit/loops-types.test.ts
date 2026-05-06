@@ -7,6 +7,7 @@ import {
   LoopPhaseSchema,
   LoopIterationSchema,
   LoopProtocolConfigSchema,
+  LoopArtifactSchema,
   AtomicStopConditionSchema,
   StopConditionSchema,
   LoopEventSchema,
@@ -347,5 +348,128 @@ describe('CRITIQUE_ARTIFACT_SUBTYPES (pln#492)', () => {
       'memory_conflict',
       'scope_creep',
     ]);
+  });
+});
+
+describe('LoopArtifact addresses_critique field-presence (pln#492 phase 2.a)', () => {
+  const baseArtifact = {
+    artifact_id: 'art_1',
+    phase: 'synthesis',
+    type: 'plan_draft',
+    produced_at: '2026-05-06T12:00:00.000Z',
+  };
+
+  it('plan_draft artifact requires addresses_critique', () => {
+    assert.throws(() => LoopArtifactSchema.parse(baseArtifact));
+  });
+
+  it('plan_draft artifact rejects empty addresses_critique array', () => {
+    assert.throws(() =>
+      LoopArtifactSchema.parse({ ...baseArtifact, addresses_critique: [] }),
+    );
+  });
+
+  it('plan_draft artifact accepts addresses_critique with at least one id', () => {
+    const parsed = LoopArtifactSchema.parse({
+      ...baseArtifact,
+      addresses_critique: ['art_critique_1'],
+    });
+    assert.equal(parsed.type, 'plan_draft');
+    assert.deepEqual(parsed.addresses_critique, ['art_critique_1']);
+  });
+
+  it('non-plan_draft artifacts do not require addresses_critique', () => {
+    const parsed = LoopArtifactSchema.parse({
+      ...baseArtifact,
+      type: 'critique',
+      phase: 'critique',
+    });
+    assert.equal(parsed.type, 'critique');
+    assert.equal(parsed.addresses_critique, undefined);
+  });
+
+  it('non-plan_draft artifacts may still set addresses_critique (no-op refine)', () => {
+    const parsed = LoopArtifactSchema.parse({
+      ...baseArtifact,
+      type: 'critique',
+      phase: 'critique',
+      addresses_critique: ['art_x'],
+    });
+    assert.deepEqual(parsed.addresses_critique, ['art_x']);
+  });
+
+  it('body size cap still enforced (regression for the original refine)', () => {
+    const oversized = 'x'.repeat(5000);
+    assert.throws(() =>
+      LoopArtifactSchema.parse({
+        ...baseArtifact,
+        addresses_critique: ['art_x'],
+        body: oversized,
+      }),
+    );
+  });
+});
+
+describe('LoopPhase.advance_gate (pln#492 phase 2.a)', () => {
+  it('parses a min_artifacts_by_type advance_gate', () => {
+    const parsed = LoopPhaseSchema.parse({
+      name: 'critique',
+      advance_gate: {
+        kind: 'min_artifacts_by_type',
+        type: 'critique',
+        n: 3,
+        scope: 'phase',
+      },
+    });
+    assert.equal(parsed.advance_gate?.kind, 'min_artifacts_by_type');
+  });
+
+  it('parses an any/all composed advance_gate', () => {
+    const parsed = LoopPhaseSchema.parse({
+      name: 'critique',
+      advance_gate: {
+        kind: 'all',
+        conditions: [
+          { kind: 'min_artifacts_by_type', type: 'critique', n: 1, scope: 'phase' },
+          { kind: 'reviewer_green' },
+        ],
+      },
+    });
+    assert.equal(parsed.advance_gate?.kind, 'all');
+  });
+
+  it('advance_gate is optional (phases without one parse cleanly)', () => {
+    const parsed = LoopPhaseSchema.parse({ name: 'proposal' });
+    assert.equal(parsed.advance_gate, undefined);
+  });
+
+  it('rejects an advance_gate with an unknown kind', () => {
+    assert.throws(() =>
+      LoopPhaseSchema.parse({
+        name: 'critique',
+        advance_gate: { kind: 'as_soon_as_possible' },
+      }),
+    );
+  });
+});
+
+describe('DEFAULT_PROTOCOLS.ideation.critique advance_gate (pln#492 phase 2.a)', () => {
+  it('critique phase carries an advance_gate of >=3 critique artifacts in current phase', () => {
+    const critique = DEFAULT_PROTOCOLS.ideation.phases.find((p) => p.name === 'critique');
+    assert.ok(critique?.advance_gate, 'critique must carry advance_gate');
+    const gate = critique.advance_gate;
+    assert.equal(gate?.kind, 'min_artifacts_by_type');
+    if (gate && gate.kind === 'min_artifacts_by_type') {
+      assert.equal(gate.type, 'critique');
+      assert.equal(gate.n, 3);
+      assert.equal(gate.scope, 'phase');
+    }
+  });
+
+  it('non-critique ideation phases do not carry advance_gate (revision/synthesis are open)', () => {
+    for (const phaseName of ['proposal', 'revision', 'synthesis']) {
+      const phase = DEFAULT_PROTOCOLS.ideation.phases.find((p) => p.name === phaseName);
+      assert.equal(phase?.advance_gate, undefined, `${phaseName} should not have advance_gate in v1`);
+    }
   });
 });

@@ -16,6 +16,7 @@ export {
   add_artifact,
   advance,
   complete_turn,
+  evaluatePhaseAdvanceGate,
   evaluateStopCondition,
   pause,
   resume,
@@ -25,6 +26,7 @@ export {
   type AdvanceResult,
   type CompleteTurnInput,
   type PauseResumeInput,
+  type PhaseAdvanceOutcome,
   type TurnInput,
 } from './verbs.js';
 export {

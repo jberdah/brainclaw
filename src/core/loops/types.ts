@@ -89,8 +89,22 @@ export const LoopPhaseSchema = z.object({
    * Use ['*'] to request the full bundle explicitly.
    */
   context_filter: z.array(z.enum(LOOP_CONTEXT_CATEGORIES)).min(1).optional(),
+  /**
+   * Optional condition that must hold for the driver to advance OUT of
+   * this phase (pln#492). Re-uses the StopCondition shape so callers can
+   * compose any/all/min_artifacts_by_type/etc. When the gate fails the
+   * driver emits a `phase_advance_blocked` system event with a structured
+   * gate_reason; it does NOT silently hang.
+   *
+   * z.lazy because StopConditionSchema is defined further down in this
+   * file and references LoopPhase indirectly; the lazy wrapper avoids
+   * the temporal-dead-zone.
+   */
+  advance_gate: z.lazy(() => StopConditionSchema).optional(),
 });
-export type LoopPhase = z.infer<typeof LoopPhaseSchema>;
+export type LoopPhase = z.infer<typeof LoopPhaseSchema> & {
+  advance_gate?: StopCondition;
+};
 
 /**
  * Iteration block for protocols with an inner cycle (e.g. ideation_loop's
@@ -139,17 +153,36 @@ export const LoopArtifactSchema = z
     body: z.string().optional(),
     produced_by: z.string().optional(),
     produced_at: z.string().datetime(),
+    /**
+     * pln#492 — synthesis schema. When the synthesis phase emits a
+     * `plan_draft` artifact, it MUST cite the critique artifact_ids it
+     * addresses (or explicitly waives) so a reviewer can audit which
+     * critiques were folded in vs dropped. Field-presence enforced by
+     * `superRefine` below; semantic validation (each id maps to a real
+     * critique artifact) is deferred to v1.1 per the plan.
+     */
+    addresses_critique: z.array(z.string().min(1)).optional(),
   })
-  .refine(
-    (artifact) => {
-      if (artifact.body === undefined) return true;
-      return Buffer.byteLength(artifact.body, 'utf8') <= LOOP_ARTIFACT_BODY_MAX_BYTES;
-    },
-    {
-      message: `LoopArtifact.body must be ≤ ${LOOP_ARTIFACT_BODY_MAX_BYTES} bytes; use a ref for larger content`,
-      path: ['body'],
-    },
-  );
+  .superRefine((artifact, ctx) => {
+    if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > LOOP_ARTIFACT_BODY_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `LoopArtifact.body must be ≤ ${LOOP_ARTIFACT_BODY_MAX_BYTES} bytes; use a ref for larger content`,
+        path: ['body'],
+      });
+    }
+    if (artifact.type === 'plan_draft') {
+      if (!artifact.addresses_critique || artifact.addresses_critique.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "LoopArtifact of type 'plan_draft' must include addresses_critique:[ids] " +
+            '(at least one) so synthesis can be audited against the critiques it folded in',
+          path: ['addresses_critique'],
+        });
+      }
+    }
+  });
 export type LoopArtifact = z.infer<typeof LoopArtifactSchema>;
 
 export const AtomicStopConditionSchema = z.discriminatedUnion('kind', [
@@ -374,6 +407,17 @@ export const DEFAULT_PROTOCOLS: Record<
       {
         name: 'critique',
         context_filter: ['traps', 'feedback', 'runtime_notes', 'critique_history'],
+        // pln#492 — gate: cannot advance critique→revision until ≥3 critique
+        // artifacts have been produced in the current critique phase. Below
+        // that floor, the loop hasn't accumulated enough adversarial pressure
+        // to make revision useful. Phase 2.b iteration engine will refine
+        // this to per-iteration scope; phase 2.a counts across the phase.
+        advance_gate: {
+          kind: 'min_artifacts_by_type',
+          type: 'critique',
+          n: 3,
+          scope: 'phase',
+        },
       },
       { name: 'revision', context_filter: ['*'] },
       { name: 'synthesis', context_filter: ['*'] },
