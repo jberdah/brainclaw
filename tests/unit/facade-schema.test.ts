@@ -102,9 +102,22 @@ describe('CoordinateRequestSchema', () => {
   });
 
   it('accepts all valid coordinate intent values', () => {
-    for (const intent of ['assign', 'consult', 'review', 'reroute', 'summarize'] as const) {
+    for (const intent of ['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate'] as const) {
       const result = CoordinateRequestSchema.safeParse({ intent, task: 'task description' });
       assert.ok(result.success, `intent '${intent}' should be valid`);
+    }
+  });
+
+  it("accepts intent='ideate' (pln#492 phase 2.c)", () => {
+    const result = CoordinateRequestSchema.safeParse({
+      intent: 'ideate',
+      task: 'Should we ship feature X next sprint or defer?',
+      targetAgents: ['codex'],
+    });
+    assert.ok(result.success);
+    if (result.success) {
+      assert.equal(result.data.intent, 'ideate');
+      assert.deepEqual(result.data.targetAgents, ['codex']);
     }
   });
 });

@@ -996,12 +996,12 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_coordinate',
-    description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, and side_effects.',
+    description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, open an ideation loop, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, and side_effects.',
     annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
-        intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize'], description: 'Coordination intent. "assign" creates a claim per target agent and dispatches the brief. "consult" dispatches without creating claims. "review" creates a review candidate. "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
+        intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate'], description: 'Coordination intent. "assign" creates a claim per target agent and dispatches the brief. "consult" dispatches without creating claims. "review" creates a review candidate. "ideate" opens an ideation loop with the task as the proposal seed (driver wire-up: pln#492 phase 2.d). "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
         task: { type: 'string', description: 'Brief or task description delivered to target agents.' },
         scope: { type: 'string', description: 'File or feature scope. Used as claim scope for assign/reroute; as thread id for summarize if threadId is absent.' },
         targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
@@ -5477,6 +5477,104 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           ? 'No messages found in thread.'
           : messages.map((m, i) => `[${i + 1}] ${m.from} → ${m.to}: ${m.text}`).join('\n');
         result = { thread_id: threadId, message_count: messages.length, summary };
+
+      } else if (req.intent === 'ideate') {
+        // pln#492 phase 2.c — open an ideation_loop with the task as a
+        // proposal seed. This skeleton does NOT yet dispatch turns; the
+        // driver wire-up (turn assignment + brief assembly) lands in
+        // phase 2.d. Callers receive the loop_id and may drive the loop
+        // manually via bclaw_loop intent='turn' / 'advance' meanwhile.
+        const loopsModuleRef = await import('../core/loops/index.js');
+        const { openLoop, add_artifact } = loopsModuleRef;
+
+        const senderIdentity = (
+          (senderAgentId ? findAgentIdentityById(senderAgentId, cwd) : undefined)
+          ?? findAgentIdentityByName(senderAgent, cwd)
+          ?? ensureAgentRegisteredForDispatch(senderAgent, cwd)
+        );
+        const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
+        const creatorActor = authorAgentId ?? senderAgent;
+
+        // Single-agent default: only the caller is in the loop unless
+        // targetAgents is explicitly provided. This matches pln#492's
+        // memory-confrontation design — one champion + memory-driven
+        // critique. Multi-agent opt-in adds critic slots per target.
+        const explicitTargets = req.targetAgents && req.targetAgents.length > 0;
+        const slots: Array<{ role: string; agent: string; agent_id?: string }> = [
+          {
+            role: 'champion',
+            agent: senderAgent,
+            ...(authorAgentId ? { agent_id: authorAgentId } : {}),
+          },
+        ];
+        if (explicitTargets) {
+          for (const agent of req.targetAgents!) {
+            const criticIdentity = findAgentIdentityByName(agent, cwd) ?? ensureAgentRegisteredForDispatch(agent, cwd);
+            slots.push({
+              role: 'critic',
+              agent,
+              ...(criticIdentity?.agent_id ? { agent_id: criticIdentity.agent_id } : {}),
+            });
+          }
+        }
+
+        let loopId: string;
+        let proposalArtifactId: string | undefined;
+        try {
+          const loop = openLoop(
+            {
+              kind: 'ideation',
+              title: req.task.slice(0, 120),
+              goal: req.scope,
+              created_by: creatorActor,
+              slots,
+            },
+            cwd,
+          );
+          loopId = loop.id;
+          artifacts.push({ type: 'loop', id: loop.id });
+          side_effects.push({ action: 'create', entity: 'loop', id: loop.id });
+
+          const proposalBody = req.task.slice(0, 4000);
+          const updated = add_artifact(
+            {
+              id: loop.id,
+              actor: creatorActor,
+              artifact: {
+                phase: 'proposal',
+                type: 'proposal',
+                body: proposalBody,
+                produced_by: creatorActor,
+              },
+            },
+            cwd,
+          );
+          const lastArtifact = updated.artifacts[updated.artifacts.length - 1];
+          proposalArtifactId = lastArtifact?.artifact_id;
+          if (proposalArtifactId) {
+            artifacts.push({ type: 'artifact', id: proposalArtifactId });
+            side_effects.push({ action: 'create', entity: 'artifact', id: proposalArtifactId });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            response: createToolErrorResponse(
+              'ideate_failed',
+              `ideate intent: failed to open ideation loop — ${msg}`,
+            ),
+          };
+        }
+
+        warnings.push(
+          "ideate skeleton (pln#492 phase 2.c): loop opened with proposal seed but no turn dispatched yet. Drive manually via bclaw_loop intent='turn' / 'advance' until phase 2.d brief assembly + driver lands.",
+        );
+
+        result = {
+          loop_id: loopId,
+          proposal_artifact_id: proposalArtifactId,
+          selected_targets: explicitTargets ? req.targetAgents! : [],
+          mode: explicitTargets ? 'multi_agent' : 'single_agent',
+        };
       }
 
       // Extract execution_status from result if present (assign/reroute set it)

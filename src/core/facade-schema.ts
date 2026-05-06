@@ -4,7 +4,11 @@ export const ExecutionStatusSchema = z.enum(['delivered_and_started', 'command_r
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 
 export const WorkIntentSchema = z.enum(['execute', 'consult', 'resume', 'review']);
-export const CoordinateIntentSchema = z.enum(['assign', 'consult', 'review', 'reroute', 'summarize']);
+// pln#492 phase 2.c — 'ideate' opens an ideation loop with a proposal seed
+// artifact. The handler does NOT yet dispatch turns (driver wire-up is
+// phase 2.d). Callers receive loop_id and may drive the loop manually via
+// bclaw_loop intent='turn' / 'advance' until the dispatch path lands.
+export const CoordinateIntentSchema = z.enum(['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate']);
 
 export const WorkRequestSchema = z.object({
   intent: WorkIntentSchema,
