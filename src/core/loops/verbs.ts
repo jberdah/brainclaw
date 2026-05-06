@@ -83,6 +83,75 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
   }
 }
 
+/**
+ * pln#492 — Phase-advance gate evaluator. Used by the iteration engine
+ * (phase 2.b) to decide whether the driver may transition out of the
+ * current phase.
+ *
+ * Returns a structured outcome:
+ *   - `{ advance: true }` when no gate is set, or the gate evaluates true
+ *   - `{ advance: false, gate_reason }` when the gate evaluates false. The
+ *     `gate_reason` is a one-line description suitable for emission as
+ *     the `phase_advance_blocked` system event payload.
+ *
+ * The gate uses the same StopCondition shape as `stop_condition` so
+ * callers can compose any/all/min_artifacts_by_type/etc. with no new
+ * vocabulary to learn.
+ *
+ * Phase 1 semantics: same artifact-counting as `evaluateStopCondition`
+ * (no iteration-window awareness). The phase 2.b driver will refine
+ * `min_artifacts_by_type{scope:'phase'}` to count only artifacts from
+ * the current iteration of the cycle.
+ */
+export interface PhaseAdvanceOutcome {
+  advance: boolean;
+  gate_reason?: string;
+}
+
+export function evaluatePhaseAdvanceGate(
+  thread: LoopThread,
+  gate: StopCondition | undefined,
+): PhaseAdvanceOutcome {
+  if (!gate) return { advance: true };
+  if (evaluateStopCondition(thread, gate)) return { advance: true };
+  return {
+    advance: false,
+    gate_reason: describeUnmetGate(thread, gate),
+  };
+}
+
+function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
+  switch (gate.kind) {
+    case 'min_artifacts_by_type': {
+      const matches = thread.artifacts.filter((artifact) => {
+        if (artifact.type !== gate.type) return false;
+        if (gate.scope === 'phase') return artifact.phase === thread.current_phase;
+        return true;
+      });
+      return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${matches.length} < n=${gate.n}`;
+    }
+    case 'phase_reached':
+      return `phase_reached unmet: current_phase="${thread.current_phase}" expected="${gate.phase}"`;
+    case 'reviewer_green':
+      return 'reviewer_green unmet: no accepted verdict artifact yet';
+    case 'max_iterations':
+      return `max_iterations unmet: iteration_count=${thread.iteration_count} < n=${gate.n}`;
+    case 'artifact_produced':
+      return `artifact_produced unmet: no artifact of type "${gate.type}" in phase "${gate.phase}"`;
+    case 'manual':
+      return 'manual gate: caller did not signal advance';
+    case 'any':
+      return `any-of unmet: none of ${gate.conditions.length} sub-conditions held`;
+    case 'all':
+      return `all-of unmet: at least one of ${gate.conditions.length} sub-conditions failed`;
+    default: {
+      const exhaustive: never = gate;
+      void exhaustive;
+      return 'unknown gate kind';
+    }
+  }
+}
+
 function stopHitsBlock(condition?: StopCondition): boolean {
   if (!condition) return false;
   if (condition.kind === 'max_iterations') return true;
