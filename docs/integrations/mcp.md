@@ -65,7 +65,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 |---|---|---|
 | `bclaw_work` | session | Start session + load context + optionally claim a scope in one call (compact payload by default) |
 | `bclaw_context` | context | Unified context read for memory, execution, board, board summary, and deltas |
-| `bclaw_coordinate` | coordination | Assign, consult, review, reroute, or summarize across agents |
+| `bclaw_coordinate` | coordination | Assign, consult, review, ideate, reroute, or summarize across agents |
 | `bclaw_dispatch` | coordination | Analyze, execute, or review dispatch work through one intent-based entry point |
 | `bclaw_loop` | loops | Drive multi-turn review, ideation, implementation, research, or debug loops |
 | `bclaw_setup` | session | Agent-driven onboarding wizard |
@@ -232,9 +232,25 @@ bclaw_context({ kind: 'board_summary' })
 // Review dispatch with structured loop
 bclaw_dispatch({ intent: 'review', openLoop: true, reviewMode: 'symmetric' })
 
+// Open a memory-confrontation ideation loop (single-agent: champion drives manually)
+bclaw_coordinate({ intent: 'ideate', task: 'Should we extract the dispatcher into a separate package?' })
+
+// Multi-agent ideation: critic gets a context-filtered, BM25-ranked brief auto-dispatched
+bclaw_coordinate({
+  intent: 'ideate',
+  task: 'Should we adopt approach A or approach B?',
+  targetAgents: ['codex'],
+})
+
 // Correct a handoff instead of mutating it
 bclaw_correct_handoff({ originalId: 'hnd_xyz', reason: 'wrong contract', text: '...' })
 ```
+
+For the full ideation_loop design (phases, context_filter, iteration
+block, advance_gate, brief assembly, single vs multi-agent UX), see
+[docs/concepts/ideation-loop.md](../concepts/ideation-loop.md). For
+the underlying loop engine, see
+[docs/concepts/loop-engine.md](../concepts/loop-engine.md).
 
 #### Deprecation status
 

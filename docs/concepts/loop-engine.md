@@ -244,7 +244,7 @@ Each `kind` ships a default `phases[]` and `stop_condition`. Users can override 
 | kind | phases | default stop_condition |
 |---|---|---|
 | `review` | `change_summary` → `findings` → `author_response` → `followup_review` → `verdict` | `reviewer_green` OR `max_iterations: 3` |
-| `ideation` | `proposal` → `critique` → `revision` → `synthesis` | `artifact_produced { phase: synthesis, type: plan_draft }` |
+| `ideation` | `proposal` → `critique` ↔ `revision` → `synthesis` (with iteration block + per-phase `context_filter` + `advance_gate` ≥3 critique artifacts; see [ideation-loop.md](./ideation-loop.md)) | `artifact_produced { phase: synthesis, type: plan_draft }` |
 | `implementation` | `sequence_build` → `dispatch` → `execute` → `self_check` → `handoff_ready` | `artifact_produced { phase: handoff_ready, type: handoff }` |
 | `research` / `debug` | user-defined | `manual` |
 
@@ -267,7 +267,7 @@ A Loop never copies these objects — it links them. Deleting the linked primiti
 
 This is the user-visible promise of the MVP — manual review round-trips disappear.
 
-The existing `review` intent in `bclaw_coordinate` already creates a review candidate. We extend it — **strictly backward-compatible** — with an optional flag `open_loop?: boolean` that **defaults to `false`**. Every existing `review` call behaves exactly as today; a caller must explicitly opt in by passing `open_loop: true`. We do **not** introduce a new intent; the coordinate enum (`assign | consult | review | reroute | summarize`) stays stable. A future minor version may flip the default after telemetry confirms adoption, but such a flip will be gated by MCP schema versioning (pln#392) and surfaced in the changelog.
+The existing `review` intent in `bclaw_coordinate` already creates a review candidate. We extend it — **strictly backward-compatible** — with an optional flag `open_loop?: boolean` that **defaults to `false`**. Every existing `review` call behaves exactly as today; a caller must explicitly opt in by passing `open_loop: true`. The coordinate enum was extended in v1.5.0 to add `ideate` (memory-confrontation ideation_loop driver — see [ideation-loop.md](./ideation-loop.md) for the full design and §[Automation: extending `bclaw_coordinate(intent='ideate')`](#automation-extending-bclaw_coordinateintentideate) below for a summary). The current vocabulary is `assign | consult | review | reroute | summarize | ideate`. A future minor version may flip the `open_loop` default after telemetry confirms adoption, but such a flip will be gated by MCP schema versioning (pln#392) and surfaced in the changelog.
 
 When `bclaw_coordinate(intent='review', open_loop: true)` is called, it:
 
@@ -289,6 +289,52 @@ The phase sequence stays the same (`findings → author_response → followup_re
 Selector: `mode: 'symmetric' | 'asymmetric'` on the `open_loop` call (or directly on `bclaw_loop(intent='open', kind='review', mode:…)`). Defaults to `asymmetric` for safety. On `open`, the server persists the resolved selection to `loop.protocol.review_mode` so resume/turn handlers do not depend on the original request envelope. If `symmetric` is requested but the active slot is human-operated or lacks write authority to the reviewed artifact, that turn degrades gracefully to asymmetric behavior for that slot: findings/verdicts are still allowed, `changes_applied` is omitted, and the loop proceeds without protocol error. Implementation-loops and security reviews typically stay asymmetric; RFC and doc reviews benefit most from symmetric.
 
 The operator never copy-pastes. They see status in the board (`bclaw_context(kind="board")`) and can `bclaw_loop(intent="get", loop_id=…)` for detail.
+
+## Automation: extending `bclaw_coordinate(intent='ideate')`
+
+Shipped in v1.5.0 (pln#492). The full design — phases, context_filter,
+iteration block, advance_gate, brief assembly, system events,
+single-agent vs multi-agent UX — lives in [ideation-loop.md](./ideation-loop.md).
+Summary for the loop-engine perspective:
+
+- `bclaw_coordinate(intent='ideate', task=…, [targetAgents=[…]])` opens
+  an ideation_loop with the caller as `champion` slot and the targets
+  (when provided) as `critic` slots. The task is stored verbatim as
+  the `proposal` artifact (sliced to the 4 KB body cap).
+- Single-agent mode (no `targetAgents`): the loop opens at the
+  proposal phase and stops there. The champion drives the cycle
+  manually via `bclaw_loop(intent='turn'|'advance')`. Useful when the
+  loop's structure (memory filter, gate, iteration accounting) is
+  what's wanted, not the multi-slot orchestration.
+- Multi-agent mode (explicit `targetAgents`): the driver advances
+  proposal → critique and dispatches a turn per critic with a brief
+  assembled by `buildIdeationBrief` — context-filtered (critic sees
+  only `traps + feedback + runtime_notes + critique_history`),
+  BM25-ranked via `search()`, capped at 48 KB.
+
+The ideation_loop introduces three loop-engine extensions consumed by
+this driver:
+
+- `LoopPhase.context_filter?: LoopContextCategory[]` — closed enum
+  with `'*'` wildcard. Drives per-phase memory selection at brief
+  assembly time.
+- `LoopPhase.advance_gate?: StopCondition` — re-uses the StopCondition
+  vocabulary as a phase-exit guard. When unmet, the driver emits a
+  `phase_advance_blocked` system event (a non-artifact event in the
+  journal) with a structured `gate_reason` and throws an actionable
+  error. The default ideation `critique` advance_gate is
+  `min_artifacts_by_type { type: 'critique', n: 3, scope: 'phase' }`.
+- `LoopProtocolConfig.iteration?: { cycle, max_iterations, exit_when }`
+  — wraps the inner critique↔revision loop. The FSM
+  (`decideNextPhase` in `iteration-engine.ts`) handles cycle progress,
+  exit_when predicates (`no_new_critique_artifacts` / `critic_signal`),
+  and emits `max_iterations_reached` when the cap fires.
+
+Both new event kinds — `phase_advance_blocked` and
+`max_iterations_reached` — live in the same event journal as
+`turn_assigned` / `phase_advanced`. They are intentionally **not**
+artifacts (which would force every consumer to filter `is_system`
+before processing content).
 
 ## Persistence
 

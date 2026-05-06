@@ -35,6 +35,7 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 | **Coordination state** | shared plans, file claims, runtime notes, and board views for active work |
 | **Agent-ready context** | compact, prompt-sized context built from real workspace state instead of stale instructions |
 | **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance |
+| **Multi-turn loops** | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see [loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
 | **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI |
 | **Queued surface tasks** | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research |
 | **Local-first storage** | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default |
@@ -136,8 +137,8 @@ Pick one of the canonical entry points depending on what you're doing:
 # Solo work — start a session, load context, claim a scope:
 bclaw_work(intent="execute", scope="src/feature")
 
-# Multi-agent — assign work, consult, or open a review:
-bclaw_coordinate(intent="assign|consult|review", task="...", targetAgents=[...])
+# Multi-agent — assign work, consult, open a review, or open an ideation loop:
+bclaw_coordinate(intent="assign|consult|review|ideate", task="...", targetAgents=[...])
 
 # Parallel lanes — dispatch a sequence across several agent instances:
 bclaw_dispatch(intent="execute", agents=[...])
@@ -291,6 +292,13 @@ npm run test:coverage      # with coverage report
 ## Changelog
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
+
+### v1.5.0
+
+- **Ideation loop MVP** (pln#492) — new `bclaw_coordinate(intent='ideate')` opens a memory-confrontation loop: critic reads only adversarial categories (traps + feedback + runtime_notes + critique_history) and gets a BM25-ranked, context-filtered, 12k-token-capped brief assembled from project memory. Single-agent (champion drives manually) or multi-agent (auto-dispatch a turn per critic). Iteration block (cycle, max_iterations, exit_when), phase-advance gate (≥3 critique artifacts before leaving critique), system events (`phase_advance_blocked`, `max_iterations_reached`). Full design: [docs/concepts/ideation-loop.md](docs/concepts/ideation-loop.md).
+- **Reliable dispatch + autonomy contract** (pln#496) — codex / sandboxed task-based agents now emit the full lifecycle (accepted → started → progress → completed). `briefMode` resolution corrected: `task-based && hasMcp → 'full'` (not 'compact', which silently dropped the protocol section). Lazy reconciliation pattern: `agentrun-reconciler` runs at every read path (`bclaw_assignment_events`, `bclaw_loop intent='get'`, `doctor --dispatch`) instead of a daemon; first run auto-recovered 9 historical orphan agent_runs in <1s. New autonomy contract section in instruction surfaces — agents execute protocol-defined transitions instead of pausing to ask. New `buildClaimEnvPrefix` consolidates cross-shell env injection (Windows defaults to cmd, POSIX uses unquoted bytes per PATH conventions). New `brainclaw doctor --dispatch` for operator-facing dispatch health.
+- **Worktree junction wipe fix** (pln#498) — `detachWorktreeJunctions` runs before `git worktree remove` on Windows so git's recursive rm cannot follow the `node_modules` junction back into the main repo. Closes the recurring post-merge wipe trap; validated empirically on multiple back-to-back merges in the v1.5.0 session.
+- **Methodological lessons** captured as user auto-memory feedback memos: bisect historical state before bisecting code (regression vs. always-broken-but-hidden), lazy reconcile at read paths beats daemon polling, codex briefs MUST include the Protocol section (implicit instructions don't propagate to sandboxed CLIs).
 
 ### v1.2.0
 
