@@ -17,6 +17,11 @@ import {
   type LoopThread,
   type StopCondition,
 } from './types.js';
+import {
+  decideNextPhase,
+  type IterationProtocol,
+  type NextPhaseDecision,
+} from './iteration-engine.js';
 
 function nextSeq(loopId: string, cwd?: string): number {
   const events = listLoopEvents(loopId, cwd);
@@ -57,14 +62,32 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
         (artifact) => artifact.phase === condition.phase && artifact.type === condition.type,
       );
     case 'min_artifacts_by_type': {
-      // pln#492 — count artifacts of `type` in the requested scope. Phase 1
-      // semantics: phase scope counts artifacts whose phase matches the
-      // thread's current_phase (across all iterations to date); loop scope
-      // counts across all phases. Iteration-window-aware refinement lives
-      // in the phase 2 gate engine, not here.
+      // pln#492 — count artifacts of `type` in the requested scope.
+      // Phase scope counts artifacts whose phase matches the thread's
+      // current_phase. When the thread is iterating (iteration_count > 0
+      // OR any artifact carries an iteration field), phase scope is
+      // refined to the current iteration window — that's what makes
+      // "≥3 critiques in current critique round" work without the
+      // previous round leaking in. loop scope counts across all phases
+      // and all iterations.
       const matches = thread.artifacts.filter((artifact) => {
         if (artifact.type !== condition.type) return false;
-        if (condition.scope === 'phase') return artifact.phase === thread.current_phase;
+        if (condition.scope === 'phase') {
+          if (artifact.phase !== thread.current_phase) return false;
+          // pln#492 phase 2.b — iteration-window awareness. If either the
+          // thread or the artifact carries iteration info, only count the
+          // artifacts produced in the thread's current iteration. Legacy
+          // loops without iteration tracking are unaffected (both fields
+          // default to 0).
+          if (
+            thread.iteration_count > 0 ||
+            thread.artifacts.some((a) => a.iteration !== undefined)
+          ) {
+            const artifactIteration = artifact.iteration ?? 0;
+            if (artifactIteration !== thread.iteration_count) return false;
+          }
+          return true;
+        }
         return true;
       });
       return matches.length >= condition.n;
@@ -123,9 +146,23 @@ export function evaluatePhaseAdvanceGate(
 function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
   switch (gate.kind) {
     case 'min_artifacts_by_type': {
+      // Mirror the iteration-aware filter used in evaluateStopCondition so
+      // the message's count matches what the evaluator actually saw — the
+      // operator should not see "count=4" in an error from a gate that
+      // counted only iteration=1 artifacts.
+      const iterationAware =
+        thread.iteration_count > 0 ||
+        thread.artifacts.some((a) => a.iteration !== undefined);
       const matches = thread.artifacts.filter((artifact) => {
         if (artifact.type !== gate.type) return false;
-        if (gate.scope === 'phase') return artifact.phase === thread.current_phase;
+        if (gate.scope === 'phase') {
+          if (artifact.phase !== thread.current_phase) return false;
+          if (iterationAware) {
+            const artifactIteration = artifact.iteration ?? 0;
+            if (artifactIteration !== thread.iteration_count) return false;
+          }
+          return true;
+        }
         return true;
       });
       return `min_artifacts_by_type unmet: ${gate.scope}-scope count of type "${gate.type}" = ${matches.length} < n=${gate.n}`;
@@ -189,27 +226,67 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
     throw new Error(`advance: current_phase "${current.current_phase}" is not in phases`);
   }
 
+  // pln#492 phase 2.b — phase-advance gate check. Skipped when the caller
+  // is forcing an explicit to_phase or passing { force: true }. On block,
+  // emit a `phase_advance_blocked` system event into the journal and throw
+  // an actionable error (not a silent hang — mitigates trp#160 wiring class).
+  if (input.to_phase === undefined && input.force !== true) {
+    const currentPhaseDef = current.phases[currentIndex];
+    const gate = currentPhaseDef?.advance_gate;
+    const gateOutcome = evaluatePhaseAdvanceGate(current, gate);
+    if (!gateOutcome.advance) {
+      const blockSeq = nextSeq(current.id, cwd);
+      const blockMutation = generateMutationId();
+      appendEvent(
+        current.id,
+        {
+          event_id: crypto.randomUUID(),
+          loop_id: current.id,
+          seq: blockSeq,
+          at: nowISO(),
+          by: input.actor,
+          mutation_id: blockMutation,
+          kind: 'phase_advance_blocked',
+          phase: current.current_phase,
+          gate_reason: gateOutcome.gate_reason ?? 'gate evaluation returned no reason',
+        },
+        cwd,
+      );
+      throw new Error(
+        `advance: phase_advance_blocked on "${current.current_phase}" — ${gateOutcome.gate_reason}`,
+      );
+    }
+  }
+
+  // Decide the next state. If the caller specified a to_phase, honour it
+  // verbatim (used by `force`-style overrides and explicit jumps). Otherwise
+  // consult the iteration engine, which knows about the cycle, exit_when,
+  // and the iteration cap.
   let to_phase: string;
+  let iteration_count = current.iteration_count;
+  let iterationDecision: NextPhaseDecision | undefined;
+
   if (input.to_phase !== undefined) {
     if (!phaseNames.includes(input.to_phase)) {
       throw new Error(`advance: to_phase "${input.to_phase}" is not in phases`);
     }
     to_phase = input.to_phase;
+    const toIndex = phaseNames.indexOf(to_phase);
+    const iteratingBackward = toIndex <= currentIndex;
+    // Going backward via explicit to_phase is allowed (it bumps the
+    // iteration counter so callers can hand-roll their own iteration when
+    // they don't have an iteration block defined). The forward-direction
+    // restriction only applies when no to_phase is given.
+    if (iteratingBackward) iteration_count = current.iteration_count + 1;
   } else {
-    if (currentIndex + 1 >= phaseNames.length) {
-      throw new Error(`advance: already at last phase "${current.current_phase}"`);
-    }
-    to_phase = phaseNames[currentIndex + 1];
+    const protocol: IterationProtocol = {
+      phases: current.phases,
+      iteration: current.protocol?.iteration,
+    };
+    iterationDecision = decideNextPhase(current, protocol);
+    to_phase = iterationDecision.target;
+    iteration_count = iterationDecision.iteration;
   }
-
-  const fromIndex = currentIndex;
-  const toIndex = phaseNames.indexOf(to_phase);
-  const iterating = toIndex <= fromIndex;
-  if (iterating && !input.force && input.to_phase === undefined) {
-    throw new Error(`advance: cannot advance backward without explicit to_phase or force`);
-  }
-
-  const iteration_count = iterating ? current.iteration_count + 1 : current.iteration_count;
 
   if (evaluateStopCondition(current, current.stop_condition)) {
     const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
@@ -225,7 +302,7 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
   const now = nowISO();
   const mutation_id = generateMutationId();
   const version = current.version + 1;
-  const seq = nextSeq(current.id, cwd);
+  let seq = nextSeq(current.id, cwd);
 
   const next: LoopThread = {
     ...current,
@@ -235,6 +312,29 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
     iteration_count,
     updated_at: now,
   };
+
+  // pln#492 phase 2.b — when the iteration engine forces the cycle out
+  // because the cap was hit, emit `max_iterations_reached` BEFORE the
+  // phase_advanced event so the journal reads in causal order.
+  if (iterationDecision?.kind === 'max_iterations') {
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'max_iterations_reached',
+        phase: current.current_phase,
+        iteration: iterationDecision.iteration,
+        max_iterations: iterationDecision.max,
+      },
+      cwd,
+    );
+    seq = nextSeq(current.id, cwd);
+  }
 
   appendEvent(
     current.id,
@@ -515,10 +615,16 @@ export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread 
   const version = current.version + 1;
   const seq = nextSeq(current.id, cwd);
 
+  // pln#492 phase 2.b — auto-populate iteration from the thread's current
+  // iteration_count when the caller didn't supply one. Iterating loops get
+  // accurate per-iteration counts without callers having to track the
+  // index; non-iterating loops are unaffected because iteration_count
+  // stays at 0.
   const newArtifact = LoopArtifactSchema.parse({
     ...input.artifact,
     artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
     produced_at: now,
+    iteration: input.artifact.iteration ?? current.iteration_count,
   });
 
   const next: LoopThread = {
