@@ -720,8 +720,8 @@ describe('bclaw_coordinate — side effects', () => {
     });
   });
 
-  describe('intent=ideate (pln#492 phase 2.c)', () => {
-    it('opens an ideation loop with proposal seed in single-agent mode (no targetAgents)', async () => {
+  describe('intent=ideate (pln#492 phase 2.c + 2.d.2)', () => {
+    it('single-agent mode (no targetAgents): opens loop with proposal seed and stops at proposal phase', async () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Should we extract the dispatcher into a separate package?',
@@ -730,7 +730,6 @@ describe('bclaw_coordinate — side effects', () => {
 
       assert.equal(response.status, 'ok');
 
-      // Loop side-effect + artifact
       const loopEffects = response.side_effects.filter((e) => e.entity === 'loop');
       assert.equal(loopEffects.length, 1, 'exactly one loop must be created');
       const loopId = loopEffects[0].id;
@@ -738,9 +737,10 @@ describe('bclaw_coordinate — side effects', () => {
       const result = response.result as Record<string, unknown>;
       assert.equal(result.loop_id, loopId);
       assert.equal(result.mode, 'single_agent');
+      assert.equal(result.dispatched_critics, 0);
+      assert.equal(result.current_phase, 'proposal');
       assert.deepEqual(result.selected_targets, []);
 
-      // Loop persisted with kind='ideation' and a single champion slot
       const loopsModule = await import('../../src/core/loops/index.js');
       const loop = loopsModule.getLoop(loopId, workspace.dir);
       assert.ok(loop, 'ideation loop must be persisted');
@@ -751,24 +751,34 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(loop.slots[0].role, 'champion');
 
       // Iteration block carried from DEFAULT_PROTOCOLS (pln#492 phase 2.b)
-      assert.ok(loop.protocol?.iteration, 'iteration block must be inherited from DEFAULT_PROTOCOLS');
+      assert.ok(loop.protocol?.iteration);
       assert.equal(loop.protocol?.iteration?.max_iterations, 3);
 
-      // Proposal artifact present with the task body
       const proposal = loop.artifacts.find((a) => a.type === 'proposal');
-      assert.ok(proposal, 'proposal artifact must be present');
-      assert.equal(proposal.phase, 'proposal');
+      assert.ok(proposal);
       assert.match(proposal.body ?? '', /extract the dispatcher/);
-      assert.equal(proposal.iteration, 0, 'proposal artifact tagged iteration=0');
+      assert.equal(proposal.iteration, 0);
 
-      // Skeleton warning surfaces so callers know dispatch is not wired yet
       assert.ok(
-        response.warnings.some((w) => w.includes('ideate skeleton')),
-        `expected skeleton warning, got: ${response.warnings.join(' | ')}`,
+        response.warnings.some((w) => w.includes('single-agent mode')),
+        `expected single-agent warning, got: ${response.warnings.join(' | ')}`,
+      );
+
+      // No dispatch in single-agent mode.
+      const events = loopsModule.listLoopEvents(loopId, workspace.dir);
+      assert.equal(
+        events.filter((e) => e.kind === 'turn_assigned').length,
+        0,
+        'single-agent mode must not dispatch turns automatically',
+      );
+      assert.equal(
+        events.filter((e) => e.kind === 'phase_advanced').length,
+        0,
+        'single-agent mode must not advance the phase automatically',
       );
     });
 
-    it('opens with critic slots in multi-agent mode (explicit targetAgents)', async () => {
+    it('multi-agent mode (explicit targetAgents): advances to critique and dispatches a turn per critic with a context-filtered brief', async () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: 'Should we adopt approach A or approach B?',
@@ -780,40 +790,38 @@ describe('bclaw_coordinate — side effects', () => {
       const result = response.result as Record<string, unknown>;
       assert.equal(result.mode, 'multi_agent');
       assert.deepEqual(result.selected_targets, ['codex']);
+      assert.equal(result.dispatched_critics, 1);
+      assert.equal(result.current_phase, 'critique');
 
-      const loopId = (result.loop_id as string) ?? '';
+      const loopId = result.loop_id as string;
       const loopsModule = await import('../../src/core/loops/index.js');
       const loop = loopsModule.getLoop(loopId, workspace.dir);
       assert.ok(loop);
       assert.equal(loop.slots.length, 2, 'champion + 1 critic');
       const champion = loop.slots.find((s) => s.role === 'champion');
       const critic = loop.slots.find((s) => s.role === 'critic');
-      assert.ok(champion, 'champion slot present');
-      assert.ok(critic, 'critic slot present');
+      assert.ok(champion);
+      assert.ok(critic);
       assert.equal(critic.agent, 'codex');
-    });
 
-    it('does NOT dispatch turns yet (skeleton: phase 2.d job)', async () => {
-      const response = await coordinate(workspace, {
-        intent: 'ideate',
-        task: 'A skeletal proposal',
-        agent: 'claude-code',
-      });
+      // pln#492 phase 2.d.2 — the loop has advanced and the critic slot has been assigned.
+      assert.equal(loop.current_phase, 'critique', 'multi-agent mode advances proposal → critique');
+      assert.equal(critic.status, 'assigned', 'critic slot flipped to assigned by turn()');
 
-      const loopId = (response.result as Record<string, unknown>).loop_id as string;
-      const loopsModule = await import('../../src/core/loops/index.js');
       const events = loopsModule.listLoopEvents(loopId, workspace.dir);
-      // Allowed events at this stage: opened, artifact_added (proposal seed).
-      // Forbidden: turn_assigned (would mean the driver was wired prematurely).
-      const turnAssigned = events.filter((e) => e.kind === 'turn_assigned');
-      assert.equal(turnAssigned.length, 0, 'no turn_assigned events at the skeleton stage');
-      // Phase advancement is also out of scope for the skeleton.
-      const phaseAdvanced = events.filter((e) => e.kind === 'phase_advanced');
-      assert.equal(phaseAdvanced.length, 0, 'no phase_advanced events at the skeleton stage');
+      const phaseAdvances = events.filter((e) => e.kind === 'phase_advanced');
+      const turnAssigns = events.filter((e) => e.kind === 'turn_assigned');
+      assert.equal(phaseAdvances.length, 1, 'one phase_advanced event for proposal → critique');
+      assert.equal(turnAssigns.length, 1, 'one turn_assigned event for the critic slot');
+
+      // Brief content is delivered as a coordinate message — proves
+      // buildIdeationBrief was wired.
+      const messageArtifacts = response.artifacts.filter((a) => a.type === 'message');
+      assert.ok(messageArtifacts.length >= 1, 'at least one coordinate message queued');
     });
 
     it('truncates oversized task to fit the LoopArtifact 4 KB body cap', async () => {
-      const oversizedTask = 'x'.repeat(8000); // 8 KB → must be sliced to 4 KB
+      const oversizedTask = 'x'.repeat(8000);
       const response = await coordinate(workspace, {
         intent: 'ideate',
         task: oversizedTask,
