@@ -38,6 +38,13 @@ export {
   type NextPhaseDecision,
 } from './iteration-engine.js';
 export {
+  buildIdeationBrief,
+  type BriefMemoryItem,
+  type BriefMemoryProvider,
+  type IdeationBriefInput,
+  type IdeationBriefResult,
+} from './brief-assembly.js';
+export {
   acquireLock,
   hashRequest,
   recordConflict,
