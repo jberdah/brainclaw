@@ -20,6 +20,12 @@ import {
   loadCandidate,
   saveCandidate,
 } from './candidates.js';
+import {
+  addCrossProjectLink,
+  removeCrossProjectLink,
+  resolveCrossProjectLinks,
+  type ResolvedCrossProjectLink,
+} from './cross-project.js';
 import { listClaims } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { listAssignments } from './assignments.js';
@@ -186,17 +192,18 @@ export function listEntities(
 
 function loadAll(name: EntityName, cwd: string): unknown[] {
   switch (name) {
-    case 'plan':         return loadState(cwd).plan_items;
-    case 'decision':     return loadState(cwd).recent_decisions;
-    case 'constraint':   return loadState(cwd).active_constraints;
-    case 'trap':         return loadState(cwd).known_traps;
-    case 'handoff':      return loadState(cwd).open_handoffs;
-    case 'candidate':    return listCandidates(undefined, cwd);
-    case 'runtime_note': return listRuntimeNotes(undefined, cwd);
-    case 'claim':        return listClaims(cwd);
-    case 'action':       return listActionRequired(cwd);
-    case 'assignment':   return listAssignments(cwd);
-    case 'agent_run':    return listAgentRuns(cwd);
+    case 'plan':                return loadState(cwd).plan_items;
+    case 'decision':            return loadState(cwd).recent_decisions;
+    case 'constraint':          return loadState(cwd).active_constraints;
+    case 'trap':                return loadState(cwd).known_traps;
+    case 'handoff':             return loadState(cwd).open_handoffs;
+    case 'candidate':           return listCandidates(undefined, cwd);
+    case 'runtime_note':        return listRuntimeNotes(undefined, cwd);
+    case 'claim':               return listClaims(cwd);
+    case 'action':              return listActionRequired(cwd);
+    case 'assignment':          return listAssignments(cwd);
+    case 'agent_run':           return listAgentRuns(cwd);
+    case 'cross_project_link':  return resolveCrossProjectLinks(cwd);
     default:
       throw new EntityOperationUnsupportedError(name, 'find');
   }
@@ -246,6 +253,18 @@ export function getEntity(
   idOrShortLabel: string,
   cwd: string,
 ): unknown {
+  if (name === 'cross_project_link') {
+    const links = resolveCrossProjectLinks(cwd) as ResolvedCrossProjectLink[];
+    const hit = links.find(
+      (l) => l.name === idOrShortLabel ||
+             l.projectName === idOrShortLabel ||
+             l.path === idOrShortLabel ||
+             l.absolutePath === idOrShortLabel ||
+             path.basename(l.absolutePath) === idOrShortLabel,
+    );
+    if (!hit) throw new EntityNotFoundError(name, idOrShortLabel);
+    return hit;
+  }
   const items = loadAll(name, cwd) as Array<Record<string, unknown>>;
   const hit = items.find(
     (item) => item.id === idOrShortLabel || item.short_label === idOrShortLabel,
@@ -356,6 +375,17 @@ export function createEntity(
       saveCandidate(candidate, cwd);
       return { entity: name, id };
     }
+    case 'cross_project_link': {
+      const link = addCrossProjectLink({
+        path: requireString(data, 'path'),
+        name: data.name as string | undefined,
+        role: data.role as 'subscriber' | 'publisher' | undefined,
+        channels: data.channels as string[] | undefined,
+        force: data.force === true,
+        cwd,
+      });
+      return { entity: name, id: link.name ?? link.path };
+    }
     default:
       throw new EntityOperationUnsupportedError(name, 'create');
   }
@@ -410,6 +440,22 @@ export function updateEntity(
       saveCandidate(patched, cwd);
       return { entity: name, id };
     }
+    case 'cross_project_link': {
+      // In-place patch: find by id (= name/path), remove, re-add with merged
+      // fields. Same path semantics as resolveCrossProjectTarget so callers can
+      // pass either the link `name` or the original `path`.
+      const current = getEntity(name, id, cwd) as ResolvedCrossProjectLink;
+      removeCrossProjectLink(current.name ?? current.path, cwd);
+      const merged = addCrossProjectLink({
+        path: current.path,
+        name: (patch.name as string | undefined) ?? current.name,
+        role: ((patch.role as 'subscriber' | 'publisher' | undefined) ?? current.role),
+        channels: (patch.channels as string[] | undefined) ?? current.channels,
+        cwd,
+        force: true,
+      });
+      return { entity: name, id: merged.name ?? merged.path };
+    }
     default:
       throw new EntityOperationUnsupportedError(name, 'update');
   }
@@ -449,6 +495,10 @@ export function removeEntity(
       const candidate = loadCandidate(id, cwd);
       archiveCandidate(candidate, 'rejected', cwd);
       return { entity: name, id, archived: true, purged: false };
+    }
+    case 'cross_project_link': {
+      const removed = removeCrossProjectLink(id, cwd);
+      return { entity: name, id: removed.name ?? removed.path, archived: false, purged: true };
     }
     default:
       throw new EntityOperationUnsupportedError(name, 'remove');
