@@ -68,6 +68,7 @@ import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreT
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
+import type { BriefMemoryProvider, LoopContextCategory } from '../core/loops/index.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
@@ -5479,13 +5480,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         result = { thread_id: threadId, message_count: messages.length, summary };
 
       } else if (req.intent === 'ideate') {
-        // pln#492 phase 2.c — open an ideation_loop with the task as a
-        // proposal seed. This skeleton does NOT yet dispatch turns; the
-        // driver wire-up (turn assignment + brief assembly) lands in
-        // phase 2.d. Callers receive the loop_id and may drive the loop
-        // manually via bclaw_loop intent='turn' / 'advance' meanwhile.
+        // pln#492 phase 2.c (open + proposal) + 2.d.2 (multi-agent dispatch).
+        // Single-agent mode (no targetAgents): open the loop with the task
+        // as a proposal seed and stop there — the champion drives manually
+        // via bclaw_loop intent='turn' / 'advance'. Multi-agent mode
+        // (targetAgents passed): also advance to critique and dispatch a
+        // turn to each critic slot with a context-filtered, BM25-ranked,
+        // size-capped brief assembled by buildIdeationBrief.
         const loopsModuleRef = await import('../core/loops/index.js');
-        const { openLoop, add_artifact } = loopsModuleRef;
+        const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief } = loopsModuleRef;
 
         const senderIdentity = (
           (senderAgentId ? findAgentIdentityById(senderAgentId, cwd) : undefined)
@@ -5495,10 +5498,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
         const creatorActor = authorAgentId ?? senderAgent;
 
-        // Single-agent default: only the caller is in the loop unless
-        // targetAgents is explicitly provided. This matches pln#492's
-        // memory-confrontation design — one champion + memory-driven
-        // critique. Multi-agent opt-in adds critic slots per target.
         const explicitTargets = req.targetAgents && req.targetAgents.length > 0;
         const slots: Array<{ role: string; agent: string; agent_id?: string }> = [
           {
@@ -5565,15 +5564,123 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
 
-        warnings.push(
-          "ideate skeleton (pln#492 phase 2.c): loop opened with proposal seed but no turn dispatched yet. Drive manually via bclaw_loop intent='turn' / 'advance' until phase 2.d brief assembly + driver lands.",
-        );
+        // pln#492 phase 2.d.2 — multi-agent dispatch. Skipped in single-
+        // agent mode (the champion drives manually).
+        let dispatchedCritics = 0;
+        let dispatchedPhase = 'proposal';
+        if (explicitTargets) {
+          try {
+            // Build a search-backed BriefMemoryProvider. Maps user-facing
+            // memory categories the brief asks for onto src/core/search.ts
+            // sections (BM25 there). Loop-internal categories
+            // (critique_history / revision_history / synthesis_artifact)
+            // are pulled by the assembler from the thread directly.
+            const searchModule = await import('../core/search.js');
+            const sectionByCategory: Partial<Record<LoopContextCategory, string>> = {
+              traps: 'traps',
+              decisions: 'decisions',
+              constraints: 'constraints',
+              handoffs: 'handoffs',
+              plans: 'plans',
+              candidates: 'candidates',
+            };
+            const provider: BriefMemoryProvider = {
+              fetch(category, query, topK) {
+                const section = sectionByCategory[category];
+                if (!section) return [];
+                const results = searchModule.search({
+                  query,
+                  section,
+                  maxResults: topK,
+                  cwd,
+                  includePending: section === 'candidates',
+                });
+                return results.map((r) => ({
+                  id: r.id,
+                  category,
+                  text: r.text,
+                  score: r.score,
+                }));
+              },
+            };
+
+            // Advance proposal → critique. proposal has no advance_gate so
+            // this is unconditional. After advance, the loop sits at the
+            // critique phase ready for critic turns.
+            advance({ id: loopId, actor: creatorActor }, cwd);
+            const advancedLoop = getLoop(loopId, cwd);
+            if (!advancedLoop) {
+              throw new Error('ideate dispatch: loop disappeared after advance');
+            }
+            dispatchedPhase = advancedLoop.current_phase;
+
+            const criticSlots = advancedLoop.slots.filter((s) => s.role === 'critic');
+            for (const slot of criticSlots) {
+              if (!slot.agent) continue;
+              const briefResult = buildIdeationBrief({
+                thread: advancedLoop,
+                slotRole: slot.role,
+                memoryProvider: provider,
+              });
+
+              turn(
+                {
+                  id: loopId,
+                  slot_id: slot.slot_id,
+                  actor: creatorActor,
+                  input: briefResult.text,
+                },
+                cwd,
+              );
+
+              const queued = queueCoordinateMessage({
+                agent: slot.agent,
+                text: briefResult.text,
+                messageType: 'rfc',
+                ref: loopId,
+                scope: req.scope,
+                tags: ['coordinate', 'ideate', 'loop'],
+                payload: {
+                  intent: 'ideate',
+                  loop_id: loopId,
+                  slot_id: slot.slot_id,
+                  phase: advancedLoop.current_phase,
+                  iteration: advancedLoop.iteration_count,
+                  proposal_artifact_id: proposalArtifactId,
+                },
+                commandMode: 'consult',
+              });
+              void queued;
+              dispatchedCritics += 1;
+
+              if (briefResult.truncated) {
+                warnings.push(
+                  `Brief for critic slot ${slot.slot_id} (${slot.agent}) truncated: ${briefResult.droppedItems} memory items dropped to fit cap`,
+                );
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            warnings.push(
+              `ideate dispatch failed: ${msg}; loop ${loopId} stays at proposal phase`,
+            );
+            facadeStatus = 'partial';
+          }
+        }
+
+        if (!explicitTargets) {
+          warnings.push(
+            "ideate single-agent mode: loop opened with proposal seed; champion drives manually via bclaw_loop intent='turn' / 'advance'. Pass targetAgents to enable multi-agent auto-dispatch.",
+          );
+        }
 
         result = {
           loop_id: loopId,
           proposal_artifact_id: proposalArtifactId,
           selected_targets: explicitTargets ? req.targetAgents! : [],
           mode: explicitTargets ? 'multi_agent' : 'single_agent',
+          dispatched_critics: dispatchedCritics,
+          current_phase: dispatchedPhase,
         };
       }
 
