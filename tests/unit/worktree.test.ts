@@ -15,6 +15,7 @@ import {
   detectSharedCheckoutRisk,
   assertPathInWorktreesScope,
   safeRemoveWorktreeDir,
+  detachWorktreeJunctions,
 } from '../../src/core/worktree.js';
 
 describe('worktreesBaseDir', () => {
@@ -282,6 +283,77 @@ describe('safeRemoveWorktreeDir', () => {
   it('handles a missing path silently (idempotent)', () => {
     const phantom = path.join(os.tmpdir(), 'bclaw-saferm-phantom-' + Date.now());
     assert.doesNotThrow(() => safeRemoveWorktreeDir(phantom));
+  });
+});
+
+// pln#498 — detachWorktreeJunctions runs before `git worktree remove` so
+// git's recursive rm cannot follow node_modules junction back into the main
+// repo. The unit test exercises the symlink-detach behaviour directly.
+describe('detachWorktreeJunctions (pln#498)', () => {
+  it('unlinks top-level symlinks while preserving the target', () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-target-'));
+    const importantFile = path.join(target, 'important.txt');
+    fs.writeFileSync(importantFile, 'must-survive');
+
+    const fakeWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-wt-'));
+    const linkPath = path.join(fakeWorktree, 'node_modules');
+    fs.symlinkSync(target, linkPath, 'dir');
+
+    // Sanity: link is a symlink before detach.
+    assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+
+    detachWorktreeJunctions(fakeWorktree);
+
+    assert.equal(fs.existsSync(linkPath), false, 'symlink unlinked');
+    assert.equal(fs.existsSync(target), true, 'target dir survived');
+    assert.equal(fs.existsSync(importantFile), true, 'file under target survived');
+    assert.equal(fs.readFileSync(importantFile, 'utf-8'), 'must-survive');
+
+    // Cleanup
+    fs.rmSync(fakeWorktree, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('leaves regular files and directories untouched', () => {
+    const fakeWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-keep-'));
+    fs.writeFileSync(path.join(fakeWorktree, 'keep.txt'), 'x');
+    fs.mkdirSync(path.join(fakeWorktree, 'sub'));
+    fs.writeFileSync(path.join(fakeWorktree, 'sub', 'nested.txt'), 'y');
+
+    detachWorktreeJunctions(fakeWorktree);
+
+    assert.equal(fs.existsSync(path.join(fakeWorktree, 'keep.txt')), true);
+    assert.equal(fs.existsSync(path.join(fakeWorktree, 'sub', 'nested.txt')), true);
+
+    fs.rmSync(fakeWorktree, { recursive: true, force: true });
+  });
+
+  it('does not descend into nested directories', () => {
+    // Nested junction inside a regular subdir should NOT be touched.
+    // Only top-level shared paths (symlinked at worktree birth) are in scope.
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-nested-target-'));
+    fs.writeFileSync(path.join(target, 't.txt'), 'nested');
+
+    const fakeWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-nested-wt-'));
+    const sub = path.join(fakeWorktree, 'sub');
+    fs.mkdirSync(sub);
+    const nestedLink = path.join(sub, 'inner-link');
+    fs.symlinkSync(target, nestedLink, 'dir');
+
+    detachWorktreeJunctions(fakeWorktree);
+
+    // Nested symlink survives — top-level walk only.
+    assert.equal(fs.existsSync(nestedLink), true, 'nested symlink survives');
+    assert.equal(fs.lstatSync(nestedLink).isSymbolicLink(), true);
+
+    fs.rmSync(nestedLink, { force: true });
+    fs.rmSync(fakeWorktree, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('is idempotent on a missing path', () => {
+    const phantom = path.join(os.tmpdir(), 'bclaw-detach-phantom-' + Date.now());
+    assert.doesNotThrow(() => detachWorktreeJunctions(phantom));
   });
 });
 
