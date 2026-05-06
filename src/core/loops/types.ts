@@ -35,14 +35,86 @@ export const LoopLinksSchema = z.object({
 });
 export type LoopLinks = z.infer<typeof LoopLinksSchema>;
 
+/**
+ * Memory categories a loop phase can request via `context_filter` (pln#492).
+ *
+ * The driver uses this list to assemble the context bundle handed to a slot
+ * for a given phase. Brainclaw entity categories are user-facing memory the
+ * slot may consult; loop-internal categories ('critique_history',
+ * 'revision_history', 'synthesis_artifact') refer to artifacts produced
+ * earlier in the same loop.
+ *
+ * The wildcard '*' means "all categories" — used by phases that need
+ * unconstrained context (proposal seed, revision after critique, synthesis).
+ *
+ * 'feedback' is a logical grouping for user auto-memory feedback notes;
+ * it is intentionally separate from 'runtime_notes' because the driver
+ * may source them from different stores.
+ */
+export const LOOP_CONTEXT_CATEGORIES = [
+  'traps',
+  'feedback',
+  'runtime_notes',
+  'decisions',
+  'constraints',
+  'handoffs',
+  'plans',
+  'candidates',
+  'project_vision',
+  'critique_history',
+  'revision_history',
+  'synthesis_artifact',
+  '*',
+] as const;
+export type LoopContextCategory = (typeof LOOP_CONTEXT_CATEGORIES)[number];
+
+/**
+ * Critique artifact subtypes for the ideation_loop critic phase (pln#492).
+ *
+ * Collapsed from 6 to 3 per the reframer findings on pln#492's own design
+ * (runtime_note 'reframer_phase_simulation_transcript', 2026-05-03):
+ * finer subtype taxonomy adds schema and test surface without buying any
+ * behavioural differentiation in v1.0. Defer to v1.1 only if downstream
+ * UX or routing turns out to need it.
+ */
+export const CRITIQUE_ARTIFACT_SUBTYPES = ['memory_conflict', 'coverage_gap', 'scope_creep'] as const;
+export type CritiqueArtifactSubtype = (typeof CRITIQUE_ARTIFACT_SUBTYPES)[number];
+
 export const LoopPhaseSchema = z.object({
   name: z.string().min(1),
   advance_when: z.enum(['all', 'any']).optional(),
+  /**
+   * Memory categories visible to the slot when this phase runs (pln#492).
+   * If omitted, the driver applies its kind-default context bundle.
+   * Use ['*'] to request the full bundle explicitly.
+   */
+  context_filter: z.array(z.enum(LOOP_CONTEXT_CATEGORIES)).min(1).optional(),
 });
 export type LoopPhase = z.infer<typeof LoopPhaseSchema>;
 
+/**
+ * Iteration block for protocols with an inner cycle (e.g. ideation_loop's
+ * critique↔revision). Defines which phases form the cycle, the cap, and
+ * the exit criterion.
+ *
+ * - `cycle` lists phase names that repeat. The driver advances through
+ *   them in order, then loops back until exit_when is satisfied or
+ *   max_iterations is reached.
+ * - `exit_when` selects the convergence criterion:
+ *     'critic_signal' — critic explicitly produced a 'sufficient' marker.
+ *     'no_new_critique_artifacts' — a full cycle completed without adding
+ *       any new critique artifact. Stable convergence by saturation.
+ */
+export const LoopIterationSchema = z.object({
+  cycle: z.array(z.string().min(1)).min(1),
+  max_iterations: z.number().int().positive(),
+  exit_when: z.enum(['critic_signal', 'no_new_critique_artifacts']),
+});
+export type LoopIteration = z.infer<typeof LoopIterationSchema>;
+
 export const LoopProtocolConfigSchema = z.object({
   review_mode: z.enum(REVIEW_MODES).optional(),
+  iteration: LoopIterationSchema.optional(),
 });
 export type LoopProtocolConfig = z.infer<typeof LoopProtocolConfigSchema>;
 
@@ -88,6 +160,17 @@ export const AtomicStopConditionSchema = z.discriminatedUnion('kind', [
     kind: z.literal('artifact_produced'),
     phase: z.string().min(1),
     type: z.string().min(1),
+  }),
+  // pln#492 — saturate by artifact count. `scope: 'phase'` counts only
+  // artifacts produced in the current phase; `scope: 'loop'` counts across
+  // every phase in the loop (used by the ideation gate to require ≥3
+  // critique artifacts in the current critique round before allowing the
+  // critique→revision advance).
+  z.object({
+    kind: z.literal('min_artifacts_by_type'),
+    type: z.string().min(1),
+    n: z.number().int().positive(),
+    scope: z.enum(['phase', 'loop']),
   }),
   z.object({ kind: z.literal('manual') }),
 ]);
@@ -223,6 +306,22 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     final_status: z.enum(['completed', 'cancelled', 'blocked']),
     reason: z.string().optional(),
   }),
+  // pln#492 — system events emitted by the iteration / phase-advance gate.
+  // Carried in the same event journal rather than as artifacts so consumers
+  // do not have to filter is_system before processing artifact content.
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('phase_advance_blocked'),
+    phase: z.string().min(1),
+    gate_reason: z.string().min(1),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('max_iterations_reached'),
+    phase: z.string().min(1),
+    iteration: z.number().int().nonnegative(),
+    max_iterations: z.number().int().positive(),
+  }),
 ]);
 export type LoopEvent = z.infer<typeof LoopEventSchema>;
 
@@ -238,7 +337,17 @@ export const LoopConflictRecordSchema = z.object({
 });
 export type LoopConflictRecord = z.infer<typeof LoopConflictRecordSchema>;
 
-export const DEFAULT_PROTOCOLS: Record<LoopKind, { phases: LoopPhase[]; stop_condition: StopCondition }> = {
+/**
+ * Default protocol per LoopKind. The loop driver reads this when a thread
+ * is opened without an explicit protocol override.
+ *
+ * `iteration` is optional — only ideation_loop uses it in v1 (pln#492);
+ * other kinds remain linear-with-stop-condition.
+ */
+export const DEFAULT_PROTOCOLS: Record<
+  LoopKind,
+  { phases: LoopPhase[]; stop_condition: StopCondition; iteration?: LoopIteration }
+> = {
   review: {
     phases: [
       { name: 'change_summary' },
@@ -252,13 +361,28 @@ export const DEFAULT_PROTOCOLS: Record<LoopKind, { phases: LoopPhase[]; stop_con
       conditions: [{ kind: 'reviewer_green' }, { kind: 'max_iterations', n: 3 }],
     },
   },
+  // pln#492 — ideation_loop: memory-confrontation protocol with inner
+  // critique↔revision cycle. `context_filter` per phase makes critic see
+  // adversarial memory only (traps + feedback + runtime_notes), while
+  // proposal sees positive context and revision/synthesis see everything.
   ideation: {
     phases: [
-      { name: 'proposal' },
-      { name: 'critique' },
-      { name: 'revision' },
-      { name: 'synthesis' },
+      {
+        name: 'proposal',
+        context_filter: ['decisions', 'constraints', 'plans', 'project_vision'],
+      },
+      {
+        name: 'critique',
+        context_filter: ['traps', 'feedback', 'runtime_notes', 'critique_history'],
+      },
+      { name: 'revision', context_filter: ['*'] },
+      { name: 'synthesis', context_filter: ['*'] },
     ],
+    iteration: {
+      cycle: ['critique', 'revision'],
+      max_iterations: 3,
+      exit_when: 'no_new_critique_artifacts',
+    },
     stop_condition: { kind: 'artifact_produced', phase: 'synthesis', type: 'plan_draft' },
   },
   implementation: {
