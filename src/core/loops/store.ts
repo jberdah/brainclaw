@@ -80,14 +80,18 @@ export interface OpenLoopInput {
 }
 
 function resolveProtocol(kind: LoopKind, mode: ReviewMode | undefined): LoopProtocolConfig | undefined {
+  // pln#492 phase 2.b — carry the iteration block from DEFAULT_PROTOCOLS
+  // into the thread's protocol so advance() / iteration-engine see it.
+  const iteration = DEFAULT_PROTOCOLS[kind].iteration;
+
   if (kind === 'review') {
     return { review_mode: mode ?? 'asymmetric' };
   }
   if (mode !== undefined) {
     // mode is only meaningful for review loops today; ignore otherwise.
-    return undefined;
+    return iteration ? { iteration } : undefined;
   }
-  return undefined;
+  return iteration ? { iteration } : undefined;
 }
 
 function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {

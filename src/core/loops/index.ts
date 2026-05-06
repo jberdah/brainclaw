@@ -30,6 +30,14 @@ export {
   type TurnInput,
 } from './verbs.js';
 export {
+  decideNextPhase,
+  artifactsInIteration,
+  noNewCritiqueInIteration,
+  hasCriticSignalInIteration,
+  type IterationProtocol,
+  type NextPhaseDecision,
+} from './iteration-engine.js';
+export {
   acquireLock,
   hashRequest,
   recordConflict,

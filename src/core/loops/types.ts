@@ -162,6 +162,15 @@ export const LoopArtifactSchema = z
      * critique artifact) is deferred to v1.1 per the plan.
      */
     addresses_critique: z.array(z.string().min(1)).optional(),
+    /**
+     * pln#492 phase 2.b — iteration window the artifact was produced in.
+     * 0-indexed (proposal/early phases produce iteration=0). Optional for
+     * backward compatibility with non-iterating loops (review): when
+     * absent, gate evaluators fall back to "all artifacts in this phase".
+     * The iteration engine populates this from `thread.iteration_count`
+     * at artifact creation time so callers don't have to track it.
+     */
+    iteration: z.number().int().nonnegative().optional(),
   })
   .superRefine((artifact, ctx) => {
     if (artifact.body !== undefined && Buffer.byteLength(artifact.body, 'utf8') > LOOP_ARTIFACT_BODY_MAX_BYTES) {
