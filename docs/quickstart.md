@@ -71,7 +71,7 @@ This is the primary path. Your agent calls brainclaw tools directly during work:
 | Tool | What it does |
 |------|-------------|
 | `bclaw_work(intent)` | Start a session, load context, claim scope — all in one call |
-| `bclaw_coordinate(intent, agents)` | Assign work to other agents, consult, or request review |
+| `bclaw_coordinate(intent, agents)` | Assign work, consult, request review, open an ideation loop, reroute, or summarize |
 | `bclaw_context(kind, path?)` | Read memory / execution / board / delta — narrow to a path when given |
 | `bclaw_claim(scope)` | Claim a file/directory before editing (prevents conflicts) |
 | `bclaw_write_note(text)` | Record an observation, decision, or trap during work |

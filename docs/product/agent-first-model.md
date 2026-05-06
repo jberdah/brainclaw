@@ -92,13 +92,17 @@ shipped protocol. The strategic reflection clarifies that:
 
 ### Ranked protocols to wire next
 
-1. **Ideation Loop** (priority #1). Replaces codev, which was the
-   primary driver for the Loop engine. Four roles (vision, challenger,
-   reinforcer, validator) chew on a topic across `proposal → critique
-   → revision → synthesis` phases. The synthesis artifact is
-   human-visible output (a plan draft, a recommendation document).
-   This is the loop where the human sees the magic: four angles for
-   one prompt.
+1. **Ideation Loop** — **MVP shipped in v1.5.0** (pln#492). The shipped
+   shape is single-champion-plus-memory rather than the four-role
+   framing originally drafted: empirical work in May 2026
+   (`feedback_ideation_loop_single_agent_method`) showed that one
+   model produces useful adversarial pressure when the critic phase's
+   `context_filter` makes it confront only adversarial memory (traps,
+   feedback, runtime_notes). Multi-agent slots are still supported as
+   an opt-in for richer diversity. See [docs/concepts/ideation-loop.md](../concepts/ideation-loop.md).
+   Reframer phase (pln#493) is the next layer — covers the
+   novelty/simplicity/external-pattern blind spot of memory-driven
+   critique.
 2. **Debug & Root-Cause Loop**. Five phases: symptom → hypothesis →
    test → fix → verify. Targets the #1 pain point of single-agent
    debugging — the lack of structure. High daily impact.
@@ -161,8 +165,8 @@ sections toward visible-to-human items.
 
 ## 5. Practical implications
 
-- Next implementation move: ideation-loop wiring, following the
-  review-loop template.
+- Next implementation move: reframer phase (pln#493) on top of the
+  shipped ideation_loop, then the Debug & Root-Cause Loop.
 - Parallel track: the cockpit needs dedicated planning once the engine
   emits enough signals (event streaming, reputation exposure, audit
   narrative generation, cost attribution).

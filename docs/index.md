@@ -29,6 +29,7 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [concepts/troubleshooting.md](concepts/troubleshooting.md) — runbook for degraded coordination state
 - [concepts/memory-staleness.md](concepts/memory-staleness.md)
 - [concepts/loop-engine.md](concepts/loop-engine.md)
+- [concepts/ideation-loop.md](concepts/ideation-loop.md) — memory-confrontation ideation loop (v1.5.0+)
 - [concepts/mcp-governance.md](concepts/mcp-governance.md)
 
 ## Reference
