@@ -188,6 +188,39 @@ Notes:
 - Filters that don't apply to a given entity (e.g. `plan_id` on `plan`)
   are currently no-ops — they don't error, but they don't match either.
 
+#### Cross-project access (pln#359)
+
+The canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` /
+`bclaw_update` / `bclaw_remove` / `bclaw_transition`) **and** the read
+dispatcher `bclaw_context` accept an optional `project` parameter that
+routes the operation to a **linked project** instead of the current one.
+
+Two link kinds are accepted:
+- `cross_project_links` (sibling/peer projects in `config.yaml`, managed
+  via `brainclaw link add/list/remove`).
+- Workspace store-chain children (monorepo-style nested projects).
+
+Arbitrary directory paths are rejected — adoption requires an explicit
+link, which gives the user a single point of control over what an agent
+can reach.
+
+```jsonc
+// Read a trap from a sibling project linked as 'brainclaw-site'
+bclaw_get({ entity: 'trap', id: 'trp_795bbfb5', project: 'brainclaw-site' })
+
+// Update a plan in the linked site repo
+bclaw_update({ entity: 'plan', id: 'pln_abc', patch: { priority: 'high' }, project: 'brainclaw-site' })
+
+// Capture context from a child project in a monorepo
+bclaw_context({ kind: 'memory', project: 'web-app' })
+```
+
+Identity (`author` / `agent`) is resolved from the **source** project's
+agent registry — an agent does not need to be registered in the target
+to write into it. Audit log entries land in the **target** project.
+Unknown project arguments throw `validation_error` with a hint listing
+the configured links — no silent fallback.
+
 #### Unified intent dispatchers
 
 | Tool | Consolidates | Example |

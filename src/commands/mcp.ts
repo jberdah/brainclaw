@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
-import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
+import { resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -232,6 +232,7 @@ export const MCP_READ_TOOLS = [
         explain: { type: 'boolean', description: 'Include ranking reasons (memory kind, markdown format).' },
         compactTemplate: { type: 'boolean', description: 'Use compact template (memory kind, format=template).' },
         includeAgentTooling: { type: 'boolean', description: 'Include agent tooling signals (execution kind).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to read context from. Defaults to the current project. Accepts cross_project_links and workspace store-chain children.' },
       },
       required: ['kind'],
     },
@@ -1147,46 +1148,49 @@ const MCP_WRITE_TOOLS = [
   // Promoted to `standard` tier at the v1.0 cut.
   {
     name: 'bclaw_find',
-    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence.',
+    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Pass `project` to query a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
         filter: { type: 'object', description: 'Filter keys: status, tag, author, plan_id, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6).' },
+        project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
       },
       required: ['entity'],
     },
   },
   {
     name: 'bclaw_get',
-    description: 'Fetch a single brainclaw entity by id or short_label.',
+    description: 'Fetch a single brainclaw entity by id or short_label. Pass `project` to fetch from a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id (e.g. dec_ab12cd) or short_label (e.g. dec#42).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to fetch from. Defaults to the current project. See `brainclaw link list` for accepted names.' },
       },
       required: ['entity', 'id'],
     },
   },
   {
     name: 'bclaw_create',
-    description: 'Create a new brainclaw entity. Data fields are entity-specific; see src/core/schema.ts.',
+    description: 'Create a new brainclaw entity. Data fields are entity-specific; see src/core/schema.ts. Pass `project` to create in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name.' },
         data: { type: 'object', description: 'Create payload (e.g. { text, author, tags }).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to create the entity in. Defaults to the current project. Identity (author/agent) is resolved from the source registry — no need to be registered in the target.' },
       },
       required: ['entity', 'data'],
     },
   },
   {
     name: 'bclaw_update',
-    description: 'Partial update of mutable fields. Fields not in EntityRegistry.updatable are rejected — use bclaw_transition for status changes.',
+    description: 'Partial update of mutable fields. Fields not in EntityRegistry.updatable are rejected — use bclaw_transition for status changes. Pass `project` to update an entity in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1194,13 +1198,14 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id.' },
         patch: { type: 'object', description: 'Fields to update (subset of EntityRegistry.updatable).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to update the entity in. Defaults to the current project.' },
       },
       required: ['entity', 'id', 'patch'],
     },
   },
   {
     name: 'bclaw_remove',
-    description: 'Remove a brainclaw entity. Archives by default; pass purge:true to hard-delete where supported.',
+    description: 'Remove a brainclaw entity. Archives by default; pass purge:true to hard-delete where supported. Pass `project` to remove from a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1208,13 +1213,14 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id.' },
         purge: { type: 'boolean', description: 'Hard-delete instead of archive. Default false.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to remove the entity from. Defaults to the current project.' },
       },
       required: ['entity', 'id'],
     },
   },
   {
     name: 'bclaw_transition',
-    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags.',
+    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1223,6 +1229,7 @@ const MCP_WRITE_TOOLS = [
         id: { type: 'string', description: 'Entity id.' },
         to: { type: 'string', description: 'Target status.' },
         reason: { type: 'string', description: 'Optional free-text reason, audited alongside the transition.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to transition the entity in. Defaults to the current project.' },
       },
       required: ['entity', 'id', 'to'],
     },
@@ -5758,6 +5765,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_find') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         // pln#460 follow-up — some MCP clients (notably Claude Code with a
         // tool schema that declares `filter: { type: 'object' }` without a
         // sub-property schema) stringify the filter object before shipping
@@ -5806,7 +5814,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             ),
           };
         }
-        const result = listEntities(entity, cwd, filter);
+        const result = listEntities(entity, targetCwd, filter);
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
         // Prior to this fix we spread `...result` at top-level of the
@@ -5828,7 +5836,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
-        const item = getEntity(entity, id, cwd);
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const item = getEntity(entity, id, targetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ fetched ${entity} ${id}` }],
@@ -5844,21 +5853,25 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const rawData = (args.data ?? {}) as Record<string, unknown>;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
 
         // Auto-fill identity fields. Without this, a caller who omits author/agent
         // creates a schema-invalid record that is silently dropped on read and
         // GC'd from disk on the next mutation. Fallback chain:
         // resolved MCP identity → args.agent → 'unknown'.
+        // Identity is resolved against the SOURCE cwd (the agent's own
+        // project/registry), not the target — an agent doesn't need to be
+        // registered in the target project to write into it.
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const data: Record<string, unknown> = { ...rawData };
         if (data.author === undefined) data.author = agent_name;
         if (data.agent === undefined) data.agent = agent_name;
         if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
 
-        const result = createEntity(entity, data, cwd);
+        const result = createEntity(entity, data, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'create', item_id: result.id, item_type: entity },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5876,11 +5889,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const patch = (args.patch ?? {}) as Record<string, unknown>;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = updateEntity(entity, id, patch, cwd);
+        const result = updateEntity(entity, id, patch, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5898,11 +5912,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const purge = args.purge === true;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = removeEntity(entity, id, cwd, purge);
+        const result = removeEntity(entity, id, targetCwd, purge);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5921,11 +5936,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const id = String(args.id ?? '');
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = transitionEntity(entity, id, to, cwd, reason);
+        const result = transitionEntity(entity, id, to, targetCwd, reason);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
