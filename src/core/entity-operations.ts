@@ -412,17 +412,26 @@ export function updateEntity(
 
   switch (name) {
     case 'plan': {
-      updatePlan({ id, ...patch } as UpdatePlanInput, cwd);
+      // Pass the whole patch through the generic escape-hatch so EntityRegistry-
+      // declared updatable fields (text, tags, estimated_effort, depends_on)
+      // actually land. The typed surface still covers status/assignee/priority/
+      // actualEffort for legacy CLI callers — see UpdatePlanInput.
+      updatePlan({
+        id,
+        patch: patch as Partial<PlanItem>,
+      }, cwd);
       return { entity: name, id };
     }
     case 'decision':
     case 'constraint':
     case 'trap': {
+      // Same generic-patch escape-hatch for memory items. Registry declares
+      // severity, scope, related_paths, expires_at, etc. as updatable; the
+      // legacy explicit text/tags whitelist silently dropped them.
       updateMemoryItem({
         id,
         type: name,
-        ...(patch.text ? { text: patch.text as string } : {}),
-        ...(patch.tags ? { tags: patch.tags as string[] } : {}),
+        patch: patch as Partial<Constraint | Decision | Trap>,
       }, cwd);
       return { entity: name, id };
     }

@@ -103,6 +103,13 @@ export interface UpdateMemoryInput {
   tags?: string[];
   status?: string;
   moveToStore?: StoreTarget;
+  /**
+   * Generic patch escape-hatch for fields declared in EntityRegistry.updatable
+   * but not exposed via the typed surface (severity, scope, related_paths,
+   * expires_at, outcome, category, platform_scope, …). Applied last via
+   * Object.assign so explicit typed fields take precedence.
+   */
+  patch?: Partial<Constraint | Decision | Trap>;
 }
 
 export interface UpdateMemoryResult {
@@ -129,6 +136,10 @@ export function updateMemoryItem(
   if (input.tags) item.tags = input.tags;
   if (input.status && input.type === 'trap') {
     (item as Trap).status = input.status as Trap['status'];
+  }
+
+  if (input.patch) {
+    Object.assign(item, input.patch);
   }
 
   if (input.moveToStore) {
