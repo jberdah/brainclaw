@@ -122,6 +122,14 @@ export interface UpdatePlanInput {
   assignee?: string;
   priority?: Priority;
   actualEffort?: string;
+  /**
+   * Generic patch escape-hatch for fields declared in EntityRegistry.updatable
+   * but not exposed via the typed surface (text, tags, estimated_effort,
+   * depends_on, plus actual_effort in snake_case if the caller prefers it).
+   * Applied last via Object.assign so explicit typed fields take precedence
+   * for legacy callers that mix both.
+   */
+  patch?: Partial<PlanItem>;
 }
 
 export interface UpdatePlanResult {
@@ -148,6 +156,11 @@ export function updatePlan(input: UpdatePlanInput, cwd?: string): UpdatePlanResu
     if (input.assignee !== undefined) plan.assignee = input.assignee;
     if (input.priority) plan.priority = input.priority;
     if (input.actualEffort) plan.actual_effort = input.actualEffort;
+
+    if (input.patch) {
+      Object.assign(plan, input.patch);
+    }
+
     plan.updated_at = timestamp;
 
     return { id: plan.id, text: plan.text, status: plan.status };
