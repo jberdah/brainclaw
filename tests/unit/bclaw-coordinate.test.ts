@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CoordinateRequestSchema } from '../../src/core/facade-schema.js';
+import { loadConfig as loadProjectConfig, saveConfig as saveProjectConfig } from '../../src/core/config.js';
 import { getSpawnableAgents } from '../../src/core/agent-capability.js';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
@@ -838,5 +839,135 @@ describe('bclaw_coordinate — side effects', () => {
         `proposal body must be sliced to ≤4000 chars; got ${proposal.body?.length}`,
       );
     });
+  });
+});
+
+// ── pln#359 phase 1b — cross-project coordinate routing ────────────────
+describe('bclaw_coordinate — cross-project routing (pln#359 phase 1b)', () => {
+  let sourceWorkspace: TestWorkspace;
+  let targetWorkspace: TestWorkspace;
+  let previousTestMode: string | undefined;
+  let previousNoSpawn: string | undefined;
+  let restoreCwd: (() => void) | undefined;
+
+  beforeEach(() => {
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    previousNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    process.env.BRAINCLAW_NO_SPAWN = '1';
+
+    sourceWorkspace = createTestWorkspace({
+      prefix: 'bclaw-coord-xp-source-',
+      currentAgent: 'claude-code',
+    });
+    targetWorkspace = createTestWorkspace({
+      prefix: 'bclaw-coord-xp-target-',
+      currentAgent: 'claude-code',
+    });
+    // Register codex in BOTH workspaces — the cross-project link discovery
+    // walks targets, but the dispatch flow itself ensures the agent is
+    // registered in the target on demand. Pre-registering avoids first-run
+    // noise.
+    sourceWorkspace.registerAgent('codex');
+    targetWorkspace.registerAgent('codex');
+
+    // Wire a publisher cross_project_link from source -> target (named).
+    const config = loadProjectConfig(sourceWorkspace.dir);
+    config.cross_project_links = [
+      { path: targetWorkspace.dir, name: 'target-project', role: 'publisher' },
+    ];
+    saveProjectConfig(config, sourceWorkspace.dir);
+
+    // Stay in the source workspace for the call site (mimics MCP server cwd).
+    restoreCwd = sourceWorkspace.useCwd();
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    sourceWorkspace.cleanup();
+    targetWorkspace.cleanup();
+    if (previousTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+    if (previousNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = previousNoSpawn;
+  });
+
+  it('routes assign brief into the target project inbox (not source)', async () => {
+    const response = await coordinate(sourceWorkspace, {
+      intent: 'assign',
+      task: 'Cross-project fix: rename helper',
+      scope: 'src/helper.ts',
+      targetAgents: ['codex'],
+      project: 'target-project',
+      agent: 'claude-code',
+    });
+
+    assert.equal(response.status, 'ok');
+
+    // Inbox message lands in TARGET, not source
+    const targetInbox = readInbox({ agent: 'codex' }, targetWorkspace.dir);
+    const sourceInbox = readInbox({ agent: 'codex' }, sourceWorkspace.dir);
+    const targetAssign = targetInbox.messages.find((m) => m.type === 'assign');
+    const sourceAssign = sourceInbox.messages.find((m) => m.type === 'assign');
+    assert.ok(targetAssign, 'assign message should land in TARGET inbox');
+    assert.ok(targetAssign.text.includes('rename helper'));
+    assert.equal(sourceAssign, undefined, 'assign message should NOT land in SOURCE inbox');
+
+    // Claim + assignment land in target
+    const targetClaims = listClaims(targetWorkspace.dir).filter((c) => c.status === 'active');
+    const sourceClaims = listClaims(sourceWorkspace.dir).filter((c) => c.status === 'active');
+    assert.equal(targetClaims.length, 1, 'claim should be created in TARGET');
+    assert.equal(targetClaims[0].agent, 'codex');
+    assert.equal(sourceClaims.length, 0, 'no claim in SOURCE');
+  });
+
+  it('emits a warning when project= is set with default autoExecute (auto-spawn disabled)', async () => {
+    const response = await coordinate(sourceWorkspace, {
+      intent: 'assign',
+      task: 'XP dispatch warning case',
+      targetAgents: ['codex'],
+      project: 'target-project',
+      agent: 'claude-code',
+    });
+
+    assert.equal(response.status, 'ok');
+    const warns = response.warnings ?? [];
+    const hit = warns.find((w) => w.includes('cross-project') && w.includes('auto-spawn disabled'));
+    assert.ok(hit, `Expected cross-project auto-spawn warning. Got: ${JSON.stringify(warns)}`);
+  });
+
+  it('rejects an unknown project name with validation_error from resolveProjectCwd', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_coordinate',
+      args: {
+        intent: 'assign',
+        task: 'should fail at resolveProjectCwd',
+        targetAgents: ['codex'],
+        project: 'nope-not-linked',
+        agent: 'claude-code',
+      },
+      cwd: sourceWorkspace.dir,
+    });
+    assert.equal(outcome.response.isError, true, 'unknown project should error');
+    const text = outcome.response.content?.[0]?.text ?? '';
+    assert.match(text, /Unknown project: 'nope-not-linked'/);
+  });
+
+  it('without project= behaves exactly like single-project mode (no warnings, source inbox)', async () => {
+    const response = await coordinate(sourceWorkspace, {
+      intent: 'assign',
+      task: 'Same-project regression check',
+      scope: 'src/foo.ts',
+      targetAgents: ['codex'],
+      agent: 'claude-code',
+    });
+
+    assert.equal(response.status, 'ok');
+    const warns = (response.warnings ?? []).filter((w) => w.includes('cross-project'));
+    assert.equal(warns.length, 0, 'no cross-project warning expected when project is omitted');
+
+    const sourceInbox = readInbox({ agent: 'codex' }, sourceWorkspace.dir);
+    const sourceAssign = sourceInbox.messages.find((m) => m.type === 'assign');
+    assert.ok(sourceAssign, 'single-project mode still writes into source inbox');
   });
 });
