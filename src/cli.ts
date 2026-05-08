@@ -96,6 +96,7 @@ import { getInstalledBrainclawVersion } from './core/brainclaw-version.js';
 import { cleanOrphanFiles, memoryDir, memoryExists } from './core/io.js';
 import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
+import { resolveProjectCwd } from './core/cross-project.js';
 import { runSwitch } from './commands/switch.js';
 import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean, runWorktreeMerge } from './commands/worktree.js';
 import { runCheckEvents } from './commands/check-events.js';
@@ -123,6 +124,7 @@ program
   .option('--verbose', 'Show info-level log messages on stderr')
   .option('--debug', 'Show debug-level log messages on stderr')
   .option('--cwd <path>', 'Override working directory for this invocation')
+  .option('--project <name>', 'Run the command against a linked project (cross_project_links or workspace store-chain child). Resolves via resolveProjectCwd; mutually exclusive with --cwd.')
   .hook('preAction', (_thisCommand, actionCommand) => {
     const root = actionCommand.optsWithGlobals();
     initLogLevel({ verbose: root.verbose, debug: root.debug });
@@ -131,9 +133,26 @@ program
     const cmdName = actionCommand.name();
     const skipResolution = cmdName === 'init' || cmdName === 'setup';
 
+    // pln#359 phase 1c — `--project <name>` resolves a linked project to an
+    // absolute path via resolveProjectCwd, then feeds the same chdir flow
+    // as --cwd. Mutually exclusive with --cwd to avoid ambiguity.
+    let explicitCwd: string | undefined = root.cwd;
+    if (root.project) {
+      if (root.cwd) {
+        console.error('Error: --project and --cwd are mutually exclusive. Use one.');
+        process.exit(1);
+      }
+      try {
+        explicitCwd = resolveProjectCwd(root.project, process.cwd());
+      } catch (err) {
+        console.error(`Error: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    }
+
     if (!skipResolution) {
-      // Resolve effective cwd (--cwd > BRAINCLAW_PROJECT > active-project > process.cwd)
-      const effectiveCwd = resolveEffectiveCwd({ explicitCwd: root.cwd });
+      // Resolve effective cwd (explicit > BRAINCLAW_PROJECT > active-project > process.cwd)
+      const effectiveCwd = resolveEffectiveCwd({ explicitCwd });
       if (effectiveCwd !== process.cwd()) {
         // Change process.cwd() so all commands resolve the correct store
         // without needing individual --cwd plumbing
@@ -145,9 +164,9 @@ program
       if (removed > 0) {
         logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
       }
-    } else if (root.cwd) {
-      // For init/setup, still respect explicit --cwd but nothing else
-      process.chdir(path.resolve(root.cwd));
+    } else if (explicitCwd) {
+      // For init/setup, still respect explicit --cwd / --project but nothing else
+      process.chdir(path.resolve(explicitCwd));
     }
   });
 

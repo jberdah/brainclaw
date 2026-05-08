@@ -6,6 +6,7 @@ import { generateId, nowISO } from './ids.js';
 import { memoryExists, resolveEntityDir } from './io.js';
 import { CrossProjectLinkSchema, type CrossProjectLink } from './schema.js';
 import type { Candidate, Handoff, State, RuntimeNote } from './schema.js';
+import { resolveProjectRef } from './store-resolution.js';
 
 export type CrossProjectSignalEntity = 'candidate' | 'handoff' | 'runtime_note';
 
@@ -214,6 +215,83 @@ export function resolveCrossProjectTarget(nameOrPath: string, cwd?: string): Res
     throw new Error(`No cross_project_link found matching: '${nameOrPath}'. Check your config.yaml cross_project_links.`);
   }
   return match;
+}
+
+/**
+ * Resolve a `project` argument (name, path, or basename) to an absolute cwd
+ * usable by entity-operations / state / etc. Powers the optional `project?`
+ * parameter on the canonical grammar (bclaw_find/get/create/update/remove/
+ * transition/context/coordinate) — pln#359.
+ *
+ * Cross-project switching is intentionally limited to **linked projects only**
+ * — projects the user has explicitly opted into. Two link kinds count:
+ *
+ *   • cross_project_links (peer/sibling links via config.yaml).
+ *   • workspace store-chain children (monorepo-style nested projects), via
+ *     `resolveProjectRef`. These are also "linked" — the parent workspace
+ *     enumerates them through its config / discovery scan.
+ *
+ * Arbitrary directory paths that aren't reachable via either link kind are
+ * rejected. Adoption requires an explicit `brainclaw link add` or workspace
+ * registration — single point of control over what an agent can reach.
+ *
+ * Resolution order:
+ *   1. `projectArg` undefined or empty            → return `currentCwd` unchanged.
+ *   2. `projectArg` matches the current project's `project_name` (from config)
+ *      OR its directory basename                  → `currentCwd`.
+ *   3. `projectArg` matches a cross_project_link  → that link's `absolutePath`,
+ *      provided the link is `available` (target dir exists + brainclaw-init).
+ *      Match keys: projectName, name, path, absolutePath, basename(absolutePath).
+ *   4. `projectArg` matches a workspace store-chain child via resolveProjectRef
+ *      → that absolute path.
+ *   5. Otherwise                                  → throw with a hint listing
+ *      the configured cross_project_links so the agent can self-correct.
+ *
+ * Errors are intentionally explicit rather than falling back silently — a
+ * misrouted write is far worse than a clean "unknown project" error.
+ */
+export function resolveProjectCwd(projectArg: string | undefined, currentCwd: string): string {
+  if (!projectArg || projectArg.trim() === '') return currentCwd;
+  const trimmed = projectArg.trim();
+  const baseCwd = path.resolve(currentCwd);
+
+  // Case 2: matches current project (by configured name OR by basename)
+  try {
+    const currentConfig = loadConfig(currentCwd);
+    if (currentConfig.project_name === trimmed) return currentCwd;
+  } catch { /* no config in current cwd — fall through */ }
+  if (path.basename(baseCwd) === trimmed) return currentCwd;
+
+  // Case 3: matches a configured cross_project_link
+  const links = resolveCrossProjectLinks(currentCwd);
+  const linkMatch = links.find(
+    (l) => l.projectName === trimmed ||
+           l.name === trimmed ||
+           l.path === trimmed ||
+           l.absolutePath === trimmed ||
+           path.basename(l.absolutePath) === trimmed,
+  );
+  if (linkMatch) {
+    if (!linkMatch.available) {
+      throw new Error(
+        `Cross-project link '${linkMatch.projectName}' is not available at ${linkMatch.absolutePath} ` +
+        `(target dir missing or not brainclaw-initialised).`,
+      );
+    }
+    return linkMatch.absolutePath;
+  }
+
+  // Case 4: matches a workspace store-chain child (monorepo-style nesting)
+  const wsHit = resolveProjectRef(trimmed, currentCwd);
+  if (wsHit) return wsHit;
+
+  // Case 5: nothing matched — throw with helpful hint
+  const knownLinks = links.map((l) => l.projectName).join(', ') || '<none>';
+  throw new Error(
+    `Unknown project: '${projectArg}'. Configured cross_project_links: ${knownLinks}. ` +
+    `Add one with \`brainclaw link add <path>\` or check config.yaml. ` +
+    `Workspace store-chain children are also accepted.`,
+  );
 }
 
 export interface AddCrossProjectLinkInput {

@@ -9,6 +9,7 @@ import {
   loadCrossProjectState,
   resolveCrossProjectTarget,
   resolveCrossProjectWritableTarget,
+  resolveProjectCwd,
   writeCrossProjectSignal,
   listIncomingCrossProjectSignals,
 } from '../../src/core/cross-project.js';
@@ -158,5 +159,85 @@ describe('cross-project', () => {
     assert.equal(incoming[0].entity_type, 'candidate');
     assert.equal(incoming[0].from_project.name, 'brainclaw-tests');
     assert.equal((incoming[0].payload as Candidate).id, 'cnd_signal01');
+  });
+});
+
+describe('resolveProjectCwd (pln#359)', () => {
+  let workspace: TestWorkspace;
+  let linkedDir: string;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-rpc-main-', projectId: 'prj_rpc_main', currentAgent: 'copilot' });
+    linkedDir = tmpDir();
+    initProject(linkedDir);
+    // Wire one cross_project_link by default for the linked-project cases
+    const config = loadConfig(workspace.dir);
+    config.cross_project_links = [{ path: linkedDir, name: 'linked-project', role: 'publisher' }];
+    saveConfig(config, workspace.dir);
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+    fs.rmSync(linkedDir, { recursive: true, force: true });
+  });
+
+  it('returns currentCwd when project arg is undefined', () => {
+    assert.equal(resolveProjectCwd(undefined, workspace.dir), workspace.dir);
+  });
+
+  it('returns currentCwd when project arg is empty string', () => {
+    assert.equal(resolveProjectCwd('', workspace.dir), workspace.dir);
+    assert.equal(resolveProjectCwd('   ', workspace.dir), workspace.dir);
+  });
+
+  it('returns currentCwd when project arg matches the current project_name', () => {
+    const config = loadConfig(workspace.dir);
+    config.project_name = 'self-project';
+    saveConfig(config, workspace.dir);
+    assert.equal(resolveProjectCwd('self-project', workspace.dir), workspace.dir);
+  });
+
+  it('returns currentCwd when project arg matches the current dir basename', () => {
+    const basename = path.basename(workspace.dir);
+    assert.equal(resolveProjectCwd(basename, workspace.dir), workspace.dir);
+  });
+
+  it('resolves to a cross_project_link by name', () => {
+    assert.equal(resolveProjectCwd('linked-project', workspace.dir), linkedDir);
+  });
+
+  it('resolves to a cross_project_link by basename', () => {
+    const basename = path.basename(linkedDir);
+    assert.equal(resolveProjectCwd(basename, workspace.dir), linkedDir);
+  });
+
+  it('resolves to a cross_project_link by absolute path', () => {
+    assert.equal(resolveProjectCwd(linkedDir, workspace.dir), linkedDir);
+  });
+
+  it('throws on an unknown project (not linked, not in workspace chain)', () => {
+    assert.throws(
+      () => resolveProjectCwd('totally-unknown', workspace.dir),
+      /Unknown project: 'totally-unknown'.*Configured cross_project_links: linked-project/s,
+    );
+  });
+
+  it('throws when the matched link is unavailable (target dir gone)', () => {
+    fs.rmSync(linkedDir, { recursive: true, force: true });
+    assert.throws(
+      () => resolveProjectCwd('linked-project', workspace.dir),
+      /not available.*not brainclaw-initialised/s,
+    );
+    // Re-create so afterEach doesn't fail
+    fs.mkdirSync(linkedDir, { recursive: true });
+    initProject(linkedDir);
+  });
+
+  it('error message lists configured links to help the agent self-correct', () => {
+    let captured: Error | undefined;
+    try { resolveProjectCwd('typo-project', workspace.dir); } catch (e) { captured = e as Error; }
+    assert.ok(captured);
+    assert.match(captured!.message, /linked-project/);
+    assert.match(captured!.message, /brainclaw link add/);
   });
 });

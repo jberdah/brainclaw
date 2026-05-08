@@ -51,6 +51,14 @@ export const CoordinateRequestSchema = z.object({
    * intents — silently ignored.
    */
   client_request_id: z.string().min(1).optional(),
+  /**
+   * pln#359 phase 1b — route the dispatch into a linked project. When set,
+   * claim, assignment, and inbox message all land in the target project
+   * (resolved via resolveProjectCwd against cross_project_links + workspace
+   * store-chain children). Auto-spawn is disabled when project is set —
+   * the target agent picks up the brief async via its own bclaw_work.
+   */
+  project: z.string().optional(),
 });
 
 export const FacadeArtifactSchema = z.object({

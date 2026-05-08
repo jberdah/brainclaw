@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
-import { resolveCrossProjectWritableTarget, writeCrossProjectSignal } from '../core/cross-project.js';
+import { resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -232,6 +232,7 @@ export const MCP_READ_TOOLS = [
         explain: { type: 'boolean', description: 'Include ranking reasons (memory kind, markdown format).' },
         compactTemplate: { type: 'boolean', description: 'Use compact template (memory kind, format=template).' },
         includeAgentTooling: { type: 'boolean', description: 'Include agent tooling signals (execution kind).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to read context from. Defaults to the current project. Accepts cross_project_links and workspace store-chain children.' },
       },
       required: ['kind'],
     },
@@ -1013,6 +1014,7 @@ const MCP_WRITE_TOOLS = [
         review_mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Optional review Loop mode when open_loop=true. `asymmetric` (default) keeps the classical author→reviewer handoff; `symmetric` lets each reviewer turn also apply fixes directly, halving round-trips for spec/doc reviews. Ignored when open_loop is false.' },
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
+        project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
       },
       required: ['intent', 'task'],
     },
@@ -1147,46 +1149,49 @@ const MCP_WRITE_TOOLS = [
   // Promoted to `standard` tier at the v1.0 cut.
   {
     name: 'bclaw_find',
-    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence.',
+    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Pass `project` to query a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
         filter: { type: 'object', description: 'Filter keys: status, tag, author, plan_id, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6).' },
+        project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
       },
       required: ['entity'],
     },
   },
   {
     name: 'bclaw_get',
-    description: 'Fetch a single brainclaw entity by id or short_label.',
+    description: 'Fetch a single brainclaw entity by id or short_label. Pass `project` to fetch from a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id (e.g. dec_ab12cd) or short_label (e.g. dec#42).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to fetch from. Defaults to the current project. See `brainclaw link list` for accepted names.' },
       },
       required: ['entity', 'id'],
     },
   },
   {
     name: 'bclaw_create',
-    description: 'Create a new brainclaw entity. Data fields are entity-specific; see src/core/schema.ts.',
+    description: 'Create a new brainclaw entity. Data fields are entity-specific; see src/core/schema.ts. Pass `project` to create in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name.' },
         data: { type: 'object', description: 'Create payload (e.g. { text, author, tags }).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to create the entity in. Defaults to the current project. Identity (author/agent) is resolved from the source registry — no need to be registered in the target.' },
       },
       required: ['entity', 'data'],
     },
   },
   {
     name: 'bclaw_update',
-    description: 'Partial update of mutable fields. Fields not in EntityRegistry.updatable are rejected — use bclaw_transition for status changes.',
+    description: 'Partial update of mutable fields. Fields not in EntityRegistry.updatable are rejected — use bclaw_transition for status changes. Pass `project` to update an entity in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1194,13 +1199,14 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id.' },
         patch: { type: 'object', description: 'Fields to update (subset of EntityRegistry.updatable).' },
+        project: { type: 'string', description: 'Optional: name of a linked project to update the entity in. Defaults to the current project.' },
       },
       required: ['entity', 'id', 'patch'],
     },
   },
   {
     name: 'bclaw_remove',
-    description: 'Remove a brainclaw entity. Archives by default; pass purge:true to hard-delete where supported.',
+    description: 'Remove a brainclaw entity. Archives by default; pass purge:true to hard-delete where supported. Pass `project` to remove from a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1208,13 +1214,14 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id.' },
         purge: { type: 'boolean', description: 'Hard-delete instead of archive. Default false.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to remove the entity from. Defaults to the current project.' },
       },
       required: ['entity', 'id'],
     },
   },
   {
     name: 'bclaw_transition',
-    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags.',
+    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1223,6 +1230,7 @@ const MCP_WRITE_TOOLS = [
         id: { type: 'string', description: 'Entity id.' },
         to: { type: 'string', description: 'Target status.' },
         reason: { type: 'string', description: 'Optional free-text reason, audited alongside the transition.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to transition the entity in. Defaults to the current project.' },
       },
       required: ['entity', 'id', 'to'],
     },
@@ -4589,6 +4597,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string };
       const preparedInvokes: PreparedInvoke[] = [];
 
+      // pln#359 phase 1b — cross-project routing. When `project` is set, all
+      // dispatch writes (claim, assignment, inbox message, audit) land in the
+      // target project (`dispatchCwd`). The target agent picks the brief up
+      // async via its own bclaw_work — auto-spawn from the source process
+      // is disabled because the spawn cwd / worktree semantics are tied to
+      // the target's git repo. The dispatch flow below uses `dispatchCwd`
+      // for state-mutating helpers; the outer `cwd` (source) stays in scope
+      // for the few cases that genuinely need source attribution.
+      const dispatchCwd = resolveProjectCwd(req.project, cwd);
+      const isCrossProject = dispatchCwd !== cwd;
+      if (isCrossProject && req.autoExecute !== false) {
+        warnings.push(
+          `cross-project dispatch (project='${req.project}') — auto-spawn disabled; the target agent picks up the brief async via its own bclaw_work.`,
+        );
+      }
+      const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
+
       /** Run E2E execution phase on prepared delivery entries. Returns overall execution status. */
       const runCoordinateExecution = async (
         prepared: PreparedInvoke[],
@@ -4779,7 +4804,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           tags: input.tags ?? [],
           author_id: senderAgentId,
           session_id: connectionSessionId,
-        }, cwd);
+        }, dispatchCwd);
         artifacts.push({ type: 'message', id: msgResult.id });
         side_effects.push({ action: 'create', entity: 'message', id: msgResult.id });
 
@@ -4847,11 +4872,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }
           const profile = check.profile!;
           // Ensure target agent is registered before creating claims/messages
-          ensureAgentRegisteredForDispatch(agentName, cwd);
+          ensureAgentRegisteredForDispatch(agentName, dispatchCwd);
           const assignScope = req.scope ?? req.task;
 
           // Guard: warn if there is already a non-archived assign message for this agent+scope
-          if (hasActiveAssignment(agentName, assignScope, cwd)) {
+          if (hasActiveAssignment(agentName, assignScope, dispatchCwd)) {
             warnings.push(JSON.stringify({
               warning: 'plan_already_assigned',
               plan_id: assignScope,
@@ -4860,7 +4885,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }
 
           // Guard: warn if there is already an active claim on the same scope
-          const conflictingClaims = listClaims(cwd).filter(
+          const conflictingClaims = listClaims(dispatchCwd).filter(
             (c) => c.status === 'active' && c.scope === assignScope,
           );
           if (conflictingClaims.length > 0) {
@@ -4879,7 +4904,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             description: req.task,
             dispatcherAgent: senderAgent,
             sessionId: connectionSessionId,
-            cwd,
+            cwd: dispatchCwd,
           });
           const claimId = claimResult.claimId;
           if (claimResult.worktreeWarning) {
@@ -4893,7 +4918,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           });
           let assignmentId: string | undefined;
           try {
-            const preId = generateAssignmentId(cwd);
+            const preId = generateAssignmentId(dispatchCwd);
             const assignment = createAssignment({
               id: preId.id,
               short_label: preId.short_label,
@@ -4904,7 +4929,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               scope: assignScope,
               description: req.task,
               tags: ['coordinate', 'assign'],
-            }, cwd);
+            }, dispatchCwd);
             assignmentId = assignment.id;
             artifacts.push({ type: 'assignment', id: assignment.id });
           } catch (err) {
@@ -4938,10 +4963,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           });
           if (assignmentId) {
             try {
-              attachAssignmentMessageToClaim(claimId, queued.entry.message_id, cwd);
-              linkClaimToAssignment(claimId, assignmentId, cwd);
-              transitionAssignment(assignmentId, 'offered', { actor: senderAgent }, cwd);
-              patchAssignmentMessageId(assignmentId, queued.entry.message_id, cwd);
+              attachAssignmentMessageToClaim(claimId, queued.entry.message_id, dispatchCwd);
+              linkClaimToAssignment(claimId, assignmentId, dispatchCwd);
+              transitionAssignment(assignmentId, 'offered', { actor: senderAgent }, dispatchCwd);
+              patchAssignmentMessageId(assignmentId, queued.entry.message_id, dispatchCwd);
               queued.entry.assignment_id = assignmentId;
             } catch (err) {
               warnings.push(`Assignment linkage failed for ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
@@ -4954,8 +4979,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         // E2E execution phase: attempt to spawn assigned agents
         const overallExecStatus = await runCoordinateExecution(preparedInvokes, {
-          autoExecute: req.autoExecute !== false,
-          senderAgent, senderAgentId, cwd, warnings,
+          autoExecute: effectiveAutoExecute !== false,
+          senderAgent, senderAgentId, cwd: dispatchCwd, warnings,
         });
 
         result = {
@@ -5045,7 +5070,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             preparedReviews: [],
           };
 
-          const candId = generateCandidateIdWithLabel(cwd);
+          const candId = generateCandidateIdWithLabel(dispatchCwd);
           saveCandidate({
             id: candId.id,
             short_label: candId.short_label,
@@ -5061,7 +5086,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             usage_count: 0,
             usage_events: [],
             ...(req.scope ? { related_paths: [req.scope] } : {}),
-          }, cwd);
+          }, dispatchCwd);
           out.candidateId = candId.id;
           out.artifacts.push({ type: 'candidate', id: candId.id });
           out.sideEffects.push({ action: 'create', entity: 'candidate', id: candId.id });
@@ -5077,9 +5102,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           try {
             const { openLoop, add_artifact, advance, turn } = loopsModuleRef;
             const senderIdentity = (
-              (senderAgentId ? findAgentIdentityById(senderAgentId, cwd) : undefined)
-              ?? findAgentIdentityByName(senderAgent, cwd)
-              ?? ensureAgentRegisteredForDispatch(senderAgent, cwd)
+              (senderAgentId ? findAgentIdentityById(senderAgentId, dispatchCwd) : undefined)
+              ?? findAgentIdentityByName(senderAgent, dispatchCwd)
+              ?? ensureAgentRegisteredForDispatch(senderAgent, dispatchCwd)
             );
             const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
             const creatorActor = authorAgentId ?? senderAgent;
@@ -5090,7 +5115,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 ...(authorAgentId ? { agent_id: authorAgentId } : {}),
               },
               ...loopReviewerAgents.map((agent) => {
-                const reviewerIdentity = findAgentIdentityByName(agent, cwd) ?? ensureAgentRegisteredForDispatch(agent, cwd);
+                const reviewerIdentity = findAgentIdentityByName(agent, dispatchCwd) ?? ensureAgentRegisteredForDispatch(agent, dispatchCwd);
                 return {
                   role: 'reviewer',
                   agent,
@@ -5106,7 +5131,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 slots,
                 mode: req.review_mode ?? 'asymmetric',
               },
-              cwd,
+              dispatchCwd,
             );
             out.loopId = loop.id;
             out.artifacts.push({ type: 'loop', id: loop.id });
@@ -5122,12 +5147,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   ref: { kind: 'candidate', id: candId.id },
                 },
               },
-              cwd,
+              dispatchCwd,
             );
 
             const advanced = advance(
               { id: loop.id, actor: creatorActor },
-              cwd,
+              dispatchCwd,
             );
             const reviewerSlots = advanced.loop.slots.filter((s) => s.role === 'reviewer');
             for (const slot of reviewerSlots) {
@@ -5138,7 +5163,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   actor: creatorActor,
                   input: req.task,
                 },
-                cwd,
+                dispatchCwd,
               );
 
               // pln#458 stp_daffa477: turn() is pure state mutation — it does
@@ -5158,7 +5183,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   description: reviewDescription,
                   dispatcherAgent: senderAgent,
                   sessionId: connectionSessionId,
-                  cwd,
+                  cwd: dispatchCwd,
                 });
                 if (claimResult.worktreeWarning) out.warnings.push(claimResult.worktreeWarning);
                 out.artifacts.push({ type: 'claim', id: claimResult.claimId });
@@ -5170,7 +5195,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
                 let reviewAssignmentId: string | undefined;
                 try {
-                  const preId = generateAssignmentId(cwd);
+                  const preId = generateAssignmentId(dispatchCwd);
                   const assignment = createAssignment({
                     id: preId.id,
                     short_label: preId.short_label,
@@ -5181,7 +5206,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                     scope: reviewScope,
                     description: reviewDescription,
                     tags: ['coordinate', 'review', 'loop'],
-                  }, cwd);
+                  }, dispatchCwd);
                   reviewAssignmentId = assignment.id;
                   out.artifacts.push({ type: 'assignment', id: assignment.id });
                 } catch (asgErr) {
@@ -5221,10 +5246,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
                 if (reviewAssignmentId) {
                   try {
-                    attachAssignmentMessageToClaim(claimResult.claimId, queued.entry.message_id, cwd);
-                    linkClaimToAssignment(claimResult.claimId, reviewAssignmentId, cwd);
-                    transitionAssignment(reviewAssignmentId, 'offered', { actor: senderAgent }, cwd);
-                    patchAssignmentMessageId(reviewAssignmentId, queued.entry.message_id, cwd);
+                    attachAssignmentMessageToClaim(claimResult.claimId, queued.entry.message_id, dispatchCwd);
+                    linkClaimToAssignment(claimResult.claimId, reviewAssignmentId, dispatchCwd);
+                    transitionAssignment(reviewAssignmentId, 'offered', { actor: senderAgent }, dispatchCwd);
+                    patchAssignmentMessageId(reviewAssignmentId, queued.entry.message_id, dispatchCwd);
                     queued.entry.assignment_id = reviewAssignmentId;
                   } catch (linkErr) {
                     out.warnings.push(
@@ -5259,7 +5284,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           if (useIdempotency) {
             const { client_request_id: _crid, ...hashablePayload } = req;
             output = loopsModuleRef.withLoopLock<ReviewOutput>({
-              cwd,
+              cwd: dispatchCwd,
               intent: 'coordinate_review',
               agentId: senderAgentId!,
               scope: { kind: 'open_idempotency', clientRequestId: req.client_request_id! },
@@ -5294,8 +5319,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         let reviewExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' | undefined;
         if (output.preparedReviews.length > 0) {
           reviewExecStatus = await runCoordinateExecution(output.preparedReviews, {
-            autoExecute: req.autoExecute !== false,
-            senderAgent, senderAgentId, cwd, warnings,
+            autoExecute: effectiveAutoExecute !== false,
+            senderAgent, senderAgentId, cwd: dispatchCwd, warnings,
           });
         }
 
@@ -5307,15 +5332,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         };
 
       } else if (req.intent === 'reroute') {
-        const activeClaims = listClaims(cwd).filter(
+        const activeClaims = listClaims(dispatchCwd).filter(
           (c) => c.status === 'active' && (req.scope ? c.scope === req.scope : true),
         );
         if (activeClaims.length === 0) {
           return { response: createToolErrorResponse('not_found', `No active claim found for scope: ${req.scope ?? '(any)'}`) };
         }
         const oldClaim = activeClaims[0];
-        saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, cwd);
-        appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, cwd);
+        saveClaim({ ...oldClaim, status: 'released' as const, released_at: nowISO() }, dispatchCwd);
+        appendAuditEntry({ actor: oldClaim.agent, action: 'release_claim', item_id: oldClaim.id, item_type: 'claim', scope: oldClaim.scope }, dispatchCwd);
         side_effects.push({ action: 'release', entity: 'claim', id: oldClaim.id });
 
         // trp#61: supersede assignments attached to the old claim so they
@@ -5323,14 +5348,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // released the claim, leaving the assignment FSM stuck and confusing
         // dispatch analysis / review.
         const { listAssignments: listAsgn } = await import('../core/assignments.js');
-        const predecessors = listAsgn(cwd, { claim_id: oldClaim.id })
+        const predecessors = listAsgn(dispatchCwd, { claim_id: oldClaim.id })
           .filter((a) => a.status !== 'completed' && a.status !== 'expired' && a.status !== 'rerouted');
         for (const predecessor of predecessors) {
           try {
             transitionAssignment(predecessor.id, 'rerouted', {
               actor: senderAgent,
               status_reason: `reroute: claim ${oldClaim.id} reassigned`,
-            }, cwd);
+            }, dispatchCwd);
             side_effects.push({ action: 'update', entity: 'assignment', id: predecessor.id });
           } catch (err) {
             warnings.push(`Failed to close predecessor assignment ${predecessor.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -5352,14 +5377,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }
           const profile = check.profile;
           if (check.valid && profile) {
-            ensureAgentRegisteredForDispatch(newAgentName, cwd);
+            ensureAgentRegisteredForDispatch(newAgentName, dispatchCwd);
             const rerouteClaimResult = createCoordinatorClaim({
               agent: newAgentName,
               scope: oldClaim.scope,
               description: req.task,
               dispatcherAgent: senderAgent,
               sessionId: connectionSessionId,
-              cwd,
+              cwd: dispatchCwd,
             });
             newClaimId = rerouteClaimResult.claimId;
             if (rerouteClaimResult.worktreeWarning) {
@@ -5373,7 +5398,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             });
             let rerouteAssignmentId: string | undefined;
             try {
-              const preId = generateAssignmentId(cwd);
+              const preId = generateAssignmentId(dispatchCwd);
               const assignment = createAssignment({
                 id: preId.id,
                 short_label: preId.short_label,
@@ -5384,7 +5409,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 scope: oldClaim.scope,
                 description: req.task,
                 tags: ['coordinate', 'assign', 'reroute'],
-              }, cwd);
+              }, dispatchCwd);
               rerouteAssignmentId = assignment.id;
               artifacts.push({ type: 'assignment', id: assignment.id });
             } catch (err) {
@@ -5423,10 +5448,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             });
             if (rerouteAssignmentId) {
               try {
-                attachAssignmentMessageToClaim(newClaimId, queued.entry.message_id, cwd);
-                linkClaimToAssignment(newClaimId, rerouteAssignmentId, cwd);
-                transitionAssignment(rerouteAssignmentId, 'offered', { actor: senderAgent }, cwd);
-                patchAssignmentMessageId(rerouteAssignmentId, queued.entry.message_id, cwd);
+                attachAssignmentMessageToClaim(newClaimId, queued.entry.message_id, dispatchCwd);
+                linkClaimToAssignment(newClaimId, rerouteAssignmentId, dispatchCwd);
+                transitionAssignment(rerouteAssignmentId, 'offered', { actor: senderAgent }, dispatchCwd);
+                patchAssignmentMessageId(rerouteAssignmentId, queued.entry.message_id, dispatchCwd);
                 queued.entry.assignment_id = rerouteAssignmentId;
               } catch (err) {
                 warnings.push(`Assignment linkage failed for ${newAgentName}: ${err instanceof Error ? err.message : String(err)}`);
@@ -5436,8 +5461,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             reroutePrepared.push({ entry: queued.entry, invoke: queued.invoke, worktreePath: rerouteClaimResult.worktreePath });
 
             const rerouteExecStatus = await runCoordinateExecution(reroutePrepared, {
-              autoExecute: req.autoExecute !== false,
-              senderAgent, senderAgentId, cwd, warnings,
+              autoExecute: effectiveAutoExecute !== false,
+              senderAgent, senderAgentId, cwd: dispatchCwd, warnings,
             });
 
             result = {
@@ -5473,7 +5498,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         if (!threadId) {
           return { response: createToolErrorResponse('validation_error', 'summarize intent requires threadId or scope') };
         }
-        const messages = getThread(threadId, cwd, { truncateText: 500 });
+        const messages = getThread(threadId, dispatchCwd, { truncateText: 500 });
         const summary = messages.length === 0
           ? 'No messages found in thread.'
           : messages.map((m, i) => `[${i + 1}] ${m.from} → ${m.to}: ${m.text}`).join('\n');
@@ -5491,9 +5516,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief } = loopsModuleRef;
 
         const senderIdentity = (
-          (senderAgentId ? findAgentIdentityById(senderAgentId, cwd) : undefined)
-          ?? findAgentIdentityByName(senderAgent, cwd)
-          ?? ensureAgentRegisteredForDispatch(senderAgent, cwd)
+          (senderAgentId ? findAgentIdentityById(senderAgentId, dispatchCwd) : undefined)
+          ?? findAgentIdentityByName(senderAgent, dispatchCwd)
+          ?? ensureAgentRegisteredForDispatch(senderAgent, dispatchCwd)
         );
         const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
         const creatorActor = authorAgentId ?? senderAgent;
@@ -5508,7 +5533,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         ];
         if (explicitTargets) {
           for (const agent of req.targetAgents!) {
-            const criticIdentity = findAgentIdentityByName(agent, cwd) ?? ensureAgentRegisteredForDispatch(agent, cwd);
+            const criticIdentity = findAgentIdentityByName(agent, dispatchCwd) ?? ensureAgentRegisteredForDispatch(agent, dispatchCwd);
             slots.push({
               role: 'critic',
               agent,
@@ -5528,7 +5553,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               created_by: creatorActor,
               slots,
             },
-            cwd,
+            dispatchCwd,
           );
           loopId = loop.id;
           artifacts.push({ type: 'loop', id: loop.id });
@@ -5546,7 +5571,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 produced_by: creatorActor,
               },
             },
-            cwd,
+            dispatchCwd,
           );
           const lastArtifact = updated.artifacts[updated.artifacts.length - 1];
           proposalArtifactId = lastArtifact?.artifact_id;
@@ -5592,7 +5617,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   query,
                   section,
                   maxResults: topK,
-                  cwd,
+                  cwd: dispatchCwd,
                   includePending: section === 'candidates',
                 });
                 return results.map((r) => ({
@@ -5607,8 +5632,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             // Advance proposal → critique. proposal has no advance_gate so
             // this is unconditional. After advance, the loop sits at the
             // critique phase ready for critic turns.
-            advance({ id: loopId, actor: creatorActor }, cwd);
-            const advancedLoop = getLoop(loopId, cwd);
+            advance({ id: loopId, actor: creatorActor }, dispatchCwd);
+            const advancedLoop = getLoop(loopId, dispatchCwd);
             if (!advancedLoop) {
               throw new Error('ideate dispatch: loop disappeared after advance');
             }
@@ -5630,7 +5655,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   actor: creatorActor,
                   input: briefResult.text,
                 },
-                cwd,
+                dispatchCwd,
               );
 
               const queued = queueCoordinateMessage({
@@ -5758,6 +5783,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_find') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         // pln#460 follow-up — some MCP clients (notably Claude Code with a
         // tool schema that declares `filter: { type: 'object' }` without a
         // sub-property schema) stringify the filter object before shipping
@@ -5806,7 +5832,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             ),
           };
         }
-        const result = listEntities(entity, cwd, filter);
+        const result = listEntities(entity, targetCwd, filter);
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
         // Prior to this fix we spread `...result` at top-level of the
@@ -5828,7 +5854,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
-        const item = getEntity(entity, id, cwd);
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const item = getEntity(entity, id, targetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ fetched ${entity} ${id}` }],
@@ -5844,21 +5871,25 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const rawData = (args.data ?? {}) as Record<string, unknown>;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
 
         // Auto-fill identity fields. Without this, a caller who omits author/agent
         // creates a schema-invalid record that is silently dropped on read and
         // GC'd from disk on the next mutation. Fallback chain:
         // resolved MCP identity → args.agent → 'unknown'.
+        // Identity is resolved against the SOURCE cwd (the agent's own
+        // project/registry), not the target — an agent doesn't need to be
+        // registered in the target project to write into it.
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const data: Record<string, unknown> = { ...rawData };
         if (data.author === undefined) data.author = agent_name;
         if (data.agent === undefined) data.agent = agent_name;
         if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
 
-        const result = createEntity(entity, data, cwd);
+        const result = createEntity(entity, data, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'create', item_id: result.id, item_type: entity },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5876,11 +5907,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const patch = (args.patch ?? {}) as Record<string, unknown>;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = updateEntity(entity, id, patch, cwd);
+        const result = updateEntity(entity, id, patch, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5898,11 +5930,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const purge = args.purge === true;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = removeEntity(entity, id, cwd, purge);
+        const result = removeEntity(entity, id, targetCwd, purge);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({
@@ -5921,11 +5954,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const id = String(args.id ?? '');
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
+        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = transitionEntity(entity, id, to, cwd, reason);
+        const result = transitionEntity(entity, id, to, targetCwd, reason);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
-          cwd,
+          targetCwd,
         );
         return {
           response: toolResponse({

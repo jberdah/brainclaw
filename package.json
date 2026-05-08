@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
     "dist/**/*.js",
     "dist/core/default-profiles/*.yaml",
     "dist/brainclaw-vscode.vsix",
+    "dist/facts.json",
     "docs/**/*.md",
     "README.md",
     "LICENSE"
@@ -25,8 +26,8 @@
     "clean:build": "node scripts/clean-build.mjs dist dist-test",
     "clean:dist": "node scripts/clean-build.mjs dist",
     "clean:dist-test": "node scripts/clean-build.mjs dist-test",
-    "build": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node scripts/build-vsix.mjs",
-    "build:cli": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs",
+    "build": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node scripts/emit-site-facts.mjs && node scripts/build-vsix.mjs",
+    "build:cli": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node scripts/emit-site-facts.mjs",
     "dev": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node dist/cli.js",
     "dev:mcp": "tsc && node scripts/copy-default-profiles.mjs",
     "build:mcp-schemas": "npm run clean:dist && tsc && node scripts/build-mcp-schemas.mjs",

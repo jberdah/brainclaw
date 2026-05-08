@@ -434,6 +434,8 @@ function renderAvailableTools(): string {
     '',
     'Entities supported by the grammar: plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run.',
     '',
+    '**Cross-project access (pln#359):** every canonical-grammar call, `bclaw_context`, and `bclaw_coordinate` accept an optional `project: <name>` argument that routes the operation to a linked project (cross_project_links from `brainclaw link list` OR a workspace store-chain child). Identity is sourced from the caller; writes + audit land in the target. Unknown project names throw — no silent fallback. The CLI exposes the same as `--project <name>` (mutually exclusive with `--cwd`). Example: `bclaw_get(entity="trap", id="trp#36", project="brainclaw-site")`. Cross-project `bclaw_coordinate` is inbox-only — auto-spawn is force-disabled because the spawn cwd / worktree are tied to the target repo; the target agent picks the brief up async via its own `bclaw_work`.',
+    '',
     '**Session + claims:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`',
     '**Plan steps:** `bclaw_add_step`, `bclaw_complete_step`, `bclaw_update_step`, `bclaw_delete_step`',
     '**Inbox + handoffs:** `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_send_message`, `bclaw_correct_handoff`',

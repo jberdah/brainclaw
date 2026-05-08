@@ -48,6 +48,7 @@ import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, rend
 import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { listAvailableProjects, switchProject } from './switch.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
+import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
 import type { ActionRequiredKind, ActionRequiredStatus, AssignmentStatus, BootstrapInterviewAnswer, PlanStatus, PlanType, RuntimeEventType, SequenceStatus } from '../core/schema.js';
@@ -101,13 +102,14 @@ export function handleMcpReadToolCall(
 ): McpToolResponse {
   let cwd = context.cwd ?? resolveEffectiveCwd();
 
-  // If a project param is provided, resolve it to an actual cwd override
+  // If a project param is provided, resolve it to an actual cwd override.
+  // resolveProjectCwd unifies cross_project_links (siblings/peers) AND
+  // workspace store-chain children. Throws on unknown project — surfaces
+  // visibly as a tool error rather than silently falling back to the
+  // current project, which would mislead the caller.
   const projectArg = args.project as string | undefined;
   if (projectArg) {
-    const resolvedProject = resolveProjectRef(projectArg, cwd);
-    if (resolvedProject) {
-      cwd = resolvedProject;
-    }
+    cwd = resolveProjectCwd(projectArg, cwd);
   }
 
   if (name === 'bclaw_get_context') {
