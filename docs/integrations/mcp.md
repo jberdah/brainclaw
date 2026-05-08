@@ -191,9 +191,11 @@ Notes:
 #### Cross-project access (pln#359)
 
 The canonical grammar (`bclaw_find` / `bclaw_get` / `bclaw_create` /
-`bclaw_update` / `bclaw_remove` / `bclaw_transition`) **and** the read
-dispatcher `bclaw_context` accept an optional `project` parameter that
-routes the operation to a **linked project** instead of the current one.
+`bclaw_update` / `bclaw_remove` / `bclaw_transition`), the read
+dispatcher `bclaw_context`, and the coordination facade `bclaw_coordinate`
+accept an optional `project` parameter that routes the operation to a
+**linked project** instead of the current one. The CLI exposes the same
+parameter as a global `--project <name>` flag.
 
 Two link kinds are accepted:
 - `cross_project_links` (sibling/peer projects in `config.yaml`, managed
@@ -203,6 +205,8 @@ Two link kinds are accepted:
 Arbitrary directory paths are rejected — adoption requires an explicit
 link, which gives the user a single point of control over what an agent
 can reach.
+
+**Read / write on canonical entities (phase 1a):**
 
 ```jsonc
 // Read a trap from a sibling project linked as 'brainclaw-site'
@@ -220,6 +224,40 @@ agent registry — an agent does not need to be registered in the target
 to write into it. Audit log entries land in the **target** project.
 Unknown project arguments throw `validation_error` with a hint listing
 the configured links — no silent fallback.
+
+**Coordinate / dispatch into a linked project (phase 1b-α):**
+
+```jsonc
+// Dispatch the brainclaw-site claude-code agent without leaving brainclaw
+bclaw_coordinate({
+  intent: 'assign',
+  task: 'Refactor the homepage hero variant',
+  scope: 'src/pages/index.astro',
+  targetAgents: ['claude-code'],
+  project: 'brainclaw-site',
+  agent: 'claude-code',  // self-attribution from the source side
+})
+```
+
+Cross-project dispatch is **inbox-only**: the target agent picks up the
+brief async via its own `bclaw_work`. Auto-spawn from the source process
+is force-disabled when `project` is set, because spawn cwd / worktree
+semantics are tied to the target's git repo. A warning surfaces in
+`FacadeResponse.warnings` so the caller knows auto-spawn was downgraded.
+The same logic applies to `intent=consult|review|reroute|ideate`.
+
+**CLI parity (phase 1c):**
+
+```bash
+# Read the linked project's plans without leaving the current dir
+brainclaw --project=brainclaw-site list-plans
+
+# Write a decision into the linked project
+brainclaw --project=brainclaw-site decision "Switch hero variant to v3"
+
+# Scoped variants: --project works on every subcommand. Mutually exclusive
+# with --cwd; use one or the other.
+```
 
 #### Unified intent dispatchers
 
