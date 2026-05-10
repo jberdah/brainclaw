@@ -207,12 +207,12 @@ describe('dispatch-e2e/per-agent-cycle', { concurrency: false }, () => {
     assert.equal(result.result.messages_sent[0]!.agent, 'codex');
     assert.ok(result.result.messages_sent[0]!.assignment_id, 'assignment created');
 
-    // Verify inbox message is compact (no protocol section for Codex)
+    // Verify inbox message includes the full lifecycle contract for Codex.
     const inbox = readInbox({ agent: 'codex', markAsRead: false }, testDir);
     const assignMsg = inbox.messages.find(m => m.type === 'assign');
     assert.ok(assignMsg, 'inbox has assign message');
     assert.ok(assignMsg!.text.includes('Write unit tests'), 'brief contains plan text');
-    assert.ok(!assignMsg!.text.includes('## Protocol'), 'compact mode omits protocol section');
+    assert.ok(assignMsg!.text.includes('## Protocol'), 'full mode includes protocol section for MCP-capable codex');
     assert.ok(assignMsg!.assignment_id, 'message has top-level assignment_id');
     assert.equal(assignMsg!.assignment_id, result.result.messages_sent[0]!.assignment_id);
     assert.equal(assignMsg!.payload?.assignment_id, assignMsg!.assignment_id);
@@ -236,7 +236,7 @@ describe('dispatch-e2e/per-agent-cycle', { concurrency: false }, () => {
     assert.ok(!invokeCmd.args.includes('test brief'), 'prompt is NOT passed as inline arg');
 
     // Verify brief mode
-    assert.equal(resolveBriefMode('codex'), 'compact');
+    assert.equal(resolveBriefMode('codex'), 'full');
   });
 
   it('codex: brief-ack wrapper keeps the assignment offered until the worker accepts', async () => {
@@ -605,15 +605,15 @@ describe('dispatch-e2e/generateDispatchBrief', { concurrency: false }, () => {
     assert.ok(brief.includes('bclaw_session_start'), 'includes session tools');
   });
 
-  it('omits protocol section for compact-mode agents (codex)', () => {
+  it('includes protocol section for MCP-capable task-based agents (codex)', () => {
     const brief = generateDispatchBrief({
       task: 'Write tests for auth module',
       agent: 'codex',
     });
 
     assert.ok(brief.includes('Write tests for auth module'), 'includes task');
-    assert.ok(!brief.includes('## Protocol'), 'compact mode omits protocol');
-    assert.ok(!brief.includes('bclaw_session_start'), 'compact mode omits tools');
+    assert.ok(brief.includes('## Protocol'), 'full mode includes protocol');
+    assert.ok(brief.includes('bclaw_claim'), 'full mode includes the self-claim workflow');
   });
 
   it('includes claim instruction to self-claim for full-mode agents when no pre-claim', () => {

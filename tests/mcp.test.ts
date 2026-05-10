@@ -1023,7 +1023,7 @@ describe('MCP server', () => {
           name: 'bclaw_get_agent_board',
           arguments: {
             agent: 'copilot',
-            project: 'auth',
+            path: 'auth',
           },
         },
       });

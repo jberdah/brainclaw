@@ -229,7 +229,7 @@ describe('commands/mcp read tools', () => {
 
     const board = handleMcpReadToolCall('bclaw_get_agent_board', {
       agent: 'copilot',
-      project: 'auth',
+      path: 'auth',
       includeReputation: true,
     }, { cwd: workspace.dir });
     assert.ok(board.content[0].text.includes('Agent board for copilot (auth)'));

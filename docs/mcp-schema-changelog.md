@@ -82,7 +82,7 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:860fbaa30a486093`
+- MCP public surface fingerprint: `sha256:92979717f0e10376`
 
 See `docs/integrations/mcp.md` for the full canonical surface + an
 example gallery per verb. See `docs/concepts/mcp-governance.md` for

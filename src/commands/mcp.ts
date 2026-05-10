@@ -167,6 +167,11 @@ interface QuickCaptureClassification {
   trapScore: number;
 }
 
+const { $defs: loopPhaseDefs, ...loopPhaseItemSchema } = generatedSchemas.LoopPhase as typeof generatedSchemas.LoopPhase & {
+  $defs?: Record<string, unknown>;
+};
+const loopSlotInputItemSchema = generatedSchemas.LoopSlotInput;
+
 export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_bootstrap',
@@ -1031,6 +1036,7 @@ const MCP_WRITE_TOOLS = [
     annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true, schemaSource: 'zod-derived' },
     inputSchema: {
       type: 'object',
+      ...(loopPhaseDefs ? { $defs: loopPhaseDefs } : {}),
       properties: {
         intent: {
           type: 'string',
@@ -1041,8 +1047,8 @@ const MCP_WRITE_TOOLS = [
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
         title: { type: 'string', description: 'Human-readable title (open).' },
         goal: { type: 'string', description: 'Optional goal statement (open).' },
-        phases: { type: 'array', items: generatedSchemas.LoopPhase, description: 'Optional phase list override (open). Items derived from LoopPhaseSchema (zod source) — see mcp-schemas.generated.ts.' },
-        slots: { type: 'array', items: generatedSchemas.LoopSlotInput, description: 'Optional initial slot specs (open). Items derived from LoopSlotInputSchema (zod source). Each item carries at least { role }.' },
+        phases: { type: 'array', items: loopPhaseItemSchema, description: 'Optional phase list override (open). Items derived from LoopPhaseSchema (zod source) — see mcp-schemas.generated.ts.' },
+        slots: { type: 'array', items: loopSlotInputItemSchema, description: 'Optional initial slot specs (open). Items derived from LoopSlotInputSchema (zod source). Each item carries at least { role }.' },
         linked: { type: 'object', description: 'Optional top-level plan/sequence refs (open).' },
         stop_condition: { type: 'object', description: 'Optional stop_condition override (open). Composite any/all supported.' },
         mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review mode selector for open (review kind only).' },

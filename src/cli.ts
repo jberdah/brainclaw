@@ -113,6 +113,55 @@ function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
+function parseLeadingGlobalOptions(argv: string[]): {
+  verbose?: boolean;
+  debug?: boolean;
+  cwd?: string;
+  project?: string;
+} {
+  const result: {
+    verbose?: boolean;
+    debug?: boolean;
+    cwd?: string;
+    project?: string;
+  } = {};
+
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (!token.startsWith('-')) {
+      break;
+    }
+    if (token === '--verbose') {
+      result.verbose = true;
+      continue;
+    }
+    if (token === '--debug') {
+      result.debug = true;
+      continue;
+    }
+    if (token === '--cwd') {
+      result.cwd = argv[i + 1];
+      i++;
+      continue;
+    }
+    if (token.startsWith('--cwd=')) {
+      result.cwd = token.slice('--cwd='.length);
+      continue;
+    }
+    if (token === '--project') {
+      result.project = argv[i + 1];
+      i++;
+      continue;
+    }
+    if (token.startsWith('--project=')) {
+      result.project = token.slice('--project='.length);
+      continue;
+    }
+  }
+
+  return result;
+}
+
 function isCodevEnabled(): boolean {
   return process.env.BRAINCLAW_ENABLE_CODEV === '1';
 }
@@ -126,7 +175,7 @@ program
   .option('--cwd <path>', 'Override working directory for this invocation')
   .option('--project <name>', 'Run the command against a linked project (cross_project_links or workspace store-chain child). Resolves via resolveProjectCwd; mutually exclusive with --cwd.')
   .hook('preAction', (_thisCommand, actionCommand) => {
-    const root = actionCommand.optsWithGlobals();
+    const root = parseLeadingGlobalOptions(process.argv.slice(2));
     initLogLevel({ verbose: root.verbose, debug: root.debug });
 
     // Skip effective cwd resolution for commands that create the store
