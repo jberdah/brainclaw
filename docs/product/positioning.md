@@ -65,16 +65,16 @@ Local-first gives teams:
 - Git history for shared project state
 - compatibility with enterprise or offline environments
 
-## License direction
+## License
 
-Today, brainclaw is published under the **Business Source License 1.1 (BSL 1.1)**.
+brainclaw core is published under the **MIT License**.
 
-The direction after the closed beta is simpler:
+The product split is:
 
-- the local-first brainclaw core is intended to move to MIT
+- the local-first brainclaw core is MIT
 - remote shared-memory, hosted collaboration, advanced dashboards, and related private add-ons will stay separate commercial products
 
-The intended MIT core covers the local coordination layer:
+The MIT core covers the local coordination layer:
 
 - local project memory
 - local MCP and CLI workflows

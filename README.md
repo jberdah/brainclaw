@@ -382,13 +382,13 @@ For older releases (v0.x and the early v1.0 launch series), `git log` on `master
 
 ## License
 
-Current releases of brainclaw are published under the [Business Source License 1.1](LICENSE) — (c) 2024-2026 Juan Berdah.
+brainclaw core is published under the [MIT License](LICENSE) — (c) 2024-2026 Juan Berdah.
 
-The long-term direction is simpler than the current wording might suggest:
+The licensing split is simple:
 
-- the local-first brainclaw core is intended to move to MIT after the closed beta
+- the local-first brainclaw core is MIT
 - cloud shared-memory, remote collaboration services, advanced dashboards, and related hosted add-ons will live in separate commercial products
 
-The intended MIT core covers what makes brainclaw useful inside a repo today: local project memory, local MCP and CLI coordination, onboarding and bootstrap, plans, claims, handoffs, runtime notes, and local agent integrations.
+The MIT core covers what makes brainclaw useful inside a repo today: local project memory, local MCP and CLI coordination, onboarding and bootstrap, plans, claims, handoffs, runtime notes, and local agent integrations.
 
 The goal is not to close brainclaw down. The goal is to keep the local-first core open and genuinely useful on its own, while keeping hosted collaboration features separate.

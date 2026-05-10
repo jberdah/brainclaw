@@ -52,7 +52,7 @@
     "handoff",
     "local-first"
   ],
-  "license": "BUSL-1.1",
+  "license": "MIT",
   "homepage": "https://brainclaw.dev",
   "dependencies": {
     "commander": "^14.0.3",
