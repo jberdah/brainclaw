@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
-import { runSetup } from './commands/setup.js';
+import { runSetup, runSetupMachine } from './commands/setup.js';
 import { runUpgrade } from './commands/upgrade.js';
 import { patchAllMcpConfigs } from './core/agent-files.js';
 import { runReconcile } from './commands/reconcile.js';
@@ -181,7 +181,7 @@ program
 
     // Skip effective cwd resolution for commands that create the store
     const cmdName = actionCommand.name();
-    const skipResolution = cmdName === 'init' || cmdName === 'setup';
+    const skipResolution = cmdName === 'init' || cmdName === 'setup' || cmdName === 'setup-machine';
 
     // pln#359 phase 1c — `--project <name>` resolves a linked project to an
     // absolute path via resolveProjectCwd, then feeds the same chdir flow
@@ -223,9 +223,9 @@ program
 // --- init ---
 program
   .command('init')
-  .description('Initialize project memory in .brainclaw/ storage directory')
+  .description('Initialize or refresh project memory in .brainclaw/ storage directory')
   .option('-y, --yes', 'Skip interactive wizard and use defaults')
-  .option('--force', 'Overwrite existing project memory directory')
+  .option('--force', 'Rebuild managed Brainclaw config and generated files from defaults')
   .option('--compact', 'Enable compact markdown mode')
   .option('--topology <mode>', 'Topology mode: embedded, sidecar, local-only')
   .option('--project-mode <mode>', 'Project mode: single-project, multi-project, auto')
@@ -240,13 +240,23 @@ program
 // --- setup ---
 program
   .command('setup')
-  .description('Interactive onboarding wizard — global agent install + multi-repo init')
+  .description('Interactive onboarding wizard — machine bootstrap plus multi-repo init')
   .option('--roots <paths>', 'Comma-separated root directories to scan (skips interactive prompt)')
   .option('--agents <agents>', 'Agents to configure: all, detected, or comma-separated names')
   .option('--repos <mode>', 'Repo selection: all, current, or comma-separated numbers')
   .option('-y, --yes', 'Accept all defaults non-interactively')
   .action(async (options) => {
     await runSetup(options);
+  });
+
+// --- setup-machine ---
+program
+  .command('setup-machine')
+  .description('Machine-only onboarding — detect/configure agents and MCP without scanning or initializing repositories')
+  .option('--agents <agents>', 'Agents to configure: all, detected, or comma-separated names')
+  .option('-y, --yes', 'Accept all defaults non-interactively')
+  .action(async (options) => {
+    await runSetupMachine(options);
   });
 
 // --- memory-log ---

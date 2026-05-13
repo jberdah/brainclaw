@@ -65,14 +65,14 @@ Skill-based integration via `skills/<agent>/SKILL.md`:
 ### Automatic (recommended)
 
 ```bash
-brainclaw setup     # machine-level: detects agents, creates global configs
-brainclaw init      # project-level: creates .brainclaw/, writes agent files
+brainclaw setup-machine   # machine-level: detects agents, creates global configs
+brainclaw init            # project-level: creates or refreshes .brainclaw/, writes agent files
 ```
 
 Or ask your coding agent to do it:
 
 ```
-"Install and initialize brainclaw in this project"
+"Inspect this package, explain what brainclaw does, then install it and initialize or join this project"
 ```
 
 The agent can use `bclaw_setup` to walk through the process interactively.

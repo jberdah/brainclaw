@@ -2,6 +2,15 @@
 
 Brainclaw works alongside your existing coding agents. It does not replace them — it gives them a shared memory and coordination layer they can all read from and write to.
 
+## Onboarding model
+
+There are two separate setup scopes:
+
+- **Machine scope** — `brainclaw setup-machine` (or the broader `brainclaw setup`) detects agents on this machine and writes the machine-level MCP/user config Brainclaw manages.
+- **Project scope** — `brainclaw init` creates or refreshes `.brainclaw/` for the current repository and rewrites the managed project/agent files safely.
+
+That split is deliberate. A fresh machine may need MCP registration before any repository is touched, while an existing project may already have `.brainclaw/` and only need a safe refresh for the arriving agent.
+
 ## How agents connect to brainclaw
 
 Brainclaw reaches each agent through multiple surfaces. Not every agent supports every surface, and that's fine — brainclaw adapts what it writes based on what the agent can handle.

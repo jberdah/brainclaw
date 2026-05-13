@@ -110,26 +110,50 @@ If you want the least surprising setup today, use Linux first. If you are on Win
 
 ## Get Started
 
-### 1. Install
+### 1. Let your coding agent lead
+
+The smoothest first-run path is agent-first:
+
+1. ask your coding agent to inspect the package and explain what brainclaw does
+2. ask it to install brainclaw and initialize or join the project you're working on
+3. use the CLI yourself when you need an explicit operator or fallback path
+
+If you want to drive setup manually, use the steps below.
+
+### 2. Install
 
 ```bash
 npm install -g brainclaw
 ```
 
-### 2. Initialize a project
+### 3. Bootstrap this machine
+
+```bash
+brainclaw setup-machine --yes
+```
+
+This detects the installed agents on the current machine, writes the machine-level MCP and user config Brainclaw manages, and does **not** scan or initialize repositories.
+
+### 4. Initialize or refresh the current project
 
 ```bash
 cd your-project
 brainclaw init
 ```
 
-This creates `.brainclaw/` in your repo, detects your coding agent, writes MCP config and instruction files, and sets up session hooks. It takes about 10 seconds.
+`brainclaw init` is now safe to rerun. It creates `.brainclaw/` when the project is new, or refreshes the managed Brainclaw and agent integration files when the project already has memory.
 
-### 3. Restart your agent
+If you are explicitly adding another agent to an existing Brainclaw project, use:
+
+```bash
+brainclaw enable-agent <agent-name>
+```
+
+### 5. Restart your agent
 
 Restart your coding agent (or reload MCP servers) so it picks up the new configuration. After that, brainclaw tools are available.
 
-### 4. Start working
+### 6. Start working
 
 Pick one of the canonical entry points depending on what you're doing:
 
@@ -161,7 +185,7 @@ For agents without MCP (e.g. Copilot reads `.github/copilot-instructions.md`), r
 brainclaw export --detect --write
 ```
 
-### 5. Verify it works
+### 7. Verify it works
 
 ```bash
 brainclaw status          # see active sessions, claims, plans
@@ -176,7 +200,7 @@ To configure brainclaw for all your repos and agents at once:
 brainclaw setup --yes
 ```
 
-This scans your projects, detects installed agents (Claude Code, Codex, Cursor, Copilot, Cline, Mistral Vibe, etc.), and writes MCP configs for each.
+This is the broader multi-repo wizard. It bootstraps the machine, scans your project roots, and initializes selected repositories in one pass.
 
 ### Existing projects
 

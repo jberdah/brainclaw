@@ -4,7 +4,7 @@ import readline from 'node:readline/promises';
 import { registerAgentIdentity, resolveDefaultAgentName, resolveExistingCurrentAgent } from '../core/agent-registry.js';
 import { MEMORY_DIR, memoryExists, ensureMemoryDir, memoryPath, writeFileAtomic } from '../core/io.js';
 import { emptyState, loadState, saveState } from '../core/state.js';
-import { defaultConfig, saveConfig } from '../core/config.js';
+import { defaultConfig, loadConfig, saveConfig } from '../core/config.js';
 import { generateMarkdown } from '../core/markdown.js';
 import { initMemoryRepo } from '../core/memory-git.js';
 import { buildProjectIdentity, resolveExistingProjectIdentity, saveProjectIdentity } from '../core/project-registry.js';
@@ -18,7 +18,7 @@ import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-s
 import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
-import type { IgnoreStrategy, ProjectMode, ProjectStrategy, TopologyMode } from '../core/schema.js';
+import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
   yes?: boolean;
@@ -79,16 +79,13 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const existingIdentity = resolveExistingProjectIdentity(cwd);
   const existingCurrentAgent = resolveExistingCurrentAgent(cwd);
   const storageDir = resolveStorageDir(options.storageDir);
-  const topology = resolveTopology(options.topology);
-  const ignoreStrategy: IgnoreStrategy = topology === 'embedded' ? 'none' : 'project-gitignore';
+  const projectMemoryExists = memoryExists(cwd);
+  const existingConfig = projectMemoryExists ? loadExistingConfig(cwd, storageDir) : undefined;
+  const topology = resolveTopology(options.topology, existingConfig?.topology);
+  const ignoreStrategy = resolveIgnoreStrategy(topology, existingConfig?.ignore_strategy);
   const skipAgentBootstrap = options.skipAgentBootstrap === true || process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   const skipAiSurfaceScan = testMode || options.noAiScan === true || options.aiScan === false;
-
-  if (memoryExists(cwd) && !options.force) {
-    console.error('Error: project memory already exists. Use --force to overwrite.');
-    process.exit(1);
-  }
 
   // Derive project name from directory
   const projectName = path.basename(cwd);
@@ -97,8 +94,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     && process.env.BRAINCLAW_SKIP_REPO_ANALYSIS !== '1';
   const analysis = shouldAnalyzeRepo ? analyzeRepository(cwd) : undefined;
 
-  const projectMode = await resolveProjectMode(options, analysis);
-  const projectStrategy = await resolveProjectStrategy(options, projectMode);
+  const projectMode = await resolveProjectMode(options, analysis, existingConfig?.project_mode);
+  const projectStrategy = await resolveProjectStrategy(options, projectMode, existingConfig?.projects?.strategy);
 
   ensureMemoryDir(cwd, storageDir);
 
@@ -144,19 +141,21 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     storageDir,
     topology,
   });
-  const config = defaultConfig(projectName, {
-    projectId: projectIdentity.project_id,
-    currentAgent: currentAgent.agent_name,
-    currentAgentId: currentAgent.agent_id,
+  const config = buildInitConfig({
+    projectName,
+    projectIdentity,
+    currentAgent: {
+      name: currentAgent.agent_name,
+      id: currentAgent.agent_id,
+    },
     projectMode,
     projectStrategy,
     storageDir,
     topology,
     ignoreStrategy,
+    existingConfig: options.force ? undefined : existingConfig,
+    compact: options.compact === true,
   });
-  if (options.compact) {
-    config.markdown = { max_items_per_section: 20, compact_mode: true };
-  }
   if (detectedAi && isAgentIntegrationName(detectedAi.name)) {
     upsertAgentIntegrationDeclaration(config, detectedAi.name, 'detected');
   }
@@ -212,8 +211,17 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     ensureGitignoreEntries(cwd, ['AGENTS.md', '.github/copilot-instructions.md', ...generatedWorkspacePaths, ...BRAINCLAW_EXCLUSIVE_DIRECTORIES]);
   }
 
-  console.log(`✔ Initialized project memory in ${storageDir}/`);
-  console.log('✔ Created project.md, config.yaml, and split state directories');
+  if (projectMemoryExists) {
+    console.log(`✔ Refreshed existing project memory in ${storageDir}/`);
+    if (options.force) {
+      console.log('✔ Existing memory preserved; rebuilt managed configuration and agent integration files from defaults');
+    } else {
+      console.log('✔ Existing memory preserved; refreshed managed configuration and agent integration files');
+    }
+  } else {
+    console.log(`✔ Initialized project memory in ${storageDir}/`);
+    console.log('✔ Created project.md, config.yaml, and split state directories');
+  }
   console.log(`✔ Project ID: ${projectIdentity.project_id}`);
   console.log(`✔ Current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
   if (registeredAiAgent) {
@@ -316,6 +324,11 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   }
 
   console.log('');
+  if (projectMemoryExists) {
+    console.log(`Tip: run 'brainclaw enable-agent <agent-name>' when you want to explicitly add another agent to this existing project.`);
+  } else {
+    console.log(`Tip: run 'brainclaw init' again later to refresh the detected agent's integration files on this project.`);
+  }
   console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);
 }
 
@@ -384,8 +397,20 @@ function looksLikeBrainclawStore(storePath: string): boolean {
     || fs.existsSync(path.join(storePath, '.git'));
 }
 
-function resolveTopology(topology?: TopologyMode): TopologyMode {
-  return topology ?? 'embedded';
+function resolveTopology(topology?: TopologyMode, existingTopology?: TopologyMode): TopologyMode {
+  return topology ?? existingTopology ?? 'embedded';
+}
+
+function resolveIgnoreStrategy(topology: TopologyMode, existingIgnoreStrategy?: IgnoreStrategy): IgnoreStrategy {
+  return existingIgnoreStrategy ?? (topology === 'embedded' ? 'none' : 'project-gitignore');
+}
+
+function loadExistingConfig(cwd: string, storageDir: string): Config | undefined {
+  try {
+    return loadConfig(cwd, storageDir);
+  } catch {
+    return undefined;
+  }
 }
 
 function ensureProjectGitignore(cwd: string, storageDir: string): void {
@@ -405,9 +430,14 @@ function ensureProjectGitignore(cwd: string, storageDir: string): void {
 async function resolveProjectMode(
   options: InitOptions,
   analysis: ReturnType<typeof analyzeRepository> | undefined,
+  existingProjectMode?: ProjectMode,
 ): Promise<ProjectMode> {
   if (options.projectMode) {
     return options.projectMode;
+  }
+
+  if (existingProjectMode) {
+    return existingProjectMode;
   }
 
   if (options.yes || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -438,6 +468,7 @@ async function resolveProjectMode(
 async function resolveProjectStrategy(
   options: InitOptions,
   projectMode: ProjectMode,
+  existingProjectStrategy?: ProjectStrategy,
 ): Promise<ProjectStrategy> {
   if (options.projectStrategy) {
     return options.projectStrategy;
@@ -445,6 +476,10 @@ async function resolveProjectStrategy(
 
   if (projectMode !== 'multi-project') {
     return 'manual';
+  }
+
+  if (existingProjectStrategy) {
+    return existingProjectStrategy;
   }
 
   if (options.yes || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -497,4 +532,121 @@ function parseProjectStrategy(value: string): ProjectStrategy | undefined {
     default:
       return undefined;
   }
+}
+
+function buildInitConfig(input: {
+  projectName: string;
+  projectIdentity: { project_id: string };
+  currentAgent: { name: string; id: string };
+  projectMode: ProjectMode;
+  projectStrategy: ProjectStrategy;
+  storageDir: string;
+  topology: TopologyMode;
+  ignoreStrategy: IgnoreStrategy;
+  existingConfig?: Config;
+  compact: boolean;
+}): Config {
+  const fallbackConfig = defaultConfig(input.projectName, {
+    projectId: input.projectIdentity.project_id,
+    currentAgent: input.currentAgent.name,
+    currentAgentId: input.currentAgent.id,
+    projectMode: input.projectMode,
+    projectStrategy: input.projectStrategy,
+    storageDir: input.storageDir,
+    topology: input.topology,
+    ignoreStrategy: input.ignoreStrategy,
+  });
+  const config = input.existingConfig
+    ? mergeConfigWithDefaults(input.existingConfig, fallbackConfig)
+    : fallbackConfig;
+  const projects = config.projects ?? fallbackConfig.projects;
+
+  config.project_name = input.projectName;
+  config.project_id = input.projectIdentity.project_id;
+  config.current_agent = input.currentAgent.name;
+  config.current_agent_id = input.currentAgent.id;
+  config.storage_dir = input.storageDir;
+  config.topology = input.topology;
+  config.ignore_strategy = input.ignoreStrategy;
+  config.project_mode = input.projectMode;
+  config.projects = {
+    ...projects,
+    strategy: input.projectStrategy,
+    known: projects.known ?? fallbackConfig.projects.known,
+  };
+
+  if (input.compact) {
+    const markdown = config.markdown ?? fallbackConfig.markdown ?? {
+      max_items_per_section: 20,
+      compact_mode: false,
+    };
+    config.markdown = {
+      ...markdown,
+      compact_mode: true,
+      max_items_per_section: Math.min(markdown.max_items_per_section, 20),
+    };
+  }
+
+  return config;
+}
+
+function mergeConfigWithDefaults(existingConfig: Config, fallbackConfig: Config): Config {
+  return ConfigSchema.parse({
+    ...fallbackConfig,
+    ...existingConfig,
+    projects: {
+      ...fallbackConfig.projects,
+      ...(existingConfig.projects ?? {}),
+      known: existingConfig.projects?.known ?? fallbackConfig.projects.known,
+    },
+    redaction: {
+      ...fallbackConfig.redaction,
+      ...(existingConfig.redaction ?? {}),
+      patterns: existingConfig.redaction?.patterns ?? fallbackConfig.redaction.patterns,
+    },
+    security: existingConfig.security
+      ? {
+          ...fallbackConfig.security,
+          ...existingConfig.security,
+        }
+      : fallbackConfig.security,
+    markdown: existingConfig.markdown
+      ? {
+          ...fallbackConfig.markdown,
+          ...existingConfig.markdown,
+        }
+      : fallbackConfig.markdown,
+    reflective_memory: existingConfig.reflective_memory
+      ? {
+          ...fallbackConfig.reflective_memory,
+          ...existingConfig.reflective_memory,
+        }
+      : fallbackConfig.reflective_memory,
+    governance: fallbackConfig.governance
+      ? {
+          ...fallbackConfig.governance,
+          ...existingConfig.governance,
+          curators: existingConfig.governance?.curators ?? fallbackConfig.governance.curators,
+        }
+      : existingConfig.governance,
+    reputation: existingConfig.reputation
+      ? {
+          ...fallbackConfig.reputation,
+          ...existingConfig.reputation,
+        }
+      : fallbackConfig.reputation,
+    agent_integrations: {
+      ...fallbackConfig.agent_integrations,
+      ...(existingConfig.agent_integrations ?? {}),
+      declarations: existingConfig.agent_integrations?.declarations ?? fallbackConfig.agent_integrations.declarations,
+    },
+    claims: existingConfig.claims
+      ? {
+          ...fallbackConfig.claims,
+          ...existingConfig.claims,
+        }
+      : fallbackConfig.claims,
+    sensitive_paths: existingConfig.sensitive_paths ?? fallbackConfig.sensitive_paths,
+    cross_project_links: existingConfig.cross_project_links ?? fallbackConfig.cross_project_links,
+  });
 }

@@ -4,7 +4,14 @@ brainclaw integrates with OpenAI's Codex CLI through MCP tools and shared instru
 
 ## Auto-setup
 
-`brainclaw init` detects Codex (the presence of `~/.codex/`) and writes `AGENTS.md` to the project root. The MCP server is registered machine-wide at `~/.codex/mcp-config.json`. To regenerate manually:
+Codex setup is split across machine and project scope:
+
+- `brainclaw setup-machine --agents codex --yes` writes the machine-level MCP config at `~/.codex/config.toml`
+- `brainclaw init` creates or refreshes the current project's Brainclaw state and writes `AGENTS.md`
+
+If the project already has `.brainclaw/`, rerunning `brainclaw init` is safe and refreshes the managed Brainclaw/Codex files for the current machine.
+
+To regenerate project instructions manually:
 
 ```bash
 brainclaw export --format agents-md --write
@@ -12,17 +19,13 @@ brainclaw export --format agents-md --write
 
 ## MCP configuration
 
-Codex reads MCP servers from a machine-level config (`~/.codex/mcp-config.json` on most installs). brainclaw is registered as:
+Codex reads MCP servers from a machine-level config (`~/.codex/config.toml` on most installs). brainclaw is registered as:
 
-```json
-{
-  "mcpServers": {
-    "brainclaw": {
-      "command": "npx",
-      "args": ["-y", "brainclaw@latest", "mcp"]
-    }
-  }
-}
+```toml
+[mcp_servers.brainclaw]
+command = "npx"
+args = ["-y", "brainclaw@latest", "mcp"]
+startup_timeout_ms = 20000
 ```
 
 Per-session MCP config can also be passed via `--additional-mcp-config @<file>` when invoking Codex.

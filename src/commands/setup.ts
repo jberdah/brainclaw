@@ -38,6 +38,11 @@ export interface SetupOptions {
   yes?: boolean;
 }
 
+export interface SetupMachineOptions {
+  agents?: string;
+  yes?: boolean;
+}
+
 export interface RepoInfo {
   path: string;
   name: string;
@@ -354,6 +359,103 @@ export function printReloadReminder(detectedAgent: string | undefined): void {
   }
 }
 
+function logDetectedAgentSurfaces(
+  detectedName: string | undefined,
+  detectedSurfaces: ReturnType<typeof buildAiSurfaceInventory>,
+): void {
+  console.log('');
+  if (detectedName) {
+    console.log(`Detected AI agent: ${detectedName}`);
+  } else {
+    console.log('No AI agent detected automatically.');
+  }
+  const visibleSurfaces = detectedSurfaces.filter((surface) => surface.status !== 'not_detected');
+  if (visibleSurfaces.length > 0) {
+    console.log('Other AI work surfaces on this machine:');
+    for (const surface of visibleSurfaces) {
+      console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
+    }
+    const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
+    if (usageHints.length > 0) {
+      console.log('');
+      console.log('Suggested uses:');
+      for (const line of usageHints) {
+        console.log(`  ${line}`);
+      }
+    }
+    console.log('');
+    console.log('These surfaces are tracked separately from coding agents and will use tailored onboarding flows.');
+  }
+}
+
+async function resolveSelectedAgentsForSetup(
+  options: { agents?: string; yes?: boolean },
+  detectedName: string | undefined,
+): Promise<string[]> {
+  console.log('Supported agents:');
+  ALL_KNOWN_AGENTS.forEach((a, i) => {
+    const tag = a === detectedName ? ' ← detected' : '';
+    console.log(`  ${i + 1}) ${a}${tag}`);
+  });
+
+  let agentChoice: string;
+  if (options.agents) {
+    agentChoice = options.agents;
+  } else if (options.yes || !process.stdin.isTTY) {
+    agentChoice = detectedName ? 'detected' : 'all';
+  } else {
+    const defaultChoice = detectedName ? 'detected' : 'all';
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      agentChoice = (await rl.question(`Configure agents: (d)etected, (a)ll, or numbers e.g. 1,3 [${defaultChoice}]: `)).trim() || defaultChoice;
+    } finally {
+      rl.close();
+    }
+  }
+
+  const selectedAgents = parseAgentSelection(agentChoice, detectedName);
+  console.log(`Selected agents: ${selectedAgents.length === 0 ? '(none)' : selectedAgents.join(', ')}`);
+  return selectedAgents;
+}
+
+export async function runSetupMachine(options: SetupMachineOptions = {}): Promise<void> {
+  const env = process.env;
+  const detectedAi = detectAiAgent(env);
+  const detectedName = detectedAi?.name;
+  const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
+  const detectedSurfaces = testMode ? [] : buildAiSurfaceInventory();
+
+  console.log(BRAINCLAW_ASCII);
+  console.log('Machine bootstrap only — no repositories will be scanned or initialized.');
+  logDetectedAgentSurfaces(detectedName, detectedSurfaces);
+
+  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName);
+
+  console.log('\n→ Installing machine-level brainclaw prerequisites...');
+  const written = runGlobalInstall(selectedAgents, env);
+  if (written.length > 0) {
+    for (const filePath of written) {
+      console.log(`  ✔ ${filePath}`);
+    }
+  } else {
+    console.log('  (all machine-level prerequisites already up to date)');
+  }
+
+  installVscodeExtension();
+
+  writeSetupState({
+    completed_at: new Date().toISOString(),
+    roots: [],
+    initialised_repos: [],
+    global_configs_written: selectedAgents,
+  }, env);
+
+  printReloadReminder(detectedName);
+  console.log('');
+  console.log('Next step: run `brainclaw init` inside the project you want to create or refresh.');
+  console.log('If the project already has .brainclaw/ and you want to register another agent explicitly, run `brainclaw enable-agent <agent-name>` there.');
+}
+
 // ─── Main CLI wizard ──────────────────────────────────────────────────────────
 
 export async function runSetup(options: SetupOptions = {}): Promise<void> {
@@ -451,52 +553,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   const detectedName = detectedAi?.name;
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   const detectedSurfaces = testMode ? [] : buildAiSurfaceInventory();
-  console.log('');
-  if (detectedName) {
-    console.log(`Detected AI agent: ${detectedName}`);
-  } else {
-    console.log('No AI agent detected automatically.');
-  }
-  const visibleSurfaces = detectedSurfaces.filter((surface) => surface.status !== 'not_detected');
-  if (visibleSurfaces.length > 0) {
-    console.log('Other AI work surfaces on this machine:');
-    for (const surface of visibleSurfaces) {
-      console.log(`  - ${surface.display_name} [${surface.surface_kind}, ${surface.status}]`);
-    }
-    const usageHints = renderAiSurfaceUsageHints(visibleSurfaces);
-    if (usageHints.length > 0) {
-      console.log('');
-      console.log('Suggested uses:');
-      for (const line of usageHints) {
-        console.log(`  ${line}`);
-      }
-    }
-    console.log('');
-    console.log('These surfaces are tracked separately from coding agents and will use tailored onboarding flows.');
-  }
-  console.log('Supported agents:');
-  ALL_KNOWN_AGENTS.forEach((a, i) => {
-    const tag = a === detectedName ? ' ← detected' : '';
-    console.log(`  ${i + 1}) ${a}${tag}`);
-  });
-
-  let agentChoice: string;
-  if (options.agents) {
-    agentChoice = options.agents;
-  } else if (options.yes || !process.stdin.isTTY) {
-    agentChoice = detectedName ? 'detected' : 'all';
-  } else {
-    const defaultChoice = detectedName ? 'detected' : 'all';
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      agentChoice = (await rl.question(`Configure agents: (d)etected, (a)ll, or numbers e.g. 1,3 [${defaultChoice}]: `)).trim() || defaultChoice;
-    } finally {
-      rl.close();
-    }
-  }
-
-  const selectedAgents = parseAgentSelection(agentChoice, detectedName);
-  console.log(`Selected agents: ${selectedAgents.length === 0 ? '(none)' : selectedAgents.join(', ')}`);
+  logDetectedAgentSurfaces(detectedName, detectedSurfaces);
+  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName);
 
   // Step 5: Global install
   console.log('\n→ Installing global brainclaw prerequisites...');

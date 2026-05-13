@@ -182,18 +182,18 @@ describe('brainclaw CLI', () => {
       assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')));
     });
 
-    it('refuses to overwrite without --force', () => {
-      run(['init', '-y'], dir);
-      const res = run(['init', '-y'], dir);
-      assert.equal(res.exitCode, 1);
-      assert.ok(res.stderr.includes('already exists'));
+    it('refreshes an existing project safely without --force', () => {
+      run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      const res = run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      assert.equal(res.exitCode, 0);
+      assert.ok(res.stdout.includes('Refreshed existing project memory'));
     });
 
-    it('overwrites with --force', () => {
-      run(['init', '-y'], dir);
-      const res = run(['init', '--force'], dir);
+    it('rebuilds managed initialization with --force', () => {
+      run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      const res = run(['init', '--force'], dir, { BRAINCLAW_TEST_MODE: '1' });
       assert.equal(res.exitCode, 0);
-      assert.ok(res.stdout.includes('Initialized'));
+      assert.ok(res.stdout.includes('Refreshed existing project memory'));
     });
 
     it('detects AGENTS.md', () => {
@@ -257,6 +257,36 @@ describe('brainclaw CLI', () => {
 
       const secondConfig = readConfig(dir);
       assert.equal(secondConfig.project_id, firstConfig.project_id);
+    });
+
+    it('preserves non-managed config when init upserts an existing project', () => {
+      run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+      const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, any>;
+      config.markdown = { ...config.markdown, max_items_per_section: 42 };
+      config.claims = { ...config.claims, auto_release_after_hours: 72 };
+      fs.writeFileSync(configPath, YAML.stringify(config), 'utf-8');
+
+      const res = run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      assert.equal(res.exitCode, 0, res.stderr);
+
+      const updated = readConfig(dir);
+      assert.equal(updated.markdown.max_items_per_section, 42);
+      assert.equal(updated.claims.auto_release_after_hours, 72);
+    });
+
+    it('resets managed config defaults when init is forced', () => {
+      run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+      const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, any>;
+      config.claims = { ...config.claims, auto_release_after_hours: 72 };
+      fs.writeFileSync(configPath, YAML.stringify(config), 'utf-8');
+
+      const res = run(['init', '--force'], dir, { BRAINCLAW_TEST_MODE: '1' });
+      assert.equal(res.exitCode, 0, res.stderr);
+
+      const updated = readConfig(dir);
+      assert.equal(updated.claims.auto_release_after_hours, 24);
     });
 
     it('stores explicit multi-project init options', () => {

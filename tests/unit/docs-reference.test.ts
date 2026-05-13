@@ -19,6 +19,7 @@ describe('documentation reference drift', () => {
   it('documents the operational CLI commands that recently drifted', () => {
     const cli = readRepoFile('docs', 'cli.md');
     for (const heading of [
+      '### `brainclaw setup-machine`',
       '### `brainclaw runtime-status`',
       '### `brainclaw check-security`',
       '### `brainclaw setup-security`',

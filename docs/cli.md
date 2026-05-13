@@ -64,7 +64,7 @@ brainclaw --cwd /other/path status   # one-off override without switching
 
 ### `brainclaw setup`
 
-Global onboarding wizard — detects AI agents, installs global Brainclaw prerequisites, installs agent/MCP config, gitignores generated workspace-local integration files, and initialises multiple repositories in one pass. This is the required machine-level bootstrap before `brainclaw init`. It scans each root itself plus its direct child repositories, and ignores internal Brainclaw memory repos such as `.brainclaw/`.
+Global onboarding wizard — bootstraps the machine, detects AI agents, installs global Brainclaw prerequisites, writes agent/MCP config, gitignores generated workspace-local integration files, and initialises multiple repositories in one pass. It scans each root itself plus its direct child repositories, and ignores internal Brainclaw memory repos such as `.brainclaw/`.
 
 | Option | Description |
 |---|---|
@@ -84,14 +84,33 @@ brainclaw setup --roots ~/Projects,~/work --agents all  # all agents, multiple r
 
 ---
 
+### `brainclaw setup-machine`
+
+Machine-only onboarding. Detects available agents, writes the machine-level MCP/user config Brainclaw manages, refreshes machine inventory, and stops there — no repository scan, no `.brainclaw/` init in the current working tree.
+
+| Option | Description |
+|---|---|
+| `--agents <agents>` | Agents to configure: `all`, `detected`, or comma-separated names |
+| `-y, --yes` | Accept all defaults non-interactively |
+
+```bash
+brainclaw setup-machine
+brainclaw setup-machine --yes
+brainclaw setup-machine --agents codex,cursor
+```
+
+Use this when Brainclaw is new on the current machine and you want to make the MCP surface visible to your coding agent before touching any project. The usual follow-up is `brainclaw init` inside the project you want to create or refresh.
+
+---
+
 ### `brainclaw init`
 
-Initialize workspace state for the current project root. Detects the AI agent environment, writes to its native instruction file, and installs a git post-merge hook for automatic claim release. `brainclaw setup` must have been run first on this machine. Do not run `init` from inside `.brainclaw/`; that directory is Brainclaw's own memory store, not a project root.
+Create or refresh Brainclaw state for the current project root. Detects the AI agent environment, writes or refreshes its native instruction file, and installs a git post-merge hook for automatic claim release. `init` is now safe to rerun on an already initialized project: it preserves canonical memory and refreshes the managed Brainclaw and detected-agent files. Do not run `init` from inside `.brainclaw/`; that directory is Brainclaw's own memory store, not a project root.
 
 | Option | Description |
 |---|---|
 | `-y, --yes` | Non-interactive, accept all defaults |
-| `--force` | Overwrite existing initialization |
+| `--force` | Rebuild managed initialization from Brainclaw defaults while preserving canonical memory data |
 | `--compact` | Generate a compact instruction file |
 | `--topology <value>` | Storage topology (e.g. `sidecar` to store outside the repo) |
 | `--project-mode <value>` | Project mode (e.g. `multi-project`) |
@@ -106,6 +125,12 @@ brainclaw init --force
 brainclaw init --topology sidecar
 brainclaw init --project-mode multi-project --project-strategy folder
 ```
+
+Common onboarding split:
+
+- new machine → `brainclaw setup-machine --yes`
+- current project (new or already using Brainclaw) → `brainclaw init`
+- explicit second agent on an existing Brainclaw project → `brainclaw enable-agent <agent-name>`
 
 ### `brainclaw machine-profile`
 

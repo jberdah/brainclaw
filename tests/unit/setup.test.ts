@@ -117,6 +117,20 @@ describe('setup/init guardrails', () => {
     assert.ok(fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')), 'project should be initialized');
   });
 
+  it('setup-machine bootstraps machine state without initializing the current repo', () => {
+    const setupResult = run(['setup-machine', '--yes', '--agents', 'codex,continue'], dir, {
+      BRAINCLAW_SKIP_SETUP_REQUIREMENT: '0',
+    });
+
+    assert.equal(setupResult.exitCode, 0, setupResult.stderr);
+    assert.ok(fs.existsSync(path.join(testHomeDir, '.brainclaw', 'config.yaml')), 'user store should exist after setup-machine');
+    assert.ok(fs.existsSync(path.join(testHomeDir, '.brainclaw', 'setup.json')), 'setup state should exist after setup-machine');
+    assert.ok(fs.existsSync(path.join(testHomeDir, '.codex', 'config.toml')), 'Codex config should be written at machine scope');
+    assert.ok(fs.existsSync(path.join(testHomeDir, '.continue', 'config.json')), 'Continue config should be written at machine scope');
+    assert.ok(!fs.existsSync(path.join(dir, '.brainclaw', 'config.yaml')), 'setup-machine should not initialize the current repo');
+    assert.match(setupResult.stdout, /Machine bootstrap only/i);
+  });
+
   // Skipped: same ETIMEDOUT class as the "setup re-entry" test above —
   // the first `setup --yes` call hangs under the 45s CLI budget on both
   // Windows and Linux CI, which masks the actual init-refuses assertion.

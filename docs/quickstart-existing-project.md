@@ -9,10 +9,14 @@ If the repo is brand new and `.brainclaw/` is absent, see [quickstart.md](quicks
 | Situation | Use |
 |---|---|
 | Repo has no `.brainclaw/` | [quickstart.md](quickstart.md) (`brainclaw init`) |
-| Repo has `.brainclaw/`, you've never worked here | **this page** (`brainclaw enable-agent` + discovery) |
+| Repo has `.brainclaw/`, you've never worked here | **this page** (`brainclaw init` upsert + discovery) |
 | Repo has memory but it was scraped from docs/git, not curated | [bootstrap](concepts/workspace-bootstrapping.md) (`brainclaw bootstrap --apply`) |
 
-The three commands target different lifecycle stages: `init` creates, `bootstrap` extracts, `enable-agent` joins.
+The three commands now target different lifecycle stages:
+- `setup-machine` bootstraps the current machine
+- `init` creates or refreshes project setup safely
+- `bootstrap` extracts project context into memory
+- `enable-agent` explicitly joins another agent to the same project
 
 ## Step 0 — verify your install is compatible
 
@@ -30,7 +34,23 @@ npm install -g brainclaw@latest
 
 (or pull the team's local-pack tarball from `.releases/` if the project doesn't publish to npm.)
 
-## Step 1 — register your agent on this project
+## Step 1 — bootstrap this machine if needed
+
+```bash
+brainclaw setup-machine --yes
+```
+
+Run this once on a fresh machine so Brainclaw can configure the agents it detects before you touch any project-level state.
+
+## Step 2 — refresh project setup for the current agent
+
+```bash
+brainclaw init
+```
+
+On a project that already has `.brainclaw/`, `brainclaw init` acts as a safe upsert. It preserves the existing memory and refreshes the managed Brainclaw and detected-agent files for the machine you're using now.
+
+If you want the explicit path for a different or additional agent, run:
 
 ```bash
 brainclaw enable-agent <agent-name>
@@ -38,15 +58,15 @@ brainclaw enable-agent <agent-name>
 
 `<agent-name>` is one of `claude-code`, `codex`, `copilot`, `cursor`, `cline`, `windsurf`, `continue`, `kilocode`, `roo`, `opencode`, `antigravity`, etc. (see [docs/integrations/overview.md](integrations/overview.md) for the full list).
 
-This command:
-- Detects the agent in your environment (env vars, installed CLIs, IDE)
+These commands:
+- Detect the agent in your environment (env vars, installed CLIs, IDE)
 - Writes the agent's native instruction file (`CLAUDE.md`, `.cursor/rules/`, `AGENTS.md`, etc.) from the project's current memory
 - Wires the MCP server config so the agent can call brainclaw at runtime
 - Adds the generated files to `.gitignore` (they're regenerated locally per developer)
 
 If you use multiple agents on the same project, run `enable-agent` once per agent.
 
-## Step 2 — read what already exists
+## Step 3 — read what already exists
 
 Before touching code, load the project's accumulated knowledge so you don't re-discover what others already learned.
 
@@ -74,7 +94,7 @@ For a narrower view focused on the area you're about to touch:
 bclaw_context(kind="memory", path="src/<area>/")
 ```
 
-## Step 3 — discover in-flight work
+## Step 4 — discover in-flight work
 
 Several things may be already underway when you arrive:
 
@@ -100,7 +120,7 @@ bclaw_context(kind="board")
 
 The board surfaces all four (plans, claims, sequences, handoffs) in one structured response.
 
-## Step 4 — pick what to work on
+## Step 5 — pick what to work on
 
 You have a few honest options:
 
@@ -110,7 +130,7 @@ You have a few honest options:
 
 In all three cases, the workflow is then the same: `bclaw_work(intent="execute", scope=…, planId=…)` opens a session, claims the scope (with an isolated git worktree), and loads the relevant context.
 
-## Step 5 — verify your setup is healthy before commiting changes
+## Step 6 — verify your setup is healthy before commiting changes
 
 Once you've started working, sanity-check:
 
@@ -124,7 +144,7 @@ This runs a series of checks: state validity, MCP runtime health (post-pln#478),
 
 - **Creating a new project** → [quickstart.md](quickstart.md)
 - **Extracting context from an existing repo without `.brainclaw/`** → [bootstrap](concepts/workspace-bootstrapping.md)
-- **Setting up brainclaw on your machine for the first time** → [docs/integrations/overview.md](integrations/overview.md) (the `brainclaw setup` flow)
+- **Setting up brainclaw on your machine for the first time** → [docs/integrations/overview.md](integrations/overview.md) (`brainclaw setup-machine` or the broader `brainclaw setup` flow)
 - **Recovering from a degraded state** → [docs/concepts/troubleshooting.md](concepts/troubleshooting.md)
 
 ## See also

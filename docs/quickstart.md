@@ -14,7 +14,15 @@ npm install -g brainclaw
 
 Requires Node.js 20+. Verify with `brainclaw --version`.
 
-## Step 2: Initialize your project
+## Step 2: Bootstrap this machine
+
+```bash
+brainclaw setup-machine --yes
+```
+
+This configures the agents Brainclaw can see on the current machine and writes the machine-level MCP/user files it manages. It does **not** initialize the current repository yet.
+
+## Step 3: Initialize or refresh your project
 
 ```bash
 cd your-project
@@ -22,16 +30,22 @@ brainclaw init
 ```
 
 **What happens:**
-- Creates `.brainclaw/` directory (project memory store)
+- Creates `.brainclaw/` when the project is new, or refreshes it safely when it already exists
 - Detects your coding agent (Claude Code, Codex, Cursor, Copilot, Cline, Mistral Vibe, etc.)
-- Writes MCP configuration for the detected agent
+- Refreshes the detected agent's project and machine integration files when applicable
 - Writes instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/brainclaw.md`, etc.)
 - Installs session hooks (if supported by your agent)
 - Adds `.brainclaw/` to `.gitignore`
 
-If you have multiple repos, use `brainclaw setup --yes` instead — it scans your project directories and initializes everything at once.
+If you want the explicit path for a second or late-arriving agent on an already initialized project, use:
 
-## Step 3: Restart your agent
+```bash
+brainclaw enable-agent <agent-name>
+```
+
+If you have multiple repos, use `brainclaw setup --yes` instead — it bootstraps the machine, scans your project directories, and initializes everything at once.
+
+## Step 4: Restart your agent
 
 Your coding agent needs to reload to pick up the new MCP configuration.
 
@@ -44,7 +58,7 @@ Your coding agent needs to reload to pick up the new MCP configuration.
 | **Windsurf** | Reload the editor |
 | **Copilot** | Reload VS Code window (uses instruction file, not MCP) |
 
-## Step 4: Verify it works
+## Step 5: Verify it works
 
 After reloading, tell your agent:
 
@@ -62,7 +76,7 @@ brainclaw agent-board     # what each agent sees
 brainclaw context         # current project memory
 ```
 
-## Step 5: Start using brainclaw
+## Step 6: Start using brainclaw
 
 ### For agents with MCP (most agents)
 

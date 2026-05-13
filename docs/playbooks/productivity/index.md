@@ -90,7 +90,7 @@ Context profiles are hardcoded in `context.ts` with fixed section weights (plans
 **Impact:** If an agent writes bad memory, cleanup is manual and item-by-item.
 
 ### No init repair path
-If `brainclaw init` partially fails or produces a bad config, there is no `brainclaw repair` command. Re-init requires `--force` which risks destroying existing memory. `bclaw_doctor` checks for issues but auto-repairs very little.
+If `brainclaw init` partially fails or produces a bad config, there is still no focused `brainclaw repair-init` path. Re-running `brainclaw init` is now a safe upsert for existing projects, and `--force` rebuilds the managed setup from defaults while preserving canonical memory, but `bclaw_doctor` still auto-repairs very little.
 **Impact:** Corrupted setups require manual intervention that non-tech creators cannot do.
 
 ### Cross-project learning is manual only
