@@ -346,6 +346,41 @@ describe('core/store-resolution', () => {
       }
     });
 
+    it('lets active project override BRAINCLAW_CWD workspace binding', () => {
+      const workspace = tmpDir('bclaw-effective-');
+      try {
+        makeStore(workspace, 'workspace');
+        saveConfig(defaultConfig('workspace'), workspace);
+
+        const child = path.join(workspace, 'apps', 'lodestar');
+        fs.mkdirSync(child, { recursive: true });
+        makeStore(child, 'repo');
+        saveConfig(defaultConfig('lodestar'), child);
+
+        saveActiveProject(workspace, {
+          path: child,
+          name: 'lodestar',
+          switched_at: new Date().toISOString(),
+        });
+
+        const originalEnv = process.env.BRAINCLAW_CWD;
+        process.env.BRAINCLAW_CWD = workspace;
+        try {
+          const resolved = resolveEffectiveCwd();
+          assert.equal(resolved, path.resolve(child));
+        } finally {
+          if (originalEnv === undefined) {
+            delete process.env.BRAINCLAW_CWD;
+          } else {
+            process.env.BRAINCLAW_CWD = originalEnv;
+          }
+        }
+      } finally {
+        clearActiveProject(workspace);
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
     it('ignores BRAINCLAW_CWD when path has no brainclaw store', () => {
       const workspace = tmpDir('bclaw-effective-');
       const bogus = tmpDir('bclaw-bogus-');

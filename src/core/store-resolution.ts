@@ -135,6 +135,8 @@ export function resolveTargetStore(
 export interface ResolveEffectiveCwdOptions {
   /** Explicit --cwd flag value (highest priority). */
   explicitCwd?: string;
+  /** Base cwd used to resolve session/global active project state. */
+  baseCwd?: string;
   /** Store chain options passed through to resolveStoreChain. */
   storeChainOptions?: ResolveStoreChainOptions;
 }
@@ -144,36 +146,42 @@ export interface ResolveEffectiveCwdOptions {
  *
  * Priority:
  * 1. explicitCwd (--cwd flag)
- * 2. BRAINCLAW_CWD env var → absolute workspace path injected by MCP configs
- * 3. BRAINCLAW_PROJECT env var → resolved by name/path from workspace
- * 4. Session-scoped active project (from .current-session)
+ * 2. BRAINCLAW_CWD env var → workspace anchor injected by MCP configs
+ * 3. BRAINCLAW_PROJECT env var → resolved by name/path from workspace anchor
+ * 4. Session-scoped active project (from .current-session under the anchor)
  * 5. Global active-project.json in workspace root
- * 6. process.cwd()
+ * 6. Workspace anchor or process.cwd()
  */
 export function resolveEffectiveCwd(
   options: ResolveEffectiveCwdOptions = {},
 ): string {
+  const baseCwd = path.resolve(options.baseCwd ?? process.cwd());
+
   // 1. Explicit --cwd flag
   if (options.explicitCwd) {
     return path.resolve(options.explicitCwd);
   }
 
-  // 2. BRAINCLAW_CWD env var — set by MCP configs to bind to the workspace
-  //    regardless of the IDE's process.cwd() at launch time
+  // 2. BRAINCLAW_CWD env var — set by MCP configs to anchor resolution to the
+  //    workspace regardless of the IDE's process.cwd() at launch time. It is a
+  //    workspace anchor, not the final answer: session/global active project
+  //    state still overrides it.
+  let anchorCwd = baseCwd;
   const envCwd = process.env.BRAINCLAW_CWD?.trim();
-  if (envCwd && fs.existsSync(path.join(path.resolve(envCwd), MEMORY_DIR, 'config.yaml'))) {
-    return path.resolve(envCwd);
+  const hasEnvWorkspace = !!envCwd && fs.existsSync(path.join(path.resolve(envCwd), MEMORY_DIR, 'config.yaml'));
+  if (hasEnvWorkspace) {
+    anchorCwd = path.resolve(envCwd);
   }
 
   // 3. BRAINCLAW_PROJECT env var
   const envProject = process.env.BRAINCLAW_PROJECT;
   if (envProject) {
-    const resolved = resolveProjectRef(envProject, process.cwd(), options.storeChainOptions);
+    const resolved = resolveProjectRef(envProject, anchorCwd, options.storeChainOptions);
     if (resolved) return resolved;
   }
 
-  // 3. Session-scoped active project (per-agent, no cross-agent interference)
-  const session = loadCurrentSession(process.cwd());
+  // 4. Session-scoped active project (per-agent, no cross-agent interference)
+  const session = loadCurrentSession(anchorCwd);
   if (session?.active_project) {
     const sp = session.active_project;
     if (fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
@@ -181,8 +189,8 @@ export function resolveEffectiveCwd(
     }
   }
 
-  // 4. Global active-project.json from workspace root
-  const wsRoot = resolveWorkspaceRoot(process.cwd(), options.storeChainOptions);
+  // 5. Global active-project.json from workspace root
+  const wsRoot = hasEnvWorkspace ? anchorCwd : resolveWorkspaceRoot(anchorCwd, options.storeChainOptions);
   if (wsRoot) {
     const active = loadActiveProject(wsRoot);
     if (active && fs.existsSync(path.join(active.path, MEMORY_DIR, 'config.yaml'))) {
@@ -190,8 +198,8 @@ export function resolveEffectiveCwd(
     }
   }
 
-  // 5. Default
-  return process.cwd();
+  // 6. Default
+  return anchorCwd;
 }
 
 /**
@@ -217,9 +225,15 @@ export function resolveProjectRef(
   cwd: string = process.cwd(),
   storeChainOptions?: ResolveStoreChainOptions,
 ): string | undefined {
+  const envWorkspace = process.env.BRAINCLAW_CWD?.trim();
+  const workspaceAnchor = envWorkspace && fs.existsSync(path.join(path.resolve(envWorkspace), MEMORY_DIR, 'config.yaml'))
+    ? path.resolve(envWorkspace)
+    : undefined;
+
   // Walk UP from real cwd to find the outermost .brainclaw/ — this avoids
   // circular resolution when an active project narrows the workspace view.
-  const wsRoot = findOutermostBrainclawRoot(process.cwd())
+  const wsRoot = workspaceAnchor
+    ?? findOutermostBrainclawRoot(cwd)
     ?? resolveWorkspaceRoot(cwd, storeChainOptions);
   if (!wsRoot) return undefined;
 

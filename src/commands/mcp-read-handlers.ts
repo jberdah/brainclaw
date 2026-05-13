@@ -100,7 +100,10 @@ export function handleMcpReadToolCall(
   args: Record<string, unknown> = {},
   context: McpReadToolContext = {},
 ): McpToolResponse {
-  let cwd = context.cwd ?? resolveEffectiveCwd();
+  const baseCwd = context.cwd ?? process.cwd();
+  let cwd = name === 'bclaw_switch'
+    ? baseCwd
+    : resolveEffectiveCwd({ baseCwd });
 
   // If a project param is provided, resolve it to an actual cwd override.
   // resolveProjectCwd unifies cross_project_links (siblings/peers) AND
@@ -108,14 +111,15 @@ export function handleMcpReadToolCall(
   // visibly as a tool error rather than silently falling back to the
   // current project, which would mislead the caller.
   const projectArg = args.project as string | undefined;
-  if (projectArg) {
-    cwd = resolveProjectCwd(projectArg, cwd);
+  const targetProjectArg = name === 'bclaw_switch' ? undefined : projectArg;
+  if (targetProjectArg) {
+    cwd = resolveProjectCwd(targetProjectArg, cwd);
   }
 
   if (name === 'bclaw_get_context') {
     const result = buildContext({
       target: args.path as string | undefined,
-      project: projectArg,
+      project: targetProjectArg,
       agent: args.agent as string | undefined,
       host: args.host as string | undefined,
       allHosts: args.allHosts as boolean | undefined,

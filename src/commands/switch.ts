@@ -298,6 +298,11 @@ function listProjects(wsRoot: string, json: boolean): void {
  * this returns the farthest one — the true multi-project workspace root.
  */
 function findOutermostWorkspaceRoot(startDir: string): string | undefined {
+  const envWorkspace = process.env.BRAINCLAW_CWD?.trim();
+  if (envWorkspace && memoryExists(path.resolve(envWorkspace))) {
+    return path.resolve(envWorkspace);
+  }
+
   let dir = path.resolve(startDir);
   const root = path.parse(dir).root;
   const home = process.env.HOME || process.env.USERPROFILE || root;

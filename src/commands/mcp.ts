@@ -6015,7 +6015,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
  * break tool execution.
  */
 export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
-  const { cwd } = payload;
+  const baseCwd = payload.cwd;
+  const cwd = payload.name === 'bclaw_switch'
+    ? baseCwd
+    : resolveEffectiveCwd({ baseCwd });
   const envClaimId = process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined;
 
   // ── Auto-session ────────────────────────────────────────────────────────────
@@ -6064,6 +6067,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
   // ── Delegate to inner handler ───────────────────────────────────────────────
   const outcome = await _executeMcpToolCallInner({
     ...payload,
+    cwd,
     connectionSessionId: effectiveConnectionSessionId,
   });
 

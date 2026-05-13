@@ -325,6 +325,60 @@ describe('MCP server', () => {
     }
   });
 
+  it('routes MCP writes to the switched child project store in a multi-project workspace', async () => {
+    run(['init', '-y', '--force', '--project-mode', 'multi-project', '--project-strategy', 'folder', '--no-analyze-repo'], dir);
+
+    const child = path.join(dir, 'applications', 'lodestar');
+    fs.mkdirSync(child, { recursive: true });
+    run(['init', '-y', '--no-analyze-repo'], child);
+
+    const proc = startMcp(dir, { BRAINCLAW_CWD: dir });
+    try {
+      await initializeMcp(proc);
+
+      const switched = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'switch-lodestar',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_switch',
+          arguments: {
+            project: 'applications/lodestar',
+          },
+        },
+      });
+
+      assert.equal(switched.result.isError, false);
+      assert.equal(switched.result.structuredContent.path, child);
+
+      const created = await sendMcpRequest(proc, {
+        jsonrpc: '2.0',
+        id: 'create-plan-in-child',
+        method: 'tools/call',
+        params: {
+          name: 'bclaw_create',
+          arguments: {
+            entity: 'plan',
+            data: {
+              text: 'Plan should follow active switched project',
+            },
+          },
+        },
+      });
+
+      assert.equal(created.result.isError, false);
+      const planId = created.result.structuredContent.id;
+      assert.match(planId, /^pln_[a-f0-9]+$/);
+
+      const childPlanPath = path.join(child, '.brainclaw', 'coordination', 'plans', `${planId}.json`);
+      const rootPlanPath = path.join(dir, '.brainclaw', 'coordination', 'plans', `${planId}.json`);
+      assert.equal(fs.existsSync(childPlanPath), true, 'plan should be written to the switched child store');
+      assert.equal(fs.existsSync(rootPlanPath), false, 'plan should not be written to the workspace store');
+    } finally {
+      await stopMcp(proc);
+    }
+  });
+
   it('returns the full catalog when tools/list requests catalog=all', async () => {
     const proc = startMcp(dir);
     try {
