@@ -48,6 +48,7 @@ import { cleanupStaleCandidates } from './core/candidates.js';
 import { runListClaims } from './commands/list-claims.js';
 import { runReleaseClaim } from './commands/release-claim.js';
 import { runClaimResource } from './commands/claim-resource.js';
+import { runAssignmentResource } from './commands/assignment-resource.js';
 import { runMemoryCommand } from './commands/memory.js';
 import { runReleaseClaims } from './commands/release-claims.js';
 import { runAgentBoard } from './commands/agent-board.js';
@@ -1109,6 +1110,27 @@ program
   .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
     runClaimResource(subcommand, args, { ...options, planStatus: options.planStatus, localOnly: options.localOnly });
+  });
+
+// --- assignment ---
+program
+  .command('assignment <subcommand> [args...]')
+  .description('Manage work assignments (list, show, update, cancel)')
+  .option('--json', 'Output as JSON for list/show')
+  .option('--all', 'Include terminal assignments in list')
+  .option('--status <status>', 'Status filter for list or target status for update')
+  .option('--agent <agent>', 'Filter by agent name')
+  .option('--claim <id>', 'Filter by linked claim ID')
+  .option('--plan <id>', 'Filter by linked plan ID')
+  .option('--sequence <id>', 'Filter by linked sequence ID')
+  .option('--reason <text>', 'Optional status reason for update/cancel')
+  .action((subcommand, args, options) => {
+    runAssignmentResource(subcommand, args, {
+      ...options,
+      claim: options.claim,
+      plan: options.plan,
+      sequence: options.sequence,
+    });
   });
 
 // --- list-claims ---

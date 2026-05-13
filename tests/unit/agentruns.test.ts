@@ -128,6 +128,35 @@ describe('AgentRun transitions', () => {
 });
 
 describe('syncAgentRunFromAssignmentTransition — guard against invalid transitions', () => {
+  it('syncs assignment cancellation to a cancelled agent run', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_sync_cancel',
+      agent: 'test-agent-cancel',
+      dispatcher_agent: 'dispatcher',
+      scope: 'src/sync-cancel',
+      description: 'Cancel sync test',
+    }, ws.dir);
+
+    const run = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: assignment.claim_id,
+      agent: 'test-agent-cancel',
+      transport: 'manual_command',
+      scope: assignment.scope,
+      description: 'Cancel sync run',
+    }, ws.dir);
+
+    transitionAssignment(assignment.id, 'offered', { actor: 'dispatcher' }, ws.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'test-agent-cancel' }, ws.dir);
+    transitionAssignment(assignment.id, 'started', { actor: 'test-agent-cancel' }, ws.dir);
+    const result = transitionAssignment(assignment.id, 'cancelled', {
+      actor: 'dispatcher',
+      status_reason: 'Supervisor aborted the assignment',
+    }, ws.dir);
+
+    assert.equal(result.assignment.status, 'cancelled');
+    assert.equal(loadAgentRun(run.id, ws.dir)?.status, 'cancelled');
+  });
 
   it('skips transition when run is already in terminal state (no crash)', () => {
     const assignment = createAssignment({

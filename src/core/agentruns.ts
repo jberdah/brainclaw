@@ -378,6 +378,15 @@ export function syncAgentRunFromAssignmentTransition(
         artifacts: options.artifacts,
       }, cwd);
       return;
+    case 'cancelled':
+      if (!canTransitionRun(run, 'cancelled')) return;
+      transitionAgentRun(run.id, 'cancelled', {
+        actor: options.actor,
+        actor_id: options.actor_id,
+        session_id: options.session_id,
+        status_reason: options.status_reason ?? 'Cancelled via assignment lifecycle',
+      }, cwd);
+      return;
     case 'failed':
       if (!canTransitionRun(run, 'failed')) return;
       transitionAgentRun(run.id, 'failed', {

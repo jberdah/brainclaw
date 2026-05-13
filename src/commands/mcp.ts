@@ -5355,7 +5355,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // dispatch analysis / review.
         const { listAssignments: listAsgn } = await import('../core/assignments.js');
         const predecessors = listAsgn(dispatchCwd, { claim_id: oldClaim.id })
-          .filter((a) => a.status !== 'completed' && a.status !== 'expired' && a.status !== 'rerouted');
+          .filter((a) => a.status !== 'completed' && a.status !== 'cancelled' && a.status !== 'expired' && a.status !== 'rerouted');
         for (const predecessor of predecessors) {
           try {
             transitionAssignment(predecessor.id, 'rerouted', {
@@ -6041,7 +6041,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         try {
           const { listAssignments: listA, saveAssignment: saveA } = await import('../core/assignments.js');
           const active = listA(cwd, { claim_id: envClaimId }).filter(
-            (a) => !['completed', 'expired', 'rerouted'].includes(a.status),
+            (a) => !['completed', 'cancelled', 'expired', 'rerouted'].includes(a.status),
           );
           for (const a of active) {
             if (!a.session_id) {

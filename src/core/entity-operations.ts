@@ -28,7 +28,7 @@ import {
 } from './cross-project.js';
 import { listClaims } from './claims.js';
 import { listActionRequired } from './actions.js';
-import { listAssignments } from './assignments.js';
+import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
 import {
   deleteRuntimeNote,
@@ -58,6 +58,7 @@ import {
 } from './entity-registry.js';
 import { generateId } from './ids.js';
 import type {
+  AssignmentStatus,
   Candidate,
   Constraint,
   Decision,
@@ -443,6 +444,13 @@ export function updateEntity(
       saveRuntimeNote(patched, cwd);
       return { entity: name, id };
     }
+    case 'assignment': {
+      const assignment = loadAssignment(id, cwd);
+      if (!assignment) throw new EntityNotFoundError(name, id);
+      const patched = { ...assignment, ...patch } as typeof assignment;
+      saveAssignment(patched, cwd);
+      return { entity: name, id };
+    }
     case 'candidate': {
       const candidate = loadCandidate(id, cwd);
       const patched = { ...candidate, ...patch } as Candidate;
@@ -509,6 +517,26 @@ export function removeEntity(
       const removed = removeCrossProjectLink(id, cwd);
       return { entity: name, id: removed.name ?? removed.path, archived: false, purged: true };
     }
+    case 'assignment': {
+      const assignment = loadAssignment(id, cwd);
+      if (!assignment) throw new EntityNotFoundError(name, id);
+      if (purge) {
+        const deleted = deleteAssignment(id, cwd);
+        if (!deleted) throw new EntityNotFoundError(name, id);
+        return { entity: name, id, archived: false, purged: true };
+      }
+      if (assignment.status === 'cancelled') {
+        return { entity: name, id, archived: true, purged: false };
+      }
+      if (ENTITY_REGISTRY.assignment.terminal.includes(assignment.status)) {
+        throw new Error(`assignment '${id}' is already terminal (${assignment.status}); use purge:true to hard-delete if needed`);
+      }
+      transitionAssignment(id, 'cancelled', {
+        actor: 'brainclaw',
+        status_reason: 'Archived via bclaw_remove',
+      }, cwd);
+      return { entity: name, id, archived: true, purged: false };
+    }
     default:
       throw new EntityOperationUnsupportedError(name, 'remove');
   }
@@ -564,6 +592,13 @@ export function transitionEntity(
         return { entity: name, id, from, to, side_effects: sideEffects };
       }
       throw new InvalidTransitionError(name, from, to);
+    }
+    case 'assignment': {
+      transitionAssignment(id, to as AssignmentStatus, {
+        actor: 'brainclaw',
+        status_reason: _reason,
+      }, cwd);
+      return { entity: name, id, from, to, side_effects: sideEffects };
     }
     default:
       throw new EntityOperationUnsupportedError(

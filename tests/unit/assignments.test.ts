@@ -68,11 +68,14 @@ describe('Assignment CRUD', () => {
 describe('Assignment FSM — validateTransition', () => {
   const validPaths: Array<[AssignmentStatus, AssignmentStatus]> = [
     ['created', 'offered'],
+    ['created', 'cancelled'],
     ['offered', 'accepted'],
     ['offered', 'expired'],
     ['accepted', 'started'],
+    ['accepted', 'cancelled'],
     ['accepted', 'timed_out'],
     ['started', 'completed'],
+    ['started', 'cancelled'],
     ['started', 'failed'],
     ['started', 'blocked'],
     ['started', 'timed_out'],
@@ -80,6 +83,7 @@ describe('Assignment FSM — validateTransition', () => {
     ['timed_out', 'retrying'],
     ['retrying', 'offered'],
     ['blocked', 'rerouted'],
+    ['blocked', 'cancelled'],
   ];
 
   for (const [from, to] of validPaths) {
@@ -94,6 +98,7 @@ describe('Assignment FSM — validateTransition', () => {
     ['offered', 'completed'],
     ['accepted', 'failed'],
     ['completed', 'started'],
+    ['cancelled', 'offered'],
     ['expired', 'offered'],
     ['rerouted', 'offered'],
   ];
@@ -132,6 +137,21 @@ describe('Assignment FSM — transitionAssignment', () => {
     assert.ok(result.assignment.completed_at);
     assert.equal(result.assignment.artifacts.length, 1);
     assert.equal(result.assignment.session_id, 'sess_1');
+  });
+
+  it('transitions started → cancelled with timestamp', () => {
+    const a = makeAssignment();
+    transitionAssignment(a.id, 'offered', { actor: 'dispatcher' }, ws.dir);
+    transitionAssignment(a.id, 'accepted', { actor: 'worker' }, ws.dir);
+    transitionAssignment(a.id, 'started', { actor: 'worker' }, ws.dir);
+    const result = transitionAssignment(a.id, 'cancelled', {
+      actor: 'dispatcher',
+      status_reason: 'Supervisor aborted the lane',
+    }, ws.dir);
+
+    assert.equal(result.assignment.status, 'cancelled');
+    assert.equal(result.assignment.status_reason, 'Supervisor aborted the lane');
+    assert.ok(result.assignment.cancelled_at);
   });
 
   it('transitions started → failed with error_message', () => {

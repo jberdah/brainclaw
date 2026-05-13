@@ -11,6 +11,7 @@ import {
   transitionEntity,
   updateEntity,
 } from '../../src/core/entity-operations.js';
+import { createAssignment, loadAssignment } from '../../src/core/assignments.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/entity-operations — CRUD verb dispatch', () => {
@@ -135,6 +136,41 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       const fetched = getEntity('plan', created.id, workspace.dir) as { author: string; text: string };
       assert.equal(fetched.author, 'jberdah');
       assert.equal(fetched.text, 'minimal');
+    });
+  });
+
+  describe('assignment', () => {
+    it('transition supports cancelling an assignment canonically', () => {
+      const assignment = createAssignment({
+        claim_id: 'clm_entity_assignment_1',
+        agent: 'worker',
+        dispatcher_agent: 'dispatcher',
+        scope: 'src/assignment',
+        description: 'Assignment entity test',
+      }, workspace.dir);
+
+      const result = transitionEntity('assignment', assignment.id, 'cancelled', workspace.dir, 'operator cancelled');
+      assert.equal(result.from, 'created');
+      assert.equal(result.to, 'cancelled');
+
+      const reloaded = loadAssignment(assignment.id, workspace.dir);
+      assert.equal(reloaded?.status, 'cancelled');
+      assert.equal(reloaded?.status_reason, 'operator cancelled');
+    });
+
+    it('remove archives an assignment by cancelling it', () => {
+      const assignment = createAssignment({
+        claim_id: 'clm_entity_assignment_2',
+        agent: 'worker',
+        dispatcher_agent: 'dispatcher',
+        scope: 'src/remove-assignment',
+        description: 'Assignment remove test',
+      }, workspace.dir);
+
+      const result = removeEntity('assignment', assignment.id, workspace.dir);
+      assert.equal(result.archived, true);
+      assert.equal(result.purged, false);
+      assert.equal(loadAssignment(assignment.id, workspace.dir)?.status, 'cancelled');
     });
   });
 

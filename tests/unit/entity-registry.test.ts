@@ -200,6 +200,8 @@ describe('core/entity-registry — known-good transitions', () => {
     { entity: 'sequence', from: 'archived', to: 'active', valid: false },
     { entity: 'assignment', from: 'created', to: 'offered', valid: true },
     { entity: 'assignment', from: 'started', to: 'completed', valid: true },
+    { entity: 'assignment', from: 'started', to: 'cancelled', valid: true },
+    { entity: 'assignment', from: 'cancelled', to: 'started', valid: false },
     { entity: 'agent_run', from: 'running', to: 'completed', valid: true },
   ];
   for (const { entity, from, to, valid } of cases) {

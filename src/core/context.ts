@@ -597,7 +597,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   if (currentAgentIdentity || agent) {
     const claimPlanIds = new Set(myClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
     const activeAssignments = listAssignments(contextCwd, { agent: agentName }).filter((assignment) =>
-      !['completed', 'failed', 'expired', 'rerouted'].includes(assignment.status),
+      !['completed', 'failed', 'cancelled', 'expired', 'rerouted'].includes(assignment.status),
     );
     const inProgressPlans = state.plan_items.filter(
       (p) =>

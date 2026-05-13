@@ -28,6 +28,7 @@ export type EventAction =
   | 'assignment_started'
   | 'assignment_progress'
   | 'assignment_completed'
+  | 'assignment_cancelled'
   | 'assignment_failed'
   | 'assignment_blocked'
   | 'assignment_timed_out'

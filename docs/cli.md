@@ -760,6 +760,26 @@ brainclaw claim list --all --json
 
 Legacy alias: `brainclaw list-claims`
 
+### `brainclaw assignment list`
+
+List assignments. By default this shows only non-terminal assignments; use `--all` to include `completed`, `cancelled`, `expired`, and `rerouted`.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+| `--all` | Include terminal assignments |
+| `--status <status>` | Filter by assignment status |
+| `--agent <name>` | Filter by agent |
+| `--claim <id>` | Filter by claim ID |
+| `--plan <id>` | Filter by plan ID |
+| `--sequence <id>` | Filter by sequence ID |
+
+```bash
+brainclaw assignment list
+brainclaw assignment list --status blocked
+brainclaw assignment list --all --json
+```
+
 ### `brainclaw list-agents`
 
 List registered agent and human identities.
@@ -1114,6 +1134,46 @@ brainclaw claim release clm_001 --plan-status done
 ```
 
 Legacy alias: `brainclaw release-claim <id>`
+
+### `brainclaw assignment get <id>`
+
+Show one assignment with its lifecycle timestamps and links.
+
+| Option | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+```bash
+brainclaw assignment get asgn_001
+brainclaw assignment get asgn_001 --json
+```
+
+### `brainclaw assignment update <id>`
+
+Advance an assignment to a supported lifecycle status through the canonical assignment FSM.
+
+| Option | Description |
+|---|---|
+| `--status <status>` | Target assignment status |
+| `--reason <text>` | Optional status reason recorded on the assignment |
+
+```bash
+brainclaw assignment update asgn_001 --status started
+brainclaw assignment update asgn_001 --status cancelled --reason "Supervisor aborted the lane"
+```
+
+### `brainclaw assignment cancel <id>`
+
+Supervisor/admin shortcut for `brainclaw assignment update <id> --status cancelled`.
+
+| Option | Description |
+|---|---|
+| `--reason <text>` | Optional cancellation reason recorded on the assignment |
+
+```bash
+brainclaw assignment cancel asgn_001
+brainclaw assignment cancel asgn_001 --reason "Superseded by reroute"
+```
 
 ### `brainclaw release-claims`
 

@@ -89,6 +89,23 @@ export function listAssignments(cwd?: string, filter?: ListAssignmentsFilter): A
   return items;
 }
 
+export function deleteAssignment(id: string, cwd?: string): boolean {
+  const store = assignmentStore(cwd);
+  if (!store.exists(id)) {
+    return false;
+  }
+  mutate({ cwd }, () => {
+    const writableStore = new JsonStore<Assignment>({
+      dirPath: assignmentsDir(cwd, 'write'),
+      documentType: 'assignment',
+      getId: (a) => a.id,
+      sort: (a, b) => a.created_at.localeCompare(b.created_at),
+    });
+    writableStore.delete(id);
+  });
+  return true;
+}
+
 // ── ID Generation ────────────────────────────────────────────
 
 export function generateAssignmentId(cwd?: string): { id: string; short_label: string } {
@@ -106,15 +123,15 @@ export function generateAssignmentId(cwd?: string): { id: string; short_label: s
  * rerouted a still-unstarted lane.
  */
 const VALID_TRANSITIONS = new Map<string, Set<string>>([
-  ['created',   new Set(['offered', 'rerouted'])],
-  ['offered',   new Set(['accepted', 'failed', 'expired', 'rerouted'])],
-  ['accepted',  new Set(['started', 'timed_out', 'rerouted'])],
-  ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out', 'rerouted'])],
-  ['failed',    new Set(['retrying', 'rerouted'])],
-  ['timed_out', new Set(['retrying', 'rerouted'])],
-  ['retrying',  new Set(['offered', 'rerouted'])],
-  ['blocked',   new Set(['rerouted', 'started', 'failed'])],
-  // Terminal: completed, expired, rerouted (no outgoing transitions)
+  ['created',   new Set(['offered', 'rerouted', 'cancelled'])],
+  ['offered',   new Set(['accepted', 'failed', 'expired', 'rerouted', 'cancelled'])],
+  ['accepted',  new Set(['started', 'timed_out', 'rerouted', 'cancelled'])],
+  ['started',   new Set(['completed', 'failed', 'blocked', 'timed_out', 'rerouted', 'cancelled'])],
+  ['failed',    new Set(['retrying', 'rerouted', 'cancelled'])],
+  ['timed_out', new Set(['retrying', 'rerouted', 'cancelled'])],
+  ['retrying',  new Set(['offered', 'rerouted', 'cancelled'])],
+  ['blocked',   new Set(['rerouted', 'started', 'failed', 'cancelled'])],
+  // Terminal: completed, cancelled, expired, rerouted (no outgoing transitions)
 ]);
 
 export interface TransitionValidation {
@@ -203,6 +220,7 @@ export function transitionAssignment(
     case 'accepted':  assignment.accepted_at = now; break;
     case 'started':   assignment.started_at = now; break;
     case 'completed': assignment.completed_at = now; break;
+    case 'cancelled': assignment.cancelled_at = now; break;
     case 'failed':    assignment.failed_at = now; break;
     case 'blocked':   assignment.blocked_at = now; break;
     case 'timed_out': assignment.timed_out_at = now; break;
@@ -376,7 +394,7 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
 // ── Active Assignment Lookup ─────────────────────────────────
 
 /** Statuses that indicate a finished assignment (no longer active). */
-const TERMINAL_STATUSES = new Set<AssignmentStatus>(['completed', 'expired', 'rerouted']);
+const TERMINAL_STATUSES = new Set<AssignmentStatus>(['completed', 'cancelled', 'expired', 'rerouted']);
 
 /**
  * Return the most recently created non-terminal assignment for the given agent.

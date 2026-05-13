@@ -689,6 +689,7 @@ export const AssignmentStatusSchema = z.enum([
   'accepted',    // Worker acknowledged receipt
   'started',     // Worker reports active work begun
   'completed',   // Worker reports successful completion
+  'cancelled',   // Supervisor/admin aborted the assignment explicitly
   'failed',      // Worker reports failure
   'blocked',     // Worker reports external blocker
   'timed_out',   // Sweeper detected no heartbeat within TTL
@@ -742,6 +743,7 @@ export const AssignmentSchema = z.object({
   accepted_at: z.string().optional(),
   started_at: z.string().optional(),
   completed_at: z.string().optional(),
+  cancelled_at: z.string().optional(),
   failed_at: z.string().optional(),
   blocked_at: z.string().optional(),
   timed_out_at: z.string().optional(),
@@ -952,6 +954,7 @@ export const RuntimeEventTypeSchema = z.enum([
   'assignment_started',
   'assignment_progress',
   'assignment_completed',
+  'assignment_cancelled',
   'assignment_failed',
   'assignment_blocked',
   'assignment_timed_out',

@@ -24,6 +24,7 @@ describe('documentation reference drift', () => {
       '### `brainclaw setup-security`',
       '### `brainclaw worktree`',
       '### `brainclaw note create <text>`',
+      '### `brainclaw assignment cancel <id>`',
     ]) {
       assert.ok(cli.includes(heading), `missing CLI docs heading: ${heading}`);
     }

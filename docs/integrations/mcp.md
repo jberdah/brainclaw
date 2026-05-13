@@ -158,8 +158,14 @@ for the full 1.0.0 changelog.
 
 Supported entities: plan, decision, constraint, trap, handoff,
 runtime_note, candidate, claim, action, assignment, agent_run
-(read-only for the latter four). Declarative transition matrix +
+(with assignment lifecycle now writable through `bclaw_transition` and
+`bclaw_remove`; `agent_run` remains read-only). Declarative transition matrix +
 updatable field list live in [src/core/entity-registry.ts](../../src/core/entity-registry.ts).
+
+For assignments specifically:
+- `bclaw_transition(entity="assignment", id=..., to="cancelled", reason=...)` is the canonical supervisor/admin cancel path.
+- `bclaw_remove(entity="assignment", id=...)` archives by cancelling the assignment.
+- `bclaw_remove(entity="assignment", id=..., purge=true)` hard-deletes the assignment record.
 
 ##### `bclaw_find` filter keys
 
