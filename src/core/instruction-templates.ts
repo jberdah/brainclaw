@@ -276,6 +276,8 @@ function renderSessionProtocol(): string {
     '- Drive a turn in a loop already assigned to you → `bclaw_loop(intent=turn|complete_turn|advance|close)`',
     '',
     'Do NOT call `bclaw_loop(intent=open)` directly — it creates a loop structure without dispatch, so the reviewer/participant never gets the work. Use the goal entries above.',
+    '',
+    '_How to verify a dispatch actually worked:_ `execution_status="delivered_and_started"` only means the brief-ack sentinel was touched — it does NOT mean the worker is doing useful work. Always (1) `bclaw_find(entity="agent_run", filter={assignment_id})` to read the spawn record; (2) check OS pid liveness yourself (`Get-Process -Id <pid>` on Windows, `kill -0 <pid>` on POSIX); (3) if the worker is silent, read its captured streams at `.brainclaw/coordination/runtime/log/<assignment_id>.{stdout,stderr}.log`. Full FSM tables + diagnostic decision tree in `docs/concepts/dispatch-lifecycle.md`.',
   ].join('\n');
 }
 

@@ -1,0 +1,215 @@
+# Dispatch lifecycle
+
+When brainclaw routes work to another agent — `bclaw_coordinate(intent="assign"|"review"|"consult")`, `bclaw_dispatch(intent="execute")`, or a multi-turn `bclaw_loop` — it spins up **up to six related entities** plus an on-disk **brief-ack sentinel** and (since pln#504) **per-assignment stdout/stderr log files**. Knowing what each one means lets you tell at a glance whether a dispatch is alive, dead, or merely slow.
+
+This doc is the consolidated reference. It complements:
+- [multi-agent-workflows.md](multi-agent-workflows.md) — happy-path coordination patterns
+- [troubleshooting.md](troubleshooting.md) — symptom-driven diagnostic playbooks
+- [loop-engine.md](loop-engine.md) — multi-turn loop protocol details
+- [../integrations/codex.md](../integrations/codex.md), [../integrations/claude-code.md](../integrations/claude-code.md), etc. — per-agent spawn semantics
+
+---
+
+## The six entities
+
+A single `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[codex])` creates:
+
+```
+                         ┌─────────────────┐
+                         │   candidate     │  cnd_…  (review payload)
+                         └────────┬────────┘
+                                  │ references
+              ┌───────────────────┼──────────────────┐
+              ▼                   ▼                  ▼
+        ┌──────────┐       ┌─────────────┐    ┌──────────┐
+        │   loop   │ ◄────►│ assignment  │    │ message  │
+        │  lop_…   │       │  asgn_…     │    │  msg_…   │
+        └──────────┘       └──────┬──────┘    └──────────┘
+                                  │
+                                  │ owned-by
+                                  ▼
+                           ┌──────────────┐
+                           │    claim     │  clm_…  (worktree lock)
+                           └──────┬───────┘
+                                  │ triggers
+                                  ▼
+                           ┌──────────────┐
+                           │  agent_run   │  run_…  (the OS-level spawn)
+                           └──────┬───────┘
+                                  │
+              ┌───────────────────┼─────────────────┐
+              ▼                   ▼                 ▼
+        ┌──────────┐       ┌─────────────┐   ┌────────────┐
+        │ ack file │       │ stdout log  │   │ stderr log │
+        │ .ack     │       │ .stdout.log │   │ .stderr.log│
+        └──────────┘       └─────────────┘   └────────────┘
+        (pln#476)          (pln#504)         (pln#504)
+```
+
+| Entity | Prefix | Created by | Owner | Purpose |
+|---|---|---|---|---|
+| `candidate` | `cnd_` | the coordinate facade (review/ideate) | the dispatcher agent | Review payload that the loop references. Stays after the loop closes. |
+| `loop` | `lop_` | `bclaw_coordinate(open_loop=true)` or `bclaw_loop(intent="open")` | the dispatcher | Multi-turn thread of structured work. Has its own FSM. |
+| `assignment` | `asgn_` | dispatcher when targeting an agent | the **target** agent | Lifecycle event for that agent's turn. The only entity whose FSM tracks the WORKER's progress. |
+| `message` | `msg_` | dispatcher | the dispatcher | The brief delivered to the target's inbox. |
+| `claim` | `clm_` | dispatcher (or `bclaw_claim` directly) | the target agent | Worktree advisory lock. Released when the work is done or the agent gives up. |
+| `agent_run` | `run_` | the CLI execution adapter, only when an OS-level spawn actually happens | the target agent | OS-level subprocess record. Status FSM tracks the LIFETIME of the process — but only the parts brainclaw can observe (see [§Liveness limits](#liveness-limits) below). |
+
+Plus two filesystem-only artefacts created by the worker shell wrapper:
+
+- **Brief-ack sentinel**: `.brainclaw/coordination/runtime/ack/<assignment_id>.ack` — touched by the spawn wrapper BEFORE the agent binary runs (pln#476). Proves the spawn shell got far enough to execute `touch`. Does NOT prove the agent binary itself succeeded.
+- **stdout/stderr logs** (pln#504): `.brainclaw/coordination/runtime/log/<assignment_id>.{stdout,stderr}.log` — opened by the parent before the spawn, the child inherits dup'd fds and writes its streams there. This is the only window onto what a sandboxed worker actually said before dying.
+
+---
+
+## FSM cheatsheet
+
+### `loop.status`
+
+```
+open ──▶ paused ──▶ open       (pause / resume)
+  │
+  ├──▶ completed                (stop_condition met)
+  ├──▶ cancelled                (manual close — use when the loop dies abnormally)
+  └──▶ blocked                  (external blocker; intent to resume later)
+```
+
+`bclaw_loop(intent="close")` accepts **only** `completed | cancelled | blocked` as `status`. **Not `failed`** — map crashed/dead loops to `cancelled` with a `reason`.
+
+### `assignment.status`
+
+```
+created ──▶ offered ──▶ accepted ──▶ started ──▶ completed
+   │            │            │            │           
+   │            │            │            └──▶ failed (worker self-reported)
+   │            │            │            └──▶ blocked (worker needs supervisor)
+   │            │            │            └──▶ cancelled (rerouted away)
+   │            │            └──▶ acceptance_ttl expired (default 15min) → cancelled
+   │            └──▶ heartbeat_ttl expired (default 30min while running) → cancelled
+   └──▶ removed by `bclaw_assignment_admin` (rare)
+```
+
+Transitions past `offered` require the assigned agent itself (or `bclaw_assignment_admin`). A coordinator that didn't create the assignment **cannot** update it — `Agent X cannot update assignment owned by Y` is the canonical rejection.
+
+### `agent_run.status`
+
+```
+launching ──▶ running ──▶ completed
+                  │           ──▶ failed (non-zero exit, worker reported)
+                  │           ──▶ interrupted (TTL/heartbeat expiry, see below)
+                  │
+                  └──▶ failed (spawn returned no pid, brief-ack timeout)
+```
+
+**Liveness limits** {#liveness-limits}: `last_event_at` is bumped only when the worker writes a lifecycle event (via MCP or via the wrap shell). A worker that crashes before its first output keeps `status=running` and `last_event_at == launched_at` forever — until something else (the operator, a future lazy reconciler from pln#503 phase 3, or a process-tree liveness check) reconciles it.
+
+Today there is **no automatic liveness check** between `last_event_at` and pid existence. If you suspect a stuck worker, do the check yourself with `Get-Process -Id <pid>` (Windows) or `kill -0 <pid>` (POSIX).
+
+### `claim.status`
+
+```
+active ──▶ released
+   │
+   └──▶ adopted (another session inherited the claim, e.g. reconnect)
+```
+
+Releasing a claim does NOT cancel its assignment / agent_run / loop — those are independent entities. You generally need to clean up all of them together when aborting a dispatch.
+
+---
+
+## Observability decision tree
+
+You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back `execution_status: "delivered_and_started"`. What does that actually mean?
+
+```
+1. execution_status = "delivered_and_started"
+   ├──▶ Means: the spawn wrapper touched the brief-ack sentinel
+   └──▶ Does NOT mean: the worker is doing useful work
+
+2. Verify the spawn is alive — check the agent_run record
+   bclaw_find(entity="agent_run", filter={assignment_id: "<asgn>"})
+   ├──▶ status="running" AND pid alive on OS AND last_event_at < 5min ago → healthy
+   ├──▶ status="running" AND pid alive AND last_event_at == launched_at → stalled (worker never produced output)
+   ├──▶ status="running" AND pid dead → silently died (see logs)
+   └──▶ status="completed" / "failed" / "interrupted" → terminal, read status_reason
+
+3. If silent, read the logs (pln#504)
+   cat .brainclaw/coordination/runtime/log/<asgn>.stderr.log
+   cat .brainclaw/coordination/runtime/log/<asgn>.stdout.log
+   ├──▶ Contains an error → root cause found
+   └──▶ Empty → worker died before any write OR launched without log capture (legacy path)
+
+4. If the worker is alive but doing nothing useful for 15+ min
+   → most likely sandbox / MCP / capability mismatch with the brief
+   → see ../integrations/<agent>.md "Caveats" for per-agent gotchas
+```
+
+---
+
+## Diagnostic playbook
+
+When a dispatch hangs, work top-down through these checks. For the symptom-driven variant see [troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived](troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived).
+
+### Quick triage (≤30s)
+
+```bash
+# 1. Is the OS-level process alive?
+Get-Process -Id <pid>          # Windows
+ps -p <pid>                    # POSIX
+
+# 2. Did the spawn wrapper actually run?
+ls .brainclaw/coordination/runtime/ack/<asgn>.ack
+
+# 3. What did the worker say? (pln#504)
+cat .brainclaw/coordination/runtime/log/<asgn>.stderr.log
+cat .brainclaw/coordination/runtime/log/<asgn>.stdout.log
+```
+
+### Deeper (1-5min)
+
+```bash
+# Full entity state
+bclaw_get(entity="assignment", id="<asgn>")     # owner, ttls, status_reason
+bclaw_get(entity="agent_run", id="<run>")       # pid, started_at, last_event_at
+bclaw_get(entity="claim", id="<clm>")           # worktree, agent
+bclaw_get(entity="loop", id="<lop>")            # current_phase, slot states
+
+# Worktree activity
+git -C <worktree> log --oneline -5              # any new commits?
+git -C <worktree> status                        # uncommitted work?
+ls <worktree>/REVIEW_FINDINGS.md                # for review loops
+```
+
+### Abort a dispatch cleanly
+
+A dead dispatch needs four cleanup steps (no single facade does all of them today):
+
+```text
+1. Stop-Process -Id <pid>                                   # if pid still alive
+2. bclaw_loop(intent="close", loop_id="<lop>", status="cancelled", reason="...")
+3. bclaw_release_claim(id="<clm>")
+4. (optional) bclaw_assignment_admin or leave assignment as `offered`
+   — only the owning agent can transition assignment.status, and a
+     released claim already makes it effectively orphan
+```
+
+---
+
+## Per-agent spawn semantics
+
+Spawn behaviour varies by agent. The capability profile in `src/core/agent-capability.ts` describes each agent's prompt delivery, sandbox model, and MCP availability. Per-agent caveats:
+
+- [codex.md](../integrations/codex.md#caveats) — `--sandbox workspace-write` required; spawned codex may not have brainclaw MCP wired; stdin_pipe prompt delivery; brief-ack required for headless dispatch detection.
+- [claude-code.md](../integrations/claude-code.md) — interactive vs `-p` headless modes; tools whitelist.
+- [copilot.md](../integrations/copilot.md), [windsurf.md](../integrations/windsurf.md), [cline.md](../integrations/cline.md), [opencode.md](../integrations/opencode.md), [roo.md](../integrations/roo.md), [kilocode.md](../integrations/kilocode.md), [continue.md](../integrations/continue.md) — per-agent specifics.
+- [mistral-vibe.md](../integrations/mistral-vibe.md) — EU/GDPR self-hosted option.
+
+---
+
+## See also
+
+- [troubleshooting.md](troubleshooting.md) — symptom-driven diagnostic playbooks
+- [loop-engine.md](loop-engine.md) — multi-turn loop protocol, locks, advance gates
+- [multi-agent-workflows.md](multi-agent-workflows.md) — high-level coordination scenarios
+- [../integrations/overview.md](../integrations/overview.md) — index of supported agents
+- [../integrations/mcp.md](../integrations/mcp.md) — full MCP tool catalog

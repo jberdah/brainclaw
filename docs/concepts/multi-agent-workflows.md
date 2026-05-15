@@ -162,5 +162,6 @@ You don't pick a "mode" up front. You compose the primitives in whatever way fit
 - [memory.md](memory.md) — what counts as memory and how it's organized
 - [plans-and-claims.md](plans-and-claims.md) — coordination layer in depth
 - [loop-engine.md](loop-engine.md) — structured multi-turn protocols (review loops, ideation, etc.)
+- [dispatch-lifecycle.md](dispatch-lifecycle.md) — what actually happens when a dispatch goes wrong: 6-entity dance, brief-ack sentinel, stdout/stderr logs, observability decision tree
 - [memory-staleness.md](memory-staleness.md) — how brainclaw signals when stored items may be outdated
 - [../integrations/overview.md](../integrations/overview.md) — connecting your specific agent

@@ -220,6 +220,7 @@ brainclaw inbox list --agent <agent>
 
 ## See also
 
+- [`docs/concepts/dispatch-lifecycle.md`](dispatch-lifecycle.md) — the entity model + FSMs + observability decision tree underlying every diagnostic step on this page
 - [`docs/concepts/memory-staleness.md`](memory-staleness.md) — staleness signals and resolve flow in depth
 - [`docs/concepts/loop-engine.md`](loop-engine.md) — multi-turn loops (review-fix), recovery semantics for in-flight loops
 - [`docs/concepts/upgrade-cli.md`](upgrade-cli.md) — `brainclaw upgrade` design + rollback path
