@@ -13,7 +13,7 @@ import { loadState, saveState } from '../../src/core/state.js';
 import { appendAuditEntry } from '../../src/core/audit.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
-function captureLogs(fn: () => void): string[] {
+async function captureLogs(fn: () => void | Promise<void>): Promise<string[]> {
   const originalLog = console.log;
   const originalError = console.error;
   const logs: string[] = [];
@@ -26,7 +26,7 @@ function captureLogs(fn: () => void): string[] {
   };
 
   try {
-    fn();
+    await fn();
     return logs;
   } finally {
     console.log = originalLog;
@@ -74,7 +74,7 @@ describe('session commands', { concurrency: false }, () => {
     workspace.cleanup();
   });
 
-  it('starts a session by storing a snapshot and a session_start runtime note', () => {
+  it('starts a session by storing a snapshot and a session_start runtime note', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_start_test';
     try {
@@ -98,8 +98,8 @@ describe('session commands', { concurrency: false }, () => {
         plan_items: [],
       }, workspace.dir);
 
-      const logs = captureLogs(() => {
-        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      const logs = await captureLogs(async () => {
+        await runSessionStart({ context: 'auth', cwd: workspace.dir });
       });
 
       assert.ok(logs[0].includes('Session started: sess_start_test'));
@@ -124,12 +124,12 @@ describe('session commands', { concurrency: false }, () => {
     }
   });
 
-  it('ends a session, reports memory changes, and auto-reflects observation notes', () => {
+  it('ends a session, reports memory changes, and auto-reflects observation notes', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_end_test';
     try {
-      captureLogs(() => {
-        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      await captureLogs(async () => {
+        await runSessionStart({ context: 'auth', cwd: workspace.dir });
       });
 
       saveRuntimeNote({
@@ -165,8 +165,8 @@ describe('session commands', { concurrency: false }, () => {
         plan_items: [],
       }, workspace.dir);
 
-      const logs = captureLogs(() => {
-        runSessionEnd({ session: 'sess_end_test', autoReflect: true, cwd: workspace.dir });
+      const logs = await captureLogs(async () => {
+        await runSessionEnd({ session: 'sess_end_test', autoReflect: true, cwd: workspace.dir });
       });
 
       assert.ok(logs[0].includes('Session ended: sess_end_test'));
@@ -187,7 +187,7 @@ describe('session commands', { concurrency: false }, () => {
     }
   });
 
-  it('supports JSON session start/end flows without auto-reflect when no memory changes occur', () => {
+  it('supports JSON session start/end flows without auto-reflect when no memory changes occur', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_json_test';
     try {
@@ -211,15 +211,15 @@ describe('session commands', { concurrency: false }, () => {
         plan_items: [],
       }, workspace.dir);
 
-      const startLogs = captureLogs(() => {
-        runSessionStart({ context: 'auth', json: true, cwd: workspace.dir });
+      const startLogs = await captureLogs(async () => {
+        await runSessionStart({ context: 'auth', json: true, cwd: workspace.dir });
       });
       const startResult = JSON.parse(startLogs[0] ?? '{}') as { session_id?: string; context_target?: string };
       assert.equal(startResult.session_id, 'sess_json_test');
       assert.equal(startResult.context_target, 'auth');
 
-      const endLogs = captureLogs(() => {
-        runSessionEnd({
+      const endLogs = await captureLogs(async () => {
+        await runSessionEnd({
           session: 'sess_json_test',
           summary: 'Stable session summary',
           autoReflect: false,
@@ -246,16 +246,16 @@ describe('session commands', { concurrency: false }, () => {
     }
   });
 
-  it('includes local agent git hygiene warnings in session-start result when generated files are not ignored', () => {
+  it('includes local agent git hygiene warnings in session-start result when generated files are not ignored', async () => {
     initGitRepo(workspace.dir);
     fs.writeFileSync(path.join(workspace.dir, '.mcp.json'), '{}\n', 'utf-8');
 
-    const result = startSession({ cwd: workspace.dir });
+    const result = await startSession({ cwd: workspace.dir });
     assert.deepEqual(result.agent_git_hygiene?.missing_gitignore_paths, ['.mcp.json']);
     assert.deepEqual(result.agent_git_hygiene?.tracked_paths, []);
   });
 
-  it('runs non-critical maintenance work when maintenanceMode is full', () => {
+  it('runs non-critical maintenance work when maintenanceMode is full', async () => {
     saveState({
       version: 1,
       write_version: 1,
@@ -280,12 +280,12 @@ describe('session commands', { concurrency: false }, () => {
       })),
     }, workspace.dir);
 
-    const result = startSession({ cwd: workspace.dir, maintenanceMode: 'full' });
+    const result = await startSession({ cwd: workspace.dir, maintenanceMode: 'full' });
     assert.equal(result.memory_pressure?.memory_pressure, true);
     assert.equal(result.memory_pressure?.done_plans, 50);
   });
 
-  it('materializes a reflected handoff and auto-dispatches review when requested', () => {
+  it('materializes a reflected handoff and auto-dispatches review when requested', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_review_loop';
     try {
@@ -329,15 +329,22 @@ describe('session commands', { concurrency: false }, () => {
         status: 'released',
       }, workspace.dir);
 
-      captureLogs(() => {
-        runSessionStart({ cwd: workspace.dir });
-      });
+      const originalLog = console.log;
+      const originalError = console.error;
+      console.log = () => {};
+      console.error = () => {};
+      try {
+        await runSessionStart({ cwd: workspace.dir });
+      } finally {
+        console.log = originalLog;
+        console.error = originalError;
+      }
 
       fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 2;\n', 'utf-8');
       git(['add', 'tracked.ts'], workspace.dir);
       git(['commit', '-m', 'feat: update tracked value'], workspace.dir);
 
-      const result = endSession({
+      const result = await endSession({
         session: 'sess_review_loop',
         reflectHandoff: true,
         dispatchReview: true,
@@ -373,27 +380,27 @@ describe('session commands', { concurrency: false }, () => {
     }
   });
 
-  it('only clears the active implicit session when the ended session matches it', () => {
+  it('only clears the active implicit session when the ended session matches it', async () => {
     clearCurrentSession(workspace.dir);
-    captureLogs(() => {
-      runSessionStart({ context: 'auth', cwd: workspace.dir });
+    await captureLogs(async () => {
+      await runSessionStart({ context: 'auth', cwd: workspace.dir });
     });
     const active = loadCurrentSession(workspace.dir);
     assert.ok(active);
 
-    captureLogs(() => {
-      runSessionEnd({ session: 'sess_other', summary: 'Other session', cwd: workspace.dir });
+    await captureLogs(async () => {
+      await runSessionEnd({ session: 'sess_other', summary: 'Other session', cwd: workspace.dir });
     });
 
     assert.equal(loadCurrentSession(workspace.dir)?.session_id, active?.session_id);
   });
 
-  it('does not auto-promote contradictory session observations', () => {
+  it('does not auto-promote contradictory session observations', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_contradiction_test';
     try {
-      captureLogs(() => {
-        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      await captureLogs(async () => {
+        await runSessionStart({ context: 'auth', cwd: workspace.dir });
       });
 
       saveState({
@@ -430,8 +437,8 @@ describe('session commands', { concurrency: false }, () => {
         note_type: 'observation',
       }, workspace.dir);
 
-      captureLogs(() => {
-        runSessionEnd({ session: 'sess_contradiction_test', autoReflect: true, cwd: workspace.dir });
+      await captureLogs(async () => {
+        await runSessionEnd({ session: 'sess_contradiction_test', autoReflect: true, cwd: workspace.dir });
       });
 
       const pending = listCandidates('pending', workspace.dir);
@@ -447,7 +454,7 @@ describe('session commands', { concurrency: false }, () => {
     }
   });
 
-  it('emits session discipline stats from session activity', () => {
+  it('emits session discipline stats from session activity', async () => {
     const previousSession = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_SESSION_ID = 'sess_stats_test';
     try {
@@ -456,8 +463,8 @@ describe('session commands', { concurrency: false }, () => {
       git(['add', '-A'], workspace.dir);
       git(['commit', '-m', 'init'], workspace.dir);
 
-      captureLogs(() => {
-        runSessionStart({ context: 'auth', cwd: workspace.dir });
+      await captureLogs(async () => {
+        await runSessionStart({ context: 'auth', cwd: workspace.dir });
       });
 
       fs.writeFileSync(path.join(workspace.dir, 'tracked.ts'), 'export const value = 2;\n', 'utf-8');
@@ -506,9 +513,9 @@ describe('session commands', { concurrency: false }, () => {
         usage_events: [],
       }, workspace.dir);
 
-      const result = JSON.parse(captureLogs(() => {
-        runSessionEnd({ session: 'sess_stats_test', json: true, cwd: workspace.dir });
-      })[0] ?? '{}') as {
+      const result = JSON.parse((await captureLogs(async () => {
+        await runSessionEnd({ session: 'sess_stats_test', json: true, cwd: workspace.dir });
+      }))[0] ?? '{}') as {
         session_stats?: {
           file_edits_count: number;
           claims_created: number;

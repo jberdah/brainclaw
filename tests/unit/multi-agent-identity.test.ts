@@ -151,18 +151,18 @@ describe('multi-agent identity on shared host', () => {
     assert.equal(name, 'codex', 'should detect codex from env, not ai_root from config');
   });
 
-  it('sessions are distinct per agent on the same store', () => {
+  it('sessions are distinct per agent on the same store', async () => {
     workspace.registerAgent('claude-code');
     workspace.registerAgent('codex');
 
     // Claude Code starts a session
     setClaudeCodeEnv();
-    const claudeSession = startSession({ cwd: workspace.dir });
+    const claudeSession = await startSession({ cwd: workspace.dir });
     assert.equal(claudeSession.agent, 'claude-code');
 
     // Codex starts a session
     setCodexEnv();
-    const codexSession = startSession({ cwd: workspace.dir });
+    const codexSession = await startSession({ cwd: workspace.dir });
     assert.equal(codexSession.agent, 'codex');
 
     // Sessions should be different
@@ -175,12 +175,12 @@ describe('multi-agent identity on shared host', () => {
     assert.ok(agents.includes('codex'), 'codex session should be listed');
   });
 
-  it('PID-aware resolution gives distinct sessions for same agent', () => {
+  it('PID-aware resolution gives distinct sessions for same agent', async () => {
     workspace.registerAgent('claude-code');
     setClaudeCodeEnv();
 
     // First session (current PID)
-    const session1 = startSession({ cwd: workspace.dir });
+    const session1 = await startSession({ cwd: workspace.dir });
     assert.equal(session1.agent, 'claude-code');
 
     // Simulate a second session from a different PID by saving a session with a fake PID

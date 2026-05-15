@@ -644,10 +644,10 @@ describe('commands/mcp read tools', () => {
     assert.equal(structured.agent_tooling.mcp_servers[0]?.availability, 'remote');
   });
 
-  it('returns session-aware context diffs through the read-tool handler', () => {
+  it('returns session-aware context diffs through the read-tool handler', async () => {
     const sessionId = 'sess_mcp_diff';
     process.env.BRAINCLAW_SESSION_ID = sessionId;
-    startSession({
+    await startSession({
       agent: workspace.currentAgent.agent_name,
       context: 'auth',
       cwd: workspace.dir,

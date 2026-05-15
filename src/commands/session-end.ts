@@ -9,6 +9,7 @@ import { loadState, persistState } from '../core/state.js';
 import { listArchivedCandidates, listCandidates } from '../core/candidates.js';
 import { createFederationMessage } from '../core/federation-message.js';
 import { pushSignal } from '../core/federation-transport.js';
+import { pushSignalToCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
 import { loadConfig } from '../core/config.js';
 import { resolveCrossProjectLinks, type ResolvedCrossProjectLink } from '../core/cross-project.js';
 import { createCandidateFromInput } from './reflect.js';
@@ -93,9 +94,9 @@ interface MaterializedSessionHandoff {
   plan_id?: string;
 }
 
-export function runSessionEnd(options: SessionEndOptions = {}): void {
+export async function runSessionEnd(options: SessionEndOptions = {}): Promise<void> {
   try {
-    const result = endSession(options);
+    const result = await endSession(options);
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -165,7 +166,7 @@ export function runSessionEnd(options: SessionEndOptions = {}): void {
   }
 }
 
-export function endSession(options: SessionEndOptions = {}): SessionEndResult {
+export async function endSession(options: SessionEndOptions = {}): Promise<SessionEndResult> {
   if (!memoryExists(options.cwd)) {
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
@@ -388,6 +389,24 @@ export function endSession(options: SessionEndOptions = {}): SessionEndResult {
     console.log(`✔ Pushed ${pushedSignals} signal(s) to linked projects`);
   }
 
+  // Cloud federation push (Phase 1 — opt-in via cloud_sync.enabled)
+  let pushedCloudSignals = 0;
+  if (isCloudSyncEnabled(options.cwd)) {
+    try {
+      pushedCloudSignals = await pushSessionCloudSignals({
+        sessionId,
+        actor,
+        sessionNotes,
+        cwd: options.cwd,
+      });
+    } catch {
+      // Non-fatal — cloud push failure should not block session end
+    }
+  }
+  if (pushedCloudSignals > 0 && !options.json) {
+    console.log(`✔ Pushed ${pushedCloudSignals} signal(s) to cloud`);
+  }
+
   appendAuditEntry({
     action: 'session_end',
     actor: actor.agent,
@@ -545,6 +564,96 @@ function pushSessionFederationSignals(input: {
   }
   for (const note of sessionRuntimeNotes) {
     pushEntitySignal('runtime_note', note as unknown as Record<string, unknown> & { id: string });
+  }
+
+  return pushed;
+}
+
+/**
+ * Push session-scoped handoffs / candidates / runtime_notes to the cloud federation.
+ * Skips entities with visibility = 'machine' or 'private' — only 'shared' (default) goes out.
+ * Failures per-entity are swallowed so a single bad fetch does not abort the rest.
+ */
+async function pushSessionCloudSignals(input: {
+  sessionId: string;
+  actor: ReturnType<typeof buildOperationalIdentity>;
+  sessionNotes: ReturnType<typeof listRuntimeNotes>;
+  cwd?: string;
+}): Promise<number> {
+  const cwd = input.cwd ?? process.cwd();
+  const config = loadConfig(cwd);
+  const fromProjectName = config.project_name ?? path.basename(cwd);
+
+  const currentState = loadState(cwd);
+  const sessionHandoffs = currentState.open_handoffs.filter(
+    (handoff) => handoff.session_id === input.sessionId,
+  );
+  const sessionCandidates = [
+    ...listCandidates(undefined, cwd),
+    ...listArchivedCandidates('accepted', cwd),
+    ...listArchivedCandidates('rejected', cwd),
+  ].filter((candidate) => candidate.session_id === input.sessionId);
+  const sessionRuntimeNotes = input.sessionNotes.filter((note) => note.session_id === input.sessionId);
+
+  // Conservative cloud-push gate (review finding 2026-05-15):
+  // HandoffSchema and CandidateSchema have NO `visibility` field today. Only
+  // RuntimeNoteSchema and TrapSchema do (schema.ts:184, 899). Treating absent
+  // visibility as "shared" would mean every handoff (including handoff.snapshot.diff
+  // which carries full git diffs) and every candidate ALWAYS leaks to cloud once
+  // cloud_sync is opted-in — a real exfiltration risk for secrets accidentally in
+  // session diffs. Conservative default: push only entities with an EXPLICIT
+  // `visibility === "shared"`. Today that's runtime_notes only. Follow-up: add
+  // `visibility: MemoryVisibilitySchema.default('shared')` to HandoffSchema +
+  // CandidateSchema so they can opt-in deliberately. Until then, handoffs and
+  // candidates stay local even with cloud_sync enabled.
+  const isExplicitlyShared = (entity: Record<string, unknown>): boolean => {
+    return entity.visibility === 'shared';
+  };
+
+  let pushed = 0;
+  const pushOne = async (
+    entityType: FederationSignalEntityType,
+    entity: Record<string, unknown> & { id: string },
+  ): Promise<void> => {
+    const message = createFederationMessage({
+      version: 1,
+      from: {
+        project_id: input.actor.project_id ?? config.project_id,
+        project_name: fromProjectName,
+        project_path: cwd,
+        agent_name: input.actor.agent,
+        agent_id: input.actor.agent_id,
+        host_id: input.actor.host_id,
+      },
+      to: {
+        // Cloud is a broadcast bus — no specific target project at this layer.
+        project_name: 'broadcast',
+        project_path: '',
+      },
+      type: entityType,
+      payload: entity,
+      causal_parent: input.sessionId,
+    });
+
+    try {
+      const ok = await pushSignalToCloud(message, cwd);
+      if (ok) pushed++;
+    } catch {
+      // Per-entity failure should not abort the loop
+    }
+  };
+
+  for (const handoff of sessionHandoffs) {
+    if (!isExplicitlyShared(handoff as unknown as Record<string, unknown>)) continue;
+    await pushOne('handoff', handoff as unknown as Record<string, unknown> & { id: string });
+  }
+  for (const candidate of sessionCandidates) {
+    if (!isExplicitlyShared(candidate as unknown as Record<string, unknown>)) continue;
+    await pushOne('candidate', candidate as unknown as Record<string, unknown> & { id: string });
+  }
+  for (const note of sessionRuntimeNotes) {
+    if (!isExplicitlyShared(note as unknown as Record<string, unknown>)) continue;
+    await pushOne('runtime_note', note as unknown as Record<string, unknown> & { id: string });
   }
 
   return pushed;

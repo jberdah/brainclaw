@@ -13,31 +13,35 @@ const DEFAULT_API_URL = 'https://app.brainclaw.dev';
 interface CloudConfig {
   apiUrl: string;
   apiKey: string;
+  enabled: boolean;
 }
 
 function resolveCloudConfig(cwd?: string): CloudConfig | undefined {
-  // Check env vars first
-  const apiUrl = process.env.BRAINCLAW_CLOUD_URL ?? DEFAULT_API_URL;
-  const apiKey = process.env.BRAINCLAW_CLOUD_API_KEY;
+  const envApiUrl = process.env.BRAINCLAW_CLOUD_URL;
+  const envApiKey = process.env.BRAINCLAW_CLOUD_API_KEY;
 
-  if (apiKey) {
-    return { apiUrl, apiKey };
-  }
-
-  // Check config.yaml
+  let configEnabled = false;
+  let configEndpoint: string | undefined;
+  let configApiKey: string | undefined;
   try {
     const config = loadConfig(cwd);
-    const cloud = (config as Record<string, unknown>).cloud as
-      | { api_url?: string; api_key?: string }
-      | undefined;
-    if (cloud?.api_key) {
-      return { apiUrl: cloud.api_url ?? apiUrl, apiKey: cloud.api_key };
+    if (config.cloud_sync) {
+      configEnabled = config.cloud_sync.enabled === true;
+      configEndpoint = config.cloud_sync.endpoint;
+      configApiKey = config.cloud_sync.api_key;
     }
   } catch {
-    // No config — cloud not configured
+    // No config available — fall back to env only
   }
 
-  return undefined;
+  const apiKey = envApiKey ?? configApiKey;
+  if (!apiKey) return undefined;
+
+  // Env-supplied key implies explicit opt-in; config flag is the alternative
+  const enabled = Boolean(envApiKey) || configEnabled;
+
+  const apiUrl = envApiUrl ?? configEndpoint ?? DEFAULT_API_URL;
+  return { apiUrl, apiKey, enabled };
 }
 
 export async function pushSignalToCloud(
@@ -133,4 +137,15 @@ export async function pushBoardToCloud(
 
 export function isCloudConfigured(cwd?: string): boolean {
   return resolveCloudConfig(cwd) !== undefined;
+}
+
+/**
+ * Returns true when cloud sync is both configured AND explicitly opted-in.
+ * Use this gate for automatic lifecycle hooks (session-start pull, session-end push).
+ * `isCloudConfigured` alone does NOT imply opt-in — a stale config api_key without
+ * `cloud_sync.enabled=true` and without the BRAINCLAW_CLOUD_API_KEY env var stays inert.
+ */
+export function isCloudSyncEnabled(cwd?: string): boolean {
+  const cloud = resolveCloudConfig(cwd);
+  return cloud !== undefined && cloud.enabled;
 }

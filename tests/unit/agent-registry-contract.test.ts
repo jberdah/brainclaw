@@ -209,12 +209,12 @@ describe('core/agent-registry identity contract', () => {
     assert.equal(identity.agent_name, 'preexisting');
   });
 
-  it('startSession auto-registers unknown agent and returns auto_registered=true', () => {
+  it('startSession auto-registers unknown agent and returns auto_registered=true', async () => {
     delete process.env.BRAINCLAW_AGENT_NAME;
     delete process.env.BRAINCLAW_AGENT_ID;
     process.env.BRAINCLAW_AGENT = 'fresh-codex-agent';
 
-    const result = startSession({
+    const result = await startSession({
       agent: 'fresh-codex-agent',
       cwd: workspace.dir,
     });

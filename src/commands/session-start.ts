@@ -12,13 +12,13 @@ import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId, generateIdWithLabel } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
-import { SessionSnapshotSchema, type SessionSnapshot, CandidateSchema, HandoffSchema, RuntimeNoteSchema } from '../core/schema.js';
+import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
 import { checkMemoryPressure, type MemoryPressureResult } from '../core/gc-semantic.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
-import { saveCandidate, generateCandidateIdWithLabel } from '../core/candidates.js';
-import { mutateState } from '../core/state.js';
+import { pullSignalsFromCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
+import { materializeFederationSignal } from '../core/federation-materialize.js';
 
 function sessionsDir(cwd?: string): string {
   return resolveEntityDir('sessions', cwd ?? process.cwd(), 'read');
@@ -69,9 +69,9 @@ export interface SessionStartResult extends SessionSnapshot {
   auto_registered?: boolean;
 }
 
-export function runSessionStart(options: SessionStartOptions = {}): void {
+export async function runSessionStart(options: SessionStartOptions = {}): Promise<void> {
   try {
-    const snapshot = startSession({
+    const snapshot = await startSession({
       ...options,
       maintenanceMode: options.maintenanceMode ?? 'full',
     });
@@ -141,7 +141,7 @@ export function runSessionStart(options: SessionStartOptions = {}): void {
   }
 }
 
-export function startSession(options: SessionStartOptions = {}): SessionStartResult {
+export async function startSession(options: SessionStartOptions = {}): Promise<SessionStartResult> {
   if (!memoryExists(options.cwd)) {
     throw new Error('.brainclaw/ not found. Run `brainclaw init` first.');
   }
@@ -295,64 +295,44 @@ export function startSession(options: SessionStartOptions = {}): SessionStartRes
     } catch { /* non-fatal */ }
   }
 
-  // Materialize incoming federation signals from linked projects
+  // Materialize incoming federation signals from linked projects (Phase 0 — local)
   if (maintenanceMode === 'full') {
     try {
       const federationSignals = pullSignalsFromLinkedProjects(options.cwd);
       let materialized = 0;
       for (const signal of federationSignals) {
         try {
-          const origin = `remote:${signal.from.project_name}:${signal.from.agent_name}`;
-          if (signal.type === 'candidate') {
-            const parsed = CandidateSchema.safeParse(signal.payload);
-            if (parsed.success) {
-              const { id, short_label } = generateCandidateIdWithLabel(options.cwd);
-              saveCandidate({
-                ...parsed.data,
-                id,
-                short_label,
-                created_at: nowISO(),
-                source: undefined, // remote federation signal — treated as 'human' (legacy default)
-                star_count: 0,
-                starred_by: [],
-                usage_count: 0,
-                usage_events: [],
-                status: 'pending',
-              }, options.cwd);
-            }
-          } else if (signal.type === 'handoff') {
-            const parsed = HandoffSchema.safeParse(signal.payload);
-            if (parsed.success) {
-              const { id, short_label } = generateIdWithLabel('open_handoffs', options.cwd);
-              mutateState((state) => {
-                state.open_handoffs.push({
-                  ...parsed.data,
-                  id,
-                  short_label,
-                  created_at: nowISO(),
-                  tags: [...(parsed.data.tags ?? []), origin],
-                });
-              }, options.cwd);
-            }
-          } else if (signal.type === 'runtime_note') {
-            const parsed = RuntimeNoteSchema.safeParse(signal.payload);
-            if (parsed.success) {
-              saveRuntimeNote({
-                ...parsed.data,
-                id: generateRuntimeNoteId(),
-                created_at: nowISO(),
-                tags: [...(parsed.data.tags ?? []), origin],
-              }, options.cwd);
-            }
+          if (materializeFederationSignal(signal, options.cwd)) {
+            materialized++;
           }
           markSignalProcessed(signal.from.project_path, signal.id);
-          materialized++;
         } catch { /* skip this signal — do not block session start */ }
       }
       if (materialized > 0) {
         console.log(`✔ Materialized ${materialized} federation signal(s) from linked projects`);
       }
     } catch { /* Non-fatal — federation pull failure should not block session start */ }
+  }
+
+  // Materialize incoming federation signals from cloud (Phase 1 — opt-in via cloud_sync.enabled)
+  if (maintenanceMode === 'full' && isCloudSyncEnabled(options.cwd)) {
+    try {
+      const cloudSignals = await pullSignalsFromCloud(actor.agent, { limit: 100 }, options.cwd);
+      let cloudMaterialized = 0;
+      for (const signal of cloudSignals) {
+        try {
+          if (materializeFederationSignal(signal, options.cwd)) {
+            cloudMaterialized++;
+          }
+          // No markSignalProcessed for cloud signals — cloud-side tracks delivery via the
+          // inbox endpoint's own state (per-agent read cursor). If the cloud returns the
+          // same signal twice, the idempotency_key field allows future dedup at materialize time.
+        } catch { /* skip this signal — do not block session start */ }
+      }
+      if (cloudMaterialized > 0) {
+        console.log(`✔ Materialized ${cloudMaterialized} federation signal(s) from cloud`);
+      }
+    } catch { /* Non-fatal — cloud pull failure should not block session start */ }
   }
 
   return {

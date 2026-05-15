@@ -1389,8 +1389,8 @@ program
   .option('--maintenance-mode <mode>', 'Maintenance mode: full (default) or fast')
   .option('--include-context', 'Output full project context after starting session (replaces separate context call)')
   .option('--json', 'Output as JSON')
-  .action((options) => {
-    runSessionStart(options);
+  .action(async (options) => {
+    await runSessionStart(options);
   });
 
 // --- session-end ---
@@ -1407,8 +1407,8 @@ program
   .option('--reviewer <name>', 'Explicit reviewer to route the reflected handoff review to')
   .option('--reflect', 'Include structured reflection questions for the agent to answer')
   .option('--json', 'Output as JSON')
-  .action((options) => {
-    runSessionEnd({
+  .action(async (options) => {
+    await runSessionEnd({
       ...options,
       autoReflect: options.autoReflect,
       autoRelease: options.autoRelease,
