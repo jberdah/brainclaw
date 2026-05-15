@@ -523,7 +523,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
-    description: 'Unified dispatch entry for sequence-lane parallelization. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send), review (routes an EXISTING reviewable handoff to a reviewer — NOT for opening new reviews; use bclaw_coordinate(intent=review, open_loop=true) for that). Consolidates bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review.',
+    description: 'Unified dispatch entry for sequence-lane parallelization (parallelize plans across lanes). To open a NEW review of a commit/branch, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` instead — bclaw_dispatch is for sequence-driven execution, NOT for opening reviews. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send to agents), review (routes an EXISTING already-reflected handoff to a reviewer — only for handoffs produced by `session-end --reflect-handoff` or similar). Consolidates the legacy bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review. Returns FacadeResponse; for verification semantics see the same response-validation guidance documented on `bclaw_coordinate`.',
     annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1003,13 +1003,13 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_coordinate',
-    description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, open an ideation loop, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, and side_effects.',
+    description: 'Multi-agent coordination facade: assign tasks to agents (with claims), consult agents (no claim), create a review candidate, open an ideation loop, reroute an active claim to another agent, or summarize a thread. Returns a FacadeResponse with selected_targets, delivery_plan, artifacts, side_effects, and execution_status. IMPORTANT — execution_status semantics: `delivered_and_started` means the spawn wrapper touched the brief-ack sentinel (`.brainclaw/coordination/runtime/ack/<assignment_id>.ack`) — NOT that the worker is doing useful work. Spawned workers may still die silently before consuming the brief (cf. trap trp_38f63ea4). To verify a dispatch is actually alive, query `bclaw_find(entity="agent_run", filter={assignment_id})` then check `status==="running"` AND OS-level pid liveness (Windows: `Get-Process -Id <pid>` ; POSIX: `kill -0 <pid>`) AND `last_event_at` within the last few minutes. See docs/concepts/troubleshooting.md §"Inbox messages stuck / brief-ack never arrived" for the diagnostic playbook, and docs/integrations/<agent>.md for per-agent spawn semantics (notably codex.md re sandbox MCP availability).',
     annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         intent: { type: 'string', enum: ['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate'], description: 'Coordination intent. "assign" creates a claim per target agent and dispatches the brief. "consult" dispatches without creating claims. "review" creates a review candidate. "ideate" opens an ideation loop with the task as the proposal seed (driver wire-up: pln#492 phase 2.d). "reroute" releases the current claim and reassigns. "summarize" reads a thread and returns a summary.' },
-        task: { type: 'string', description: 'Brief or task description delivered to target agents.' },
+        task: { type: 'string', description: 'Brief or task description delivered to target agents. WARNING: the brief is delivered to a worker that may be sandboxed and not have brainclaw MCP wired in its session — notably codex spawned with `--sandbox workspace-write`. Briefs that instruct MCP-call protocols (e.g. require the worker to call `bclaw_send_message`, `bclaw_assignment_update`, `bclaw_complete_step`) will hang the worker silently. Prefer file-based protocols (write findings/reply to a markdown file in the worktree + commit fixes directly on the branch) for these agents. The coordinator then harvests the file and lifecycle-closes the assignment itself. See docs/integrations/<agent>.md for per-agent capability matrix.' },
         scope: { type: 'string', description: 'File or feature scope. Used as claim scope for assign/reroute; as thread id for summarize if threadId is absent.' },
         targetAgents: { type: 'array', items: { type: 'string' }, description: 'Agent names to target. If omitted, all spawnable agents are used.' },
         constraints: { type: 'object', description: 'Optional structured constraints passed alongside the brief (e.g. deadline, reviewCriteria).' },
@@ -1041,7 +1041,7 @@ const MCP_WRITE_TOOLS = [
         intent: {
           type: 'string',
           enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close'],
-          description: 'Loop lifecycle intent. See docs/concepts/loop-engine.md for semantics.',
+          description: 'Loop lifecycle intent. See docs/concepts/loop-engine.md for semantics. ANTI-PATTERN: do NOT call `intent="open"` directly to start a review or ideation loop — it creates the loop structure WITHOUT dispatching the first turn, so the reviewer/participant never receives the work. Use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` (or `intent="ideate"`) instead — that opens the loop AND dispatches the first turn in one call. `bclaw_loop` is for driving turns inside a loop that was already opened via the coordinate facade (intents: turn, complete_turn, advance, close, etc.).',
         },
         loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
@@ -1052,7 +1052,7 @@ const MCP_WRITE_TOOLS = [
         linked: { type: 'object', description: 'Optional top-level plan/sequence refs (open).' },
         stop_condition: { type: 'object', description: 'Optional stop_condition override (open). Composite any/all supported.' },
         mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Review mode selector for open (review kind only).' },
-        status: { type: 'string', description: 'Filter value for list, or target final_status for close.' },
+        status: { type: 'string', description: 'For intent="list": filter value (any loop status). For intent="close": target final status — accepted values are `completed` | `cancelled` | `blocked` only (NOT `failed`; map crashed/dead loops to `cancelled` with a `reason`).' },
         include_events: { type: 'boolean', description: 'get: include the event journal in the response.' },
         limit: { type: 'number', description: 'list: max loops returned.' },
         offset: { type: 'number', description: 'list: pagination offset.' },
