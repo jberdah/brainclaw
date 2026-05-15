@@ -91,6 +91,8 @@ export const BclawLoopCompleteTurnSchema = z.object({
       type: z.string().min(1),
       body: z.string().optional(),
       ref: LoopRefSchema.optional(),
+      /** pln#492 synthesis audit trail. Required when type === 'plan_draft'. */
+      addresses_critique: z.array(z.string().min(1)).optional(),
     })
     .optional(),
   expected_version: z.number().int().nonnegative().optional(),
@@ -116,6 +118,8 @@ export const BclawLoopAddArtifactSchema = z.object({
     body: z.string().optional(),
     produced_by: z.string().optional(),
     ref: LoopRefSchema.optional(),
+    /** pln#492 synthesis audit trail. Required when type === 'plan_draft'. */
+    addresses_critique: z.array(z.string().min(1)).optional(),
   }),
   expected_version: z.number().int().nonnegative().optional(),
   ...CallerEnvelopeFields,
