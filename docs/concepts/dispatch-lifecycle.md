@@ -101,9 +101,9 @@ launching ──▶ running ──▶ completed
                   └──▶ failed (spawn returned no pid, brief-ack timeout)
 ```
 
-**Liveness limits** {#liveness-limits}: `last_event_at` is bumped only when the worker writes a lifecycle event (via MCP or via the wrap shell). A worker that crashes before its first output keeps `status=running` and `last_event_at == launched_at` forever — until something else (the operator, a future lazy reconciler from pln#503 phase 3, or a process-tree liveness check) reconciles it.
+**Liveness limits** {#liveness-limits}: `last_event_at` is bumped only when the worker writes a lifecycle event (via MCP or via the wrap shell). A worker that crashes before its first output keeps `status=running` and `last_event_at == launched_at` until reconciled. Since pln#503 phase 3.2, **any read of `agent_run` via `bclaw_find` / `bclaw_get` triggers a lazy reconciliation pass**: open runs past the 60s grace window get their pid checked, and dead workers transition to `failed` (`status_reason='silent_termination_no_evidence'`) once past the 30min stale threshold.
 
-Today there is **no automatic liveness check** between `last_event_at` and pid existence. If you suspect a stuck worker, do the check yourself with `Get-Process -Id <pid>` (Windows) or `kill -0 <pid>` (POSIX).
+For a single consolidated check (run + assignment + claim + loop + pid + log tails + verdict in one response), use **`bclaw_dispatch_status(target_id)`** (pln#503 phase 3.1).
 
 ### `claim.status`
 
@@ -120,6 +120,10 @@ Releasing a claim does NOT cancel its assignment / agent_run / loop — those ar
 ## Observability decision tree
 
 You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back `execution_status: "delivered_and_started"`. What does that actually mean?
+
+**Fast path** (recommended since pln#503 phase 3.1): call `bclaw_dispatch_status(target_id="<asgn_…>")` and read its `diagnosis.health` + `diagnosis.recommended_next_action`. The tool consolidates the steps below into a single response — entity fan-out, pid liveness, log tails, verdict, recommended next action.
+
+**Long path** (for understanding or when the tool isn't available):
 
 ```
 1. execution_status = "delivered_and_started"
@@ -150,7 +154,16 @@ You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back
 
 When a dispatch hangs, work top-down through these checks. For the symptom-driven variant see [troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived](troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived).
 
-### Quick triage (≤30s)
+### Quick triage (≤5s)
+
+```bash
+# Single call covers process liveness + ack + log tails + entity state + verdict
+bclaw_dispatch_status(target_id="<asgn>")        # or clm_/lop_/run_
+```
+
+Read `diagnosis.health` (`healthy` | `stalled` | `silent_death` | `terminal` | `not_dispatched` | `unknown`) and `diagnosis.recommended_next_action` — usually that's all you need.
+
+### Manual triage (≤30s — when `bclaw_dispatch_status` isn't available)
 
 ```bash
 # 1. Is the OS-level process alive?
@@ -168,7 +181,7 @@ cat .brainclaw/coordination/runtime/log/<asgn>.stdout.log
 ### Deeper (1-5min)
 
 ```bash
-# Full entity state
+# Full entity state — same fan-out bclaw_dispatch_status does for you
 bclaw_get(entity="assignment", id="<asgn>")     # owner, ttls, status_reason
 bclaw_get(entity="agent_run", id="<run>")       # pid, started_at, last_event_at
 bclaw_get(entity="claim", id="<clm>")           # worktree, agent

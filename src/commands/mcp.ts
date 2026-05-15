@@ -518,6 +518,20 @@ export const MCP_READ_TOOLS = [
       required: ['thread_id'],
     },
   },
+  {
+    name: 'bclaw_dispatch_status',
+    description: 'Consolidated dispatch status — given a `target_id` (asgn_/clm_/lop_/run_), resolves all linked entities (assignment, claim, loop, agent_run), reads the on-disk artefacts (brief-ack sentinel + per-assignment stdout/stderr log tails), checks OS pid liveness, and returns a single health verdict + a recommended next action. Replaces the five separate `bclaw_find` / `bclaw_get` calls a caller would otherwise make to verify a dispatch is actually doing useful work. Particularly useful right after `bclaw_coordinate` returns `execution_status="delivered_and_started"` — that response\'s `verify_with` hint points at this tool by name. See docs/concepts/dispatch-lifecycle.md for the full entity model and FSM details.',
+    annotations: { tier: 'facade', category: 'coordination', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_id: { type: 'string', description: 'Any one of: an assignment id (`asgn_…`), a claim id (`clm_…`), a loop id (`lop_…`), or an agent_run id (`run_…`). The tool resolves to the assignment scope internally and fetches the rest.' },
+        tail_log_lines: { type: 'number', description: 'How many trailing lines of each captured log file (stdout / stderr) to include in the response. Default 20. Pass 0 to omit tails and only return size_bytes.' },
+        stall_threshold_ms: { type: 'number', description: 'Age in ms past which a `running` agent_run with a live pid but no recent activity is considered `stalled`. Default 300000 (5 min).' },
+      },
+      required: ['target_id'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
