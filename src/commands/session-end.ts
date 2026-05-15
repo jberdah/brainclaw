@@ -595,17 +595,22 @@ async function pushSessionCloudSignals(input: {
   ].filter((candidate) => candidate.session_id === input.sessionId);
   const sessionRuntimeNotes = input.sessionNotes.filter((note) => note.session_id === input.sessionId);
 
-  // Conservative cloud-push gate (review finding 2026-05-15):
-  // HandoffSchema and CandidateSchema have NO `visibility` field today. Only
-  // RuntimeNoteSchema and TrapSchema do (schema.ts:184, 899). Treating absent
-  // visibility as "shared" would mean every handoff (including handoff.snapshot.diff
-  // which carries full git diffs) and every candidate ALWAYS leaks to cloud once
-  // cloud_sync is opted-in — a real exfiltration risk for secrets accidentally in
-  // session diffs. Conservative default: push only entities with an EXPLICIT
-  // `visibility === "shared"`. Today that's runtime_notes only. Follow-up: add
-  // `visibility: MemoryVisibilitySchema.default('shared')` to HandoffSchema +
-  // CandidateSchema so they can opt-in deliberately. Until then, handoffs and
-  // candidates stay local even with cloud_sync enabled.
+  // Conservative cloud-push gate (review finding 2026-05-15, finalized via
+  // pln#365 finalization 2026-05-15):
+  //
+  // All four signal-bearing schemas now carry a `visibility` field:
+  //   - RuntimeNoteSchema  (schema.ts:899)  — defaults to 'shared'
+  //   - TrapSchema         (schema.ts:184)  — defaults to 'shared'
+  //   - HandoffSchema      (schema.ts:~248) — optional, no default (opt-in)
+  //   - CandidateSchema    (schema.ts:~619) — optional, no default (opt-in)
+  //
+  // Handoffs and candidates are opt-in because their text / snapshot.diff
+  // can carry per-host secrets. An agent must explicitly set
+  // `visibility: 'shared'` to push such an entity to cloud. RuntimeNotes
+  // default to shared since they're already the lightest-weight signal.
+  //
+  // The gate below is intentionally literal — `entity.visibility === 'shared'`.
+  // Undefined or absent visibility means "stay local" regardless of cloud_sync.
   const isExplicitlyShared = (entity: Record<string, unknown>): boolean => {
     return entity.visibility === 'shared';
   };
