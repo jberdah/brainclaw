@@ -595,12 +595,19 @@ async function pushSessionCloudSignals(input: {
   ].filter((candidate) => candidate.session_id === input.sessionId);
   const sessionRuntimeNotes = input.sessionNotes.filter((note) => note.session_id === input.sessionId);
 
-  // Handoffs and candidates do not carry a visibility field today (treated as shared);
-  // only runtime_notes do. Skip cloud push when an entity explicitly opts out via
-  // visibility = 'machine' or 'private'.
-  const isShared = (entity: Record<string, unknown>): boolean => {
-    const v = entity.visibility;
-    return v === undefined || v === 'shared';
+  // Conservative cloud-push gate (review finding 2026-05-15):
+  // HandoffSchema and CandidateSchema have NO `visibility` field today. Only
+  // RuntimeNoteSchema and TrapSchema do (schema.ts:184, 899). Treating absent
+  // visibility as "shared" would mean every handoff (including handoff.snapshot.diff
+  // which carries full git diffs) and every candidate ALWAYS leaks to cloud once
+  // cloud_sync is opted-in — a real exfiltration risk for secrets accidentally in
+  // session diffs. Conservative default: push only entities with an EXPLICIT
+  // `visibility === "shared"`. Today that's runtime_notes only. Follow-up: add
+  // `visibility: MemoryVisibilitySchema.default('shared')` to HandoffSchema +
+  // CandidateSchema so they can opt-in deliberately. Until then, handoffs and
+  // candidates stay local even with cloud_sync enabled.
+  const isExplicitlyShared = (entity: Record<string, unknown>): boolean => {
+    return entity.visibility === 'shared';
   };
 
   let pushed = 0;
@@ -637,15 +644,15 @@ async function pushSessionCloudSignals(input: {
   };
 
   for (const handoff of sessionHandoffs) {
-    if (!isShared(handoff)) continue;
+    if (!isExplicitlyShared(handoff as unknown as Record<string, unknown>)) continue;
     await pushOne('handoff', handoff as unknown as Record<string, unknown> & { id: string });
   }
   for (const candidate of sessionCandidates) {
-    if (!isShared(candidate)) continue;
+    if (!isExplicitlyShared(candidate as unknown as Record<string, unknown>)) continue;
     await pushOne('candidate', candidate as unknown as Record<string, unknown> & { id: string });
   }
   for (const note of sessionRuntimeNotes) {
-    if (!isShared(note)) continue;
+    if (!isExplicitlyShared(note as unknown as Record<string, unknown>)) continue;
     await pushOne('runtime_note', note as unknown as Record<string, unknown> & { id: string });
   }
 
