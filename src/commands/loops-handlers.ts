@@ -474,6 +474,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
                     type: req.artifact.type,
                     body: req.artifact.body,
                     ref: req.artifact.ref,
+                    addresses_critique: req.artifact.addresses_critique,
                   }
                 : undefined,
               actor,
@@ -532,6 +533,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
                 body: req.artifact.body,
                 produced_by: req.artifact.produced_by,
                 ref: req.artifact.ref,
+                addresses_critique: req.artifact.addresses_critique,
               },
               actor,
             },
