@@ -2,6 +2,8 @@
 
 Brainclaw works alongside your existing coding agents. It does not replace them — it gives them a shared memory and coordination layer they can all read from and write to.
 
+For coordination internals — what happens when brainclaw spawns or routes work to another agent (claims, assignments, brief-ack sentinels, stdout/stderr log files, FSM transitions) — see [../concepts/dispatch-lifecycle.md](../concepts/dispatch-lifecycle.md).
+
 ## Onboarding model
 
 There are two separate setup scopes:

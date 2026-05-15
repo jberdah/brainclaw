@@ -450,6 +450,7 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 
 - [plans-and-claims.md](plans-and-claims.md)
 - [coordination.md](coordination.md)
+- [dispatch-lifecycle.md](dispatch-lifecycle.md) — entity FSMs (loop / assignment / agent_run / claim), brief-ack semantics, log-file diagnostic playbook
 - [runtime-notes.md](runtime-notes.md)
 - pln#394 `feat/loop-engine-mvp`
 - pln#395 `feat/review-loop-protocol`
