@@ -153,7 +153,33 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     const useShell = isWin32 && /\.(cmd|bat)$/i.test(spawnExecutable);
 
     const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
-    const stdio = needsStdin ? ['pipe' as const, 'ignore' as const, 'ignore' as const] : 'ignore' as const;
+
+    // pln#504: open per-assignment log files for stdout/stderr capture so silent
+    // worker deaths (trp#292) become diagnosable. Previously stdio used 'ignore'
+    // for stdout+stderr — anything the worker said vanished. Best-effort: on
+    // failure to open log files we fall back to the legacy 'ignore' behaviour
+    // rather than abort the spawn.
+    const useAckWrap = !!(options.assignmentId && (options.ackRoot ?? options.worktreePath));
+    let logFds: { stdout: number; stderr: number } | undefined;
+    if (useAckWrap) {
+      try {
+        const logRoot = options.ackRoot ?? options.worktreePath!;
+        const logDir = path.join(logRoot, '.brainclaw', 'coordination', 'runtime', 'log');
+        fs.mkdirSync(logDir, { recursive: true });
+        logFds = {
+          stdout: fs.openSync(path.join(logDir, `${options.assignmentId!}.stdout.log`), 'a'),
+          stderr: fs.openSync(path.join(logDir, `${options.assignmentId!}.stderr.log`), 'a'),
+        };
+      } catch {
+        // Log capture is best-effort — never block the spawn on logging issues.
+        logFds = undefined;
+      }
+    }
+
+    const stdinTarget: 'pipe' | 'ignore' = needsStdin ? 'pipe' : 'ignore';
+    const stdoutTarget: number | 'ignore' = logFds ? logFds.stdout : 'ignore';
+    const stderrTarget: number | 'ignore' = logFds ? logFds.stderr : 'ignore';
+    const stdio: ('pipe' | 'ignore' | number)[] = [stdinTarget, stdoutTarget, stderrTarget];
 
     // pln#476: wrap the spawn command with a brief-ack step so the worker
     // shell touches a sentinel file BEFORE the agent binary runs.
@@ -161,7 +187,6 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     // executed — needed for codex (which lacks the brainclaw MCP context
     // to call bclaw_assignment_update). When ackRoot/assignmentId are
     // omitted, we keep the original direct-binary spawn.
-    const useAckWrap = !!(options.assignmentId && (options.ackRoot ?? options.worktreePath));
     let child;
     if (useAckWrap) {
       const ackRoot = options.ackRoot ?? options.worktreePath!;
@@ -205,6 +230,13 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     }
 
     child.unref();
+
+    // Close the parent's copies of the log file descriptors. The child has its
+    // own dup'd copies and will keep writing to them after we return.
+    if (logFds) {
+      try { fs.closeSync(logFds.stdout); } catch { /* best-effort */ }
+      try { fs.closeSync(logFds.stderr); } catch { /* best-effort */ }
+    }
 
     const pid = child.pid;
     if (!pid) {
