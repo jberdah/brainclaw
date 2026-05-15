@@ -187,17 +187,24 @@ brainclaw stale resolve <plan_id>            # → dropped (default for stale)
 ```bash
 # 1. Is the worker process still alive?
 ps -ef | grep <agent-binary>      # codex, claude, copilot, …
+# Windows: Get-Process -Id <pid>   # or `tasklist /FI "PID eq <pid>"`
 
 # 2. Did the brief-ack file land?
 ls .brainclaw/coordination/runtime/ack/<assignment_id>.ack
 # If yes → spawn started, worker is somewhere in its loop
 # If no → spawn never started or died before the wrap shell ran touch
 
-# 3. Inspect the worktree for activity
+# 3. (pln#504) What did the worker actually say? stdout/stderr capture
+# Spawned workers now route their streams to per-assignment log files. If the
+# worker died silently, the error usually shows up here.
+cat .brainclaw/coordination/runtime/log/<assignment_id>.stdout.log
+cat .brainclaw/coordination/runtime/log/<assignment_id>.stderr.log
+
+# 4. Inspect the worktree for activity
 git -C <worktree> log --oneline -5
 git -C <worktree> status
 
-# 4. Check the run log
+# 5. Check the run log
 brainclaw inbox list --agent <agent>
 # or via MCP: bclaw_assignment_events(assignmentId="<id>")
 ```
