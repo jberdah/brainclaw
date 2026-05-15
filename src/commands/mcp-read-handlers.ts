@@ -24,6 +24,7 @@ import { listClaims, assessClaimLiveness } from '../core/claims.js';
 import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
+import { getDispatchStatus } from '../core/dispatch-status.js';
 import { listActionRequired } from '../core/actions.js';
 import { queryRuntimeEvents } from '../core/events.js';
 import { listSequences, getActiveSequence } from '../core/sequence.js';
@@ -1747,6 +1748,45 @@ export function handleMcpReadToolCall(
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
       structuredContent: { thread_id: threadId, total: messages.length, messages, schema_version: SCHEMA_VERSION },
+    };
+  }
+
+  if (name === 'bclaw_dispatch_status') {
+    const targetId = String(args.target_id ?? '');
+    if (!targetId) {
+      throw new Error('Missing required argument: target_id (asgn_/clm_/lop_/run_)');
+    }
+    const tailLogLines = typeof args.tail_log_lines === 'number' ? args.tail_log_lines : undefined;
+    const stallThresholdMs = typeof args.stall_threshold_ms === 'number' ? args.stall_threshold_ms : undefined;
+    const status = getDispatchStatus({
+      target_id: targetId,
+      cwd,
+      tail_log_lines: tailLogLines,
+      stall_threshold_ms: stallThresholdMs,
+    });
+
+    // Text view: short, single-screen summary so an agent can decide what to do
+    // without parsing the structured payload.
+    const lines: string[] = [
+      `Dispatch status for ${targetId} (resolved_from=${status.resolved_from})`,
+      `Health: ${status.diagnosis.health}`,
+      `Summary: ${status.diagnosis.summary}`,
+      `Next action: ${status.diagnosis.recommended_next_action}`,
+      '',
+      'Entities:',
+      `  assignment=${status.entities.assignment_id ?? '-'} (status=${status.assignment?.status ?? '-'})`,
+      `  claim=${status.entities.claim_id ?? '-'} (status=${status.claim?.status ?? '-'})`,
+      `  loop=${status.entities.loop_id ?? '-'} (phase=${status.loop?.current_phase ?? '-'})`,
+      `  run=${status.entities.run_id ?? '-'} (status=${status.agent_run?.status ?? '-'})`,
+      '',
+      `Runtime: pid=${status.runtime.pid ?? '-'} alive=${status.runtime.pid_alive ?? 'unknown'} ack=${status.runtime.ack_file.exists}`,
+      `  stdout: ${status.runtime.log_files.stdout?.exists ? `${status.runtime.log_files.stdout.size_bytes}B` : 'absent'}`,
+      `  stderr: ${status.runtime.log_files.stderr?.exists ? `${status.runtime.log_files.stderr.size_bytes}B` : 'absent'}`,
+    ];
+
+    return {
+      content: [{ type: 'text', text: lines.join('\n') }],
+      structuredContent: { ...status, schema_version: SCHEMA_VERSION } as unknown as Record<string, unknown>,
     };
   }
 
