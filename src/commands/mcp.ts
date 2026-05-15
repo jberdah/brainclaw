@@ -5719,6 +5719,27 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const resultExecStatus = (result && typeof result === 'object' && 'execution_status' in result)
         ? (result as Record<string, unknown>).execution_status as FacadeResponse['execution_status']
         : undefined;
+
+      // pln#503 phase 3.3: when execution_status === 'delivered_and_started',
+      // attach a self-documenting `verify_with` hint pointing at the assignment
+      // record. Callers should not take delivered_and_started at face value —
+      // it only attests the brief-ack sentinel was touched, not that the worker
+      // is doing useful work. The hint tells them exactly which canonical-
+      // grammar call to make next to verify spawn liveness.
+      let verifyWith: FacadeResponse['verify_with'] | undefined;
+      if (resultExecStatus === 'delivered_and_started') {
+        const firstAssignment = artifacts.find((a) => a.type === 'assignment');
+        if (firstAssignment) {
+          verifyWith = {
+            action: 'bclaw_find',
+            entity: 'agent_run',
+            filter: { assignment_id: firstAssignment.id },
+            expected_when_alive: 'agent_run with status="running" AND OS pid alive AND last_event_at within the last few minutes',
+            see_also: 'docs/concepts/dispatch-lifecycle.md',
+          };
+        }
+      }
+
       const facadeResponse: FacadeResponse = {
         status: facadeStatus,
         intent: req.intent,
@@ -5728,6 +5749,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         warnings,
         duration_ms: Date.now() - startMs,
         ...(resultExecStatus ? { execution_status: resultExecStatus } : {}),
+        ...(verifyWith ? { verify_with: verifyWith } : {}),
       };
 
       const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
