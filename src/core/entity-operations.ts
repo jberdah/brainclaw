@@ -30,6 +30,7 @@ import { listClaims } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
+import { reconcileAgentRun, TERMINAL_STATUSES } from './agentrun-reconciler.js';
 import {
   deleteRuntimeNote,
   listRuntimeNotes,
@@ -180,6 +181,36 @@ export interface TransitionResult {
 
 // ─── FIND ─────────────────────────────────────────────────────────────
 
+/**
+ * Lazy reconciliation pass on agent_run reads (pln#503 phase 3.2).
+ *
+ * Before returning agent_run records to `bclaw_find` / `bclaw_get`, walk any
+ * record whose status is non-terminal and call `reconcileAgentRun(id)`. The
+ * reconciler:
+ *   - no-ops for runs under the 60s grace window or already terminal
+ *   - transitions to `completed` (inferred=true) when evidence of completion
+ *     exists (post-start commit, claim released, assignment completed)
+ *   - transitions to `failed` (silent_termination_no_evidence) when the run
+ *     is past the stale threshold AND its pid is provably dead
+ *
+ * Without this pass, a worker that crashed before its first output keeps
+ * `status="running"` indefinitely — the empirical pattern recorded in trp#292.
+ * The full agentrun-reconciler.ts machinery already existed (pln#496); this
+ * just wires it into the canonical-grammar read path so every read of
+ * `agent_run` produces converged state.
+ */
+function loadAgentRunsWithReconciliation(cwd: string): unknown[] {
+  const runs = listAgentRuns(cwd);
+  for (const run of runs) {
+    if (!TERMINAL_STATUSES.has(run.status)) {
+      try { reconcileAgentRun(run.id, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }
+    }
+  }
+  // Re-list to capture any transitions made above.
+  return listAgentRuns(cwd);
+}
+
+
 export function listEntities(
   name: EntityName,
   cwd: string,
@@ -203,7 +234,7 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'claim':               return listClaims(cwd);
     case 'action':              return listActionRequired(cwd);
     case 'assignment':          return listAssignments(cwd);
-    case 'agent_run':           return listAgentRuns(cwd);
+    case 'agent_run':           return loadAgentRunsWithReconciliation(cwd);
     case 'cross_project_link':  return resolveCrossProjectLinks(cwd);
     default:
       throw new EntityOperationUnsupportedError(name, 'find');

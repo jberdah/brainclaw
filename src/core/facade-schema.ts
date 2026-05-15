@@ -73,6 +73,23 @@ export const FacadeSideEffectSchema = z.object({
   id: z.string(),
 });
 
+/**
+ * Self-documenting verification hint attached to dispatch responses (pln#503
+ * phase 3.3). Tells the caller exactly which canonical-grammar call to make
+ * next to verify the spawn is actually doing work — `delivered_and_started`
+ * is a brief-ack signal, not proof of life. See dispatch-lifecycle.md.
+ */
+export const VerifyWithSchema = z.object({
+  action: z.literal('bclaw_find'),
+  entity: z.literal('agent_run'),
+  filter: z.object({ assignment_id: z.string() }),
+  /** Human-readable description of what to look for in the result. */
+  expected_when_alive: z.string(),
+  /** Doc pointer for the diagnostic flow when the check fails. */
+  see_also: z.string(),
+});
+export type VerifyWith = z.infer<typeof VerifyWithSchema>;
+
 export const FacadeResponseSchema = z.object({
   status: z.enum(['ok', 'error', 'partial']),
   intent: z.string(),
@@ -85,6 +102,8 @@ export const FacadeResponseSchema = z.object({
   session_id: z.string().optional(),
   warnings: z.array(z.string()),
   execution_status: ExecutionStatusSchema.optional(),
+  /** pln#503 phase 3.3: present when execution_status === 'delivered_and_started'. */
+  verify_with: VerifyWithSchema.optional(),
 });
 
 export type WorkIntent = z.infer<typeof WorkIntentSchema>;
