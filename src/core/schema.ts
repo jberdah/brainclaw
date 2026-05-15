@@ -246,6 +246,17 @@ export const HandoffSchema = z.object({
    */
   superseded_by: z.string().optional(),
   supersedes: z.string().optional(),
+  /**
+   * pln#365 finalization: opt-in cloud federation. Optional (no default) so
+   * existing on-disk handoffs without the field continue to parse, AND so
+   * an unset value means "stay local" rather than "implicitly shared". To
+   * opt a handoff into cloud push, set `visibility: 'shared'` explicitly
+   * when building it. Session-end push uses literal `visibility === 'shared'`
+   * (cf. session-end.ts:isExplicitlyShared). Risk it mitigates: a session
+   * handoff with `snapshot.diff` carrying secrets would otherwise leak the
+   * moment cloud_sync flips on, by virtue of being created at all.
+   */
+  visibility: MemoryVisibilitySchema.optional(),
 });
 export type Handoff = z.infer<typeof HandoffSchema>;
 
@@ -609,6 +620,13 @@ export const CandidateSchema = z.preprocess(candidatePreprocess, z.object({
   resolved_by: z.string().optional(),
   resolution_reason: z.string().optional(),
   provenance: ProvenancePassthroughSchema,
+  /**
+   * pln#365 finalization: opt-in cloud federation. Mirrors HandoffSchema —
+   * optional (no default) so unset means "stay local" and an agent must
+   * explicitly set `visibility: 'shared'` to opt a candidate into cloud
+   * push. Conservative because candidate.text can carry secrets.
+   */
+  visibility: MemoryVisibilitySchema.optional(),
 }));
 export type Candidate = z.infer<typeof CandidateSchema>;
 
