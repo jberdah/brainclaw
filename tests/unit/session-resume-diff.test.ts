@@ -35,10 +35,10 @@ describe('session resume: context_diff auto-surfacing', { concurrency: false }, 
     workspace.cleanup();
   });
 
-  it('includes context_diff when sinceSession points at a previous session snapshot', () => {
+  it('includes context_diff when sinceSession points at a previous session snapshot', async () => {
     // Start a first session — this creates the snapshot baseline
     process.env.BRAINCLAW_SESSION_ID = 'sess_resume_first';
-    const firstSnapshot = startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
+    const firstSnapshot = await startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
     assert.equal(firstSnapshot.session_id, 'sess_resume_first');
 
     // Add memory items AFTER the first session started
@@ -75,7 +75,7 @@ describe('session resume: context_diff auto-surfacing', { concurrency: false }, 
 
     // Start a second session — this is the "resume" scenario
     process.env.BRAINCLAW_SESSION_ID = 'sess_resume_second';
-    startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
+    await startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
 
     // Build context with sinceSession pointing at the first session
     const result = buildContext({
@@ -100,13 +100,13 @@ describe('session resume: context_diff auto-surfacing', { concurrency: false }, 
     assert.equal(result.context_diff, undefined);
   });
 
-  it('previous session lookup finds correct session for same agent', () => {
+  it('previous session lookup finds correct session for same agent', async () => {
     // Simulate the lookup logic used in session-start --include-context
     process.env.BRAINCLAW_SESSION_ID = 'sess_lookup_first';
-    startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
+    await startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
 
     process.env.BRAINCLAW_SESSION_ID = 'sess_lookup_second';
-    const secondSnapshot = startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
+    const secondSnapshot = await startSession({ cwd: workspace.dir, maintenanceMode: 'fast' });
 
     const allSessions = loadAllSessions(workspace.dir);
     const previousSession = allSessions.find(

@@ -3230,7 +3230,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (resolved.error && resolved.error.kind !== 'identity_error') {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
-      const result = startSession({
+      const result = await startSession({
         agent: resolved.identity?.agent_name ?? (typeof args.agent === 'string' ? args.agent : undefined),
         agentId: resolved.identity?.agent_id ?? (typeof args.agentId === 'string' ? args.agentId : undefined),
         context: args.context as string | undefined,
@@ -3374,7 +3374,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
-      const result = endSession({
+      const result = await endSession({
         session: args.session as string | undefined,
         agent: resolved.identity?.agent_name,
         agentId: resolved.identity?.agent_id,
@@ -4442,9 +4442,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const warnings: string[] = [];
 
       // Step 1: implicit session start (handles auto-registration internally)
-      let sessionResult: ReturnType<typeof startSession>;
+      let sessionResult: Awaited<ReturnType<typeof startSession>>;
       try {
-        sessionResult = startSession({
+        sessionResult = await startSession({
           agent: typeof args.agent === 'string' ? args.agent : undefined,
           agentId: typeof args.agentId === 'string' ? args.agentId : undefined,
           context: workReq.contextTarget,
@@ -6035,7 +6035,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
         effectiveConnectionSessionId = claim.session_id;
       } else {
         // First-ever connection for this claim — start a fresh session + adopt.
-        const sessionResult = startSession({ cwd, maintenanceMode: 'fast' });
+        const sessionResult = await startSession({ cwd, maintenanceMode: 'fast' });
         autoSessionId = sessionResult.session_id;
         effectiveConnectionSessionId = autoSessionId;
         try { adoptClaimSession(envClaimId, autoSessionId, cwd); } catch { /* best-effort */ }

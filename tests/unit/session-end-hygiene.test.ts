@@ -35,12 +35,12 @@ describe('0.7.0 session-end hygiene check', () => {
     workspace.cleanup();
   });
 
-  it('open_work_warning is undefined when agent has no active claims', () => {
-    const result = endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
+  it('open_work_warning is undefined when agent has no active claims', async () => {
+    const result = await endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
     assert.equal(result.open_work_warning, undefined);
   });
 
-  it('detects active claim in open_work_warning', () => {
+  it('detects active claim in open_work_warning', async () => {
     saveClaim({
       id: 'clm_hw001',
       agent: workspace.currentAgent.agent_name,
@@ -52,7 +52,7 @@ describe('0.7.0 session-end hygiene check', () => {
       schema_version: 2,
     }, workspace.dir);
 
-    const result = endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
+    const result = await endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
     assert.ok(result.open_work_warning);
     assert.equal(result.open_work_warning.active_claims.length, 1);
     assert.equal(result.open_work_warning.active_claims[0].id, 'clm_hw001');
@@ -60,7 +60,7 @@ describe('0.7.0 session-end hygiene check', () => {
     assert.equal(result.open_work_warning.auto_released, false);
   });
 
-  it('detects in_progress plan by assignee in open_work_warning', () => {
+  it('detects in_progress plan by assignee in open_work_warning', async () => {
     const state: State = {
       version: 1,
       write_version: 1,
@@ -85,13 +85,13 @@ describe('0.7.0 session-end hygiene check', () => {
     };
     saveState(state, workspace.dir);
 
-    const result = endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
+    const result = await endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
     assert.ok(result.open_work_warning);
     assert.equal(result.open_work_warning.in_progress_plans.length, 1);
     assert.equal(result.open_work_warning.in_progress_plans[0].id, 'pln_hw001');
   });
 
-  it('auto-release releases claims when --auto-release is set', () => {
+  it('auto-release releases claims when --auto-release is set', async () => {
     saveClaim({
       id: 'clm_hw002',
       agent: workspace.currentAgent.agent_name,
@@ -103,7 +103,7 @@ describe('0.7.0 session-end hygiene check', () => {
       schema_version: 2,
     }, workspace.dir);
 
-    const result = endSession({ session: 'sess_hygiene_test', autoRelease: true, cwd: workspace.dir });
+    const result = await endSession({ session: 'sess_hygiene_test', autoRelease: true, cwd: workspace.dir });
     assert.ok(result.open_work_warning);
     assert.equal(result.open_work_warning.auto_released, true);
 
@@ -114,7 +114,7 @@ describe('0.7.0 session-end hygiene check', () => {
     assert.equal(claim.status, 'released');
   });
 
-  it('does not include claims from other agents', () => {
+  it('does not include claims from other agents', async () => {
     saveClaim({
       id: 'clm_hw003',
       agent: 'someother',
@@ -126,7 +126,7 @@ describe('0.7.0 session-end hygiene check', () => {
       schema_version: 2,
     }, workspace.dir);
 
-    const result = endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
+    const result = await endSession({ session: 'sess_hygiene_test', cwd: workspace.dir });
     assert.equal(result.open_work_warning, undefined);
   });
 });

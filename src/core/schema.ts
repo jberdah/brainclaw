@@ -1111,6 +1111,13 @@ export const RemoteSyncSchema = z.object({
 });
 export type RemoteSync = z.infer<typeof RemoteSyncSchema>;
 
+export const CloudSyncConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  endpoint: z.string().default('https://app.brainclaw.dev'),
+  api_key: z.string().optional(),
+});
+export type CloudSyncConfig = z.infer<typeof CloudSyncConfigSchema>;
+
 export const SessionSnapshotSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   session_id: z.string(),
@@ -1472,6 +1479,7 @@ export const ConfigSchema = z.object({
   target_audience: z.enum(['human', 'agent']).optional().default('human'),
   openclaw_bridge: z.boolean().optional().default(false),
   remote_sync: RemoteSyncSchema.optional(),
+  cloud_sync: CloudSyncConfigSchema.optional(),
   telemetry: z.literal(false),
   allow_network: z.literal(false),
   redaction: RedactionConfigSchema,
