@@ -761,7 +761,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_add_step',
-    description: 'Add a sub-step to a plan item. Requires contributor trust level or above.',
+    description: 'Add a sub-step to a plan item. Requires contributor trust level or above. Pass `project` to target a step in a plan that lives in a linked project (same pattern as the canonical-grammar tools).',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -771,13 +771,14 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         assignee: { type: 'string', description: 'Optional assignee.' },
+        project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to add the step in. Defaults to the current project. Same resolution as canonical-grammar tools — accepts cross_project_links and workspace store-chain children.' },
       },
       required: ['planId', 'text'],
     },
   },
   {
     name: 'bclaw_complete_step',
-    description: 'Mark a plan sub-step as done. Requires contributor trust level or above.',
+    description: 'Mark a plan sub-step as done. Requires contributor trust level or above. Pass `project` to operate on a plan in a linked project.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -786,13 +787,14 @@ const MCP_WRITE_TOOLS = [
         stepId: { type: 'string', description: 'Step ID to complete.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to complete the step in. Defaults to the current project.' },
       },
       required: ['planId', 'stepId'],
     },
   },
   {
     name: 'bclaw_update_step',
-    description: 'Update a plan sub-step (status, text, assignee). Supports all step statuses: todo, in_progress, testing, done, blocked. Requires contributor trust level or above.',
+    description: 'Update a plan sub-step (status, text, assignee). Supports all step statuses: todo, in_progress, testing, done, blocked. Requires contributor trust level or above. Pass `project` to operate on a plan in a linked project.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -804,13 +806,14 @@ const MCP_WRITE_TOOLS = [
         assignee: { type: 'string', description: 'New assignee (empty string to unassign).' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to update the step in. Defaults to the current project.' },
       },
       required: ['planId', 'stepId'],
     },
   },
   {
     name: 'bclaw_delete_step',
-    description: 'Remove a sub-step from a plan. Requires contributor trust level or above.',
+    description: 'Remove a sub-step from a plan. Requires contributor trust level or above. Pass `project` to operate on a plan in a linked project.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -819,6 +822,7 @@ const MCP_WRITE_TOOLS = [
         stepId: { type: 'string', description: 'Step ID to delete.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
+        project: { type: 'string', description: 'Optional: name of a linked project to delete the step from. Defaults to the current project.' },
       },
       required: ['planId', 'stepId'],
     },
@@ -3962,8 +3966,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const stepText = String(args.text ?? '').trim();
       if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      const stepTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
-        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: args.assignee as string | undefined }, cwd);
+        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: args.assignee as string | undefined }, stepTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step added: [${result.stepId}] ${stepText} (${result.doneSteps}/${result.totalSteps} done)` }],
@@ -3994,8 +3999,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const csStepId = String(args.stepId ?? '').trim();
       if (!csPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!csStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
+      const csTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
-        const result = completeStepOp({ planId: csPlanId, stepId: csStepId }, cwd);
+        const result = completeStepOp({ planId: csPlanId, stepId: csStepId }, csTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step completed: [${result.stepId}] (${result.doneSteps}/${result.totalSteps} done)` }],
@@ -4031,6 +4037,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (args.status && !validStatuses.includes(String(args.status))) {
         return { response: createToolErrorResponse('validation_error', `Invalid status: ${args.status}. Valid: ${validStatuses.join(', ')}`) };
       }
+      const usTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
         const result = updateStepOp({
           planId: usPlanId,
@@ -4038,7 +4045,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           status: args.status as PlanStepStatus | undefined,
           text: args.text as string | undefined,
           assignee: args.assignee as string | undefined,
-        }, cwd);
+        }, usTargetCwd);
         const changes: string[] = [];
         if (args.status) changes.push(`status=${args.status}`);
         if (args.text) changes.push('text updated');
@@ -4074,8 +4081,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const dsStepId = String(args.stepId ?? '').trim();
       if (!dsPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!dsStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
+      const dsTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
-        const result = deleteStepOp({ planId: dsPlanId, stepId: dsStepId }, cwd);
+        const result = deleteStepOp({ planId: dsPlanId, stepId: dsStepId }, dsTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step deleted: [${result.stepId}] (${result.doneSteps}/${result.totalSteps} remaining)` }],
