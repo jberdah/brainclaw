@@ -58,7 +58,6 @@ import {
   type EntityName,
 } from './entity-registry.js';
 import { generateId } from './ids.js';
-import { z } from 'zod';
 import {
   CandidateTypeSchema,
   ConstraintCategorySchema,
@@ -479,7 +478,8 @@ export function updateEntity(
       // declared updatable fields (text, tags, estimated_effort, depends_on)
       // actually land. The typed surface still covers status/assignee/priority/
       // actualEffort for legacy CLI callers — see UpdatePlanInput.
-      validatePatchEnum(patch, 'type', PLAN_TYPES);
+      // Note: `plan.type` is intentionally create-only (not in plan.updatable
+      // at entity-registry.ts) — no validation needed here.
       validatePatchEnum(patch, 'priority', PrioritySchema.options);
       updatePlan({
         id,
@@ -508,8 +508,9 @@ export function updateEntity(
       return { entity: name, id };
     }
     case 'runtime_note': {
+      // Note: `note_type` is intentionally create-only (not in
+      // runtime_note.updatable at entity-registry.ts) — no validation needed.
       validatePatchEnum(patch, 'visibility', MemoryVisibilitySchema.options);
-      validatePatchEnum(patch, 'note_type', RUNTIME_NOTE_TYPES);
       const notes = listRuntimeNotes(undefined, cwd);
       const note = notes.find((n) => n.id === id);
       if (!note) throw new EntityNotFoundError(name, id);
@@ -525,7 +526,8 @@ export function updateEntity(
       return { entity: name, id };
     }
     case 'candidate': {
-      validatePatchEnum(patch, 'type', CandidateTypeSchema.options);
+      // Note: `candidate.type` is intentionally create-only (not in
+      // candidate.updatable at entity-registry.ts) — no validation needed.
       const candidate = loadCandidate(id, cwd);
       const patched = { ...candidate, ...patch } as Candidate;
       saveCandidate(patched, cwd);
