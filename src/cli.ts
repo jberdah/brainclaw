@@ -106,6 +106,8 @@ import { runMigrate } from './commands/migrate.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
 import { runHarvestCandidates } from './commands/harvest.js';
+import { runQuestionsCommand, type QuestionStatus } from './commands/questions.js';
+import { runReplyCommand } from './commands/reply.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
 
 const program = new Command();
@@ -2025,6 +2027,54 @@ if (isCodevEnabled()) {
       runCodevMetrics(thread, { ...options, cwd: globalOpts.cwd });
     });
 }
+
+// --- questions (operator-question artifacts across loops; pln#508 step 4) ---
+program
+  .command('questions')
+  .description('List pending operator_question artifacts across loops in the current project')
+  .option('--loop <loop_id>', 'Filter to a single loop')
+  .option('--status <status>', 'Filter by status: awaiting (default), answered, timed_out', 'awaiting')
+  .option('--mine', 'Filter to questions targeted at the current agent (v1 heuristic: humans see all awaiting)')
+  .option('--json', 'Output as JSON')
+  .action((options) => {
+    const globalOpts = program.opts();
+    const status = options.status as QuestionStatus;
+    if (!['awaiting', 'answered', 'timed_out'].includes(status)) {
+      console.error(`Error: --status must be one of awaiting|answered|timed_out (got "${options.status}")`);
+      process.exit(1);
+    }
+    runQuestionsCommand(
+      {
+        loop: options.loop,
+        status,
+        mine: options.mine,
+        json: options.json,
+      },
+      globalOpts.cwd,
+    );
+  });
+
+// --- reply (provide_input to an operator_question; pln#508 step 4) ---
+program
+  .command('reply <qst_id>')
+  .description('Resolve an operator_question artifact (wraps bclaw_loop.provide_input)')
+  .option('--answer <text>', 'Free-form answer text')
+  .option('--choose <option_id>', 'Pick one of the question\'s structured options[].id')
+  .option('--skip', 'Materialize the question\'s suggested_default')
+  .option('--json', 'Output as JSON')
+  .action((qstId, options) => {
+    const globalOpts = program.opts();
+    runReplyCommand(
+      qstId,
+      {
+        answer: options.answer,
+        choose: options.choose,
+        skip: options.skip,
+        json: options.json,
+      },
+      globalOpts.cwd,
+    );
+  });
 
 // --- run (agent profiles) ---
 program
