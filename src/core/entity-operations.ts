@@ -63,8 +63,26 @@ import {
   CandidateTypeSchema,
   ConstraintCategorySchema,
   DecisionOutcomeSchema,
+  MemoryVisibilitySchema,
+  PrioritySchema,
   SeveritySchema,
 } from './schema.js';
+
+/**
+ * Inline list of valid runtime_note.note_type values, mirroring the
+ * z.enum literal at RuntimeNoteSchema (schema.ts:920). Kept inline because
+ * the schema does not export the enum as a named constant; revisit if a
+ * named export is added.
+ */
+const RUNTIME_NOTE_TYPES = ['observation', 'session_start', 'session_end'] as const;
+
+/**
+ * Inline list of valid plan.type values, mirroring PlanTypeSchema
+ * (schema.ts:279). Inlined here because PlanTypeSchema is wrapped in
+ * `.default('feat')` which makes `.options` unreachable on the public
+ * Zod surface. Revisit if the schema exports the inner enum directly.
+ */
+const PLAN_TYPES = ['feat', 'fix', 'chore', 'spike', 'doc'] as const;
 import type {
   AssignmentStatus,
   Candidate,
@@ -328,8 +346,8 @@ export function createEntity(
       const res = createPlan({
         text: requireString(data, 'text'),
         author: requireString(data, 'author'),
-        type: data.type as PlanItem['type'] | undefined,
-        priority: data.priority as PlanItem['priority'] | undefined,
+        type: requireEnum(data, 'type', PLAN_TYPES, { optional: true }),
+        priority: requireEnum(data, 'priority', PrioritySchema.options, { optional: true }),
         assignee: data.assignee as string | undefined,
         project: data.project as string | undefined,
         tags: data.tags as string[] | undefined,
@@ -382,8 +400,8 @@ export function createEntity(
         text: requireString(data, 'text'),
         created_at: new Date().toISOString(),
         tags: (data.tags as string[] | undefined) ?? [],
-        visibility: (data.visibility as RuntimeNote['visibility']) ?? 'shared',
-        note_type: (data.note_type as RuntimeNote['note_type']) ?? 'observation',
+        visibility: requireEnum(data, 'visibility', MemoryVisibilitySchema.options, { optional: true }) ?? 'shared',
+        note_type: requireEnum(data, 'note_type', RUNTIME_NOTE_TYPES, { optional: true }) ?? 'observation',
         provenance: defaultProvenance(data),
         ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
         ...(data.project_id ? { project_id: data.project_id as string } : {}),
@@ -461,6 +479,8 @@ export function updateEntity(
       // declared updatable fields (text, tags, estimated_effort, depends_on)
       // actually land. The typed surface still covers status/assignee/priority/
       // actualEffort for legacy CLI callers — see UpdatePlanInput.
+      validatePatchEnum(patch, 'type', PLAN_TYPES);
+      validatePatchEnum(patch, 'priority', PrioritySchema.options);
       updatePlan({
         id,
         patch: patch as Partial<PlanItem>,
@@ -473,6 +493,13 @@ export function updateEntity(
       // Same generic-patch escape-hatch for memory items. Registry declares
       // severity, scope, related_paths, expires_at, etc. as updatable; the
       // legacy explicit text/tags whitelist silently dropped them.
+      if (name === 'decision') {
+        validatePatchEnum(patch, 'outcome', DecisionOutcomeSchema.options);
+      } else if (name === 'constraint') {
+        validatePatchEnum(patch, 'category', ConstraintCategorySchema.options);
+      } else {
+        validatePatchEnum(patch, 'severity', SeveritySchema.options);
+      }
       updateMemoryItem({
         id,
         type: name,
@@ -481,6 +508,8 @@ export function updateEntity(
       return { entity: name, id };
     }
     case 'runtime_note': {
+      validatePatchEnum(patch, 'visibility', MemoryVisibilitySchema.options);
+      validatePatchEnum(patch, 'note_type', RUNTIME_NOTE_TYPES);
       const notes = listRuntimeNotes(undefined, cwd);
       const note = notes.find((n) => n.id === id);
       if (!note) throw new EntityNotFoundError(name, id);
@@ -496,6 +525,7 @@ export function updateEntity(
       return { entity: name, id };
     }
     case 'candidate': {
+      validatePatchEnum(patch, 'type', CandidateTypeSchema.options);
       const candidate = loadCandidate(id, cwd);
       const patched = { ...candidate, ...patch } as Candidate;
       saveCandidate(patched, cwd);
@@ -716,4 +746,27 @@ function requireEnum<T extends string>(
     );
   }
   return value as T;
+}
+
+/**
+ * Validates that, if `patch[field]` is present (and not null/undefined), it
+ * matches one of `validValues`. Used by updateEntity for enum-shaped patch
+ * fields, to extend the same validation parity used at create time. Codex
+ * round 1 (pln#509 step 1 review) correctly flagged that updateEntity was
+ * still vulnerable to the same silent persistence bug when patching enum
+ * fields with invalid values. Fields not present in `patch` are ignored.
+ */
+function validatePatchEnum(
+  patch: Record<string, unknown>,
+  field: string,
+  validValues: readonly string[],
+): void {
+  if (!(field in patch)) return;
+  const value = patch[field];
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string' || !(validValues as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid value for '${field}' in patch: got ${JSON.stringify(value)}. Expected one of: ${validValues.join(' | ')}`,
+    );
+  }
 }
