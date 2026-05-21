@@ -14,6 +14,8 @@ import {
   listLoopEvents,
   openLoop,
   pause,
+  provideInput,
+  requestInput,
   resume,
   turn,
   type LoopThread,
@@ -411,5 +413,161 @@ describe('closeLoop interaction with verbs', () => {
     closeLoop({ id: loop.id, final_status: 'completed', actor: 'agt_test' }, cwd);
     const onDisk = getLoop(loop.id, cwd);
     assert.equal(onDisk?.status, 'completed');
+  });
+});
+
+/* ============= pln#508 step 3 — FSM invariant regression coverage ========== */
+
+describe('FSM invariant 1 — assertMutable refuses terminal loops on every mutating verb', () => {
+  let cwd: string;
+  before(() => { cwd = makeWorkspace(); });
+  after(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  function closedLoop(status: 'completed' | 'cancelled' | 'blocked'): LoopThread {
+    const loop = openReview(cwd);
+    closeLoop({ id: loop.id, final_status: status, actor: 'agt_test' }, cwd);
+    return getLoop(loop.id, cwd)!;
+  }
+
+  it('advance refuses on completed', () => {
+    const loop = closedLoop('completed');
+    assert.throws(() => advance({ id: loop.id, actor: 'agt_test' }, cwd), /already completed/);
+  });
+
+  it('turn refuses on cancelled', () => {
+    const loop = closedLoop('cancelled');
+    assert.throws(
+      () => turn({ id: loop.id, slot_id: loop.slots[0].slot_id, actor: 'agt_test' }, cwd),
+      /already cancelled/,
+    );
+  });
+
+  it('complete_turn refuses on blocked', () => {
+    const loop = closedLoop('blocked');
+    assert.throws(
+      () =>
+        complete_turn(
+          { id: loop.id, slot_id: loop.slots[0].slot_id, outcome: 'done', actor: 'agt_test' },
+          cwd,
+        ),
+      /already blocked/,
+    );
+  });
+
+  it('add_artifact refuses on completed', () => {
+    const loop = closedLoop('completed');
+    assert.throws(
+      () =>
+        add_artifact(
+          {
+            id: loop.id,
+            actor: 'agt_test',
+            artifact: { phase: loop.current_phase, type: 'note', body: 'late' },
+          },
+          cwd,
+        ),
+      /already completed/,
+    );
+  });
+
+  it('request_input refuses on cancelled', () => {
+    const loop = closedLoop('cancelled');
+    assert.throws(
+      () =>
+        requestInput(
+          {
+            loop_id: loop.id,
+            slot_id: loop.slots[0].slot_id,
+            phase: loop.current_phase,
+            question_text: 'too late',
+            evidence: ['e'],
+            pause_scope: 'loop',
+            on_timeout: 'continue_incomplete',
+            actor: 'agt_test',
+          },
+          cwd,
+        ),
+      /already cancelled/,
+    );
+  });
+
+  it('provide_input refuses on cancelled', () => {
+    // Build a paused-on-question loop first, then cancel it, then attempt to
+    // resolve the question. The terminal check should fire before the
+    // duplicate-replay or unknown-question branches.
+    const loop = openReview(cwd);
+    const slot = loop.slots[0];
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const ask = requestInput(
+      {
+        loop_id: loop.id,
+        slot_id: slot.slot_id,
+        phase: loop.current_phase,
+        question_text: 'will not be answered',
+        evidence: ['e'],
+        suggested_default: 'X',
+        pause_scope: 'loop',
+        on_timeout: 'use_default',
+        timeout_at: future,
+        actor: 'agt_test',
+      },
+      cwd,
+    );
+    closeLoop({ id: loop.id, final_status: 'cancelled', actor: 'agt_test' }, cwd);
+    assert.throws(
+      () =>
+        provideInput(
+          {
+            loop_id: loop.id,
+            replies_to: ask.question_id,
+            resolved_via: 'answer',
+            answer_text: 'too late',
+            actor: 'agt_test',
+          },
+          cwd,
+        ),
+      /already cancelled/,
+    );
+  });
+});
+
+describe('FSM invariant 2 — pause() pause_reason coercion + freeform back-compat', () => {
+  // Design decision (pln#508 step 3): pause() does NOT reject freeform
+  // `reason` strings — it accepts them for backward compatibility with
+  // legacy callers and only coerces them onto `thread.pause_reason` when
+  // they match the PAUSE_REASONS enum. New callers should pass the
+  // structured `pause_reason` parameter instead.
+  let cwd: string;
+  before(() => { cwd = makeWorkspace(); });
+  after(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('coerces a known PauseReason from the freeform reason onto thread.pause_reason', () => {
+    const loop = openReview(cwd);
+    const paused = pause({ id: loop.id, reason: 'awaiting_operator', actor: 'agt_test' }, cwd);
+    assert.equal(paused.pause_reason, 'awaiting_operator');
+  });
+
+  it('honours the structured pause_reason param when set, even with a freeform reason alongside', () => {
+    const loop = openReview(cwd);
+    const paused = pause(
+      { id: loop.id, reason: 'a freeform string', pause_reason: 'awaiting_file_apply', actor: 'agt_test' },
+      cwd,
+    );
+    assert.equal(paused.pause_reason, 'awaiting_file_apply');
+  });
+
+  it('accepts freeform reason without throwing (back-compat); pause_reason stays undefined', () => {
+    const loop = openReview(cwd);
+    const paused = pause({ id: loop.id, reason: 'operator afk', actor: 'agt_test' }, cwd);
+    assert.equal(paused.status, 'paused');
+    assert.equal(paused.pause_reason, undefined);
+  });
+
+  it('resume() clears pause_reason so the schema invariant holds', () => {
+    const loop = openReview(cwd);
+    pause({ id: loop.id, pause_reason: 'awaiting_operator', actor: 'agt_test' }, cwd);
+    const resumed = resume({ id: loop.id, actor: 'agt_test' }, cwd);
+    assert.equal(resumed.status, 'open');
+    assert.equal(resumed.pause_reason, undefined);
   });
 });
