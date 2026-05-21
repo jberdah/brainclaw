@@ -58,6 +58,13 @@ import {
   type EntityName,
 } from './entity-registry.js';
 import { generateId } from './ids.js';
+import { z } from 'zod';
+import {
+  CandidateTypeSchema,
+  ConstraintCategorySchema,
+  DecisionOutcomeSchema,
+  SeveritySchema,
+} from './schema.js';
 import type {
   AssignmentStatus,
   Candidate,
@@ -337,7 +344,7 @@ export function createEntity(
       const res = createDecision({
         text: requireString(data, 'text'),
         author: requireString(data, 'author'),
-        outcome: data.outcome as Decision['outcome'],
+        outcome: requireEnum(data, 'outcome', DecisionOutcomeSchema.options, { optional: true }),
         tags: data.tags as string[] | undefined,
         relatedPaths: data.related_paths as string[] | undefined,
         planId: data.plan_id as string | undefined,
@@ -349,7 +356,7 @@ export function createEntity(
       const res = createConstraint({
         text: requireString(data, 'text'),
         author: requireString(data, 'author'),
-        category: data.category as Constraint['category'],
+        category: requireEnum(data, 'category', ConstraintCategorySchema.options, { optional: true }),
         tags: data.tags as string[] | undefined,
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
@@ -360,7 +367,7 @@ export function createEntity(
       const res = createTrap({
         text: requireString(data, 'text'),
         author: requireString(data, 'author'),
-        severity: (data.severity ?? 'medium') as Trap['severity'],
+        severity: requireEnum(data, 'severity', SeveritySchema.options, { optional: true }) ?? 'medium',
         tags: data.tags as string[] | undefined,
         relatedPaths: data.related_paths as string[] | undefined,
       }, cwd);
@@ -388,9 +395,15 @@ export function createEntity(
     }
     case 'candidate': {
       const id = generateId('candidate');
+      const validatedType = requireEnum(data, 'type', CandidateTypeSchema.options);
+      if (!validatedType) {
+        // requireEnum without `optional` throws on missing/invalid, but
+        // narrow the type for the assignment below.
+        throw new Error(`Missing required field: type`);
+      }
       const candidate: Candidate = {
         id,
-        type: requireString(data, 'type') as Candidate['type'],
+        type: validatedType,
         text: requireString(data, 'text'),
         created_at: new Date().toISOString(),
         author: requireString(data, 'author'),
@@ -670,4 +683,37 @@ function requireString(data: Record<string, unknown>, field: string): string {
     throw new Error(`Missing required field: ${field}`);
   }
   return value;
+}
+
+/**
+ * Validates that data[field] is one of `validValues`, throwing a clear
+ * error message when the value is invalid. Fixes the silent-data-loss bug
+ * documented in candidate can_a3458961 + pln#509 step 1: previously the
+ * create path used unchecked `as` casts on enum fields, so invalid values
+ * (e.g. outcome:'accepted' instead of 'approved') were written to disk and
+ * then silently skipped at load time by the strict Zod parser. Now we
+ * validate at write time against the same valid-value lists used by the
+ * load-time schemas.
+ *
+ * Callers pass `XxxSchema.options` (a readonly tuple of valid strings)
+ * rather than the schema itself — this avoids brittle generic constraints
+ * on Zod's enum type which differs between major versions.
+ */
+function requireEnum<T extends string>(
+  data: Record<string, unknown>,
+  field: string,
+  validValues: readonly T[],
+  opts: { optional?: boolean } = {},
+): T | undefined {
+  const value = data[field];
+  if (value === undefined || value === null) {
+    if (opts.optional) return undefined;
+    throw new Error(`Missing required field: ${field}`);
+  }
+  if (typeof value !== 'string' || !(validValues as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid value for '${field}': got ${JSON.stringify(value)}. Expected one of: ${validValues.join(' | ')}`,
+    );
+  }
+  return value as T;
 }
