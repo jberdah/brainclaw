@@ -15,8 +15,13 @@ export type ReviewMode = (typeof REVIEW_MODES)[number];
  * Slot lifecycle states. `done` / `failed` / `cancelled` are terminal and
  * mirror the `complete_turn` outcome so a caller reading the thread can
  * observe the per-slot outcome without replaying the event journal.
+ *
+ * pln#508 step 1 — `waiting_input` added to support the bootstrap loop's
+ * operator-question primitive. A slot in `waiting_input` is non-terminal:
+ * the engine resumes it back to `working` once its open_question is
+ * answered (see request_input/provide_input intents, pln#508 step 2).
  */
-export const SLOT_STATUSES = ['open', 'assigned', 'working', 'done', 'failed', 'cancelled'] as const;
+export const SLOT_STATUSES = ['open', 'assigned', 'working', 'waiting_input', 'done', 'failed', 'cancelled'] as const;
 export type SlotStatus = (typeof SLOT_STATUSES)[number];
 
 export const TERMINAL_SLOT_STATUSES: readonly SlotStatus[] = ['done', 'failed', 'cancelled'] as const;
@@ -129,6 +134,27 @@ export type LoopIteration = z.infer<typeof LoopIterationSchema>;
 export const LoopProtocolConfigSchema = z.object({
   review_mode: z.enum(REVIEW_MODES).optional(),
   iteration: LoopIterationSchema.optional(),
+  /**
+   * pln#508 step 1 — protocol preset selector. When set (e.g. `'bootstrap'`),
+   * the coordinate facade routes preset-specific behaviors (close hook,
+   * phase config, dispatch eligibility) keyed off this value. Loops without
+   * a preset fall back to kind-default behavior.
+   */
+  preset: z.string().min(1).optional(),
+  /**
+   * pln#508 step 1 — cap on operator_question artifacts per loop. Enforced
+   * at request_input intent time (pln#508 step 2). Bootstrap preset sets
+   * this to 3 to prevent the "agent defers everything to the human" failure
+   * mode documented in feedback_agent_autonomy_gap.md.
+   */
+  max_operator_questions: z.number().int().positive().optional(),
+  /**
+   * pln#508 step 1 — ISO-8601 duration string (e.g. 'P7D') capping how long
+   * a loop may stay in status='paused' before the timeout machinery fires.
+   * Used by request_input artifacts with on_timeout policy. Bootstrap
+   * preset defaults to 'P7D'.
+   */
+  max_pause_duration: z.string().min(1).optional(),
 });
 export type LoopProtocolConfig = z.infer<typeof LoopProtocolConfigSchema>;
 
@@ -143,6 +169,175 @@ export const LoopSlotSchema = z.object({
   status: z.enum(SLOT_STATUSES),
 });
 export type LoopSlot = z.infer<typeof LoopSlotSchema>;
+
+// ───────────────────────────────────────────────────────────────────────
+// pln#508 step 1 — bootstrap loop foundation: operator-interaction schemas
+// ───────────────────────────────────────────────────────────────────────
+//
+// These body schemas validate the JSON payload encoded in LoopArtifact.body
+// for the artifact types introduced by the bootstrap loop preset and
+// generally reusable for any human-in-the-loop primitive. Step 2's
+// request_input / provide_input handlers parse and validate via
+// `KNOWN_ARTIFACT_BODY_SCHEMAS[type]`.
+
+/** Where the operator pause applies: just the asking slot, or the whole loop. */
+export const PAUSE_SCOPES = ['slot', 'loop'] as const;
+export type PauseScope = (typeof PAUSE_SCOPES)[number];
+
+/** What the engine should do when an operator_question times out (Phase 0 spec §6). */
+export const ON_TIMEOUT_POLICIES = ['use_default', 'cancel_loop', 'continue_incomplete'] as const;
+export type OnTimeoutPolicy = (typeof ON_TIMEOUT_POLICIES)[number];
+
+/** How an operator_answer arrived (Phase 0 spec §2). */
+export const RESOLVED_VIA = ['answer', 'choose', 'skip', 'timeout_default'] as const;
+export type ResolvedVia = (typeof RESOLVED_VIA)[number];
+
+/** Reasons a loop may be paused. Maintained alongside LoopThread.pause_reason. */
+export const PAUSE_REASONS = ['awaiting_operator', 'awaiting_file_apply'] as const;
+export type PauseReason = (typeof PAUSE_REASONS)[number];
+
+export const OperatorQuestionOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  tradeoff: z.string().optional(),
+});
+export type OperatorQuestionOption = z.infer<typeof OperatorQuestionOptionSchema>;
+
+/**
+ * Operator question artifact body. The Champion records the question the
+ * operator must answer, with `evidence` (anti-autonomy-gap: the slot must
+ * show it tried), an optional `suggested_default` (used by skip / timeout
+ * resolution), and an optional `options` set (2..4) that enables structured
+ * `--choose` replies via the CLI.
+ */
+export const OperatorQuestionBodySchema = z
+  .object({
+    question_id: z.string().regex(/^qst_[0-9a-z]+$/),
+    question_text: z.string().min(1).max(500),
+    evidence: z.array(z.string().min(1)).min(1),
+    suggested_default: z.string().optional(),
+    options: z.array(OperatorQuestionOptionSchema).min(2).max(4).optional(),
+    pause_scope: z.enum(PAUSE_SCOPES),
+    on_timeout: z.enum(ON_TIMEOUT_POLICIES),
+    timeout_at: z.string().datetime().optional(),
+  })
+  .superRefine((q, ctx) => {
+    if (q.options && q.suggested_default !== undefined) {
+      const optionIds = new Set(q.options.map((o) => o.id));
+      if (!optionIds.has(q.suggested_default)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `OperatorQuestion.suggested_default "${q.suggested_default}" must match an options[].id when options is present`,
+          path: ['suggested_default'],
+        });
+      }
+    }
+    if (q.on_timeout === 'use_default' && q.suggested_default === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorQuestion.on_timeout=use_default requires suggested_default to be set',
+        path: ['on_timeout'],
+      });
+    }
+  });
+export type OperatorQuestionBody = z.infer<typeof OperatorQuestionBodySchema>;
+
+/**
+ * Operator answer artifact body. `replies_to` correlates to a question_id
+ * tracked in `LoopThread.open_questions`. `by` distinguishes human-provided
+ * answers from system-synthesized ones (timeout default fallback); synthetic
+ * answers MUST be flagged so audit can identify them.
+ */
+export const OperatorAnswerBodySchema = z
+  .object({
+    replies_to: z.string().regex(/^qst_[0-9a-z]+$/),
+    resolved_via: z.enum(RESOLVED_VIA),
+    answer_text: z.string().optional(),
+    chosen_option_id: z.string().optional(),
+    by: z.enum(['operator', 'system']),
+    synthetic: z.boolean().optional(),
+  })
+  .superRefine((a, ctx) => {
+    if (a.by === 'system' && a.resolved_via !== 'timeout_default') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorAnswer.by="system" requires resolved_via="timeout_default" (synthetic answers can only be timeout-induced)',
+        path: ['resolved_via'],
+      });
+    }
+    if (a.by === 'system' && a.synthetic !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorAnswer.by="system" must have synthetic=true for audit clarity',
+        path: ['synthetic'],
+      });
+    }
+    const hasText = a.answer_text !== undefined;
+    const hasChosen = a.chosen_option_id !== undefined;
+    if (hasText && hasChosen) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorAnswer must have exactly one of {answer_text, chosen_option_id}, not both',
+        path: ['answer_text'],
+      });
+    }
+    if (!hasText && !hasChosen) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorAnswer must have exactly one of {answer_text, chosen_option_id}',
+        path: ['answer_text'],
+      });
+    }
+  });
+export type OperatorAnswerBody = z.infer<typeof OperatorAnswerBodySchema>;
+
+/**
+ * Ref-based artifact body — used by project_md_draft, project_md_final,
+ * signals_report, file_diff. The artifact's actual content lives at
+ * `.brainclaw/coordination/loops/<loop_id>/artifacts/<ref>`. The body
+ * JSON itself carries only metadata: path, size, content hash. This sidesteps
+ * the 4 KiB LOOP_ARTIFACT_BODY_MAX_BYTES limit empirically hit during the
+ * pln#508 design session (PROJECT.md + AGENTS.md = 6,714 bytes; unified
+ * diffs are bigger).
+ */
+export const RefBasedArtifactBodySchema = z.object({
+  ref: z.string().min(1),
+  byte_count: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type RefBasedArtifactBody = z.infer<typeof RefBasedArtifactBodySchema>;
+
+/**
+ * Set of artifact `type` strings whose `body` MUST be a JSON-encoded
+ * RefBasedArtifactBody. Validation lives in LoopArtifactSchema's
+ * superRefine below — older artifact types (proposal, critique, plan_draft,
+ * etc.) keep freeform-string body semantics for backward compatibility.
+ */
+export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
+  'project_md_draft',
+  'project_md_final',
+  'signals_report',
+  'file_diff',
+]);
+
+/**
+ * Lookup table mapping known artifact types to their body Zod schemas.
+ * Step 2 handlers (request_input/provide_input) parse `artifact.body` as
+ * JSON and call `safeParse` on `KNOWN_ARTIFACT_BODY_SCHEMAS[type]`.
+ *
+ * Types not listed keep the legacy freeform-body behavior — no body schema
+ * is enforced. This preserves backward compatibility with proposal / critique
+ * / revision / plan_draft / change_summary artifacts produced before pln#508.
+ */
+export const KNOWN_ARTIFACT_BODY_SCHEMAS = {
+  operator_question: OperatorQuestionBodySchema,
+  operator_answer: OperatorAnswerBodySchema,
+  project_md_draft: RefBasedArtifactBodySchema,
+  project_md_final: RefBasedArtifactBodySchema,
+  signals_report: RefBasedArtifactBodySchema,
+  file_diff: RefBasedArtifactBodySchema,
+} as const;
+export type KnownArtifactType = keyof typeof KNOWN_ARTIFACT_BODY_SCHEMAS;
 
 export const LoopArtifactSchema = z
   .object({
@@ -188,6 +383,38 @@ export const LoopArtifactSchema = z
             "LoopArtifact of type 'plan_draft' must include addresses_critique:[ids] " +
             '(at least one) so synthesis can be audited against the critiques it folded in',
           path: ['addresses_critique'],
+        });
+      }
+    }
+    // pln#508 step 1 — validate the body of known-typed artifacts against
+    // their schema. For ref-based types (project_md_*, signals_report,
+    // file_diff) this enforces metadata-only bodies (ref + sha256 + byte_count)
+    // and rejects raw markdown/diff content inline. For operator_question /
+    // operator_answer it validates the structured fields used by the
+    // request_input/provide_input intents (step 2). Older artifact types
+    // (proposal, critique, revision, change_summary, plan_draft, ...) are
+    // not in KNOWN_ARTIFACT_BODY_SCHEMAS and keep freeform body semantics.
+    if (artifact.body !== undefined && artifact.type in KNOWN_ARTIFACT_BODY_SCHEMAS) {
+      const schema = KNOWN_ARTIFACT_BODY_SCHEMAS[artifact.type as KnownArtifactType];
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(artifact.body);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `LoopArtifact type="${artifact.type}" requires body to be a JSON-encoded payload; got non-JSON content`,
+          path: ['body'],
+        });
+        return;
+      }
+      const result = schema.safeParse(parsed);
+      if (!result.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `LoopArtifact type="${artifact.type}" body failed schema validation: ` +
+            result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+          path: ['body'],
         });
       }
     }
@@ -253,6 +480,35 @@ export const LoopThreadSchema = z
     linked: LoopLinksSchema.optional(),
     stop_condition: StopConditionSchema.optional(),
 
+    /**
+     * pln#508 step 1 — set of unresolved operator_question artifact ids.
+     * The engine maintains this on every request_input / provide_input
+     * intent (step 2). Default `[]` for backward compatibility with loops
+     * created before this schema field landed.
+     */
+    open_questions: z.array(z.string().regex(/^qst_[0-9a-z]+$/)).default([]),
+    /**
+     * pln#508 step 1 — why the loop is paused, when status='paused'. The
+     * two valid reasons cover the bootstrap loop's operator-question and
+     * file-overwrite-approval primitives. Old paused loops without this
+     * field continue to load; only newly-paused loops are required to set it.
+     */
+    pause_reason: z.enum(PAUSE_REASONS).optional(),
+    /**
+     * pln#508 step 1 — set when `pause_reason='awaiting_file_apply'`.
+     * Carries the source artifact (project_md_final), target file path,
+     * and the diff artifact the operator is approving. The file is only
+     * written once an operator_answer with resolved_via in
+     * {answer, choose} lands AND the answer indicates approval.
+     */
+    pending_file_apply: z
+      .object({
+        artifact_id: z.string().min(1),
+        target_path: z.string().min(1),
+        diff_artifact_id: z.string().min(1),
+      })
+      .optional(),
+
     created_at: z.string().datetime(),
     updated_at: z.string().datetime(),
     closed_at: z.string().datetime().optional(),
@@ -273,6 +529,28 @@ export const LoopThreadSchema = z
         code: z.ZodIssueCode.custom,
         message: `LoopThread.current_phase "${thread.current_phase}" is not in phases`,
         path: ['current_phase'],
+      });
+    }
+    // pln#508 step 1 — pause_reason / pending_file_apply invariants.
+    // We intentionally do NOT enforce "status=paused requires pause_reason"
+    // because pre-existing paused loops on disk may lack it; that bidirectional
+    // invariant is enforced by the request_input handler in step 2 at write
+    // time, not by the load-time schema.
+    if (thread.pause_reason !== undefined && thread.status !== 'paused') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `LoopThread.pause_reason is set ("${thread.pause_reason}") but status is "${thread.status}" — pause_reason requires status="paused"`,
+        path: ['pause_reason'],
+      });
+    }
+    if (thread.pending_file_apply !== undefined && thread.pause_reason !== 'awaiting_file_apply') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          `LoopThread.pending_file_apply is set but pause_reason is ` +
+          `${thread.pause_reason === undefined ? 'undefined' : `"${thread.pause_reason}"`}` +
+          ' — pending_file_apply requires pause_reason="awaiting_file_apply"',
+        path: ['pending_file_apply'],
       });
     }
   });

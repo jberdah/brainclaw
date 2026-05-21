@@ -322,6 +322,7 @@ describe('loops — evaluateStopCondition', () => {
     phases: [{ name: 'findings' }, { name: 'verdict' }],
     current_phase: 'findings',
     iteration_count: 0,
+    open_questions: [],
     slots: [],
     artifacts: [],
     created_at: new Date().toISOString(),

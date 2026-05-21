@@ -34,6 +34,7 @@ function makeThread(over: Partial<LoopThread> = {}): LoopThread {
     ],
     current_phase: 'proposal',
     iteration_count: 0,
+    open_questions: [],
     slots: [],
     artifacts: [],
     created_at: '2026-05-06T12:00:00.000Z',

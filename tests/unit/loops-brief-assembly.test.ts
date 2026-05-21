@@ -40,6 +40,7 @@ function makeThread(over: Partial<LoopThread> = {}): LoopThread {
     ],
     current_phase: 'critique',
     iteration_count: 0,
+    open_questions: [],
     slots: [],
     artifacts: [
       {

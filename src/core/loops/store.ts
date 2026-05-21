@@ -151,6 +151,9 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
     iteration_count: 0,
     slots,
     artifacts: [],
+    // pln#508 step 1 — bootstrap loop primitives. Default to no open
+    // questions; the request_input handler (step 2) appends/removes ids.
+    open_questions: [],
     linked: input.linked,
     stop_condition: input.stop_condition ?? protocolDefaults.stop_condition,
     created_at: now,
