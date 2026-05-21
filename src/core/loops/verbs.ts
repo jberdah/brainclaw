@@ -15,6 +15,12 @@ import {
   type LoopSlot,
   type LoopStatus,
   type LoopThread,
+  type OnTimeoutPolicy,
+  type OperatorAnswerBody,
+  type OperatorQuestionBody,
+  type OperatorQuestionOption,
+  type PauseScope,
+  type ResolvedVia,
   type StopCondition,
 } from './types.js';
 import {
@@ -679,6 +685,386 @@ export function resume(input: PauseResumeInput, cwd?: string): LoopThread {
   }
   return commitSimpleStatus(current, 'open', 'resumed', input.actor, input.reason, cwd);
 }
+
+/* =============== pln#508 step 2 — request_input / provide_input ============ */
+
+export interface RequestInputInput {
+  loop_id: string;
+  slot_id: string;
+  phase: string;
+  question_text: string;
+  evidence: string[];
+  suggested_default?: string;
+  options?: OperatorQuestionOption[];
+  pause_scope: PauseScope;
+  on_timeout: OnTimeoutPolicy;
+  timeout_at?: string;
+  actor: string;
+}
+
+export interface RequestInputResult {
+  thread: LoopThread;
+  question_id: string;
+  artifact_id: string;
+}
+
+/**
+ * Atomic operator-question primitive (Phase 0 spec §3).
+ *
+ * Validates the question body against `OperatorQuestionBodySchema` (via
+ * `LoopArtifactSchema.parse` in `add_artifact`-style construction), enforces
+ * the protocol's `max_operator_questions` cap, appends the question to the
+ * loop's `open_questions`, and pauses either the asking slot
+ * (`pause_scope='slot'` → slot.status=waiting_input) or the whole loop
+ * (`pause_scope='loop'` → loop.status=paused, pause_reason='awaiting_operator').
+ *
+ * Refuses on terminal status or when status !== 'open' (no compounding
+ * pauses — see Phase 0 spec §5, INVARIANT 1/2).
+ */
+export function requestInput(input: RequestInputInput, cwd?: string): RequestInputResult {
+  const current = loadLoopOrThrow(input.loop_id, cwd);
+  assertMutable(current, 'request_input');
+  if (current.status !== 'open') {
+    throw new Error(
+      `request_input: loop ${current.id} is "${current.status}", cannot accept new questions ` +
+      `(no compounding pauses — resolve current open_questions first)`,
+    );
+  }
+
+  const max = current.protocol?.max_operator_questions;
+  if (max !== undefined) {
+    const existing = current.artifacts.filter((a) => a.type === 'operator_question').length;
+    if (existing >= max) {
+      throw new Error(
+        `request_input: loop ${current.id} has reached max_operator_questions=${max}; ` +
+        `champion must derive remaining answers autonomously`,
+      );
+    }
+  }
+
+  const slot = current.slots.find((s) => s.slot_id === input.slot_id);
+  if (!slot) {
+    throw new Error(`request_input: slot ${input.slot_id} not found on loop ${current.id}`);
+  }
+
+  const question_id = `qst_${crypto.randomBytes(6).toString('hex')}`;
+  const questionBody: OperatorQuestionBody = {
+    question_id,
+    question_text: input.question_text,
+    evidence: input.evidence,
+    suggested_default: input.suggested_default,
+    options: input.options,
+    pause_scope: input.pause_scope,
+    on_timeout: input.on_timeout,
+    timeout_at: input.timeout_at,
+    by_slot_id: input.slot_id,
+  };
+
+  const now = nowISO();
+  const mutation_id = generateMutationId();
+  const version = current.version + 1;
+
+  // LoopArtifactSchema.parse runs the body schema validation for
+  // type='operator_question' via KNOWN_ARTIFACT_BODY_SCHEMAS — so any
+  // invariant violation (empty evidence, options size, on_timeout vs
+  // suggested_default) surfaces here.
+  const newArtifact = LoopArtifactSchema.parse({
+    artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
+    phase: input.phase,
+    type: 'operator_question',
+    body: JSON.stringify(questionBody),
+    produced_by: slot.agent_id ?? slot.agent ?? input.actor,
+    produced_at: now,
+    iteration: current.iteration_count,
+  });
+
+  let nextStatus: LoopStatus = current.status;
+  let nextPauseReason = current.pause_reason;
+  let nextSlots: LoopSlot[] = current.slots;
+  const fromSlotStatus = slot.status;
+
+  if (input.pause_scope === 'loop') {
+    nextStatus = 'paused';
+    nextPauseReason = 'awaiting_operator';
+  } else {
+    nextSlots = current.slots.map((s) =>
+      s.slot_id === input.slot_id ? { ...s, status: 'waiting_input' as const } : s,
+    );
+  }
+
+  const next: LoopThread = {
+    ...current,
+    version,
+    mutation_id,
+    artifacts: [...current.artifacts, newArtifact],
+    open_questions: [...current.open_questions, question_id],
+    status: nextStatus,
+    pause_reason: nextPauseReason,
+    slots: nextSlots,
+    updated_at: now,
+  };
+
+  let seq = nextSeq(current.id, cwd);
+
+  appendEvent(
+    current.id,
+    {
+      event_id: crypto.randomUUID(),
+      loop_id: current.id,
+      seq,
+      at: now,
+      by: input.actor,
+      mutation_id,
+      kind: 'input_requested',
+      question_id,
+      pause_scope: input.pause_scope,
+      by_slot_id: input.slot_id,
+    },
+    cwd,
+  );
+
+  if (input.pause_scope === 'slot') {
+    seq += 1;
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'slot_status_changed',
+        slot_id: input.slot_id,
+        from_status: fromSlotStatus,
+        to_status: 'waiting_input',
+      },
+      cwd,
+    );
+  }
+
+  writeThreadFile(next, cwd);
+  return { thread: next, question_id, artifact_id: newArtifact.artifact_id };
+}
+
+export interface ProvideInputInput {
+  loop_id: string;
+  replies_to: string;
+  resolved_via: ResolvedVia;
+  answer_text?: string;
+  chosen_option_id?: string;
+  /** Defaults to 'operator'. Engine timeout sweep calls this with 'system'. */
+  by?: 'operator' | 'system';
+  actor: string;
+}
+
+export interface ProvideInputResult {
+  thread: LoopThread;
+  artifact_id: string;
+  /** True when `replies_to` was already resolved before this call (idempotent replay). */
+  duplicate: boolean;
+}
+
+/**
+ * Resolves an open operator_question with an operator (or synthetic
+ * timeout-default) answer. Phase 0 spec §3 atomic operation:
+ *   1. Resolve `replies_to`:
+ *        - In `open_questions` → proceed.
+ *        - Else, find existing operator_answer with same `replies_to` →
+ *          return the existing artifact (idempotent replay).
+ *        - Else → throw `unknown_question`.
+ *   2. Materialize `answer_text` / `chosen_option_id` from the source
+ *      question's `suggested_default` when `resolved_via='skip'` or
+ *      `'timeout_default'` and the caller didn't pass them.
+ *   3. Append the operator_answer artifact (validated body).
+ *   4. Remove the question_id from `open_questions`.
+ *   5. Resume: if source had `pause_scope='slot'`, transition the asking
+ *      slot back to 'working'. If `pause_scope='loop'` AND open_questions
+ *      now empty AND pause_reason='awaiting_operator', resume the loop.
+ *   6. Emit `input_provided` (+ `slot_status_changed` for slot scope).
+ */
+export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInputResult {
+  const current = loadLoopOrThrow(input.loop_id, cwd);
+  // assertMutable allows paused loops (we need to resume them); only
+  // refuse terminal status.
+  if (current.status === 'completed' || current.status === 'cancelled' || current.status === 'blocked') {
+    throw new Error(`provide_input: loop ${current.id} is already ${current.status}`);
+  }
+
+  const isOpen = current.open_questions.includes(input.replies_to);
+
+  if (!isOpen) {
+    // Idempotent-replay path: look for an existing operator_answer with
+    // matching replies_to in the artifact list.
+    const existing = current.artifacts.find((a) => {
+      if (a.type !== 'operator_answer' || !a.body) return false;
+      try {
+        const parsed = JSON.parse(a.body) as { replies_to?: string };
+        return parsed.replies_to === input.replies_to;
+      } catch {
+        return false;
+      }
+    });
+    if (existing) {
+      return { thread: current, artifact_id: existing.artifact_id, duplicate: true };
+    }
+    throw new Error(
+      `provide_input: unknown_question — replies_to "${input.replies_to}" is not in ` +
+      `open_questions and no existing operator_answer artifact references it`,
+    );
+  }
+
+  // Locate the source question to determine pause_scope and by_slot_id.
+  const sourceQuestion = current.artifacts.find((a) => {
+    if (a.type !== 'operator_question' || !a.body) return false;
+    try {
+      const parsed = JSON.parse(a.body) as { question_id?: string };
+      return parsed.question_id === input.replies_to;
+    } catch {
+      return false;
+    }
+  });
+
+  if (!sourceQuestion || !sourceQuestion.body) {
+    throw new Error(
+      `provide_input: question ${input.replies_to} is in open_questions but its artifact ` +
+      `was not found on the loop — state corruption`,
+    );
+  }
+  const sourceBody = JSON.parse(sourceQuestion.body) as OperatorQuestionBody;
+
+  // Materialize default values for skip / timeout_default resolutions.
+  let answerText = input.answer_text;
+  let chosenOptionId = input.chosen_option_id;
+  if (
+    (input.resolved_via === 'skip' || input.resolved_via === 'timeout_default') &&
+    answerText === undefined &&
+    chosenOptionId === undefined
+  ) {
+    if (sourceBody.suggested_default === undefined) {
+      throw new Error(
+        `provide_input: resolved_via="${input.resolved_via}" without an explicit ` +
+        `answer requires the source question to have suggested_default set`,
+      );
+    }
+    if (sourceBody.options) {
+      chosenOptionId = sourceBody.suggested_default;
+    } else {
+      answerText = sourceBody.suggested_default;
+    }
+  }
+
+  const by = input.by ?? 'operator';
+  const synthetic = by === 'system';
+  const answerBody: OperatorAnswerBody = {
+    replies_to: input.replies_to,
+    resolved_via: input.resolved_via,
+    answer_text: answerText,
+    chosen_option_id: chosenOptionId,
+    by,
+    synthetic: synthetic ? true : undefined,
+  };
+
+  const now = nowISO();
+  const mutation_id = generateMutationId();
+  const version = current.version + 1;
+
+  const newArtifact = LoopArtifactSchema.parse({
+    artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
+    phase: sourceQuestion.phase,
+    type: 'operator_answer',
+    body: JSON.stringify(answerBody),
+    produced_by: by === 'system' ? 'engine' : input.actor,
+    produced_at: now,
+    iteration: current.iteration_count,
+  });
+
+  const nextOpenQuestions = current.open_questions.filter((q) => q !== input.replies_to);
+
+  let nextStatus = current.status;
+  let nextPauseReason = current.pause_reason;
+  let nextSlots = current.slots;
+  let resumedSlotId: string | undefined;
+  let resumedSlotFromStatus: LoopSlot['status'] | undefined;
+
+  if (sourceBody.pause_scope === 'slot') {
+    const slotId = sourceBody.by_slot_id;
+    if (slotId) {
+      const slot = current.slots.find((s) => s.slot_id === slotId);
+      if (slot && slot.status === 'waiting_input') {
+        resumedSlotId = slotId;
+        resumedSlotFromStatus = slot.status;
+        nextSlots = current.slots.map((s) =>
+          s.slot_id === slotId ? { ...s, status: 'working' as const } : s,
+        );
+      }
+    }
+  } else if (
+    sourceBody.pause_scope === 'loop' &&
+    nextOpenQuestions.length === 0 &&
+    current.pause_reason === 'awaiting_operator'
+  ) {
+    nextStatus = 'open';
+    nextPauseReason = undefined;
+  }
+
+  const next: LoopThread = {
+    ...current,
+    version,
+    mutation_id,
+    artifacts: [...current.artifacts, newArtifact],
+    open_questions: nextOpenQuestions,
+    status: nextStatus,
+    pause_reason: nextPauseReason,
+    slots: nextSlots,
+    updated_at: now,
+  };
+
+  let seq = nextSeq(current.id, cwd);
+
+  appendEvent(
+    current.id,
+    {
+      event_id: crypto.randomUUID(),
+      loop_id: current.id,
+      seq,
+      at: now,
+      by: input.actor,
+      mutation_id,
+      kind: 'input_provided',
+      question_id: input.replies_to,
+      resolved_via: input.resolved_via,
+      answered_by: by,
+      synthetic,
+    },
+    cwd,
+  );
+
+  if (resumedSlotId && resumedSlotFromStatus) {
+    seq += 1;
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'slot_status_changed',
+        slot_id: resumedSlotId,
+        from_status: resumedSlotFromStatus,
+        to_status: 'working',
+      },
+      cwd,
+    );
+  }
+
+  writeThreadFile(next, cwd);
+  return { thread: next, artifact_id: newArtifact.artifact_id, duplicate: false };
+}
+
+/* =========================== /pln#508 step 2 ============================== */
 
 function commitSimpleStatus(
   current: LoopThread,

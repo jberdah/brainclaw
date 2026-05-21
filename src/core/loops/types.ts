@@ -220,6 +220,15 @@ export const OperatorQuestionBodySchema = z
     pause_scope: z.enum(PAUSE_SCOPES),
     on_timeout: z.enum(ON_TIMEOUT_POLICIES),
     timeout_at: z.string().datetime().optional(),
+    /**
+     * pln#508 step 2 — slot that asked the question. Set by the
+     * `request_input` handler from its `slot_id` parameter so the
+     * `provide_input` handler can find the right slot to resume when
+     * `pause_scope='slot'`. Optional for forward compatibility with
+     * questions created from non-slot contexts (e.g. timeout-synthesized
+     * answers don't need it; pause_scope='loop' doesn't need it either).
+     */
+    by_slot_id: z.string().min(1).optional(),
   })
   .superRefine((q, ctx) => {
     if (q.options && q.suggested_default !== undefined) {
@@ -641,6 +650,52 @@ export const LoopEventSchema = z.discriminatedUnion('kind', [
     phase: z.string().min(1),
     iteration: z.number().int().nonnegative(),
     max_iterations: z.number().int().positive(),
+  }),
+  // pln#508 step 2 — bootstrap loop operator-interaction events.
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('input_requested'),
+    question_id: z.string().regex(/^qst_[0-9a-z]+$/),
+    pause_scope: z.enum(PAUSE_SCOPES),
+    by_slot_id: z.string().min(1),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('input_provided'),
+    question_id: z.string().regex(/^qst_[0-9a-z]+$/),
+    resolved_via: z.enum(RESOLVED_VIA),
+    /**
+     * Whose answer this is — `'operator'` for human-provided, `'system'`
+     * for engine-synthesized (timeout default). Named `answered_by` to
+     * avoid clashing with `LoopEventBaseShape.by` (event actor / source).
+     */
+    answered_by: z.enum(['operator', 'system']),
+    synthetic: z.boolean(),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('slot_status_changed'),
+    slot_id: z.string().min(1),
+    from_status: z.enum(SLOT_STATUSES),
+    to_status: z.enum(SLOT_STATUSES),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('pause_timeout'),
+    question_id: z.string().regex(/^qst_[0-9a-z]+$/),
+    action_taken: z.enum(ON_TIMEOUT_POLICIES),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('file_apply_requested'),
+    artifact_id: z.string().min(1),
+    target_path: z.string().min(1),
+  }),
+  z.object({
+    ...LoopEventBaseShape,
+    kind: z.literal('file_apply_resolved'),
+    artifact_id: z.string().min(1),
+    approved: z.boolean(),
   }),
 ]);
 export type LoopEvent = z.infer<typeof LoopEventSchema>;

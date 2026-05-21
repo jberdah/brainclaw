@@ -19,6 +19,8 @@ export {
   evaluatePhaseAdvanceGate,
   evaluateStopCondition,
   pause,
+  provideInput,
+  requestInput,
   resume,
   turn,
   type AddArtifactInput,
@@ -27,6 +29,10 @@ export {
   type CompleteTurnInput,
   type PauseResumeInput,
   type PhaseAdvanceOutcome,
+  type ProvideInputInput,
+  type ProvideInputResult,
+  type RequestInputInput,
+  type RequestInputResult,
   type TurnInput,
 } from './verbs.js';
 export {

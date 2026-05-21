@@ -7,6 +7,10 @@ import {
   LoopPhaseSchema,
   LoopRefSchema,
   LoopSlotSchema,
+  ON_TIMEOUT_POLICIES,
+  OperatorQuestionOptionSchema,
+  PAUSE_SCOPES,
+  RESOLVED_VIA,
   REVIEW_MODES,
   StopConditionSchema,
 } from './types.js';
@@ -149,6 +153,66 @@ export const BclawLoopCloseSchema = z.object({
   ...CallerEnvelopeFields,
 });
 
+/**
+ * pln#508 step 2 — `bclaw_loop(intent='request_input')`.
+ *
+ * A slot pauses on an operator question. The handler generates a fresh
+ * `question_id`, JSON-encodes the OperatorQuestionBody, attaches it as an
+ * `operator_question` artifact, appends the id to `LoopThread.open_questions`,
+ * and transitions either the slot (`pause_scope='slot'` → status=waiting_input)
+ * or the whole loop (`pause_scope='loop'` → status=paused, pause_reason='awaiting_operator').
+ *
+ * Refused when the loop is not in status='open' (no compounding pauses) and
+ * when `loop.protocol.max_operator_questions` is already reached (anti
+ * autonomy-gap cap, e.g. the bootstrap preset sets max=3).
+ */
+export const BclawLoopRequestInputSchema = z.object({
+  intent: z.literal('request_input'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  slot_id: z.string().min(1),
+  phase: z.string().min(1),
+  question_text: z.string().min(1).max(500),
+  evidence: z.array(z.string().min(1)).min(1),
+  suggested_default: z.string().optional(),
+  options: z.array(OperatorQuestionOptionSchema).min(2).max(4).optional(),
+  pause_scope: z.enum(PAUSE_SCOPES),
+  on_timeout: z.enum(ON_TIMEOUT_POLICIES),
+  timeout_at: z.string().datetime().optional(),
+  expected_version: z.number().int().nonnegative().optional(),
+  ...CallerEnvelopeFields,
+});
+
+/**
+ * pln#508 step 2 — `bclaw_loop(intent='provide_input')`.
+ *
+ * Resolves an open operator_question. Idempotency: if `replies_to` is no
+ * longer in `loop.open_questions` but an existing operator_answer artifact
+ * references it, the existing answer is returned (no new artifact created).
+ * Unknown `replies_to` → `unknown_question` error.
+ *
+ * Resume logic:
+ * - If the source question had `pause_scope='slot'`, the asking slot
+ *   (`by_slot_id`) transitions from `waiting_input` back to `working`.
+ * - If `pause_scope='loop'` AND `open_questions` becomes empty AND the
+ *   loop is paused on `awaiting_operator`, the loop resumes to status='open'.
+ */
+export const BclawLoopProvideInputSchema = z.object({
+  intent: z.literal('provide_input'),
+  loop_id: z.string().regex(/^lop_[0-9a-z]+$/),
+  replies_to: z.string().regex(/^qst_[0-9a-z]+$/),
+  resolved_via: z.enum(RESOLVED_VIA),
+  answer_text: z.string().optional(),
+  chosen_option_id: z.string().optional(),
+  /**
+   * Defaults to 'operator'. The timeout machinery (pln#508 step 3) calls
+   * the underlying verb with `by='system'` to create synthetic answers,
+   * but external callers should leave this absent.
+   */
+  by: z.enum(['operator', 'system']).optional(),
+  expected_version: z.number().int().nonnegative().optional(),
+  ...CallerEnvelopeFields,
+});
+
 export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopOpenSchema,
   BclawLoopGetSchema,
@@ -160,6 +224,8 @@ export const BclawLoopRequestSchema = z.discriminatedUnion('intent', [
   BclawLoopPauseSchema,
   BclawLoopResumeSchema,
   BclawLoopCloseSchema,
+  BclawLoopRequestInputSchema,
+  BclawLoopProvideInputSchema,
 ]);
 
 export type BclawLoopRequest = z.infer<typeof BclawLoopRequestSchema>;
@@ -176,4 +242,6 @@ export const BCLAW_LOOP_INTENTS = [
   'pause',
   'resume',
   'close',
+  'request_input',
+  'provide_input',
 ] as const;

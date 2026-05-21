@@ -16,6 +16,8 @@ import {
   LockTimeoutError,
   openLoop,
   pause,
+  provideInput,
+  requestInput,
   resume,
   turn,
   VersionConflictError,
@@ -582,6 +584,78 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
             [],
             Date.now() - startMs,
             summarizeLoop(loop),
+          );
+        });
+      }
+
+      case 'request_input': {
+        return withLockedLoopMutation(req, agentId, options.cwd, () => {
+          const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
+          const result = requestInput(
+            {
+              loop_id: req.loop_id,
+              slot_id: req.slot_id,
+              phase: req.phase,
+              question_text: req.question_text,
+              evidence: req.evidence,
+              suggested_default: req.suggested_default,
+              options: req.options,
+              pause_scope: req.pause_scope,
+              on_timeout: req.on_timeout,
+              timeout_at: req.timeout_at,
+              actor,
+            },
+            options.cwd,
+          );
+          const newEvents = findNewLoopEvents(result.thread.id, beforeEvents, options.cwd);
+          return successResponse(
+            'request_input',
+            {
+              loop: result.thread,
+              question_id: result.question_id,
+              artifact_id: result.artifact_id,
+              next_expected: computeNextExpected(result.thread),
+            },
+            [loopArtifactEntry(result.thread.id), ...loopEventArtifacts(newEvents)],
+            [sideEffectUpdate('loop', result.thread.id), ...loopEventSideEffects(newEvents)],
+            [],
+            Date.now() - startMs,
+            summarizeLoop(result.thread),
+          );
+        });
+      }
+
+      case 'provide_input': {
+        return withLockedLoopMutation(req, agentId, options.cwd, () => {
+          const beforeEvents = snapshotLoopEvents(req.loop_id, options.cwd);
+          const result = provideInput(
+            {
+              loop_id: req.loop_id,
+              replies_to: req.replies_to,
+              resolved_via: req.resolved_via,
+              answer_text: req.answer_text,
+              chosen_option_id: req.chosen_option_id,
+              by: req.by,
+              actor,
+            },
+            options.cwd,
+          );
+          const newEvents = findNewLoopEvents(result.thread.id, beforeEvents, options.cwd);
+          return successResponse(
+            'provide_input',
+            {
+              loop: result.thread,
+              artifact_id: result.artifact_id,
+              duplicate: result.duplicate,
+              next_expected: computeNextExpected(result.thread),
+            },
+            [loopArtifactEntry(result.thread.id), ...loopEventArtifacts(newEvents)],
+            [sideEffectUpdate('loop', result.thread.id), ...loopEventSideEffects(newEvents)],
+            result.duplicate
+              ? ['provide_input: idempotent replay — replies_to was already resolved; returning existing answer']
+              : [],
+            Date.now() - startMs,
+            summarizeLoop(result.thread),
           );
         });
       }
