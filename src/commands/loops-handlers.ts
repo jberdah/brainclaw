@@ -52,7 +52,7 @@ export interface HandleBclawLoopResult {
 type ValidRequest = BclawLoopRequest;
 type LoopEventSnapshot = Set<string>;
 type NextExpectedHint = {
-  action: 'turn' | 'complete_turn' | 'advance' | 'close';
+  action: 'turn' | 'complete_turn' | 'provide_input' | 'advance' | 'close';
   intent: string;
   reason?: string;
   phase?: string;
@@ -248,6 +248,14 @@ function computeNextExpected(loop: LoopThread): {
 } | null {
   if (loop.status === 'completed' || loop.status === 'cancelled' || loop.status === 'blocked') {
     return null;
+  }
+  if (loop.open_questions.length > 0) {
+    return {
+      action: 'provide_input',
+      intent: 'bclaw_loop.provide_input',
+      reason: loop.status === 'paused' ? loop.pause_reason : 'awaiting_operator',
+      blocking_on: loop.open_questions,
+    };
   }
   if (loop.status === 'paused') {
     return null;

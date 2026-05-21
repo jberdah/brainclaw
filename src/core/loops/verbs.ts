@@ -730,6 +730,12 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
       `(no compounding pauses — resolve current open_questions first)`,
     );
   }
+  if (current.open_questions.length > 0) {
+    throw new Error(
+      `request_input: loop ${current.id} already has open_questions=${current.open_questions.length}; ` +
+      `resolve existing operator question(s) before requesting another`,
+    );
+  }
 
   const max = current.protocol?.max_operator_questions;
   if (max !== undefined) {
@@ -745,6 +751,9 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
   const slot = current.slots.find((s) => s.slot_id === input.slot_id);
   if (!slot) {
     throw new Error(`request_input: slot ${input.slot_id} not found on loop ${current.id}`);
+  }
+  if (slot.status === 'done' || slot.status === 'failed' || slot.status === 'cancelled') {
+    throw new Error(`request_input: slot ${input.slot_id} is terminal (${slot.status})`);
   }
 
   const question_id = `qst_${crypto.randomBytes(6).toString('hex')}`;

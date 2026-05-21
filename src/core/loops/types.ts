@@ -274,6 +274,13 @@ export const OperatorAnswerBodySchema = z
         path: ['resolved_via'],
       });
     }
+    if (a.resolved_via === 'timeout_default' && a.by !== 'system') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'OperatorAnswer.resolved_via="timeout_default" requires by="system"',
+        path: ['by'],
+      });
+    }
     if (a.by === 'system' && a.synthetic !== true) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
