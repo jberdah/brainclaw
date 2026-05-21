@@ -11,7 +11,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate, rende
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { collectLoadValidationWarnings, findLoadValidationWarning, loadState, persistState, saveState } from '../core/state.js';
 import { generateIdWithLabel } from '../core/ids.js';
 import { memoryExists } from '../core/io.js';
 import { generateCandidateIdWithLabel, loadCandidate, saveCandidate } from '../core/candidates.js';
@@ -78,6 +78,7 @@ import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from 
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode, validateAgentForDispatch } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
+import { sweepDeadPidRunningAgentRunsAtRead } from '../core/agentrun-reconciler.js';
 import {
   createAssignment,
   generateAssignmentId,
@@ -761,19 +762,28 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_add_step',
-    description: 'Add a sub-step to a plan item. Requires contributor trust level or above. Pass `project` to target a step in a plan that lives in a linked project (same pattern as the canonical-grammar tools).',
+    description: 'Add a sub-step to a plan item. Canonical shape is `{ planId, data: { text, title?, assignee? } }`; legacy top-level `{ text, assignee }` still works for backward compatibility. If both are present, data.* wins and a warning is emitted. Requires contributor trust level or above. Pass `project` to target a step in a plan that lives in a linked project (same pattern as the canonical-grammar tools).',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         planId: { type: 'string', description: 'Plan item ID.' },
-        text: { type: 'string', description: 'Step description.' },
+        data: {
+          type: 'object',
+          description: 'Canonical step payload: { text, title?, assignee? }. title is accepted as an alias for text.',
+          properties: {
+            text: { type: 'string', description: 'Step description.' },
+            title: { type: 'string', description: 'Alias for text.' },
+            assignee: { type: 'string', description: 'Optional assignee.' },
+          },
+        },
+        text: { type: 'string', description: 'Legacy top-level step description; prefer data.text.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
-        assignee: { type: 'string', description: 'Optional assignee.' },
+        assignee: { type: 'string', description: 'Legacy top-level optional assignee; prefer data.assignee.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to add the step in. Defaults to the current project. Same resolution as canonical-grammar tools — accepts cross_project_links and workspace store-chain children.' },
       },
-      required: ['planId', 'text'],
+      required: ['planId'],
     },
   },
   {
@@ -1173,13 +1183,13 @@ const MCP_WRITE_TOOLS = [
   // Promoted to `standard` tier at the v1.0 cut.
   {
     name: 'bclaw_find',
-    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Pass `project` to query a linked project instead of the current one.',
+    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Tag filters accept `tag: string` for one tag or `tags: string[]` for any-match. For entity="agent_run", filters also accept assignment_id, claim_id, and message_id. Pass `project` to query a linked project instead of the current one.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
-        filter: { type: 'object', description: 'Filter keys: status, tag, author, plan_id, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6).' },
+        filter: { type: 'object', description: 'Filter keys: status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). entity=agent_run also accepts assignment_id, claim_id, message_id.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
       },
       required: ['entity'],
@@ -3963,12 +3973,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
       const stepPlanId = String(args.planId ?? '').trim();
-      const stepText = String(args.text ?? '').trim();
+      const stepData = args.data && typeof args.data === 'object' && !Array.isArray(args.data)
+        ? args.data as Record<string, unknown>
+        : {};
+      if ((args.text !== undefined || args.assignee !== undefined) && Object.keys(stepData).length > 0) {
+        console.warn('[brainclaw:warn] bclaw_add_step received legacy top-level fields alongside data.*; using data.* values');
+      }
+      const stepTextRaw = stepData.text ?? stepData.title ?? args.text;
+      const stepText = typeof stepTextRaw === 'string' ? stepTextRaw.trim() : '';
+      const stepAssignee = (stepData.assignee ?? args.assignee) as string | undefined;
       if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
-      if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
+      if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: data.text') };
       const stepTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
-        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: args.assignee as string | undefined }, stepTargetCwd);
+        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: stepAssignee }, stepTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step added: [${result.stepId}] ${stepText} (${result.doneSteps}/${result.totalSteps} done)` }],
@@ -5868,10 +5886,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // applied when it hadn't. Under the new contract, an unknown key is
         // a validation_error listing the keys actually honored.
         const KNOWN_FILTER_KEYS = new Set([
-          'status', 'tag', 'author', 'plan_id', 'source', 'auto_generated',
+          'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
+          'assignment_id', 'claim_id', 'message_id',
           'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
         ]);
-        const unknownKeys = Object.keys(filter).filter((k) => !KNOWN_FILTER_KEYS.has(k));
+        const agentRunOnlyFilterKeys = new Set(['assignment_id', 'claim_id', 'message_id']);
+        const unknownKeys = Object.keys(filter).filter((k) =>
+          !KNOWN_FILTER_KEYS.has(k) || (agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run')
+        );
         if (unknownKeys.length > 0) {
           return {
             response: createToolErrorResponse(
@@ -5883,6 +5905,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
         const result = listEntities(entity, targetCwd, filter);
+        const warnings = collectLoadValidationWarnings(entity, targetCwd);
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
         // Prior to this fix we spread `...result` at top-level of the
@@ -5892,7 +5915,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)` }],
-            structuredContent: { ...result },
+            structuredContent: { ...result, warnings },
           }),
         };
       } catch (error: unknown) {
@@ -5905,6 +5928,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const entity = String(args.entity ?? '') as EntityName;
         const id = String(args.id ?? '');
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const validationWarning = findLoadValidationWarning(entity, id, targetCwd);
+        if (validationWarning) {
+          return {
+            response: toolResponse({
+              content: [{ type: 'text', text: `✖ ${entity} ${id} failed validation at load` }],
+              structuredContent: {
+                ok: false,
+                error: 'validation_failed',
+                entity_id: validationWarning.entity_id,
+                validation_errors: validationWarning.validation_errors,
+                path: validationWarning.path,
+              },
+            }, true),
+          };
+        }
         const item = getEntity(entity, id, targetCwd);
         return {
           response: toolResponse({
@@ -6106,6 +6144,10 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     try {
       bumpActiveAssignmentHeartbeat(envClaimId, undefined, cwd);
     } catch { /* best-effort */ }
+  }
+
+  if ((payload.name === 'bclaw_find' || payload.name === 'bclaw_get') && payload.args.entity === 'agent_run') {
+    try { sweepDeadPidRunningAgentRunsAtRead(cwd); } catch { /* best-effort */ }
   }
 
   // ── Delegate to inner handler ───────────────────────────────────────────────

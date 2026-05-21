@@ -30,7 +30,7 @@ import { listClaims } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
-import { reconcileAgentRun, TERMINAL_STATUSES } from './agentrun-reconciler.js';
+import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
 import {
   deleteRuntimeNote,
   listRuntimeNotes,
@@ -63,25 +63,11 @@ import {
   ConstraintCategorySchema,
   DecisionOutcomeSchema,
   MemoryVisibilitySchema,
+  PlanTypeEnumSchema,
   PrioritySchema,
+  RuntimeNoteTypeSchema,
   SeveritySchema,
 } from './schema.js';
-
-/**
- * Inline list of valid runtime_note.note_type values, mirroring the
- * z.enum literal at RuntimeNoteSchema (schema.ts:920). Kept inline because
- * the schema does not export the enum as a named constant; revisit if a
- * named export is added.
- */
-const RUNTIME_NOTE_TYPES = ['observation', 'session_start', 'session_end'] as const;
-
-/**
- * Inline list of valid plan.type values, mirroring PlanTypeSchema
- * (schema.ts:279). Inlined here because PlanTypeSchema is wrapped in
- * `.default('feat')` which makes `.options` unreachable on the public
- * Zod surface. Revisit if the schema exports the inner enum directly.
- */
-const PLAN_TYPES = ['feat', 'fix', 'chore', 'spike', 'doc'] as const;
 import type {
   AssignmentStatus,
   Candidate,
@@ -156,8 +142,12 @@ export class InvalidTransitionError extends Error {
 export interface EntityFilter {
   status?: string;
   tag?: string;
+  tags?: string[];
   author?: string;
   plan_id?: string;
+  assignment_id?: string;
+  claim_id?: string;
+  message_id?: string;
   limit?: number;
   offset?: number;
   /**
@@ -226,6 +216,10 @@ export interface TransitionResult {
 function loadAgentRunsWithReconciliation(cwd: string): unknown[] {
   const runs = listAgentRuns(cwd);
   for (const run of runs) {
+    if (run.status === 'running') {
+      try { reconcileDeadPidRunningAgentRunAtRead(run.id, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }
+      continue;
+    }
     if (!TERMINAL_STATUSES.has(run.status)) {
       try { reconcileAgentRun(run.id, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }
     }
@@ -276,11 +270,25 @@ function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
       Array.isArray(item.tags) && (item.tags as unknown[]).includes(filter.tag),
     );
   }
+  if (Array.isArray(filter.tags) && filter.tags.length > 0) {
+    result = result.filter((item) =>
+      Array.isArray(item.tags) && filter.tags!.some((tag) => (item.tags as unknown[]).includes(tag)),
+    );
+  }
   if (filter.author) {
     result = result.filter((item) => item.author === filter.author);
   }
   if (filter.plan_id) {
     result = result.filter((item) => item.plan_id === filter.plan_id);
+  }
+  if (filter.assignment_id) {
+    result = result.filter((item) => item.assignment_id === filter.assignment_id);
+  }
+  if (filter.claim_id) {
+    result = result.filter((item) => item.claim_id === filter.claim_id);
+  }
+  if (filter.message_id) {
+    result = result.filter((item) => item.message_id === filter.message_id);
   }
   if (filter.source) {
     result = result.filter((item) => item.source === filter.source);
@@ -345,7 +353,7 @@ export function createEntity(
       const res = createPlan({
         text: requireString(data, 'text'),
         author: requireString(data, 'author'),
-        type: requireEnum(data, 'type', PLAN_TYPES, { optional: true }),
+        type: requireEnum(data, 'type', PlanTypeEnumSchema.options, { optional: true }),
         priority: requireEnum(data, 'priority', PrioritySchema.options, { optional: true }),
         assignee: data.assignee as string | undefined,
         project: data.project as string | undefined,
@@ -400,7 +408,7 @@ export function createEntity(
         created_at: new Date().toISOString(),
         tags: (data.tags as string[] | undefined) ?? [],
         visibility: requireEnum(data, 'visibility', MemoryVisibilitySchema.options, { optional: true }) ?? 'shared',
-        note_type: requireEnum(data, 'note_type', RUNTIME_NOTE_TYPES, { optional: true }) ?? 'observation',
+        note_type: requireEnum(data, 'note_type', RuntimeNoteTypeSchema.options, { optional: true }) ?? 'observation',
         provenance: defaultProvenance(data),
         ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
         ...(data.project_id ? { project_id: data.project_id as string } : {}),

@@ -276,7 +276,8 @@ export const PlanStepSchema = z.object({
 });
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
-export const PlanTypeSchema = z.enum(['feat', 'fix', 'chore', 'spike', 'doc']).default('feat');
+export const PlanTypeEnumSchema = z.enum(['feat', 'fix', 'chore', 'spike', 'doc']);
+export const PlanTypeSchema = PlanTypeEnumSchema.default('feat');
 export type PlanType = z.infer<typeof PlanTypeSchema>;
 
 export const PlanItemSchema = z.object({
@@ -902,6 +903,8 @@ export type ActionRequired = z.infer<typeof ActionRequiredSchema>;
 
 // --- Runtime notes schemas ---
 
+export const RuntimeNoteTypeSchema = z.enum(['observation', 'session_start', 'session_end']);
+
 export const RuntimeNoteSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   id: z.string(),
@@ -917,7 +920,7 @@ export const RuntimeNoteSchema = z.object({
   visibility: MemoryVisibilitySchema.default('shared'),
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
-  note_type: z.enum(['observation', 'session_start', 'session_end']).default('observation'),
+  note_type: RuntimeNoteTypeSchema.default('observation'),
   model: z.string().optional(),
   provenance: ProvenancePassthroughSchema,
 });

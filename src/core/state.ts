@@ -10,6 +10,12 @@ import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentTyp
 import { rebuildProjectMd } from './markdown.js';
 import { refreshLiveCompanions } from '../commands/export.js';
 import { logger } from './logger.js';
+
+export interface LoadValidationWarning {
+  entity_id: string;
+  validation_errors: string[];
+  path: string;
+}
 export function emptyState(): State {
   return {
     version: 1,
@@ -40,6 +46,70 @@ function loadDirectoryItems<T>(
     }
   }
   return items;
+}
+
+const ENTITY_LOAD_CONFIG = {
+  constraint: { subdir: 'constraints', documentType: 'constraint', recursive: false },
+  decision: { subdir: 'decisions', documentType: 'decision', recursive: false },
+  trap: { subdir: 'traps', documentType: 'trap', recursive: false },
+  handoff: { subdir: 'handoffs', documentType: 'handoff', recursive: false },
+  plan: { subdir: 'plans', documentType: 'plan', recursive: false },
+  candidate: { subdir: 'inbox', documentType: 'candidate', recursive: false },
+  claim: { subdir: 'claims', documentType: 'claim', recursive: false },
+  assignment: { subdir: 'assignments', documentType: 'assignment', recursive: false },
+  agent_run: { subdir: 'runs', documentType: 'agent_run', recursive: false },
+  action: { subdir: 'actions', documentType: 'action_required', recursive: false },
+  runtime_note: { subdir: 'runtime', documentType: 'runtime_note', recursive: true },
+} as const satisfies Record<string, { subdir: string; documentType: VersionedDocumentType; recursive: boolean }>;
+
+type LoadableEntityName = keyof typeof ENTITY_LOAD_CONFIG;
+
+function listJsonFiles(dirPath: string, recursive: boolean): string[] {
+  if (!fs.existsSync(dirPath)) return [];
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(dirPath).sort()) {
+    const fullPath = path.join(dirPath, entry);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      if (recursive) files.push(...listJsonFiles(fullPath, true));
+      continue;
+    }
+    if (entry.endsWith('.json')) files.push(fullPath);
+  }
+  return files;
+}
+
+function validationErrorsFrom(error: unknown): string[] {
+  if (error && typeof error === 'object' && 'issues' in error && Array.isArray((error as { issues?: unknown[] }).issues)) {
+    return ((error as { issues: Array<{ path?: unknown[]; message?: string }> }).issues).map((issue) => {
+      const issuePath = Array.isArray(issue.path) && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+      return `${issuePath}${issue.message ?? 'validation failed'}`;
+    });
+  }
+  return [error instanceof Error ? error.message : String(error)];
+}
+
+export function collectLoadValidationWarnings(entity: string, cwd?: string): LoadValidationWarning[] {
+  const config = ENTITY_LOAD_CONFIG[entity as LoadableEntityName];
+  if (!config) return [];
+  const effectiveCwd = cwd ?? process.cwd();
+  const dirPath = resolveEntityDir(config.subdir, effectiveCwd, 'read');
+  return listJsonFiles(dirPath, config.recursive).flatMap((filepath) => {
+    try {
+      loadVersionedJsonFile(config.documentType, filepath);
+      return [];
+    } catch (error) {
+      return [{
+        entity_id: path.basename(filepath, '.json'),
+        validation_errors: validationErrorsFrom(error),
+        path: filepath,
+      }];
+    }
+  });
+}
+
+export function findLoadValidationWarning(entity: string, id: string, cwd?: string): LoadValidationWarning | undefined {
+  return collectLoadValidationWarnings(entity, cwd).find((warning) => warning.entity_id === id);
 }
 
 export function loadState(cwd?: string): State {

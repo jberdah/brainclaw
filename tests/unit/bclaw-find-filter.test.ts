@@ -17,9 +17,12 @@
  */
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import { createEntity, updateEntity, transitionEntity } from '../../src/core/entity-operations.js';
+import { createEntity, transitionEntity } from '../../src/core/entity-operations.js';
+import { createAgentRun } from '../../src/core/agentruns.js';
 
 interface FindResult {
   entity: string;
@@ -138,6 +141,124 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       const result = content as FindResult;
       assert.equal(result.total, 1);
       assert.equal(result.items[0].id, secPlan.id);
+    });
+
+    it('filter={tags:["security","perf"]} returns entities with any listed tag', async () => {
+      const secPlan = createEntity('plan', { text: 'security thing', author: 'claude-code', tags: ['security'] }, workspace.dir);
+      const perfPlan = createEntity('plan', { text: 'perf thing', author: 'claude-code', tags: ['perf'] }, workspace.dir);
+      createEntity('plan', { text: 'docs thing', author: 'claude-code', tags: ['docs'] }, workspace.dir);
+
+      const { content } = await find(workspace, 'plan', { tags: ['security', 'perf'] });
+      const result = content as FindResult;
+      assert.equal(result.total, 2);
+      assert.deepEqual(new Set(result.items.map((i) => i.id)), new Set([secPlan.id, perfPlan.id]));
+    });
+  });
+
+  describe('agent_run first-class field filters', () => {
+    it('accepts assignment_id, claim_id, and message_id for entity=agent_run', async () => {
+      const match = createAgentRun({
+        assignment_id: 'asgn_filter_match',
+        claim_id: 'clm_filter_match',
+        message_id: 'msg_filter_match',
+        agent: 'codex',
+        transport: 'manual_command',
+        scope: 'src/filter',
+        description: 'matching run',
+      }, workspace.dir);
+      createAgentRun({
+        assignment_id: 'asgn_filter_other',
+        claim_id: 'clm_filter_other',
+        message_id: 'msg_filter_other',
+        agent: 'codex',
+        transport: 'manual_command',
+        scope: 'src/filter',
+        description: 'other run',
+      }, workspace.dir);
+
+      const { isError, content } = await find(workspace, 'agent_run', {
+        assignment_id: 'asgn_filter_match',
+        claim_id: 'clm_filter_match',
+        message_id: 'msg_filter_match',
+      });
+      assert.equal(isError, false, `expected success, got ${JSON.stringify(content)}`);
+      const result = content as FindResult;
+      assert.equal(result.total, 1);
+      assert.equal(result.items[0].id, match.id);
+    });
+
+    it('lazy-reconciles running agent_run with dead pid to cancelled and persists it', async () => {
+      const run = createAgentRun({
+        assignment_id: 'asgn_dead_pid',
+        claim_id: 'clm_dead_pid',
+        agent: 'codex',
+        transport: 'cli_spawn',
+        status: 'running',
+        scope: 'src/filter',
+        description: 'dead pid run',
+        pid: 99999999,
+      }, workspace.dir);
+
+      const { isError, content } = await find(workspace, 'agent_run', { assignment_id: 'asgn_dead_pid' });
+      assert.equal(isError, false, `expected success, got ${JSON.stringify(content)}`);
+      const result = content as FindResult;
+      assert.equal(result.total, 1);
+      assert.equal(result.items[0].id, run.id);
+      assert.equal(result.items[0].status, 'cancelled');
+      assert.equal(result.items[0].status_reason, 'pid_dead_at_read');
+
+      const getOutcome = await executeMcpToolCall({
+        name: 'bclaw_get',
+        args: { entity: 'agent_run', id: run.id },
+        cwd: workspace.dir,
+      });
+      const getResult = getOutcome.response.structuredContent as unknown as { item?: { status?: string; status_reason?: string } };
+      assert.equal(getResult.item?.status, 'cancelled');
+      assert.equal(getResult.item?.status_reason, 'pid_dead_at_read');
+    });
+  });
+
+  describe('load-validation warnings', () => {
+    it('surfaces invalid decision files via bclaw_find warnings and bclaw_get validation_failed', async () => {
+      const dir = path.join(workspace.dir, '.brainclaw', 'memory', 'decisions');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'dec_invalid_fixture.json'), JSON.stringify({
+        schema_version: 2,
+        id: 'dec_invalid_fixture',
+        text: 'invalid decision missing required fields',
+      }, null, 2));
+
+      const findOutcome = await executeMcpToolCall({
+        name: 'bclaw_find',
+        args: { entity: 'decision' },
+        cwd: workspace.dir,
+      });
+      assert.equal(findOutcome.response.isError, false);
+      const findResult = findOutcome.response.structuredContent as unknown as FindResult & {
+        warnings?: Array<{ entity_id?: string; validation_errors?: string[]; path?: string }>;
+      };
+      assert.ok(Array.isArray(findResult.warnings));
+      const warning = findResult.warnings.find((w) => w.entity_id === 'dec_invalid_fixture');
+      assert.ok(warning, `expected warning for invalid fixture, got ${JSON.stringify(findResult.warnings)}`);
+      assert.ok(warning.validation_errors?.length);
+      assert.ok(warning.path?.endsWith('dec_invalid_fixture.json'));
+
+      const getOutcome = await executeMcpToolCall({
+        name: 'bclaw_get',
+        args: { entity: 'decision', id: 'dec_invalid_fixture' },
+        cwd: workspace.dir,
+      });
+      assert.equal(getOutcome.response.isError, true);
+      const getResult = getOutcome.response.structuredContent as unknown as {
+        ok?: boolean;
+        error?: string;
+        entity_id?: string;
+        validation_errors?: string[];
+      };
+      assert.equal(getResult.ok, false);
+      assert.equal(getResult.error, 'validation_failed');
+      assert.equal(getResult.entity_id, 'dec_invalid_fixture');
+      assert.ok(getResult.validation_errors?.length);
     });
   });
 

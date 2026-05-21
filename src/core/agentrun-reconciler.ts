@@ -56,6 +56,8 @@ export const DEFAULT_HEALTH_CHECK_GRACE_MS = 60_000;
  * declared `failed` with `silent_termination_no_evidence`. Default 30 min.
  */
 export const DEFAULT_STALE_AFTER_MS = 30 * 60_000;
+export const DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS = 5 * 60_000;
+export const DEFAULT_DEAD_PID_READ_SWEEP_LIMIT = 50;
 
 const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   'completed', 'failed', 'cancelled', 'timed_out', 'interrupted',
@@ -67,7 +69,8 @@ export type ReconcileAction =
   | 'no_op'
   | 'health_check_unverified'
   | 'inferred_completed'
-  | 'inferred_failed';
+  | 'inferred_failed'
+  | 'cancelled_dead_pid';
 
 export interface ReconcileEvidence {
   /** Run's age in ms relative to `started_at` (or `created_at` if missing). */
@@ -104,6 +107,8 @@ export interface ReconcileOptions {
   nowMs?: number;
   /** Actor name recorded on synthetic transitions / events. Default 'reconciler'. */
   actor?: string;
+  /** Cap for dead-pid read sweeps. */
+  limit?: number;
 }
 
 // ── Process liveness ───────────────────────────────────────────────────────
@@ -364,6 +369,72 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     reason: `delivered_but_unverified (age=${Math.round(evidence.age_ms / 1000)}s, process_alive=${evidence.process_alive})`,
     evidence, previous_status, current_status: run.status,
   };
+}
+
+export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: string, options: ReconcileOptions = {}): ReconcileResult {
+  const run = loadAgentRun(runId, cwd);
+  if (!run) {
+    const evidence: ReconcileEvidence = {
+      age_ms: 0, has_post_start_commit: false, claim_released: false,
+      assignment_completed: false, process_alive: undefined,
+    };
+    return {
+      run_id: runId, action: 'no_op', reason: 'run not found', evidence,
+      previous_status: 'created' as AgentRunStatus, current_status: 'created' as AgentRunStatus,
+    };
+  }
+
+  const evidence = collectEvidence(run, cwd, { nowMs: options.nowMs });
+  if (run.status !== 'running') {
+    return {
+      run_id: run.id, action: 'no_op', reason: `run status is ${run.status}, not running`,
+      evidence, previous_status: run.status, current_status: run.status,
+    };
+  }
+  if (evidence.process_alive !== false) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: evidence.process_alive === true ? 'process alive' : 'pid liveness unknown',
+      evidence, previous_status: run.status, current_status: run.status,
+    };
+  }
+
+  try {
+    transitionAgentRun(run.id, 'cancelled', {
+      actor: options.actor ?? 'reconciler',
+      status_reason: 'pid_dead_at_read',
+    }, cwd);
+    return {
+      run_id: run.id, action: 'cancelled_dead_pid', reason: 'pid_dead_at_read',
+      evidence, previous_status: run.status, current_status: 'cancelled',
+    };
+  } catch (err) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: `cancel transition rejected: ${err instanceof Error ? err.message : String(err)}`,
+      evidence, previous_status: run.status, current_status: run.status,
+    };
+  }
+}
+
+export function sweepDeadPidRunningAgentRunsAtRead(cwd?: string, options: ReconcileOptions = {}): ReconcileResult[] {
+  const now = options.nowMs ?? Date.now();
+  const minAgeMs = options.staleAfterMs ?? DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS;
+  const cutoff = now - minAgeMs;
+  const limit = options.limit ?? DEFAULT_DEAD_PID_READ_SWEEP_LIMIT;
+  const candidates = listAgentRuns(cwd, { status: 'running' })
+    .filter((run) => {
+      const lastEventAt = run.last_event_at ?? run.started_at ?? run.created_at;
+      const ts = new Date(lastEventAt).getTime();
+      return Number.isFinite(ts) && ts <= cutoff;
+    })
+    .sort((left, right) => {
+      const leftTs = new Date(left.last_event_at ?? left.started_at ?? left.created_at).getTime();
+      const rightTs = new Date(right.last_event_at ?? right.started_at ?? right.created_at).getTime();
+      return rightTs - leftTs;
+    })
+    .slice(0, limit);
+  return candidates.map((run) => reconcileDeadPidRunningAgentRunAtRead(run.id, cwd, options));
 }
 
 /**
