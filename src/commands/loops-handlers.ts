@@ -19,6 +19,7 @@ import {
   provideInput,
   requestInput,
   resume,
+  sweepPauseTimeouts,
   turn,
   VersionConflictError,
   withLoopLock,
@@ -316,6 +317,29 @@ function summarizeLoop(loop: LoopThread, autoClosed?: boolean): string {
   return `✔ loop ${loop.id} [${loop.kind}] phase=${loop.current_phase} status=${loop.status}${suffix}`;
 }
 
+/**
+ * pln#508 step 3 — lazy pause-timeout reconcile at facade entry.
+ *
+ * Phase 0 spec §6: any time the facade is invoked against a loop_id, sweep
+ * the target loop for timed-out operator_question artifacts BEFORE
+ * dispatching the intent. The downstream verb then sees the corrected state
+ * (e.g. a `cancel_loop` timeout already fired → mutating intents will get
+ * the natural `already cancelled` error from assertMutable; a `use_default`
+ * timeout already fired → open_questions reflects the synthesized answer).
+ *
+ * Best-effort: wrapped in try/catch so any reconcile error (corrupt loop on
+ * disk, fs hiccup, …) never blocks the facade. The handler proceeds with
+ * stale state in that case, which is no worse than the pre-step-3 behavior.
+ *
+ * Mirrors the lazy-reconcile pattern used by `agentrun-reconciler.ts` for
+ * agent_run silent completion (see entity-operations.ts loadAgentRunsWithReconciliation).
+ */
+function trySweepLoopTimeouts(loop_id: string, cwd: string | undefined): void {
+  try {
+    sweepPauseTimeouts(loop_id, undefined, cwd);
+  } catch { /* best-effort: never block facade on sweep errors */ }
+}
+
 export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoopResult {
   const startMs = Date.now();
   const defaultActor = options.defaultActor ?? 'bclaw_loop';
@@ -330,6 +354,14 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
     return errorResponse(req.intent, 'validation_error', semanticError, Date.now() - startMs);
   }
   const { actor, agentId } = resolveActor(req, defaultActor);
+
+  // pln#508 step 3 — lazy pause-timeout reconcile at facade entry. Skip
+  // intents without a single-target loop ('open' creates a new loop;
+  // 'list' enumerates many — sweeping every loop on a list call would be
+  // an unbounded fan-out and is not what the spec asks for).
+  if ('loop_id' in req && typeof req.loop_id === 'string') {
+    trySweepLoopTimeouts(req.loop_id, options.cwd);
+  }
 
   try {
     switch (req.intent) {

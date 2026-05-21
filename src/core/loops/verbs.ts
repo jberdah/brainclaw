@@ -10,6 +10,7 @@ import {
 } from './store.js';
 import {
   LoopArtifactSchema,
+  PAUSE_REASONS,
   type LoopArtifact,
   type LoopEvent,
   type LoopSlot,
@@ -19,6 +20,7 @@ import {
   type OperatorAnswerBody,
   type OperatorQuestionBody,
   type OperatorQuestionOption,
+  type PauseReason,
   type PauseScope,
   type ResolvedVia,
   type StopCondition,
@@ -406,6 +408,10 @@ function commitClosedTransition(
     status: final_status,
     updated_at: now,
     closed_at: now,
+    // Schema invariant: pause_reason / pending_file_apply only legal in
+    // status='paused'. Closing from a paused state must clear both.
+    pause_reason: undefined,
+    pending_file_apply: undefined,
   };
   appendEvent(
     thread.id,
@@ -666,8 +672,32 @@ export function add_artifact(input: AddArtifactInput, cwd?: string): LoopThread 
 
 export interface PauseResumeInput {
   id: string;
+  /**
+   * Freeform reason recorded on the `paused` event. Legacy callers may pass
+   * arbitrary strings here; when the value matches a known PauseReason it is
+   * additionally coerced onto `thread.pause_reason` (pln#508 step 3 INVARIANT 2).
+   */
   reason?: string;
+  /**
+   * Structured pause reason (preferred for new callers). When set, written
+   * directly to `thread.pause_reason`. Takes precedence over coercion from
+   * `reason`. pln#508 step 3, Phase 0 spec §5.
+   */
+  pause_reason?: PauseReason;
   actor: string;
+}
+
+/**
+ * pln#508 step 3 (Phase 0 spec §5, INVARIANT 2) — coerce a freeform `reason`
+ * string into a structured PauseReason when it matches the known enum.
+ * Returns undefined for non-matching values so legacy callers still work
+ * without populating `thread.pause_reason`.
+ */
+function coercePauseReason(reason: string | undefined): PauseReason | undefined {
+  if (reason === undefined) return undefined;
+  return (PAUSE_REASONS as readonly string[]).includes(reason)
+    ? (reason as PauseReason)
+    : undefined;
 }
 
 export function pause(input: PauseResumeInput, cwd?: string): LoopThread {
@@ -675,7 +705,19 @@ export function pause(input: PauseResumeInput, cwd?: string): LoopThread {
   if (current.status !== 'open') {
     throw new Error(`pause: loop ${current.id} is ${current.status}, not open`);
   }
-  return commitSimpleStatus(current, 'paused', 'paused', input.actor, input.reason, cwd);
+  // Resolve effective pause_reason: explicit param wins, else coerce from
+  // the freeform reason string when it matches PAUSE_REASONS, else leave
+  // undefined for backward compatibility.
+  const effectiveReason = input.pause_reason ?? coercePauseReason(input.reason);
+  return commitSimpleStatus(
+    current,
+    'paused',
+    'paused',
+    input.actor,
+    input.reason,
+    cwd,
+    effectiveReason,
+  );
 }
 
 export function resume(input: PauseResumeInput, cwd?: string): LoopThread {
@@ -683,7 +725,71 @@ export function resume(input: PauseResumeInput, cwd?: string): LoopThread {
   if (current.status !== 'paused') {
     throw new Error(`resume: loop ${current.id} is ${current.status}, not paused`);
   }
-  return commitSimpleStatus(current, 'open', 'resumed', input.actor, input.reason, cwd);
+  // Clear pause_reason on resume — schema enforces "pause_reason requires
+  // status=paused", so leaving it set would fail LoopThreadSchema validation.
+  return commitSimpleStatus(current, 'open', 'resumed', input.actor, input.reason, cwd, null);
+}
+
+/* ============= pln#508 step 3 — open_questions reconciliation ============== */
+
+/**
+ * Phase 0 spec §5 INVARIANT 3 — compute the canonical set of open question
+ * ids from `thread.artifacts`. A question is "open" when it has an
+ * operator_question artifact and NO matching operator_answer artifact (matched
+ * by `body.replies_to === question.question_id`).
+ *
+ * The persisted `thread.open_questions` SHOULD always equal this computed set
+ * after request_input / provide_input. The debug assert in
+ * `assertOpenQuestionsInvariant` verifies the equality when
+ * `BRAINCLAW_FSM_ASSERTS=1`; in production we log a warning rather than
+ * throw so a single drift doesn't take down the engine.
+ */
+export function reconcileOpenQuestions(thread: LoopThread): string[] {
+  const questionIds = new Set<string>();
+  const answeredIds = new Set<string>();
+
+  for (const artifact of thread.artifacts) {
+    if (!artifact.body) continue;
+    if (artifact.type === 'operator_question') {
+      try {
+        const parsed = JSON.parse(artifact.body) as { question_id?: string };
+        if (typeof parsed.question_id === 'string') {
+          questionIds.add(parsed.question_id);
+        }
+      } catch { /* malformed body — skip; LoopArtifactSchema rejects new ones */ }
+    } else if (artifact.type === 'operator_answer') {
+      try {
+        const parsed = JSON.parse(artifact.body) as { replies_to?: string };
+        if (typeof parsed.replies_to === 'string') {
+          answeredIds.add(parsed.replies_to);
+        }
+      } catch { /* malformed body — skip */ }
+    }
+  }
+
+  const open: string[] = [];
+  for (const id of questionIds) {
+    if (!answeredIds.has(id)) open.push(id);
+  }
+  return open;
+}
+
+function fsmAssertsEnabled(): boolean {
+  return process.env.BRAINCLAW_FSM_ASSERTS === '1';
+}
+
+function assertOpenQuestionsInvariant(thread: LoopThread, intent: string): void {
+  if (!fsmAssertsEnabled()) return;
+  const canonical = new Set(reconcileOpenQuestions(thread));
+  const persisted = new Set(thread.open_questions);
+  if (canonical.size !== persisted.size || [...canonical].some((id) => !persisted.has(id))) {
+    // Log only — Phase 0 spec §5: "Don't fail in prod, just log warning."
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[brainclaw/loops/fsm] ${intent}: open_questions drift on loop ${thread.id} ` +
+      `— persisted=${JSON.stringify([...persisted])} canonical=${JSON.stringify([...canonical])}`,
+    );
+  }
 }
 
 /* =============== pln#508 step 2 — request_input / provide_input ============ */
@@ -853,6 +959,7 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
   }
 
   writeThreadFile(next, cwd);
+  assertOpenQuestionsInvariant(next, 'request_input');
   return { thread: next, question_id, artifact_id: newArtifact.artifact_id };
 }
 
@@ -1070,11 +1177,22 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
   }
 
   writeThreadFile(next, cwd);
+  assertOpenQuestionsInvariant(next, 'provide_input');
   return { thread: next, artifact_id: newArtifact.artifact_id, duplicate: false };
 }
 
 /* =========================== /pln#508 step 2 ============================== */
 
+/**
+ * Commit a simple open ↔ paused transition.
+ *
+ * `pauseReasonOverride` semantics (pln#508 step 3):
+ *   - undefined → leave `thread.pause_reason` as-is (pass-through via spread).
+ *   - PauseReason value → write that value to `thread.pause_reason`.
+ *   - null → explicitly clear `thread.pause_reason` (used by resume() to
+ *     satisfy the LoopThreadSchema invariant "pause_reason requires
+ *     status=paused").
+ */
 function commitSimpleStatus(
   current: LoopThread,
   newStatus: 'open' | 'paused',
@@ -1082,6 +1200,7 @@ function commitSimpleStatus(
   actor: string,
   reason: string | undefined,
   cwd: string | undefined,
+  pauseReasonOverride?: PauseReason | null,
 ): LoopThread {
   const now = nowISO();
   const mutation_id = generateMutationId();
@@ -1093,6 +1212,10 @@ function commitSimpleStatus(
     mutation_id,
     status: newStatus,
     updated_at: now,
+    pause_reason:
+      pauseReasonOverride === null
+        ? undefined
+        : pauseReasonOverride ?? current.pause_reason,
   };
   const base = {
     event_id: crypto.randomUUID(),
@@ -1107,6 +1230,280 @@ function commitSimpleStatus(
       ? { ...base, kind: 'paused', reason }
       : { ...base, kind: 'resumed' };
   appendEvent(current.id, event, cwd);
+  writeThreadFile(next, cwd);
+  return next;
+}
+
+/* ================ pln#508 step 3 — pause-timeout machinery ================ */
+
+/**
+ * Phase 0 spec §6 — sweep the loop's `open_questions` for any whose deadline
+ * has passed. For each timed-out question, apply the policy recorded on its
+ * source artifact:
+ *
+ *   - `use_default`         → synthesize an `operator_answer` via
+ *                              `provideInput(by='system', resolved_via='timeout_default')`.
+ *   - `cancel_loop`         → close the loop with `final_status='cancelled'`
+ *                              and `reason='operator_timeout'`.
+ *   - `continue_incomplete` → drop the question_id from `open_questions`
+ *                              WITHOUT creating an answer; resume the slot
+ *                              or loop per the source `pause_scope`.
+ *
+ * Each timeout firing also appends a `pause_timeout` system event so the
+ * journal records the action taken.
+ *
+ * Idempotent + safe to call repeatedly: questions no longer in `open_questions`
+ * are skipped; terminal loops short-circuit immediately.
+ */
+export interface SweepPauseTimeoutsResult {
+  loop_id: string;
+  fired: Array<{ question_id: string; action_taken: OnTimeoutPolicy }>;
+}
+
+export function sweepPauseTimeouts(
+  loop_id: string,
+  now?: Date,
+  cwd?: string,
+): SweepPauseTimeoutsResult {
+  const nowMs = (now ?? new Date()).getTime();
+  let current = getLoop(loop_id, cwd);
+  if (!current) {
+    return { loop_id, fired: [] };
+  }
+  // Terminal loops never get swept (Phase 0 spec §6).
+  if (
+    current.status === 'completed' ||
+    current.status === 'cancelled' ||
+    current.status === 'blocked'
+  ) {
+    return { loop_id, fired: [] };
+  }
+  if (current.open_questions.length === 0) {
+    return { loop_id, fired: [] };
+  }
+
+  const fired: Array<{ question_id: string; action_taken: OnTimeoutPolicy }> = [];
+  // Snapshot question_ids: we mutate state inside the loop and want a stable
+  // iteration set even if e.g. provideInput's cascade clears multiple.
+  const candidates = [...current.open_questions];
+
+  for (const question_id of candidates) {
+    // Reload between iterations — provideInput / continue_incomplete /
+    // commitClosedTransition all rewrite the thread, and a previous iteration
+    // may have already taken the loop terminal.
+    const reloaded = getLoop(loop_id, cwd);
+    if (!reloaded) break;
+    current = reloaded;
+    if (
+      current.status === 'completed' ||
+      current.status === 'cancelled' ||
+      current.status === 'blocked'
+    ) {
+      break;
+    }
+    if (!current.open_questions.includes(question_id)) continue;
+
+    const source = findOperatorQuestion(current, question_id);
+    if (!source) continue;
+
+    const deadlineMs = resolveDeadlineMs(current, source);
+    if (deadlineMs === undefined) continue;
+    if (nowMs <= deadlineMs) continue;
+
+    const policy = source.body.on_timeout;
+    if (policy === 'use_default') {
+      try {
+        provideInput(
+          {
+            loop_id,
+            replies_to: question_id,
+            resolved_via: 'timeout_default',
+            by: 'system',
+            actor: 'engine',
+          },
+          cwd,
+        );
+      } catch {
+        // If provideInput rejects (e.g. missing suggested_default that should
+        // have been caught at request_input time), fall through so we still
+        // record an audit event marking the attempted sweep.
+        continue;
+      }
+      emitPauseTimeoutEvent(loop_id, question_id, 'use_default', cwd);
+      fired.push({ question_id, action_taken: 'use_default' });
+    } else if (policy === 'cancel_loop') {
+      // Re-read after we know we're firing — cancel transitions the loop
+      // to terminal and persists.
+      const beforeCancel = getLoop(loop_id, cwd);
+      if (!beforeCancel) break;
+      commitClosedTransition(beforeCancel, 'cancelled', 'engine', 'operator_timeout', cwd);
+      emitPauseTimeoutEvent(loop_id, question_id, 'cancel_loop', cwd);
+      fired.push({ question_id, action_taken: 'cancel_loop' });
+      // Subsequent candidates can't fire on a terminal loop.
+      break;
+    } else if (policy === 'continue_incomplete') {
+      applyContinueIncomplete(current, question_id, source.body, cwd);
+      emitPauseTimeoutEvent(loop_id, question_id, 'continue_incomplete', cwd);
+      fired.push({ question_id, action_taken: 'continue_incomplete' });
+    }
+  }
+
+  return { loop_id, fired };
+}
+
+function emitPauseTimeoutEvent(
+  loop_id: string,
+  question_id: string,
+  action_taken: OnTimeoutPolicy,
+  cwd: string | undefined,
+): void {
+  appendEvent(
+    loop_id,
+    {
+      event_id: crypto.randomUUID(),
+      loop_id,
+      seq: nextSeq(loop_id, cwd),
+      at: nowISO(),
+      by: 'engine',
+      mutation_id: generateMutationId(),
+      kind: 'pause_timeout',
+      question_id,
+      action_taken,
+    },
+    cwd,
+  );
+}
+
+interface SourceQuestion {
+  artifact: LoopArtifact;
+  body: OperatorQuestionBody;
+}
+
+function findOperatorQuestion(thread: LoopThread, question_id: string): SourceQuestion | undefined {
+  for (const artifact of thread.artifacts) {
+    if (artifact.type !== 'operator_question' || !artifact.body) continue;
+    try {
+      const body = JSON.parse(artifact.body) as OperatorQuestionBody;
+      if (body.question_id === question_id) {
+        return { artifact, body };
+      }
+    } catch { /* skip malformed */ }
+  }
+  return undefined;
+}
+
+/**
+ * Compute the deadline (ms since epoch) for a question. Prefers the
+ * artifact's explicit `timeout_at`. Falls back to `produced_at +
+ * protocol.max_pause_duration` (ISO-8601 duration). Returns undefined when
+ * neither source yields a usable value.
+ */
+function resolveDeadlineMs(thread: LoopThread, source: SourceQuestion): number | undefined {
+  if (source.body.timeout_at) {
+    const parsed = Date.parse(source.body.timeout_at);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  const max = thread.protocol?.max_pause_duration;
+  if (!max) return undefined;
+  const startMs = Date.parse(source.artifact.produced_at);
+  if (Number.isNaN(startMs)) return undefined;
+  const durationMs = parseIso8601DurationMs(max);
+  if (durationMs === undefined) return undefined;
+  return startMs + durationMs;
+}
+
+/**
+ * Minimal ISO-8601 duration parser. Supports the subset needed by the
+ * bootstrap preset: P[n]D[ T[n]H[n]M[n]S ]. Returns the total duration in
+ * milliseconds, or undefined when the input is not a recognised duration.
+ * Note: months/years are intentionally NOT supported — they have no
+ * fixed millisecond length and the preset only needs days/hours/minutes.
+ */
+function parseIso8601DurationMs(input: string): number | undefined {
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(input);
+  if (!match) return undefined;
+  const [, daysStr, hoursStr, minutesStr, secondsStr] = match;
+  // If everything is missing the regex still matches "P" — guard against
+  // returning 0 for a meaningless string.
+  if (!daysStr && !hoursStr && !minutesStr && !secondsStr) return undefined;
+  const days = daysStr ? Number(daysStr) : 0;
+  const hours = hoursStr ? Number(hoursStr) : 0;
+  const minutes = minutesStr ? Number(minutesStr) : 0;
+  const seconds = secondsStr ? Number(secondsStr) : 0;
+  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+}
+
+/**
+ * Apply the `continue_incomplete` timeout policy: drop the question_id from
+ * `open_questions` without creating an answer artifact, and resume the slot
+ * or loop per the source `pause_scope`. Atomic: one version bump, no
+ * `input_provided` event (continue_incomplete is explicitly "no answer").
+ */
+function applyContinueIncomplete(
+  current: LoopThread,
+  question_id: string,
+  body: OperatorQuestionBody,
+  cwd: string | undefined,
+): LoopThread {
+  const now = nowISO();
+  const mutation_id = generateMutationId();
+  const version = current.version + 1;
+  const nextOpenQuestions = current.open_questions.filter((q) => q !== question_id);
+
+  let nextStatus: LoopStatus = current.status;
+  let nextPauseReason = current.pause_reason;
+  let nextSlots: LoopSlot[] = current.slots;
+  let resumedSlotId: string | undefined;
+  let resumedSlotFromStatus: LoopSlot['status'] | undefined;
+
+  if (body.pause_scope === 'slot' && body.by_slot_id) {
+    const slot = current.slots.find((s) => s.slot_id === body.by_slot_id);
+    if (slot && slot.status === 'waiting_input') {
+      resumedSlotId = slot.slot_id;
+      resumedSlotFromStatus = slot.status;
+      nextSlots = current.slots.map((s) =>
+        s.slot_id === slot.slot_id ? { ...s, status: 'working' as const } : s,
+      );
+    }
+  } else if (
+    body.pause_scope === 'loop' &&
+    nextOpenQuestions.length === 0 &&
+    current.pause_reason === 'awaiting_operator'
+  ) {
+    nextStatus = 'open';
+    nextPauseReason = undefined;
+  }
+
+  const next: LoopThread = {
+    ...current,
+    version,
+    mutation_id,
+    open_questions: nextOpenQuestions,
+    status: nextStatus,
+    pause_reason: nextPauseReason,
+    slots: nextSlots,
+    updated_at: now,
+  };
+
+  if (resumedSlotId && resumedSlotFromStatus) {
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq: nextSeq(current.id, cwd),
+        at: now,
+        by: 'engine',
+        mutation_id,
+        kind: 'slot_status_changed',
+        slot_id: resumedSlotId,
+        from_status: resumedSlotFromStatus,
+        to_status: 'working',
+      },
+      cwd,
+    );
+  }
+
   writeThreadFile(next, cwd);
   return next;
 }

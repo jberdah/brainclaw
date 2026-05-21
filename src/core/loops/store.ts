@@ -246,6 +246,12 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     status: input.final_status,
     updated_at: now,
     closed_at: now,
+    // pln#508 step 3 — schema invariant requires pause_reason /
+    // pending_file_apply to be absent outside status='paused'. closeLoop on
+    // a paused thread must clear both, otherwise LoopThreadSchema.parse
+    // rejects the write.
+    pause_reason: undefined,
+    pending_file_apply: undefined,
   };
 
   appendEvent(

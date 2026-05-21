@@ -20,8 +20,10 @@ export {
   evaluateStopCondition,
   pause,
   provideInput,
+  reconcileOpenQuestions,
   requestInput,
   resume,
+  sweepPauseTimeouts,
   turn,
   type AddArtifactInput,
   type AdvanceInput,
@@ -33,6 +35,7 @@ export {
   type ProvideInputResult,
   type RequestInputInput,
   type RequestInputResult,
+  type SweepPauseTimeoutsResult,
   type TurnInput,
 } from './verbs.js';
 export {
