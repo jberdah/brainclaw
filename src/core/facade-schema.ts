@@ -59,6 +59,16 @@ export const CoordinateRequestSchema = z.object({
    * the target agent picks up the brief async via its own bclaw_work.
    */
   project: z.string().optional(),
+  /**
+   * Bypass the pre-flight uncommitted-changes check (can_30c295b4 fix).
+   * By default, bclaw_coordinate refuses dispatches when the source cwd
+   * has uncommitted modifications, because the dispatched worker spawns
+   * from HEAD and won't see them — leading to silent review on stale code.
+   * Set allow_dirty=true to override (e.g. when the caller knows the
+   * dispatched work doesn't depend on the dirty files, or when running
+   * tests). Has no effect when the source cwd is not a git repo.
+   */
+  allow_dirty: z.boolean().optional(),
 });
 
 export const FacadeArtifactSchema = z.object({

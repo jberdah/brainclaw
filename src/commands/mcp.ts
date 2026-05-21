@@ -4630,9 +4630,53 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
       }
       const req = parseResult.data;
+
+      // can_30c295b4 — pre-flight uncommitted-changes check.
+      // Dispatches that spawn a worker (review/assign/consult/ideate) clone
+      // the source repo at HEAD into a worktree. Any uncommitted edits in
+      // the source cwd are invisible to the worker, so the worker reviews
+      // stale code without any error signal. Refuse the dispatch by default
+      // when the source cwd is a git repo with a dirty working tree.
+      // Override via allow_dirty=true when the caller knows the dispatched
+      // work doesn't depend on the modified files (e.g. tests, docs-only
+      // worker tasks). Has no effect when cwd is not a git repo.
+      if (!req.allow_dirty && (req.intent === 'review' || req.intent === 'assign' || req.intent === 'consult' || req.intent === 'ideate')) {
+        try {
+          const { spawnSync } = await import('node:child_process');
+          const probe = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8', timeout: 5000 });
+          if (probe.status === 0 && typeof probe.stdout === 'string' && probe.stdout.trim().length > 0) {
+            const fileCount = probe.stdout.trim().split('\n').length;
+            return {
+              response: createToolErrorResponse(
+                'dirty_working_tree',
+                `Refusing to dispatch: source working tree has ${fileCount} uncommitted file(s). The spawned worker will not see these changes (worktrees branch from HEAD). Commit or stash before dispatching, or pass allow_dirty=true to override. Source cwd: ${cwd}`,
+              ),
+            };
+          }
+          // probe.status !== 0 → not a git repo (or git unavailable) → skip the check silently
+        } catch {
+          // best-effort: never block dispatch on a pre-flight check failure unrelated to the actual dirty state
+        }
+      }
+
       const warnings: string[] = [];
       const artifacts: Array<{ type: string; id: string; path?: string }> = [];
       const side_effects: Array<{ action: string; entity: string; id: string }> = [];
+
+      // can_5e62334e — codex sandboxed dispatches cannot commit in worktrees
+      // because `.git` is a file pointer to the parent repo's
+      // .git/worktrees/<wt>/ directory, which lives OUTSIDE the worktree's
+      // writable root that `--sandbox workspace-write` permits. Any
+      // codex worker that runs `git commit` will fail with `index.lock:
+      // Permission denied`. Warn callers up-front so briefs don't request
+      // per-bug commits; the coordinator must harvest the worktree
+      // diff via `git diff` and commit from a non-sandboxed cwd.
+      if (Array.isArray(req.targetAgents) && req.targetAgents.includes('codex')) {
+        warnings.push(
+          'codex --sandbox workspace-write cannot commit to git in worktrees (.git is outside writable root). Briefs MUST NOT request per-bug commits; codex will produce uncommitted edits, then the coordinator must harvest via `git diff HEAD` from the worktree path and commit from the main repo. See can_5e62334e for context.',
+        );
+      }
+
       const senderAgent = typeof args.agent === 'string' && args.agent.trim()
         ? args.agent.trim()
         : 'bclaw_coordinate';
