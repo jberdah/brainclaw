@@ -2054,6 +2054,20 @@ program
     );
   });
 
+// --- bootstrap-loop (open/join/status/cancel a bootstrap loop; pln#513 step 3) ---
+program
+  .command('bootstrap-loop')
+  .description('Open or join a bootstrap loop on the current project, or query its status')
+  .option('--status', 'Report current state')
+  .option('--cancel', 'Cancel the active bootstrap loop')
+  .option('--yes', 'Skip confirmation prompts')
+  .option('--json', 'Machine-readable output')
+  .action(async (options) => {
+    const globalOpts = program.opts();
+    const { runBootstrapLoopCommand } = await import('./commands/bootstrap-loop.js');
+    await runBootstrapLoopCommand(options, globalOpts.cwd);
+  });
+
 // --- reply (provide_input to an operator_question; pln#508 step 4) ---
 program
   .command('reply <qst_id>')
