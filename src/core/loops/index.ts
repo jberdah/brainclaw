@@ -67,6 +67,12 @@ export {
 } from './hooks/bootstrap-write.js';
 export { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 export {
+  readSurveySources,
+  type ReadSurveySourcesOptions,
+  type SurveySourceExcerpt,
+  type SurveySourceResult,
+} from './hooks/survey-source-reader.js';
+export {
   acquireLock,
   hashRequest,
   recordConflict,

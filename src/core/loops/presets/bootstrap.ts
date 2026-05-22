@@ -31,6 +31,13 @@ export interface LoopPreset {
  */
 export const BOOTSTRAP_PRESET: LoopPreset = {
   phases: [
+    // pln#516 step 1 — survey reads source. The bootstrap champion SHOULD
+    // call `readSurveySources(cwd)` (exported from ../hooks/survey-source-reader.js)
+    // to populate the source_excerpts portion of its signals_report. The engine
+    // does NOT invoke this automatically; the champion drives it (RefBasedArtifactBody
+    // is unchanged — see types.ts). Empirical motivation: TranslaVox cold-start
+    // missed the actual GCP Speech+Translate pipeline because survey scanned only
+    // topology + manifests (can_0160d6c4).
     {
       name: 'survey',
       context_filter: ['project_vision', 'decisions', 'plans', 'feedback'],
