@@ -6,7 +6,7 @@ import path from 'node:path';
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { FacadeResponse } from '../../src/core/facade-schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import { listClaims } from '../../src/core/claims.js';
+import { generateClaimId, listClaims, saveClaim } from '../../src/core/claims.js';
 
 /**
  * pln#513 step 5 — coverage for the bootstrap entry-point primitives:
@@ -24,6 +24,23 @@ async function callTool(
 ): Promise<FacadeResponse> {
   const outcome = await executeMcpToolCall({ name, args, cwd: workspace.dir });
   return outcome.response.structuredContent as FacadeResponse;
+}
+
+interface McpErrorEnvelope {
+  isError: boolean;
+  error?: { kind: string; message: string; details?: unknown };
+}
+
+async function callToolExpectError(
+  workspace: TestWorkspace,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<McpErrorEnvelope> {
+  const outcome = await executeMcpToolCall({ name, args, cwd: workspace.dir });
+  return {
+    isError: outcome.response.isError === true,
+    error: (outcome.response.structuredContent as { error?: McpErrorEnvelope['error'] })?.error,
+  };
 }
 
 describe('bclaw_work — bootstrap_recommended hint (pln#513 step 1, seq #50)', () => {
@@ -144,6 +161,42 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
 
     const joinedWarning = second.warnings.find((w) => w.includes('joined existing'));
     assert.ok(joinedWarning, `expected a "joined existing" warning, got: ${second.warnings.join(' | ')}`);
+  });
+
+  it('returns bootstrap_coordination_in_progress when an active lock exists with no backing loop (pln#513 phase 4 codex review)', async () => {
+    // Seed an orphan coordination lock — simulates a parallel coordinator
+    // mid-acquire (saveClaim ran but openLoop hasn't completed yet) AND no
+    // bootstrap loop on disk for the re-find to land on.
+    const lockScope = `bootstrap-coordination-lock:${workspace.dir}`;
+    saveClaim({
+      id: generateClaimId(),
+      agent: 'claude-code',
+      agent_id: undefined,
+      user: undefined,
+      project_id: undefined,
+      host_id: undefined,
+      session_id: undefined,
+      scope: lockScope,
+      description: 'simulated parallel coordinator',
+      created_at: new Date().toISOString(),
+      status: 'active',
+      plan_id: undefined,
+      model: undefined,
+    }, workspace.dir);
+
+    const r = await callToolExpectError(workspace, 'bclaw_coordinate', {
+      intent: 'ideate',
+      preset: 'bootstrap',
+      task: 'should be rejected because a lock is held',
+      agent: 'claude-code',
+    });
+
+    assert.equal(r.isError, true);
+    assert.equal(r.error?.kind, 'bootstrap_coordination_in_progress');
+    assert.ok(
+      r.error?.message.includes('another coordinator is currently opening'),
+      `expected coordinator-in-progress message, got: ${r.error?.message}`,
+    );
   });
 
   it('non-bootstrap ideate does NOT trigger the join-or-lock path', async () => {

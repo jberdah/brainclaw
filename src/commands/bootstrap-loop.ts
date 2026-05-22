@@ -38,6 +38,14 @@ export interface BootstrapLoopResult {
   };
   next_expected?: NextExpectedHint | null;
   warnings?: string[];
+  /**
+   * pln#513 Phase 4 codex review fix — set to true when `action === 'joined'`,
+   * matching the structural flag returned by
+   * bclaw_coordinate(intent='ideate', preset='bootstrap'). Lets JSON/MCP
+   * consumers branch on a single field regardless of which entry point
+   * (CLI vs facade) produced the response.
+   */
+  joined_existing?: true;
 }
 
 function fail(message: string, exitCode: 1 | 2, opts: BootstrapLoopCommandOptions): never {
@@ -97,6 +105,9 @@ function buildResult(action: BootstrapLoopAction, loop: LoopThread): BootstrapLo
       artifact_id: loop.pending_file_apply.artifact_id,
       diff_artifact_id: loop.pending_file_apply.diff_artifact_id,
     };
+  }
+  if (action === 'joined') {
+    result.joined_existing = true;
   }
   return result;
 }

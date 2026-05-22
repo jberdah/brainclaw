@@ -123,19 +123,33 @@ function buildSlot(partial: Partial<LoopSlot> & { role: string }): LoopSlot {
   };
 }
 
-export function appendEvent(loopId: string, event: LoopEvent, cwd?: string): void {
+export function appendEvent(
+  loopId: string,
+  event: LoopEvent,
+  cwd?: string,
+  /**
+   * pln#513 Phase 4 codex review fix — callers can pass the in-memory next
+   * thread snapshot when they're about to write it. Without this, the
+   * notification hook's `getLoop(loopId)` read sees the PREVIOUS thread
+   * because `appendEvent` runs before `writeThreadFile` at the verb call
+   * sites — meaning the just-added operator_question artifact isn't
+   * reachable, and the OS notification can't include the question text.
+   * Optional + additive: existing callers (and future ones that don't
+   * benefit) keep the disk-read fallback below.
+   */
+  threadSnapshot?: LoopThread,
+): void {
   const parsed = LoopEventSchema.parse(event);
   ensureLoopsDir(cwd);
   fs.appendFileSync(eventsPath(loopId, cwd), `${JSON.stringify(parsed)}\n`);
 
   // pln#513 step 4 — best-effort OS notification on input_requested events.
-  // We load the thread snapshot here (the hook needs the protocol preset +
-  // operator_question body) and call the gated hook. Any error — including
-  // an unreadable thread file or a spawn failure — is swallowed so the
-  // journal write that triggered this hook remains the source of truth.
+  // Prefer the in-memory snapshot from the caller (carries the freshly-
+  // added operator_question). Fall back to a disk read so any direct
+  // appendEvent caller without a snapshot still gets best-effort scoping.
   if (parsed.kind === 'input_requested') {
     try {
-      const loop = getLoop(loopId, cwd);
+      const loop = threadSnapshot ?? getLoop(loopId, cwd);
       if (loop) notifyOperatorOnInputRequested(parsed, loop, cwd);
     } catch {
       // hook is best-effort; never propagate.
@@ -448,6 +462,10 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
           by_slot_id: slot.slot_id,
         },
         cwd,
+        // pln#513 phase 4 codex review fix — pass the paused-thread snapshot
+        // so the notification hook reads the freshly-added file_overwrite
+        // operator_question rather than the previous on-disk thread.
+        pausedThread,
       );
 
       writeThreadFile(pausedThread, cwd);

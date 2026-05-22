@@ -946,6 +946,10 @@ export function requestInput(input: RequestInputInput, cwd?: string): RequestInp
       by_slot_id: input.slot_id,
     },
     cwd,
+    // pln#513 phase 4 codex review fix — pass the next thread so the
+    // notification hook sees the freshly-added operator_question rather
+    // than re-reading the previous on-disk snapshot.
+    next,
   );
 
   if (input.pause_scope === 'slot') {
