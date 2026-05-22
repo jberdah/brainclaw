@@ -7,6 +7,7 @@ import {
   advance,
   closeLoop,
   complete_turn,
+  computeNextExpected,
   getLoop,
   IdempotencyKeyReusedError,
   IdempotencyOwnerMismatchError,
@@ -27,6 +28,7 @@ import {
   type LoopPhase,
   type LoopSlot,
   type LoopThread,
+  type NextExpectedHint,
 } from '../core/loops/index.js';
 import {
   BclawLoopRequestSchema,
@@ -52,17 +54,9 @@ export interface HandleBclawLoopResult {
 
 type ValidRequest = BclawLoopRequest;
 type LoopEventSnapshot = Set<string>;
-type NextExpectedHint = {
-  action: 'turn' | 'complete_turn' | 'provide_input' | 'advance' | 'close';
-  intent: string;
-  reason?: string;
-  phase?: string;
-  slot_id?: string;
-  role?: string;
-  from_phase?: string;
-  to_phase?: string;
-  blocking_on: string[];
-};
+// NextExpectedHint type now lives in src/core/loops/next-expected.ts
+// (hoisted per can_e57c7782 follow-up so MCP facade + CLI share the
+// same contract). Imported above.
 
 function resolveActor(
   req: { agent?: string; agentId?: string },
@@ -226,91 +220,25 @@ function withLockedLoopMutation(
       // Best-effort fence at entry; see SLOT_BOUND_INTENTS / fence-check
       // discipline comment above for why mid-verb re-checks are deferred.
       fenceCheck();
+      // pln#508 step 3 follow-up (can_810ff9ec): run the timeout sweep
+      // INSIDE the loop lock for mutating intents. Previously the sweep
+      // ran at facade entry (before lock acquisition), which could race
+      // with concurrent writers and turn the caller's expected_version
+      // into a sweep-induced version_conflict. Now: sweep writes happen
+      // under the same lock as the caller's verb — single-writer
+      // serialization preserved. If the sweep bumps the version, the
+      // caller's verb sees the post-sweep state (e.g. their question
+      // already timed out → provide_input legitimately returns
+      // unknown_question, which is correct semantics).
+      trySweepLoopTimeouts(req.loop_id, cwd);
       return work();
     },
   });
 }
 
-/**
- * `NextExpectedHint` — self-describing hint to the caller about the most
- * natural next intent. Kept conservative for the MVP: we look at the loop's
- * status + slot states and pick the smallest correct action.
- */
-function computeNextExpected(loop: LoopThread): {
-  action: NextExpectedHint['action'];
-  intent: string;
-  reason?: string;
-  phase?: string;
-  slot_id?: string;
-  role?: string;
-  from_phase?: string;
-  to_phase?: string;
-  blocking_on: string[];
-} | null {
-  if (loop.status === 'completed' || loop.status === 'cancelled' || loop.status === 'blocked') {
-    return null;
-  }
-  if (loop.open_questions.length > 0) {
-    return {
-      action: 'provide_input',
-      intent: 'bclaw_loop.provide_input',
-      reason: loop.status === 'paused' ? loop.pause_reason : 'awaiting_operator',
-      blocking_on: loop.open_questions,
-    };
-  }
-  if (loop.status === 'paused') {
-    return null;
-  }
-
-  const currentPhaseSlots: LoopSlot[] = loop.slots.filter(
-    (s: LoopSlot) => (s.phase ?? loop.current_phase) === loop.current_phase,
-  );
-  const openSlots: LoopSlot[] = currentPhaseSlots.filter((s: LoopSlot) => s.status === 'open');
-  if (openSlots.length > 0) {
-    const first = openSlots[0];
-    return {
-      action: 'turn',
-      intent: 'bclaw_loop.turn',
-      phase: loop.current_phase,
-      slot_id: first.slot_id,
-      role: first.role,
-      blocking_on: openSlots.map((s: LoopSlot) => s.slot_id),
-    };
-  }
-
-  const assignedOrWorking: LoopSlot[] = currentPhaseSlots.filter(
-    (s: LoopSlot) => s.status === 'assigned' || s.status === 'working',
-  );
-  if (assignedOrWorking.length > 0) {
-    return {
-      action: 'complete_turn',
-      intent: 'bclaw_loop.complete_turn',
-      phase: loop.current_phase,
-      slot_id: assignedOrWorking[0].slot_id,
-      role: assignedOrWorking[0].role,
-      blocking_on: assignedOrWorking.map((s: LoopSlot) => s.slot_id),
-    };
-  }
-
-  const phaseNames: string[] = loop.phases.map((p: LoopPhase) => p.name);
-  const currentIndex = phaseNames.indexOf(loop.current_phase);
-  if (currentIndex >= 0 && currentIndex + 1 < phaseNames.length) {
-    return {
-      action: 'advance',
-      intent: 'bclaw_loop.advance',
-      from_phase: loop.current_phase,
-      to_phase: phaseNames[currentIndex + 1],
-      blocking_on: [],
-    };
-  }
-
-  return {
-    action: 'close',
-    intent: 'bclaw_loop.close',
-    reason: 'terminal_phase_reached',
-    blocking_on: [],
-  };
-}
+// computeNextExpected lives in src/core/loops/next-expected.ts (hoisted
+// per can_e57c7782 follow-up — same contract is now shared by both the
+// MCP facade here and the CLI `brainclaw reply` command).
 
 function summarizeLoop(loop: LoopThread, autoClosed?: boolean): string {
   const suffix = autoClosed ? ' (auto-closed)' : '';
@@ -355,11 +283,13 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
   }
   const { actor, agentId } = resolveActor(req, defaultActor);
 
-  // pln#508 step 3 — lazy pause-timeout reconcile at facade entry. Skip
-  // intents without a single-target loop ('open' creates a new loop;
-  // 'list' enumerates many — sweeping every loop on a list call would be
-  // an unbounded fan-out and is not what the spec asks for).
-  if ('loop_id' in req && typeof req.loop_id === 'string') {
+  // pln#508 step 3 — lazy pause-timeout reconcile at facade entry. Only
+  // for the `get` read-only intent (no withLockedLoopMutation wrapper).
+  // Mutating intents sweep INSIDE withLockedLoopMutation to keep all
+  // writes under the same loop lock as the caller's verb — see
+  // can_810ff9ec follow-up. `open` has no existing loop_id; `list`
+  // enumerates many loops (unbounded fan-out, not in scope).
+  if (req.intent === 'get' && typeof req.loop_id === 'string') {
     trySweepLoopTimeouts(req.loop_id, options.cwd);
   }
 

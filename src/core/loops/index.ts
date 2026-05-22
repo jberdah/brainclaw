@@ -47,6 +47,10 @@ export {
   type NextPhaseDecision,
 } from './iteration-engine.js';
 export {
+  computeNextExpected,
+  type NextExpectedHint,
+} from './next-expected.js';
+export {
   buildIdeationBrief,
   type BriefMemoryItem,
   type BriefMemoryProvider,

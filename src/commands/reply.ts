@@ -1,6 +1,6 @@
 import { memoryExists } from '../core/io.js';
-import { listLoops, provideInput } from '../core/loops/index.js';
-import type { ProvideInputResult } from '../core/loops/index.js';
+import { computeNextExpected, listLoops, provideInput } from '../core/loops/index.js';
+import type { NextExpectedHint, ProvideInputResult } from '../core/loops/index.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import type {
   LoopArtifact,
@@ -27,17 +27,8 @@ export interface ReplyCommandResult {
   duplicate?: boolean;
 }
 
-export interface NextExpectedHint {
-  action: 'turn' | 'complete_turn' | 'provide_input' | 'advance' | 'close';
-  intent: string;
-  reason?: string;
-  phase?: string;
-  slot_id?: string;
-  role?: string;
-  from_phase?: string;
-  to_phase?: string;
-  blocking_on: string[];
-}
+// NextExpectedHint imported from `../core/loops/index.js` — single
+// source of truth shared with the MCP facade (hoisted per can_e57c7782).
 
 function fail(message: string, exitCode: 1 | 2, opts: ReplyCommandOptions): never {
   if (opts.json) {
@@ -90,71 +81,6 @@ function findLoopForQuestion(
     }
   }
   return undefined;
-}
-
-function computeNextExpected(loop: LoopThread): NextExpectedHint | null {
-  if (loop.status === 'completed' || loop.status === 'cancelled' || loop.status === 'blocked') {
-    return null;
-  }
-  if (loop.open_questions.length > 0) {
-    return {
-      action: 'provide_input',
-      intent: 'bclaw_loop.provide_input',
-      reason: loop.status === 'paused' ? loop.pause_reason : 'awaiting_operator',
-      blocking_on: [...loop.open_questions],
-    };
-  }
-  if (loop.status === 'paused') {
-    return null;
-  }
-
-  const currentPhaseSlots: LoopSlot[] = loop.slots.filter(
-    (s) => (s.phase ?? loop.current_phase) === loop.current_phase,
-  );
-  const openSlots = currentPhaseSlots.filter((s) => s.status === 'open');
-  if (openSlots.length > 0) {
-    const first = openSlots[0];
-    return {
-      action: 'turn',
-      intent: 'bclaw_loop.turn',
-      phase: loop.current_phase,
-      slot_id: first.slot_id,
-      role: first.role,
-      blocking_on: openSlots.map((s) => s.slot_id),
-    };
-  }
-  const assignedOrWorking = currentPhaseSlots.filter(
-    (s) => s.status === 'assigned' || s.status === 'working',
-  );
-  if (assignedOrWorking.length > 0) {
-    return {
-      action: 'complete_turn',
-      intent: 'bclaw_loop.complete_turn',
-      phase: loop.current_phase,
-      slot_id: assignedOrWorking[0].slot_id,
-      role: assignedOrWorking[0].role,
-      blocking_on: assignedOrWorking.map((s) => s.slot_id),
-    };
-  }
-
-  const phaseNames = loop.phases.map((p) => p.name);
-  const currentIndex = phaseNames.indexOf(loop.current_phase);
-  if (currentIndex >= 0 && currentIndex + 1 < phaseNames.length) {
-    return {
-      action: 'advance',
-      intent: 'bclaw_loop.advance',
-      from_phase: loop.current_phase,
-      to_phase: phaseNames[currentIndex + 1],
-      blocking_on: [],
-    };
-  }
-
-  return {
-    action: 'close',
-    intent: 'bclaw_loop.close',
-    reason: 'terminal_phase_reached',
-    blocking_on: [],
-  };
 }
 
 function formatNextExpected(hint: NextExpectedHint | null): string {

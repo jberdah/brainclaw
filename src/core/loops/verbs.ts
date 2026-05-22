@@ -1420,7 +1420,15 @@ function resolveDeadlineMs(thread: LoopThread, source: SourceQuestion): number |
  * milliseconds, or undefined when the input is not a recognised duration.
  * Note: months/years are intentionally NOT supported — they have no
  * fixed millisecond length and the preset only needs days/hours/minutes.
+ *
+ * Bound (can_45f6a7fb): output is rejected when ms is non-finite, ≤0,
+ * or exceeds MAX_PAUSE_DURATION_MS (365 days). Without this bound, inputs
+ * like `P99999999999999D` parse to `Infinity` or unsafe integers, and
+ * `now > timeout_at` evaluates falsy ⇒ the deadline never fires ⇒
+ * paused loops hang forever with no recovery path.
  */
+const MAX_PAUSE_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
+
 function parseIso8601DurationMs(input: string): number | undefined {
   const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(input);
   if (!match) return undefined;
@@ -1432,7 +1440,11 @@ function parseIso8601DurationMs(input: string): number | undefined {
   const hours = hoursStr ? Number(hoursStr) : 0;
   const minutes = minutesStr ? Number(minutesStr) : 0;
   const seconds = secondsStr ? Number(secondsStr) : 0;
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const ms = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_PAUSE_DURATION_MS) {
+    return undefined;
+  }
+  return ms;
 }
 
 /**
