@@ -399,6 +399,52 @@ describe('runReplyCommand', () => {
     assert.ok(captured.stderr.join('\n').includes('no suggested_default'));
   });
 
+  it('exits 1 with mode-mismatch error when --answer is used on a question with structured options (pln#512 phase 3 codex fix #2)', () => {
+    const { loop, championSlotId } = openLoopWithChampion(cwd);
+    const qid = askQuestion(cwd, loop.id, championSlotId, {
+      options: [
+        { id: 'approve', label: 'Approve' },
+        { id: 'reject', label: 'Reject' },
+      ],
+      suggested_default: 'reject',
+    });
+    // Crucially: "approve" looks like a free-text answer but it would resolve
+    // as chosen_option_id='' which post-hooks treat as the reject branch.
+    assert.throws(
+      () => runReplyCommand(qid, { answer: 'approve' }, cwd),
+      (err: unknown) => err instanceof ProcessExitError && err.code === 1,
+    );
+    const joined = captured.stderr.join('\n');
+    assert.ok(
+      joined.includes('has structured options'),
+      `expected mode-mismatch error, got: ${joined}`,
+    );
+    // When the answer text matches an option id verbatim, the error points
+    // the operator at the right --choose form.
+    assert.ok(
+      joined.includes('--choose approve'),
+      `expected --choose approve hint, got: ${joined}`,
+    );
+  });
+
+  it('exits 1 with mode-mismatch error when --answer is used on options without a matching id', () => {
+    const { loop, championSlotId } = openLoopWithChampion(cwd);
+    const qid = askQuestion(cwd, loop.id, championSlotId, {
+      options: [
+        { id: 'apply', label: 'Apply' },
+        { id: 'skip', label: 'Skip' },
+      ],
+      suggested_default: 'apply',
+    });
+    assert.throws(
+      () => runReplyCommand(qid, { answer: 'something else' }, cwd),
+      (err: unknown) => err instanceof ProcessExitError && err.code === 1,
+    );
+    const joined = captured.stderr.join('\n');
+    assert.ok(joined.includes('has structured options'));
+    assert.ok(joined.includes('known: apply, skip'), `got: ${joined}`);
+  });
+
   it('exits 1 with format error for a malformed qst_id', () => {
     assert.throws(
       () => runReplyCommand('not-a-qst-id', { answer: 'x' }, cwd),

@@ -5,6 +5,7 @@ import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
 import {
   add_artifact,
   advance,
+  AwaitingFileApplyApprovalError,
   closeLoop,
   complete_turn,
   computeNextExpected,
@@ -686,6 +687,22 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
     }
     if (err instanceof LockLostError) {
       return errorResponse(req.intent, 'lock_lost', err.message, Date.now() - startMs);
+    }
+    if (err instanceof AwaitingFileApplyApprovalError) {
+      // pln#512 phase 3 codex review fix #1: surface structurally so callers
+      // can branch on the code without parsing the message text.
+      return errorResponse(
+        req.intent,
+        'awaiting_file_apply_approval',
+        err.message,
+        Date.now() - startMs,
+        {
+          loop_id: err.loop_id,
+          question_id: err.question_id,
+          target_path: err.target_path,
+          diff_artifact_id: err.diff_artifact_id,
+        },
+      );
     }
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('unauthorized_slot_write')) {

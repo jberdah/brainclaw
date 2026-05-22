@@ -19,6 +19,7 @@ import {
   type LoopEvent,
   type LoopThread,
 } from '../../src/core/loops/index.js';
+import { handleBclawLoop } from '../../src/commands/loops-handlers.js';
 import { writeFileAtomic } from '../../src/core/io.js';
 
 /**
@@ -487,5 +488,45 @@ describe('closeLoop bootstrap pre-hook — atomicity (pln#512 step 2)', () => {
 
     const leftover = fs.readdirSync(f.cwd).filter((e) => e.endsWith('.tmp'));
     assert.deepEqual(leftover, [], 'no .tmp file should remain after approve-path atomic rename');
+  });
+});
+
+describe('bclaw_loop facade — awaiting_file_apply_approval is surfaced structurally (pln#512 phase 3 codex fix #1)', () => {
+  let fixtures: Fixture[] = [];
+  beforeEach(() => { fixtures = []; });
+  afterEach(() => {
+    for (const f of fixtures) {
+      try { fs.rmSync(f.cwd, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  });
+
+  it('close intent on a paused-overwrite loop returns code=awaiting_file_apply_approval with structured details', () => {
+    const fixture = setupBootstrapLoop({ finalContent: '# new\n' });
+    fixtures.push(fixture);
+    const target = path.join(fixture.cwd, 'PROJECT.md');
+    fs.writeFileSync(target, '# original\n', 'utf8');
+
+    const r = handleBclawLoop({
+      args: { intent: 'close', loop_id: fixture.loop.id, status: 'completed', agentId: 'agt_test' },
+      cwd: fixture.cwd,
+    });
+
+    assert.equal(r.response.status, 'error');
+    assert.equal(r.response.intent, 'bclaw_loop.close');
+    assert.ok(
+      r.response.error?.startsWith('awaiting_file_apply_approval:'),
+      `error code should be awaiting_file_apply_approval, got: ${r.response.error}`,
+    );
+
+    const details = r.response.result as {
+      loop_id: string;
+      question_id: string;
+      target_path: string;
+      diff_artifact_id: string;
+    };
+    assert.equal(details.loop_id, fixture.loop.id);
+    assert.match(details.question_id, /^qst_[0-9a-f]+$/);
+    assert.equal(details.target_path, target);
+    assert.match(details.diff_artifact_id, /^art_[0-9a-f]+$/);
   });
 });

@@ -190,6 +190,27 @@ export function runReplyCommand(
     }
   }
 
+  // pln#512 phase 3 codex review fix #2: when the source question carries
+  // structured options, `--answer` cannot resolve it correctly. The verb
+  // post-hooks (e.g. file_overwrite_approval) branch on chosen_option_id,
+  // so a free-text answer of "approve" creates an answer artifact whose
+  // chosen_option_id is empty — the hook treats that as REJECT. Refuse the
+  // mode mismatch up front and point the operator at --choose.
+  if (mode === 'answer' && question.options && question.options.length > 0) {
+    const opts = question.options;
+    const known = opts.map((o) => o.id).join(', ');
+    const text = (options.answer ?? '').trim();
+    const matchedOption = opts.find((o) => o.id === text);
+    const hint = matchedOption
+      ? ` — to pick this option, use \`--choose ${matchedOption.id}\``
+      : ` — pick one with \`--choose <id>\` (known: ${known})`;
+    fail(
+      `question ${questionId} has structured options; --answer is not accepted${hint}`,
+      1,
+      options,
+    );
+  }
+
   if (mode === 'skip' && question.suggested_default === undefined) {
     fail(
       `--skip on ${questionId}: source question has no suggested_default to materialize`,
