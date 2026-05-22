@@ -66,6 +66,8 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
       return thread.artifacts.some(isVerdictAccepted);
     case 'max_iterations':
       return thread.iteration_count >= condition.n;
+    case 'min_iterations':
+      return thread.iteration_count >= condition.n;
     case 'artifact_produced':
       return thread.artifacts.some(
         (artifact) => artifact.phase === condition.phase && artifact.type === condition.type,
@@ -187,6 +189,8 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
       return 'reviewer_green unmet: no accepted verdict artifact yet';
     case 'max_iterations':
       return `max_iterations unmet: iteration_count=${thread.iteration_count} < n=${gate.n}`;
+    case 'min_iterations':
+      return `min_iterations unmet: iteration_count (${thread.iteration_count}) < required (${gate.n})`;
     case 'artifact_produced':
       return `artifact_produced unmet: no artifact of type "${gate.type}" in phase "${gate.phase}"`;
     case 'no_open_questions':
@@ -195,8 +199,15 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
       return 'manual gate: caller did not signal advance';
     case 'any':
       return `any-of unmet: none of ${gate.conditions.length} sub-conditions held`;
-    case 'all':
+    case 'all': {
+      // pln#516 step 2 — `all` composes other gates; the generic "at least
+      // one of N failed" tells the operator nothing actionable. Find the
+      // first sub-condition that evaluates false and report its reason so
+      // the journal records what is actually blocking the advance.
+      const failing = gate.conditions.find((c) => !evaluateStopCondition(thread, c));
+      if (failing) return describeUnmetGate(thread, failing);
       return `all-of unmet: at least one of ${gate.conditions.length} sub-conditions failed`;
+    }
     default: {
       const exhaustive: never = gate;
       void exhaustive;

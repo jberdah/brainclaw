@@ -51,11 +51,23 @@ export const BOOTSTRAP_PRESET: LoopPreset = {
     {
       name: 'clarify',
       context_filter: ['critique_history', 'runtime_notes', 'feedback'],
+      // pln#516 step 2 — wrap the original `any` exit condition under a
+      // `min_iterations >= 1` floor so the gate refuses to auto-traverse at
+      // entry. Without the floor `no_open_questions` is trivially true while
+      // `open_questions` is still `[]` (it only fills once the champion calls
+      // requestInput), and `advance(propose→clarify)` slid straight into
+      // review_draft (can_d5a41770, run_4b0500c6).
       advance_gate: {
-        kind: 'any',
+        kind: 'all',
         conditions: [
-          { kind: 'no_open_questions' },
-          { kind: 'max_iterations', n: 1 },
+          { kind: 'min_iterations', n: 1 },
+          {
+            kind: 'any',
+            conditions: [
+              { kind: 'no_open_questions' },
+              { kind: 'max_iterations', n: 1 },
+            ],
+          },
         ],
       },
     },

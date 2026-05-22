@@ -215,7 +215,10 @@ describe('evaluatePhaseAdvanceGate (pln#492 phase 2.a)', () => {
     };
     const outcome = evaluatePhaseAdvanceGate(thread, gate);
     assert.equal(outcome.advance, false);
-    assert.match(outcome.gate_reason ?? '', /all-of unmet/);
+    // pln#516 step 2 — describeUnmetGate recurses into the first failing
+    // sub-condition of `all`, so the message surfaces the actual root cause
+    // (reviewer_green here, since the thread has 3 critiques but no verdict).
+    assert.match(outcome.gate_reason ?? '', /reviewer_green unmet/);
   });
 
   it('manual gate is always blocked (caller must signal advance another way)', () => {

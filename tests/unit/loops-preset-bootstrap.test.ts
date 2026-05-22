@@ -79,13 +79,24 @@ describe('BOOTSTRAP_PRESET — phase chain (pln#511 step 1)', () => {
     });
   });
 
-  it('clarify advance_gate is any[no_open_questions, max_iterations=1]', () => {
+  it('clarify advance_gate is all[min_iterations=1, any[no_open_questions, max_iterations=1]] (pln#516 step 2)', () => {
+    // pln#516 step 2 — the original `any [no_open_questions, max_iterations:1]`
+    // auto-traversed because no_open_questions is trivially true at clarify-entry
+    // (open_questions only fills after requestInput). Wrapping the original
+    // `any` under an `all` with a `min_iterations >= 1` floor refuses to exit
+    // the phase before the champion has had a tick to call requestInput.
     const gate = BOOTSTRAP_PRESET.phases[2].advance_gate;
     assert.deepEqual(gate, {
-      kind: 'any',
+      kind: 'all',
       conditions: [
-        { kind: 'no_open_questions' },
-        { kind: 'max_iterations', n: 1 },
+        { kind: 'min_iterations', n: 1 },
+        {
+          kind: 'any',
+          conditions: [
+            { kind: 'no_open_questions' },
+            { kind: 'max_iterations', n: 1 },
+          ],
+        },
       ],
     });
   });
@@ -156,14 +167,25 @@ describe('evaluateStopCondition — no_open_questions', () => {
     );
   });
 
-  it('composes inside the clarify `any` gate: matches when either condition holds', () => {
+  it('composes inside the clarify `all { min_iterations, any[...] }` gate (pln#516 step 2)', () => {
     const clarifyGate = BOOTSTRAP_PRESET.phases[2].advance_gate!;
-    // open_questions empty → no_open_questions branch fires.
+    // iteration_count=0 → min_iterations floor unmet → `all` returns false
+    // regardless of the inner `any` (this is the can_d5a41770 fix: refuse to
+    // auto-traverse clarify before the champion has ticked).
     assert.equal(
-      evaluateStopCondition(makeThread({ open_questions: [] }), clarifyGate),
+      evaluateStopCondition(makeThread({ open_questions: [], iteration_count: 0 }), clarifyGate),
+      false,
+    );
+    // iteration_count=1 AND open_questions=[] → both branches hold.
+    assert.equal(
+      evaluateStopCondition(
+        makeThread({ open_questions: [], iteration_count: 1 }),
+        clarifyGate,
+      ),
       true,
     );
-    // Question still open BUT iteration_count >= 1 → max_iterations branch fires.
+    // iteration_count=1 AND a question still open → max_iterations branch fires
+    // inside the inner `any` (n=1, iteration_count>=1) so the gate holds.
     assert.equal(
       evaluateStopCondition(
         makeThread({ open_questions: ['qst_abc123'], iteration_count: 1 }),
@@ -171,7 +193,7 @@ describe('evaluateStopCondition — no_open_questions', () => {
       ),
       true,
     );
-    // Question open AND iteration_count < 1 → neither branch holds.
+    // iteration_count=0 AND a question open → min_iterations false → all false.
     assert.equal(
       evaluateStopCondition(
         makeThread({ open_questions: ['qst_abc123'], iteration_count: 0 }),
@@ -286,11 +308,18 @@ describe('bclaw_coordinate preset selector — wiring (pln#511 step 2)', () => {
     );
     assert.equal(loop.current_phase, 'survey');
     // Phase advance gates carry through unchanged from the preset.
+    // pln#516 step 2: clarify gate is now wrapped in `all { min_iterations, any [...] }`.
     assert.deepEqual(loop.phases[2].advance_gate, {
-      kind: 'any',
+      kind: 'all',
       conditions: [
-        { kind: 'no_open_questions' },
-        { kind: 'max_iterations', n: 1 },
+        { kind: 'min_iterations', n: 1 },
+        {
+          kind: 'any',
+          conditions: [
+            { kind: 'no_open_questions' },
+            { kind: 'max_iterations', n: 1 },
+          ],
+        },
       ],
     });
     // The stop_condition wired into the thread is the preset's.

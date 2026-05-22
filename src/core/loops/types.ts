@@ -441,6 +441,11 @@ export const AtomicStopConditionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('phase_reached'), phase: z.string().min(1) }),
   z.object({ kind: z.literal('reviewer_green') }),
   z.object({ kind: z.literal('max_iterations'), n: z.number().int().positive() }),
+  // pln#516 step 2 — minimum-iteration floor. Used by the bootstrap preset's
+  // clarify gate (composed inside `all`) to refuse exiting the phase before
+  // the champion has had at least one iteration tick to call requestInput.
+  // Symmetric to `max_iterations`: matches when `iteration_count >= n`.
+  z.object({ kind: z.literal('min_iterations'), n: z.number().int().positive() }),
   z.object({
     kind: z.literal('artifact_produced'),
     phase: z.string().min(1),
