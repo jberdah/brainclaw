@@ -457,6 +457,10 @@ export const AtomicStopConditionSchema = z.discriminatedUnion('kind', [
     n: z.number().int().positive(),
     scope: z.enum(['phase', 'loop']),
   }),
+  // pln#511 step 1 — bootstrap preset's clarify phase advances when the
+  // operator has no pending questions. Composed with `max_iterations=1`
+  // under an `any` gate so the loop never blocks the operator forever.
+  z.object({ kind: z.literal('no_open_questions') }),
   z.object({ kind: z.literal('manual') }),
 ]);
 export type AtomicStopCondition = z.infer<typeof AtomicStopConditionSchema>;

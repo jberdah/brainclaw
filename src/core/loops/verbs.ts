@@ -100,6 +100,11 @@ export function evaluateStopCondition(thread: LoopThread, condition?: StopCondit
       });
       return matches.length >= condition.n;
     }
+    case 'no_open_questions':
+      // pln#511 step 1 — bootstrap preset clarify-phase primitive. Mirrors
+      // the persisted `thread.open_questions` set (kept in sync by
+      // request_input / provide_input — see reconcileOpenQuestions).
+      return thread.open_questions.length === 0;
     case 'manual':
       return false;
     case 'any':
@@ -183,6 +188,8 @@ function describeUnmetGate(thread: LoopThread, gate: StopCondition): string {
       return `max_iterations unmet: iteration_count=${thread.iteration_count} < n=${gate.n}`;
     case 'artifact_produced':
       return `artifact_produced unmet: no artifact of type "${gate.type}" in phase "${gate.phase}"`;
+    case 'no_open_questions':
+      return `no_open_questions unmet: ${thread.open_questions.length} questions still open`;
     case 'manual':
       return 'manual gate: caller did not signal advance';
     case 'any':

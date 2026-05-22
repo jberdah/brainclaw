@@ -57,6 +57,7 @@ export {
   type IdeationBriefInput,
   type IdeationBriefResult,
 } from './brief-assembly.js';
+export { BOOTSTRAP_PRESET, type LoopPreset } from './presets/bootstrap.js';
 export {
   acquireLock,
   hashRequest,
