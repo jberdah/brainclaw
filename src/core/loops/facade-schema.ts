@@ -23,6 +23,7 @@ import {
 const CallerEnvelopeFields = {
   agent: z.string().optional(),
   agentId: z.string().optional(),
+  project: z.string().optional(),
   client_request_id: z.string().min(1).optional(),
 };
 

@@ -1037,6 +1037,7 @@ const MCP_WRITE_TOOLS = [
         task: { type: 'string', description: 'Optional task description (used as claim description when creating a claim).' },
         messageId: { type: 'string', description: 'Optional message/thread ID for traceability.' },
         contextTarget: { type: 'string', description: 'Optional path passed to bclaw_get_context to filter memory.' },
+        project: { type: 'string', description: 'Optional linked project name/path. Routes session, context, claims, audit, and bootstrap probe to that project. Defaults to the current cwd.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         compact: { type: 'boolean', description: 'Return a compact payload (default true). Set to false to include the full context result. Compact mode avoids exceeding MCP token limits on projects with large memory.', default: true },
@@ -1112,6 +1113,7 @@ const MCP_WRITE_TOOLS = [
         reason: { type: 'string', description: 'advance / pause / close: optional reason string.' },
         expected_version: { type: 'number', description: 'Accepted for RFC compatibility on mutating intents, but not enforced until lock/CAS wiring lands.' },
         client_request_id: { type: 'string', description: 'Accepted for RFC compatibility on mutating intents, but not enforced until lock/idempotency wiring lands.' },
+        project: { type: 'string', description: 'Optional linked project name/path. Routes loop reads and mutations to that project. Defaults to the current cwd.' },
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id (enforced for slot-bound auth in complete_turn).' },
       },
@@ -4597,6 +4599,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', parseResult.error.message) };
       }
       const workReq = parseResult.data;
+      const targetCwd = resolveProjectCwd(workReq.project, cwd);
       const useCompact = workReq.compact !== false; // default true
       const warnings: string[] = [];
 
@@ -4607,7 +4610,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           agent: typeof args.agent === 'string' ? args.agent : undefined,
           agentId: typeof args.agentId === 'string' ? args.agentId : undefined,
           context: workReq.contextTarget,
-          cwd,
+          cwd: targetCwd,
         });
       } catch (sessionErr: unknown) {
         return { response: createToolErrorResponse('session_error', sessionErr instanceof Error ? sessionErr.message : String(sessionErr)) };
@@ -4625,14 +4628,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         let sinceSession: string | undefined;
         if (workReq.intent === 'resume') {
-          const previousSession = loadAllSessions(cwd)
+          const previousSession = loadAllSessions(targetCwd)
             .find((s) => s.agent === sessionResult.agent && s.session_id !== sessionResult.session_id);
           sinceSession = previousSession?.session_id;
         }
         contextResult = buildContext({
           target: workReq.contextTarget ?? workReq.scope,
           agent: sessionResult.agent,
-          cwd,
+          cwd: targetCwd,
           sinceSession,
         });
       } catch { /* non-fatal — context failure should not block work */ }
@@ -4641,7 +4644,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       let claimId: string | undefined;
       let claimStatus: FacadeResponse['claim_status'] = 'none';
       if (workReq.intent === 'execute' && workReq.scope) {
-        const existingClaims = listClaims(cwd).filter(
+        const existingClaims = listClaims(targetCwd).filter(
           (c) => c.status === 'active' && c.agent === sessionResult.agent && c.scope === workReq.scope,
         );
         if (existingClaims.length > 0) {
@@ -4663,12 +4666,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             status: 'active',
             plan_id: workReq.planId,
             model: currentModel,
-          }, cwd);
-          appendAuditEntry({ actor: sessionResult.agent, actor_id: sessionResult.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: workReq.scope, session_id: sessionResult.session_id }, cwd);
+          }, targetCwd);
+          appendAuditEntry({ actor: sessionResult.agent, actor_id: sessionResult.agent_id, action: 'claim', item_id: claimId, item_type: 'claim', scope: workReq.scope, session_id: sessionResult.session_id }, targetCwd);
           claimStatus = 'created';
 
           // Policy check post-claim
-          const policyResult = checkPolicy({ scope: workReq.scope, agent: sessionResult.agent, agentId: sessionResult.agent_id, cwd });
+          const policyResult = checkPolicy({ scope: workReq.scope, agent: sessionResult.agent, agentId: sessionResult.agent_id, cwd: targetCwd });
           for (const w of policyResult.warnings.filter((pw) => pw.kind !== 'no_claim')) {
             const idLabel = w.id ? ` (${w.id})` : '';
             warnings.push(`[${w.kind}]${idLabel} ${w.message}`);
@@ -4726,7 +4729,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const fsMod = await import('node:fs');
         const pathMod = await import('node:path');
-        const projectMdPath = pathMod.join(cwd, 'PROJECT.md');
+        const projectMdPath = pathMod.join(targetCwd, 'PROJECT.md');
         let needsBootstrap = false;
         try {
           const stat = fsMod.statSync(projectMdPath);
@@ -6170,7 +6173,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     if (name === 'bclaw_loop') {
       const { handleBclawLoop } = await import('./loops-handlers.js');
-      const result = handleBclawLoop({ args: args as unknown, cwd });
+      const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
+      const result = handleBclawLoop({ args: args as unknown, cwd: targetCwd });
       return {
         response: toolResponse({
           content: [{ type: 'text', text: result.summary }],
