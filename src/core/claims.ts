@@ -60,6 +60,61 @@ export function saveClaim(claim: Claim, cwd?: string): void {
   });
 }
 
+export interface AcquireClaimScopeInput {
+  scope: string;
+  agent: string;
+  agent_id?: string;
+  description: string;
+  // Optional fields passed through to saveClaim.
+  user?: string;
+  session_id?: string;
+  plan_id?: string;
+  model?: string;
+}
+
+export interface AcquireClaimScopeResult {
+  /** True if we saved a new active claim. */
+  acquired: boolean;
+  /** The new claim when acquired === true. */
+  claim?: Claim;
+  /** The other active claim already on the scope when acquired === false. */
+  conflicting_claim?: Claim;
+}
+
+/**
+ * Atomically check for an active claim on `scope` and save a new one if absent.
+ *
+ * Atomicity is provided by running both operations inside a single mutate() call;
+ * the mutation-pipeline mutex serializes filesystem writes on the claims store.
+ */
+export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): AcquireClaimScopeResult {
+  return mutate({ cwd }, () => {
+    const conflictingClaim = listClaims(cwd).find(
+      (claim) => claim.status === 'active' && claim.scope === input.scope,
+    );
+    if (conflictingClaim) {
+      return { acquired: false, conflicting_claim: conflictingClaim };
+    }
+
+    const claim: Claim = {
+      id: generateClaimId(),
+      agent: input.agent,
+      agent_id: input.agent_id,
+      user: input.user,
+      session_id: input.session_id,
+      scope: input.scope,
+      description: input.description,
+      created_at: nowISO(),
+      status: 'active',
+      plan_id: input.plan_id,
+      model: input.model,
+    };
+
+    saveClaim(claim, cwd);
+    return { acquired: true, claim };
+  });
+}
+
 export function loadClaim(id: string, cwd?: string): Claim {
   return claimStore(cwd).load(id);
 }

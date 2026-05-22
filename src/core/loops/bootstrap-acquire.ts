@@ -10,13 +10,12 @@
  *
  * Algorithm (lock is opportunistic, not blocking):
  *   1. Find an existing bootstrap loop in {open, paused} → join it.
- *   2. Check for an active coordination-lock claim (another caller is
- *      mid-open). Re-find once; join if now visible, else throw
+ *   2. Atomically acquire the coordination-lock claim. If another caller won,
+ *      re-find once; join if now visible, else throw
  *      `BootstrapCoordinationInProgressError`.
- *   3. Acquire the lock, call `openLoop`, release the lock (success or fail).
+ *   3. Call `openLoop`, release the lock (success or fail).
  */
-import { generateClaimId, listClaims, releaseClaim, saveClaim } from '../claims.js';
-import { nowISO } from '../ids.js';
+import { acquireClaimScope, releaseClaim } from '../claims.js';
 import { BOOTSTRAP_PRESET } from './presets/bootstrap.js';
 import { listLoops, openLoop } from './store.js';
 import type { LoopThread } from './types.js';
@@ -28,6 +27,8 @@ export interface AcquireBootstrapOptions {
   actor: string;
   /** Optional agent_id for the claim + slot. */
   agent_id?: string;
+  /** Optional session_id written into the coordination-lock claim. */
+  session_id?: string;
   /** Optional model tag written into the coordination-lock claim. */
   model?: string;
 }
@@ -91,37 +92,30 @@ export function acquireBootstrapLoop(
     return { action: 'joined', loop: existing, warnings };
   }
 
-  // Step 2 — check for an active coordination-lock held by a concurrent caller.
+  // Step 2 — atomically acquire the coordination-lock claim.
   const lockScope = `bootstrap-coordination-lock:${cwd ?? process.cwd()}`;
-  const heldLocks = listClaims(cwd).filter(
-    (c) => c.status === 'active' && c.scope === lockScope,
-  );
-  if (heldLocks.length > 0) {
-    // Re-check once: the holder may have just finished opening the loop.
+  const acquireResult = acquireClaimScope({
+    scope: lockScope,
+    agent: opts.actor,
+    agent_id: opts.agent_id,
+    description: `bootstrap coordination lock (open by ${opts.actor})`,
+    user: process.env.USER || process.env.USERNAME || undefined,
+    session_id: opts.session_id,
+    model: opts.model,
+  }, cwd);
+
+  if (!acquireResult.acquired) {
+    // Lost race — re-check once: the holder may have just finished opening the loop.
     const reFound = findExistingBootstrapLoop(cwd);
     if (reFound) {
       warnings.push(`bootstrap loop opened by a parallel coordinator (${reFound.id}); joined existing.`);
       return { action: 'joined', loop: reFound, warnings };
     }
-    throw new BootstrapCoordinationInProgressError(heldLocks[0].id);
+    throw new BootstrapCoordinationInProgressError(acquireResult.conflicting_claim!.id);
   }
 
-  // Step 3 — acquire the lock, open the loop, release the lock.
-  const lockClaimId = generateClaimId();
-  saveClaim(
-    {
-      id: lockClaimId,
-      agent: opts.actor,
-      agent_id: opts.agent_id,
-      user: process.env.USER || process.env.USERNAME || undefined,
-      scope: lockScope,
-      description: `bootstrap coordination lock (open by ${opts.actor})`,
-      created_at: nowISO(),
-      status: 'active',
-      model: opts.model,
-    },
-    cwd,
-  );
+  // Step 3 — open the loop, release the lock.
+  const lockClaimId = acquireResult.claim!.id;
 
   try {
     const loop = openLoop(
