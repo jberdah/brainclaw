@@ -235,8 +235,13 @@ program
   .option('--no-analyze-repo', 'Skip repository analysis when suggesting a project mode')
   .option('--no-ai-scan', 'Skip AI surface scan during init')
   .option('--scan', 'Scan subdirectories for service boundaries and suggest init targets')
+  .option('--cwd <path>', 'Override working directory for init scaffolding (parity with other CLI commands)')
   .action(async (options) => {
-    await runInit(options);
+    // pln#515 step 1: commander binds --cwd to the program-level option even
+    // when it appears after `init`, so resolve via program.opts() and feed
+    // runInit's existing options.cwd plumb.
+    const programCwd = program.opts().cwd;
+    await runInit({ ...options, cwd: options.cwd ?? programCwd });
   });
 
 // --- setup ---
