@@ -76,6 +76,17 @@ export interface OpenLoopInput {
   linked?: LoopLinks;
   stop_condition?: StopCondition;
   mode?: ReviewMode;
+  /**
+   * pln#511 step 2 — explicit protocol override. When set, this is the
+   * exact LoopProtocolConfig written to the thread; it bypasses the
+   * kind+mode-derived default from resolveProtocol(). Callers using a
+   * loop preset (e.g. bootstrap) pass the preset's `protocol` here so
+   * fields like `preset`, `max_operator_questions`, `max_pause_duration`
+   * land on the thread. Existing callers (review, ideation defaults)
+   * keep working unchanged — leaving this undefined preserves the
+   * kind-default protocol behavior.
+   */
+  protocol?: LoopProtocolConfig;
   created_by: string;
 }
 
@@ -134,7 +145,11 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
   const id = generateLoopId();
   const mutation_id = generateMutationId();
   const slots: LoopSlot[] = (input.slots ?? []).map(buildSlot);
-  const protocol = resolveProtocol(input.kind, input.mode);
+  // pln#511 step 2 — an explicit `protocol` override (carried by loop
+  // presets) wins over the kind/mode-derived default. When no override
+  // is supplied, fall back to the legacy resolveProtocol() path so
+  // existing callers (review, default ideation) are unaffected.
+  const protocol = input.protocol ?? resolveProtocol(input.kind, input.mode);
 
   const thread: LoopThread = {
     schema_version: 1,

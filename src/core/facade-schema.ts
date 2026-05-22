@@ -69,6 +69,17 @@ export const CoordinateRequestSchema = z.object({
    * tests). Has no effect when the source cwd is not a git repo.
    */
   allow_dirty: z.boolean().optional(),
+  /**
+   * pln#511 step 2 — loop preset selector. When set on intent='ideate',
+   * the handler bypasses the kind-default ideation phases and opens the
+   * loop with the named preset's phases / stop_condition / protocol.
+   * v1 ships a single preset ('bootstrap', see src/core/loops/presets/).
+   * The handler validates the name against the preset registry and
+   * rejects unknown names with `unknown_preset`. Presets are kind-
+   * specific: passing `preset` with any intent other than 'ideate' is
+   * rejected as `preset_kind_mismatch`.
+   */
+  preset: z.string().min(1).optional(),
 });
 
 export const FacadeArtifactSchema = z.object({

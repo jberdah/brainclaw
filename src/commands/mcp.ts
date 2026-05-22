@@ -4631,6 +4631,34 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       const req = parseResult.data;
 
+      // pln#511 step 2 — preset selector validation. Presets are kind-
+      // specific in v1: only intent='ideate' carries them. Unknown names
+      // are rejected up-front against the registry so the handler never
+      // silently falls back to the kind-default. The bootstrap preset
+      // also enforces a dispatch constraint (can_753a083a): the champion
+      // must be a human-connected agent, never a sandboxed worker —
+      // checked below once the senderAgent is resolved.
+      if (req.preset !== undefined) {
+        if (req.intent !== 'ideate') {
+          return {
+            response: createToolErrorResponse(
+              'preset_kind_mismatch',
+              `preset='${req.preset}' is only valid for intent='ideate' in v1; got intent='${req.intent}'. Loop presets are kind-specific — open the loop without a preset, or call with intent='ideate'.`,
+            ),
+          };
+        }
+        const { PRESETS: PRESETS_REGISTRY } = await import('../core/loops/presets/index.js');
+        if (!(req.preset in PRESETS_REGISTRY)) {
+          const validNames = Object.keys(PRESETS_REGISTRY).join(', ') || '(none)';
+          return {
+            response: createToolErrorResponse(
+              'unknown_preset',
+              `Unknown preset '${req.preset}'. Valid preset names: ${validNames}.`,
+            ),
+          };
+        }
+      }
+
       // can_30c295b4 — pre-flight uncommitted-changes check.
       // Dispatches that spawn a worker (review/assign/consult/ideate) clone
       // the source repo at HEAD into a worktree. Any uncommitted edits in
@@ -4683,6 +4711,28 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const senderAgentId = typeof args.agentId === 'string' && args.agentId.trim()
         ? args.agentId.trim()
         : undefined;
+
+      // pln#511 step 2 — bootstrap preset dispatch constraint (can_753a083a).
+      // The bootstrap loop's champion must be a human-connected agent: it
+      // asks the operator clarifying questions and writes PROJECT.md. A
+      // sandboxed worker (codex / github-copilot) cannot reach the human,
+      // so the loop would stall in `clarify`. Enforce by requiring
+      // targetAgents to be empty (= single-agent / self-champion mode)
+      // or to contain only the caller. Other presets are unrestricted.
+      if (req.preset === 'bootstrap') {
+        const targets = req.targetAgents ?? [];
+        const onlyCaller = targets.length === 0
+          || (targets.length === 1 && targets[0] === senderAgent);
+        if (!onlyCaller) {
+          return {
+            response: createToolErrorResponse(
+              'bootstrap_preset_not_dispatchable',
+              `preset='bootstrap' cannot dispatch to other agents (can_753a083a): the champion must be a human-connected agent. Got targetAgents=${JSON.stringify(targets)}; pass an empty array or [${JSON.stringify(senderAgent)}].`,
+            ),
+          };
+        }
+      }
+
       const commandHints: Array<{ agent: string; command: string; shell: string }> = [];
       type PreparedInvoke = { entry: CoordinateDeliveryEntry; invoke: ReturnType<typeof buildInvokeCommand>; worktreePath?: string };
       const preparedInvokes: PreparedInvoke[] = [];
@@ -5602,8 +5652,17 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // (targetAgents passed): also advance to critique and dispatch a
         // turn to each critic slot with a context-filtered, BM25-ranked,
         // size-capped brief assembled by buildIdeationBrief.
+        //
+        // pln#511 step 2 — when `req.preset` is set, the loop opens with
+        // the preset's phases / stop_condition / protocol instead of the
+        // kind-default ideation chain. Bootstrap preset enforces single-
+        // agent / self-champion mode (validated above), so the multi-
+        // agent dispatch branch never runs for it.
         const loopsModuleRef = await import('../core/loops/index.js');
         const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief } = loopsModuleRef;
+        const presetSelected = req.preset
+          ? (await import('../core/loops/presets/index.js')).PRESETS[req.preset]
+          : undefined;
 
         const senderIdentity = (
           (senderAgentId ? findAgentIdentityById(senderAgentId, dispatchCwd) : undefined)
@@ -5613,7 +5672,18 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
         const creatorActor = authorAgentId ?? senderAgent;
 
-        const explicitTargets = req.targetAgents && req.targetAgents.length > 0;
+        // pln#511 step 2 — bootstrap preset always runs in single-agent
+        // mode: the champion drives the whole loop. Even when the caller
+        // passes targetAgents=[caller] (validated as the only legal non-
+        // empty form), we don't add critic slots and we don't take the
+        // multi-agent dispatch branch. Treating that idiom as "single
+        // agent / self-champion" matches what the constraint check
+        // already enforced upstream.
+        const explicitTargets = Boolean(
+          req.targetAgents
+          && req.targetAgents.length > 0
+          && req.preset !== 'bootstrap',
+        );
         const slots: Array<{ role: string; agent: string; agent_id?: string }> = [
           {
             role: 'champion',
@@ -5642,6 +5712,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               goal: req.scope,
               created_by: creatorActor,
               slots,
+              ...(presetSelected
+                ? {
+                    phases: presetSelected.phases,
+                    stop_condition: presetSelected.stop_condition,
+                    protocol: presetSelected.protocol,
+                  }
+                : {}),
             },
             dispatchCwd,
           );
@@ -5649,25 +5726,35 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           artifacts.push({ type: 'loop', id: loop.id });
           side_effects.push({ action: 'create', entity: 'loop', id: loop.id });
 
-          const proposalBody = req.task.slice(0, 4000);
-          const updated = add_artifact(
-            {
-              id: loop.id,
-              actor: creatorActor,
-              artifact: {
-                phase: 'proposal',
-                type: 'proposal',
-                body: proposalBody,
-                produced_by: creatorActor,
+          // pln#511 step 2 — skip the proposal-seed artifact when a preset
+          // is in use. The kind-default ideation chain opens at phase
+          // 'proposal' and the seed artifact lives there; presets define
+          // their own initial phase + seeding semantics (bootstrap starts
+          // at 'survey' and produces a signals_report). Forcing a
+          // 'proposal'-phased artifact here would dangle on a phase the
+          // loop doesn't contain. The task text is already captured on
+          // the thread (title + goal).
+          if (!presetSelected) {
+            const proposalBody = req.task.slice(0, 4000);
+            const updated = add_artifact(
+              {
+                id: loop.id,
+                actor: creatorActor,
+                artifact: {
+                  phase: 'proposal',
+                  type: 'proposal',
+                  body: proposalBody,
+                  produced_by: creatorActor,
+                },
               },
-            },
-            dispatchCwd,
-          );
-          const lastArtifact = updated.artifacts[updated.artifacts.length - 1];
-          proposalArtifactId = lastArtifact?.artifact_id;
-          if (proposalArtifactId) {
-            artifacts.push({ type: 'artifact', id: proposalArtifactId });
-            side_effects.push({ action: 'create', entity: 'artifact', id: proposalArtifactId });
+              dispatchCwd,
+            );
+            const lastArtifact = updated.artifacts[updated.artifacts.length - 1];
+            proposalArtifactId = lastArtifact?.artifact_id;
+            if (proposalArtifactId) {
+              artifacts.push({ type: 'artifact', id: proposalArtifactId });
+              side_effects.push({ action: 'create', entity: 'artifact', id: proposalArtifactId });
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -5681,8 +5768,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         // pln#492 phase 2.d.2 — multi-agent dispatch. Skipped in single-
         // agent mode (the champion drives manually).
+        //
+        // pln#511 step 2 — initial phase comes from the actual loop's
+        // first phase, not a hardcoded 'proposal'. Presets like bootstrap
+        // open at 'survey'; the kind-default ideation chain still opens
+        // at 'proposal', so this is backward compatible.
         let dispatchedCritics = 0;
-        let dispatchedPhase = 'proposal';
+        let dispatchedPhase = presetSelected ? presetSelected.phases[0].name : 'proposal';
         if (explicitTargets) {
           try {
             // Build a search-backed BriefMemoryProvider. Maps user-facing
@@ -5785,7 +5877,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         if (!explicitTargets) {
           warnings.push(
-            "ideate single-agent mode: loop opened with proposal seed; champion drives manually via bclaw_loop intent='turn' / 'advance'. Pass targetAgents to enable multi-agent auto-dispatch.",
+            presetSelected
+              ? `ideate single-agent mode (preset='${req.preset}'): loop opened at phase '${dispatchedPhase}'; champion drives manually via bclaw_loop intent='turn' / 'advance'.`
+              : "ideate single-agent mode: loop opened with proposal seed; champion drives manually via bclaw_loop intent='turn' / 'advance'. Pass targetAgents to enable multi-agent auto-dispatch.",
           );
         }
 
@@ -5796,6 +5890,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           mode: explicitTargets ? 'multi_agent' : 'single_agent',
           dispatched_critics: dispatchedCritics,
           current_phase: dispatchedPhase,
+          ...(presetSelected ? { preset: req.preset } : {}),
         };
       }
 
