@@ -65,6 +65,7 @@ export {
   type WriteProjectMdOptions,
   type WriteProjectMdResult,
 } from './hooks/bootstrap-write.js';
+export { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 export {
   acquireLock,
   hashRequest,

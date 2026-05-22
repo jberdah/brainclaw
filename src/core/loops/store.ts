@@ -5,6 +5,7 @@ import path from 'node:path';
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
+import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 import {
   DEFAULT_PROTOCOLS,
   LoopArtifactSchema,
@@ -126,6 +127,20 @@ export function appendEvent(loopId: string, event: LoopEvent, cwd?: string): voi
   const parsed = LoopEventSchema.parse(event);
   ensureLoopsDir(cwd);
   fs.appendFileSync(eventsPath(loopId, cwd), `${JSON.stringify(parsed)}\n`);
+
+  // pln#513 step 4 — best-effort OS notification on input_requested events.
+  // We load the thread snapshot here (the hook needs the protocol preset +
+  // operator_question body) and call the gated hook. Any error — including
+  // an unreadable thread file or a spawn failure — is swallowed so the
+  // journal write that triggered this hook remains the source of truth.
+  if (parsed.kind === 'input_requested') {
+    try {
+      const loop = getLoop(loopId, cwd);
+      if (loop) notifyOperatorOnInputRequested(parsed, loop, cwd);
+    } catch {
+      // hook is best-effort; never propagate.
+    }
+  }
 }
 
 export function writeThreadFile(thread: LoopThread, cwd?: string): void {
