@@ -4,6 +4,7 @@ import { loadActiveProject, saveActiveProject, clearActiveProject } from '../cor
 import { loadCurrentSession, saveCurrentSession } from '../core/identity.js';
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
+import { resolveProjectCwd } from '../core/cross-project.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
 import { loadConfig } from '../core/config.js';
 
@@ -42,7 +43,21 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
     throw new Error('No brainclaw workspace found. Run `brainclaw init` first.');
   }
 
-  const resolved = resolveProjectRef(projectRef, cwd);
+  // pln#515 step 4 — resolution priority:
+  // 1. resolveProjectRef: workspace store-chain children (existing path)
+  // 2. resolveProjectCwd: cross_project_links (added so bclaw_switch can
+  //    target externally-linked projects, not just store-chain children).
+  // resolveProjectCwd returns the original cwd on no-match, so we check
+  // for a real change before treating it as a resolution.
+  let resolved = resolveProjectRef(projectRef, cwd);
+  if (!resolved) {
+    try {
+      const linkResolved = resolveProjectCwd(projectRef, cwd);
+      if (linkResolved !== cwd) {
+        resolved = linkResolved;
+      }
+    } catch { /* link resolution failure surfaces as the same error below */ }
+  }
   if (!resolved) {
     throw new Error(`Cannot resolve project "${projectRef}". Use bclaw_switch with list=true to see available projects.`);
   }
