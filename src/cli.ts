@@ -2073,6 +2073,67 @@ program
     await runBootstrapLoopCommand(options, globalOpts.cwd);
   });
 
+// --- loop (drive loop turn verbs; pln#517 step 2) ---
+const loopCmd = program
+  .command('loop')
+  .description('Drive a loop turn (turn / complete-turn / advance / add-artifact)');
+
+loopCmd
+  .command('turn <loop_id>')
+  .description('Issue a turn assignment on a slot')
+  .requiredOption('--slot <slot_id>', 'Target slot id (lsl_...)')
+  .option('--input <text>', 'Free-form input passed to the slot')
+  .option('--role <role>', 'Slot role (resolves the first non-done slot with that role)')
+  .option('--assignment-id <id>', 'Dispatcher-provided assignment id to record on the slot')
+  .option('--json', 'Machine-readable output')
+  .action(async (loop_id, options) => {
+    const globalOpts = program.opts();
+    const { runLoopCommand } = await import('./commands/loop.js');
+    await runLoopCommand('turn', { loop_id }, options, globalOpts.cwd);
+  });
+
+loopCmd
+  .command('complete-turn <loop_id>')
+  .description('Complete a slot turn')
+  .requiredOption('--slot <slot_id>', 'Target slot id (lsl_...)')
+  .requiredOption('--outcome <outcome>', 'Turn outcome: done, failed, or cancelled')
+  .option('--failure-reason <text>', 'Reason when outcome is failed')
+  .option('--artifact <json>', 'JSON object payload for an artifact to attach')
+  .option('--json', 'Machine-readable output')
+  .action(async (loop_id, options) => {
+    const globalOpts = program.opts();
+    const { runLoopCommand } = await import('./commands/loop.js');
+    await runLoopCommand('complete-turn', { loop_id }, options, globalOpts.cwd);
+  });
+
+loopCmd
+  .command('advance <loop_id>')
+  .description('Advance a loop to its next phase')
+  .option('--to-phase <name>', 'Explicit target phase')
+  .option('--force', 'Bypass phase gate checks')
+  .option('--reason <text>', 'Reason to record on the phase advance event')
+  .option('--json', 'Machine-readable output')
+  .action(async (loop_id, options) => {
+    const globalOpts = program.opts();
+    const { runLoopCommand } = await import('./commands/loop.js');
+    await runLoopCommand('advance', { loop_id }, options, globalOpts.cwd);
+  });
+
+loopCmd
+  .command('add-artifact <loop_id>')
+  .description('Attach an artifact to a loop')
+  .requiredOption('--phase <phase>', 'Artifact phase')
+  .requiredOption('--type <type>', 'Artifact type')
+  .requiredOption('--body <json-or-text>', 'Artifact body as JSON or text')
+  .option('--produced-by <agent>', 'Agent that produced the artifact')
+  .option('--ref <ref>', 'JSON ref object, e.g. {"kind":"plan","id":"pln_..."}')
+  .option('--json', 'Machine-readable output')
+  .action(async (loop_id, options) => {
+    const globalOpts = program.opts();
+    const { runLoopCommand } = await import('./commands/loop.js');
+    await runLoopCommand('add-artifact', { loop_id }, options, globalOpts.cwd);
+  });
+
 // --- reply (provide_input to an operator_question; pln#508 step 4) ---
 program
   .command('reply <qst_id>')
