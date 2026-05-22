@@ -125,6 +125,22 @@ export const FacadeResponseSchema = z.object({
   execution_status: ExecutionStatusSchema.optional(),
   /** pln#503 phase 3.3: present when execution_status === 'delivered_and_started'. */
   verify_with: VerifyWithSchema.optional(),
+  /**
+   * pln#513 step 1 — bclaw_work hint surfaced when the project lacks a usable
+   * PROJECT.md (absent or zero bytes). True means the agent should consider
+   * opening a bootstrap loop before assuming context; the literal call to
+   * make is in `next_action`. False or absent means the project already has
+   * a PROJECT.md and the bootstrap entry-point should not be offered.
+   * Additive: existing callers that don't read it are unaffected.
+   */
+  bootstrap_recommended: z.boolean().optional(),
+  /**
+   * pln#513 step 1 — literal MCP call to surface as the bootstrap entry-point
+   * when `bootstrap_recommended` is true. Carries the canonical-grammar text
+   * (`bclaw_coordinate(intent='ideate', preset='bootstrap')`) verbatim so the
+   * CLI doesn't have to reconstruct it.
+   */
+  next_action: z.string().optional(),
 });
 
 export type WorkIntent = z.infer<typeof WorkIntentSchema>;
