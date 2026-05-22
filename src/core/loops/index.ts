@@ -93,3 +93,10 @@ export {
   type RecordConflictInput,
   type WithLoopLockOptions,
 } from './lock.js';
+export {
+  acquireBootstrapLoop,
+  findExistingBootstrapLoop,
+  BootstrapCoordinationInProgressError,
+  type AcquireBootstrapOptions,
+  type AcquireBootstrapResult,
+} from './bootstrap-acquire.js';

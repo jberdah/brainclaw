@@ -1,11 +1,11 @@
 import readline from 'node:readline';
 import { memoryExists } from '../core/io.js';
 import {
-  BOOTSTRAP_PRESET,
+  acquireBootstrapLoop,
+  BootstrapCoordinationInProgressError,
   closeLoop,
   computeNextExpected,
-  listLoops,
-  openLoop,
+  findExistingBootstrapLoop,
   type LoopArtifact,
   type LoopStatus,
   type LoopThread,
@@ -55,13 +55,6 @@ function fail(message: string, exitCode: 1 | 2, opts: BootstrapLoopCommandOption
     console.error(`Error: ${message}`);
   }
   process.exit(exitCode);
-}
-
-function findExistingBootstrapLoop(cwd?: string): LoopThread | undefined {
-  const loops = listLoops({ kind: 'ideation' }, cwd);
-  return loops.find(
-    (l) => l.protocol?.preset === 'bootstrap' && (l.status === 'open' || l.status === 'paused'),
-  );
 }
 
 function parseQuestionBody(artifact: LoopArtifact): OperatorQuestionBody | undefined {
@@ -167,10 +160,11 @@ async function confirmCancel(loopId: string): Promise<boolean> {
 
 /**
  * `brainclaw bootstrap-loop` — open, join, query, or cancel the bootstrap
- * loop on the current project. Talks directly to the loop verbs (openLoop /
- * closeLoop) rather than the MCP bclaw_coordinate facade; the v1 find-existing
- * step is a local scan, NOT the coordinate facade's join-or-lock semantics
- * (sequence #60, not yet shipped).
+ * loop on the current project. The open/join path delegates to
+ * `acquireBootstrapLoop` (src/core/loops/bootstrap-acquire.ts) which
+ * implements the same coordination-lock singleton acquire used by the MCP
+ * bclaw_coordinate facade. Two concurrent CLI invocations will now converge
+ * on the same loop rather than opening duplicates (pln#518 step 1).
  */
 export async function runBootstrapLoopCommand(
   options: BootstrapLoopCommandOptions = {},
@@ -245,38 +239,24 @@ export async function runBootstrapLoopCommand(
     return;
   }
 
-  // No-args: find-existing or open a new bootstrap loop.
-  const existing = findExistingBootstrapLoop(cwd);
-  if (existing) {
-    const result = buildResult('joined', existing);
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    printHuman(result, existing);
-    return;
-  }
-
+  // No-args: delegate to the singleton acquire path (pln#518 step 1).
+  // acquireBootstrapLoop handles find-existing + coordination-lock + openLoop,
+  // preventing two concurrent CLI invocations from both calling openLoop.
   const actor = resolveCurrentAgentName(cwd);
   let loop: LoopThread;
+  let action: 'opened' | 'joined';
   try {
-    loop = openLoop(
-      {
-        kind: 'ideation',
-        title: 'Bootstrap PROJECT.md',
-        created_by: actor,
-        slots: [{ role: 'champion', agent: actor }],
-        phases: BOOTSTRAP_PRESET.phases,
-        stop_condition: BOOTSTRAP_PRESET.stop_condition,
-        protocol: BOOTSTRAP_PRESET.protocol,
-      },
-      cwd,
-    );
+    const acquired = acquireBootstrapLoop({ actor }, cwd);
+    loop = acquired.loop;
+    action = acquired.action;
   } catch (err) {
+    if (err instanceof BootstrapCoordinationInProgressError) {
+      fail(err.message, 2, options);
+    }
     const msg = err instanceof Error ? err.message : String(err);
-    fail(`openLoop verb rejected the call: ${msg}`, 2, options);
+    fail(`bootstrap-loop acquire failed: ${msg}`, 2, options);
   }
-  const result = buildResult('opened', loop);
+  const result = buildResult(action, loop);
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
     return;

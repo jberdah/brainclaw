@@ -68,7 +68,7 @@ import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreT
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
-import type { BriefMemoryProvider, LoopContextCategory } from '../core/loops/index.js';
+import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
 import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
 import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
@@ -5693,7 +5693,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // pln#513 step 2 — labelled block (ideate:) so the bootstrap
         // join-or-lock path can break out early after assigning result.
         const loopsModuleRef = await import('../core/loops/index.js');
-        const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief, listLoops } = loopsModuleRef;
+        const { openLoop, add_artifact, advance, turn, getLoop, buildIdeationBrief } = loopsModuleRef;
         const presetSelected = req.preset
           ? (await import('../core/loops/presets/index.js')).PRESETS[req.preset]
           : undefined;
@@ -5709,84 +5709,49 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         //      release the lock on the way out (success or fail).
         // The lock is opportunistic, not blocking — a fast retry-in-place
         // not a wait-on-mutex. Keeps the verb short and predictable.
-        let joinedExistingId: string | undefined;
-        let joinedPhase: string | undefined;
-        let joinedStatus: string | undefined;
-        let bootstrapLockClaimId: string | undefined;
-
+        // pln#518 step 1 — bootstrap join-or-lock now delegates to the shared
+        // acquireBootstrapLoop helper (src/core/loops/bootstrap-acquire.ts).
+        // Both the CLI and this MCP handler converge on the same singleton
+        // acquire path, eliminating the race where two concurrent callers both
+        // passed the local scan and called openLoop directly.
+        let bootstrapOpenedLoop: LoopThread | undefined;
         if (req.preset === 'bootstrap') {
-          const findExistingBootstrap = (): { id: string; phase: string; status: string } | undefined => {
-            const all = listLoops({ kind: 'ideation' }, dispatchCwd);
-            const hit = all.find((l) =>
-              l.protocol?.preset === 'bootstrap'
-              && (l.status === 'open' || l.status === 'paused'),
+          const { acquireBootstrapLoop, BootstrapCoordinationInProgressError: BcipError } =
+            await import('../core/loops/bootstrap-acquire.js');
+          let acqResult: Awaited<ReturnType<typeof acquireBootstrapLoop>>;
+          try {
+            acqResult = acquireBootstrapLoop(
+              { actor: senderAgent, agent_id: senderAgentId, model: currentModel },
+              dispatchCwd,
             );
-            return hit ? { id: hit.id, phase: hit.current_phase, status: hit.status } : undefined;
-          };
-
-          const existing = findExistingBootstrap();
-          if (existing) {
-            joinedExistingId = existing.id;
-            joinedPhase = existing.phase;
-            joinedStatus = existing.status;
-            warnings.push(
-              `bootstrap loop already open on this project (${existing.id}, phase=${existing.phase}, status=${existing.status}); joined existing instead of opening a duplicate.`,
-            );
-          } else {
-            const lockScope = `bootstrap-coordination-lock:${dispatchCwd}`;
-            const heldLocks = listClaims(dispatchCwd).filter(
-              (c) => c.status === 'active' && c.scope === lockScope,
-            );
-            if (heldLocks.length > 0) {
-              const reFind = findExistingBootstrap();
-              if (reFind) {
-                joinedExistingId = reFind.id;
-                joinedPhase = reFind.phase;
-                joinedStatus = reFind.status;
-                warnings.push(
-                  `bootstrap loop opened by a parallel coordinator (${reFind.id}); joined existing.`,
-                );
-              } else {
-                return {
-                  response: createToolErrorResponse(
-                    'bootstrap_coordination_in_progress',
-                    `another coordinator is currently opening a bootstrap loop (claim ${heldLocks[0].id}); retry shortly.`,
-                  ),
-                };
-              }
-            } else {
-              bootstrapLockClaimId = generateClaimId();
-              saveClaim({
-                id: bootstrapLockClaimId,
-                agent: senderAgent,
-                agent_id: senderAgentId,
-                user: process.env.USER || process.env.USERNAME || undefined,
-                project_id: undefined,
-                host_id: undefined,
-                session_id: undefined,
-                scope: lockScope,
-                description: `bootstrap coordination lock (open by ${senderAgent})`,
-                created_at: nowISO(),
-                status: 'active',
-                plan_id: undefined,
-                model: currentModel,
-              }, dispatchCwd);
+          } catch (err) {
+            if (err instanceof BcipError) {
+              return {
+                response: createToolErrorResponse(
+                  'bootstrap_coordination_in_progress',
+                  err.message,
+                ),
+              };
             }
+            throw err;
           }
-        }
-
-        if (joinedExistingId) {
-          artifacts.push({ type: 'loop', id: joinedExistingId });
-          result = {
-            loop_id: joinedExistingId,
-            joined_existing: true,
-            current_phase: joinedPhase,
-            status: joinedStatus,
-            mode: 'single_agent',
-            ...(req.preset ? { preset: req.preset } : {}),
-          };
-          // Skip the rest of the ideate flow — we joined an existing loop.
-          break ideate;
+          warnings.push(...acqResult.warnings);
+          if (acqResult.action === 'joined') {
+            const jLoop = acqResult.loop;
+            artifacts.push({ type: 'loop', id: jLoop.id });
+            result = {
+              loop_id: jLoop.id,
+              joined_existing: true,
+              current_phase: jLoop.current_phase,
+              status: jLoop.status,
+              mode: 'single_agent',
+              preset: req.preset,
+            };
+            // Skip the rest of the ideate flow — we joined an existing loop.
+            break ideate;
+          }
+          // action === 'opened': helper already called openLoop + released lock.
+          bootstrapOpenedLoop = acqResult.loop;
         }
 
         const senderIdentity = (
@@ -5829,6 +5794,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         let loopId: string;
         let proposalArtifactId: string | undefined;
+        if (bootstrapOpenedLoop) {
+          // Bootstrap case: helper already opened the loop and released its lock.
+          loopId = bootstrapOpenedLoop.id;
+          artifacts.push({ type: 'loop', id: bootstrapOpenedLoop.id });
+          side_effects.push({ action: 'create', entity: 'loop', id: bootstrapOpenedLoop.id });
+        } else {
         try {
           const loop = openLoop(
             {
@@ -5883,12 +5854,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          // pln#513 step 2 — release the bootstrap coordination lock if
-          // we took it. Without this, an openLoop crash would orphan the
-          // lock and block all subsequent bootstrap callers.
-          if (bootstrapLockClaimId) {
-            try { releaseClaim(bootstrapLockClaimId, dispatchCwd); } catch { /* best-effort */ }
-          }
           return {
             response: createToolErrorResponse(
               'ideate_failed',
@@ -5896,6 +5861,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             ),
           };
         }
+        } // end else (non-bootstrap open path)
 
         // pln#492 phase 2.d.2 — multi-agent dispatch. Skipped in single-
         // agent mode (the champion drives manually).
@@ -6024,13 +5990,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           ...(presetSelected ? { preset: req.preset } : {}),
         };
 
-        // pln#513 step 2 — release the bootstrap coordination lock the
-        // open path acquired. The join early-break never gets here, but
-        // that path never acquired one in the first place. Best-effort —
-        // never block the response on a release failure.
-        if (bootstrapLockClaimId) {
-          try { releaseClaim(bootstrapLockClaimId, dispatchCwd); } catch { /* best-effort */ }
-        }
+        // pln#518 step 1 — bootstrap lock is now managed inside acquireBootstrapLoop;
+        // no release needed here.
       }
 
       // Extract execution_status from result if present (assign/reroute set it)

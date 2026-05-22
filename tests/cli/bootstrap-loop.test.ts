@@ -19,7 +19,7 @@ import {
   type LoopThread,
 } from '../../src/core/loops/index.js';
 
-import { runBootstrapLoopCommand } from '../../src/commands/bootstrap-loop.js';
+import { runBootstrapLoopCommand, type BootstrapLoopResult } from '../../src/commands/bootstrap-loop.js';
 
 interface Captured {
   stdout: string[];
@@ -312,5 +312,62 @@ describe('runBootstrapLoopCommand — guards', () => {
     } finally {
       fs.rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * pln#518 step 1 — regression for the singleton acquire path.
+ *
+ * Verifies that two sequential runBootstrapLoopCommand() invocations converge
+ * on the SAME loop rather than creating duplicates. A true concurrent race
+ * can't be reproduced in unit tests without fault injection, but the
+ * sequential-repeat case is the most common operator scenario and exercises
+ * the find-existing → join path added by the refactor.
+ */
+describe('runBootstrapLoopCommand — singleton acquire regression (pln#518)', () => {
+  let cwd: string;
+  let restoreConsole: () => void;
+  let restoreExit: () => void;
+  let captured: Captured;
+
+  beforeEach(() => {
+    cwd = makeWorkspace();
+    const c = captureConsole();
+    captured = c.captured;
+    restoreConsole = c.restore;
+    restoreExit = stubExit();
+  });
+
+  afterEach(() => {
+    restoreConsole();
+    restoreExit();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('second invocation joins the loop opened by the first — no duplicate', async () => {
+    // First call: opens a new loop.
+    await runBootstrapLoopCommand({ json: true }, cwd);
+    const firstOutput = JSON.parse(captured.stdout.join('\n')) as BootstrapLoopResult;
+    assert.equal(firstOutput.ok, true);
+    assert.equal(firstOutput.action, 'opened');
+    const loopIdA = firstOutput.loop_id;
+    assert.ok(loopIdA.startsWith('lop_'), `expected lop_ prefix, got ${loopIdA}`);
+
+    // Reset captured output for second call.
+    captured.stdout.length = 0;
+
+    // Second call: must join the existing loop, not open a new one.
+    await runBootstrapLoopCommand({ json: true }, cwd);
+    const secondOutput = JSON.parse(captured.stdout.join('\n')) as BootstrapLoopResult;
+    assert.equal(secondOutput.ok, true);
+    assert.equal(secondOutput.action, 'joined', 'second invocation must join, not open');
+    assert.equal(secondOutput.loop_id, loopIdA, 'must return the same loop_id');
+    assert.equal(secondOutput.joined_existing, true, 'joined_existing must be true');
+
+    // Exactly one bootstrap loop must exist on disk.
+    const allBootstrap = listLoops({ kind: 'ideation' }, cwd).filter(
+      (l) => l.protocol?.preset === 'bootstrap',
+    );
+    assert.equal(allBootstrap.length, 1, 'exactly one bootstrap loop must be on disk');
   });
 });
