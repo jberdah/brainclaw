@@ -4,10 +4,13 @@ import path from 'node:path';
 
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
+import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import {
   DEFAULT_PROTOCOLS,
+  LoopArtifactSchema,
   LoopEventSchema,
   LoopThreadSchema,
+  type LoopArtifact,
   type LoopEvent,
   type LoopKind,
   type LoopLinks,
@@ -16,6 +19,7 @@ import {
   type LoopSlot,
   type LoopStatus,
   type LoopThread,
+  type OperatorQuestionBody,
   type ReviewMode,
   type StopCondition,
 } from './types.js';
@@ -239,6 +243,81 @@ export interface CloseLoopInput {
   actor: string;
 }
 
+/**
+ * pln#512 step 2 — sentinel thrown by closeLoop when the bootstrap close
+ * hook intercepts an attempt to complete an overwrite of an existing
+ * non-empty PROJECT.md. The thread is left in `status='paused'` with
+ * `pause_reason='awaiting_file_apply'` and a fresh operator_question on
+ * `open_questions`; the caller is expected to surface that question to the
+ * operator, then re-attempt the close once an answer is provided (or rely on
+ * the provideInput post-hook to auto-complete the close — see verbs.ts).
+ *
+ * Thrown with a stable `code` field so callers can `if (e.code ===
+ * 'awaiting_file_apply_approval') ...` instead of string-matching the
+ * message.
+ */
+export class AwaitingFileApplyApprovalError extends Error {
+  readonly code = 'awaiting_file_apply_approval' as const;
+  constructor(
+    public readonly loop_id: string,
+    public readonly question_id: string,
+    public readonly target_path: string,
+    public readonly diff_artifact_id: string,
+  ) {
+    super(
+      `closeLoop: awaiting_file_apply_approval — loop ${loop_id} paused on question ${question_id} ` +
+      `for overwrite of ${target_path}; provide_input(replies_to=${question_id}, chosen_option_id=approve|reject) to resolve`,
+    );
+    this.name = 'AwaitingFileApplyApprovalError';
+  }
+}
+
+/**
+ * pln#512 step 2 — builds the operator_question artifact that asks the
+ * operator whether to overwrite an existing PROJECT.md with the loop's
+ * `project_md_final`. The question shape is fixed (Phase 0 spec §3-5): two
+ * options `approve` / `reject`, default `reject`, pause_scope='loop',
+ * on_timeout='use_default'.
+ *
+ * Returns the (Schema-validated) artifact + its question_id so the caller
+ * can splice it onto the thread and push the id into `open_questions`.
+ */
+function buildFileOverwriteApprovalQuestion(args: {
+  phase: string;
+  slot_id: string;
+  produced_by: string;
+  target_path: string;
+  project_md_final_id: string;
+  now: string;
+}): { artifact: LoopArtifact; question_id: string } {
+  const question_id = `qst_${crypto.randomBytes(6).toString('hex')}`;
+  const body: OperatorQuestionBody = {
+    question_id,
+    question_text: 'Apply the proposed PROJECT.md diff?',
+    evidence: [
+      `existing PROJECT.md at ${args.target_path}`,
+      `project_md_final artifact ${args.project_md_final_id}`,
+    ],
+    suggested_default: 'reject',
+    options: [
+      { id: 'approve', label: 'Apply diff', tradeoff: 'overwrites current PROJECT.md' },
+      { id: 'reject', label: 'Keep current', tradeoff: 'discards proposed final' },
+    ],
+    pause_scope: 'loop',
+    on_timeout: 'use_default',
+    by_slot_id: args.slot_id,
+  };
+  const artifact = LoopArtifactSchema.parse({
+    artifact_id: `art_${crypto.randomBytes(6).toString('hex')}`,
+    phase: args.phase,
+    type: 'operator_question',
+    body: JSON.stringify(body),
+    produced_by: args.produced_by,
+    produced_at: args.now,
+  });
+  return { artifact, question_id };
+}
+
 export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
   const current = getLoop(input.id, cwd);
   if (!current) {
@@ -248,11 +327,155 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     throw new Error(`closeLoop: loop ${input.id} is already ${current.status}`);
   }
 
+  // pln#512 step 2 — bootstrap preset close pre-hook. When completing a
+  // bootstrap loop, materialize PROJECT.md from the final artifact:
+  //   - absent / empty target → atomic write, proceed with close.
+  //   - present + non-empty target → pause the close, request operator
+  //     approval for the overwrite; provideInput post-hook resumes + closes.
+  //   - no project_md_final artifact → proceed (nothing to write).
+  //
+  // Only runs when final_status='completed' — cancel/blocked paths skip
+  // the hook because the operator didn't actually converge on a PROJECT.md.
+  const runBootstrapHook =
+    input.final_status === 'completed' && current.protocol?.preset === 'bootstrap';
+
+  let fileWritten = false;
+  let project_md_final_id: string | undefined;
+
+  if (runBootstrapHook) {
+    const writeResult = writeProjectMdSafe(current, cwd);
+    // Locate the project_md_final artifact id used by the hook (for the
+    // file_apply_requested / file_apply_resolved event correlation field).
+    for (let i = current.artifacts.length - 1; i >= 0; i--) {
+      if (current.artifacts[i].type === 'project_md_final') {
+        project_md_final_id = current.artifacts[i].artifact_id;
+        break;
+      }
+    }
+
+    if (writeResult.needs_approval) {
+      if (!writeResult.diff_artifact) {
+        throw new Error(
+          `closeLoop: writeProjectMdSafe returned needs_approval without a diff_artifact — invariant violation`,
+        );
+      }
+      if (!project_md_final_id) {
+        throw new Error(
+          `closeLoop: writeProjectMdSafe returned needs_approval but no project_md_final artifact found on loop ${current.id}`,
+        );
+      }
+      const slot = current.slots[0];
+      if (!slot) {
+        throw new Error(
+          `closeLoop: bootstrap loop ${current.id} has no slots — cannot synthesize operator_question for file_overwrite_approval`,
+        );
+      }
+
+      const pauseNow = nowISO();
+      const pauseMutationId = generateMutationId();
+      const pauseVersion = current.version + 1;
+      const eventsSoFar = listLoopEvents(input.id, cwd);
+      let pauseSeq = (eventsSoFar[eventsSoFar.length - 1]?.seq ?? 0) + 1;
+
+      const { artifact: questionArtifact, question_id } = buildFileOverwriteApprovalQuestion({
+        phase: current.current_phase,
+        slot_id: slot.slot_id,
+        produced_by: slot.agent_id ?? slot.agent ?? input.actor,
+        target_path: writeResult.target_path,
+        project_md_final_id,
+        now: pauseNow,
+      });
+
+      const pausedThread: LoopThread = {
+        ...current,
+        version: pauseVersion,
+        mutation_id: pauseMutationId,
+        status: 'paused',
+        pause_reason: 'awaiting_file_apply',
+        pending_file_apply: {
+          artifact_id: project_md_final_id,
+          target_path: writeResult.target_path,
+          diff_artifact_id: writeResult.diff_artifact.artifact_id,
+        },
+        artifacts: [...current.artifacts, writeResult.diff_artifact, questionArtifact],
+        open_questions: [...current.open_questions, question_id],
+        updated_at: pauseNow,
+      };
+
+      appendEvent(
+        current.id,
+        {
+          event_id: crypto.randomUUID(),
+          loop_id: current.id,
+          seq: pauseSeq,
+          at: pauseNow,
+          by: input.actor,
+          mutation_id: pauseMutationId,
+          kind: 'file_apply_requested',
+          artifact_id: project_md_final_id,
+          target_path: writeResult.target_path,
+        },
+        cwd,
+      );
+      pauseSeq += 1;
+      appendEvent(
+        current.id,
+        {
+          event_id: crypto.randomUUID(),
+          loop_id: current.id,
+          seq: pauseSeq,
+          at: pauseNow,
+          by: input.actor,
+          mutation_id: pauseMutationId,
+          kind: 'input_requested',
+          question_id,
+          pause_scope: 'loop',
+          by_slot_id: slot.slot_id,
+        },
+        cwd,
+      );
+
+      writeThreadFile(pausedThread, cwd);
+      throw new AwaitingFileApplyApprovalError(
+        current.id,
+        question_id,
+        writeResult.target_path,
+        writeResult.diff_artifact.artifact_id,
+      );
+    }
+
+    fileWritten = writeResult.written === true;
+  }
+
   const now = nowISO();
   const mutation_id = generateMutationId();
   const version = current.version + 1;
   const events = listLoopEvents(input.id, cwd);
-  const seq = (events[events.length - 1]?.seq ?? 0) + 1;
+  let seq = (events[events.length - 1]?.seq ?? 0) + 1;
+
+  // Emit file_apply_resolved(approved=true) BEFORE the closed event when
+  // the bootstrap hook wrote the file directly (absent/empty target). The
+  // synthetic event documents that the close went through without operator
+  // intervention so the journal reads symmetrically with the paused-then-
+  // approved branch.
+  if (runBootstrapHook && fileWritten && project_md_final_id) {
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'file_apply_resolved',
+        artifact_id: project_md_final_id,
+        approved: true,
+      },
+      cwd,
+    );
+    seq += 1;
+  }
 
   const next: LoopThread = {
     ...current,

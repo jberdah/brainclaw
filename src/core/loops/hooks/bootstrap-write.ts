@@ -35,6 +35,20 @@ export interface WriteProjectMdResult {
 }
 
 /**
+ * pln#512 step 2 — caller-side option toggle.
+ *
+ * `approved=true` means "the operator already said yes to the overwrite via a
+ * resolved file_overwrite_approval question; skip the diff path and write
+ * atomically". Used by the provideInput post-hook to finalize the file write
+ * after the operator approves an existing PROJECT.md overwrite. Default
+ * `approved=false` preserves step 1 behavior — the hook still returns a
+ * file_diff artifact when target is present_non_empty.
+ */
+export interface WriteProjectMdOptions {
+  approved?: boolean;
+}
+
+/**
  * Directory where ref-based artifact payloads for a given loop live on disk.
  * No central helper exists yet, so this is the canonical place to compute it.
  * Layout mirrors the thread/event storage convention in store.ts:
@@ -110,8 +124,13 @@ function sha256Hex(content: string): string {
  * pln#512 step 1 — IMPL.
  *
  * @see WriteProjectMdResult
+ * @see WriteProjectMdOptions
  */
-export function writeProjectMdSafe(loop: LoopThread, cwd?: string): WriteProjectMdResult {
+export function writeProjectMdSafe(
+  loop: LoopThread,
+  cwd?: string,
+  opts?: WriteProjectMdOptions,
+): WriteProjectMdResult {
   const resolvedCwd = cwd ?? process.cwd();
   const target_path = path.join(resolvedCwd, 'PROJECT.md');
 
@@ -139,6 +158,21 @@ export function writeProjectMdSafe(loop: LoopThread, cwd?: string): WriteProject
       target_path,
       written: true,
       reason: exists ? 'empty' : 'absent',
+    };
+  }
+
+  // pln#512 step 2 — approval short-circuit. When the operator has already
+  // signed off on the overwrite (via a resolved file_overwrite_approval
+  // question), the caller passes opts.approved=true and we write atomically
+  // without re-generating a diff artifact. Mirrors the absent/empty branch
+  // semantics so callers see a unified shape.
+  if (opts?.approved === true) {
+    writeFileAtomic(target_path, sourceContent);
+    return {
+      needs_approval: false,
+      target_path,
+      written: true,
+      reason: 'present_non_empty',
     };
   }
 

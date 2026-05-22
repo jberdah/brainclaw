@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { nowISO } from '../ids.js';
+import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import {
   appendEvent,
   generateMutationId,
@@ -1106,13 +1107,47 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
 
   const nextOpenQuestions = current.open_questions.filter((q) => q !== input.replies_to);
 
-  let nextStatus = current.status;
+  // Widen to LoopStatus — the assertMutable check above narrowed current.status
+  // to 'open' | 'paused', but the file_apply post-hook below can transition
+  // directly to 'completed' (pln#512 step 2).
+  let nextStatus: LoopStatus = current.status;
   let nextPauseReason = current.pause_reason;
   let nextSlots = current.slots;
+  let nextPendingFileApply = current.pending_file_apply;
+  let nextClosedAt = current.closed_at;
   let resumedSlotId: string | undefined;
   let resumedSlotFromStatus: LoopSlot['status'] | undefined;
 
-  if (sourceBody.pause_scope === 'slot') {
+  // pln#512 step 2 — file_overwrite_approval resolution path. When the loop
+  // is paused on a file_apply question (set by the closeLoop bootstrap
+  // pre-hook), the answer carries the operator's approve/reject decision.
+  // Approve → write PROJECT.md atomically; reject → leave target untouched.
+  // Either way, the loop transitions directly to status='completed' so the
+  // caller's original `closeLoop(final_status='completed')` intent is
+  // honoured without requiring a second close round-trip.
+  let fileApplyResolution: { approved: boolean; artifact_id: string } | undefined;
+  if (
+    sourceBody.pause_scope === 'loop' &&
+    nextOpenQuestions.length === 0 &&
+    current.pause_reason === 'awaiting_file_apply' &&
+    current.pending_file_apply !== undefined
+  ) {
+    const approved = chosenOptionId === 'approve';
+    if (approved) {
+      // Idempotent on the source artifact: writeProjectMdSafe re-reads
+      // project_md_final and atomic-writes the target. Failure here propagates
+      // — we don't want to mark the loop completed if the write failed.
+      writeProjectMdSafe(current, cwd, { approved: true });
+    }
+    fileApplyResolution = {
+      approved,
+      artifact_id: current.pending_file_apply.artifact_id,
+    };
+    nextStatus = 'completed';
+    nextPauseReason = undefined;
+    nextPendingFileApply = undefined;
+    nextClosedAt = now;
+  } else if (sourceBody.pause_scope === 'slot') {
     const slotId = sourceBody.by_slot_id;
     if (slotId) {
       const slot = current.slots.find((s) => s.slot_id === slotId);
@@ -1141,6 +1176,8 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
     open_questions: nextOpenQuestions,
     status: nextStatus,
     pause_reason: nextPauseReason,
+    pending_file_apply: nextPendingFileApply,
+    closed_at: nextClosedAt,
     slots: nextSlots,
     updated_at: now,
   };
@@ -1180,6 +1217,47 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
         slot_id: resumedSlotId,
         from_status: resumedSlotFromStatus,
         to_status: 'working',
+      },
+      cwd,
+    );
+  }
+
+  // pln#512 step 2 — file_apply close-out events. The file_apply_resolved
+  // event must precede the closed event so the journal reads in causal
+  // order (resolve → close), mirroring the absent/empty branch in
+  // closeLoop.
+  if (fileApplyResolution !== undefined) {
+    seq += 1;
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'file_apply_resolved',
+        artifact_id: fileApplyResolution.artifact_id,
+        approved: fileApplyResolution.approved,
+      },
+      cwd,
+    );
+    seq += 1;
+    appendEvent(
+      current.id,
+      {
+        event_id: crypto.randomUUID(),
+        loop_id: current.id,
+        seq,
+        at: now,
+        by: input.actor,
+        mutation_id,
+        kind: 'closed',
+        final_status: 'completed',
+        reason: fileApplyResolution.approved
+          ? 'file_overwrite_approved'
+          : 'file_overwrite_rejected',
       },
       cwd,
     );

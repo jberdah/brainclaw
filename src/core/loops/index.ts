@@ -1,5 +1,6 @@
 export * from './types.js';
 export {
+  AwaitingFileApplyApprovalError,
   closeLoop,
   ensureLoopsDir,
   generateLoopId,
@@ -9,6 +10,7 @@ export {
   listLoopEvents,
   listLoops,
   openLoop,
+  writeThreadFile,
   type CloseLoopInput,
   type OpenLoopInput,
 } from './store.js';
@@ -58,7 +60,11 @@ export {
   type IdeationBriefResult,
 } from './brief-assembly.js';
 export { BOOTSTRAP_PRESET, type LoopPreset } from './presets/bootstrap.js';
-export { writeProjectMdSafe, type WriteProjectMdResult } from './hooks/bootstrap-write.js';
+export {
+  writeProjectMdSafe,
+  type WriteProjectMdOptions,
+  type WriteProjectMdResult,
+} from './hooks/bootstrap-write.js';
 export {
   acquireLock,
   hashRequest,
