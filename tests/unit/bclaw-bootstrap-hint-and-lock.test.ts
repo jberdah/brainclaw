@@ -12,6 +12,7 @@ import {
   BootstrapCoordinationInProgressError,
   findExistingBootstrapLoop,
   normalizeLockKey,
+  sweepOrphanBootstrapLocks,
 } from '../../src/core/loops/bootstrap-acquire.js';
 
 /**
@@ -203,6 +204,103 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
       r.error?.message.includes('another coordinator is currently opening'),
       `expected coordinator-in-progress message, got: ${r.error?.message}`,
     );
+  });
+
+  it('TTL sweep releases orphan locks older than the cutoff with no backing loop (pln#518 step 4, seq #120)', async () => {
+    // Seed an OLD orphan lock (created 10 minutes ago) with no backing loop.
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const orphanId = generateClaimId();
+    saveClaim({
+      id: orphanId,
+      agent: 'claude-code',
+      agent_id: undefined,
+      user: undefined,
+      project_id: undefined,
+      host_id: undefined,
+      session_id: undefined,
+      scope: lockScope,
+      description: 'crashed parallel coordinator',
+      created_at: tenMinutesAgo,
+      status: 'active',
+      plan_id: undefined,
+      model: undefined,
+    }, workspace.dir);
+
+    // Direct sweep call.
+    const sweepResult = sweepOrphanBootstrapLocks(workspace.dir);
+    assert.equal(sweepResult.released, 1, 'sweep must release exactly the one orphan');
+
+    // The orphan is now released — next bootstrap call must succeed.
+    const r = await callTool(workspace, 'bclaw_coordinate', {
+      intent: 'ideate',
+      preset: 'bootstrap',
+      task: 'should succeed after orphan sweep',
+      agent: 'claude-code',
+    });
+    assert.equal(r.status, 'ok');
+    const result = r.result as { loop_id: string; joined_existing?: boolean };
+    assert.match(result.loop_id, /^lop_/);
+    assert.equal(result.joined_existing, undefined);
+  });
+
+  it('TTL sweep does NOT release fresh locks (< TTL)', async () => {
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    saveClaim({
+      id: generateClaimId(),
+      agent: 'claude-code',
+      agent_id: undefined,
+      user: undefined,
+      project_id: undefined,
+      host_id: undefined,
+      session_id: undefined,
+      scope: lockScope,
+      description: 'fresh in-flight coordinator',
+      created_at: oneMinuteAgo,
+      status: 'active',
+      plan_id: undefined,
+      model: undefined,
+    }, workspace.dir);
+
+    const sweepResult = sweepOrphanBootstrapLocks(workspace.dir);
+    assert.equal(sweepResult.released, 0, 'fresh lock must be preserved (still in-flight)');
+  });
+
+  it('TTL sweep does NOT release locks when a backing loop exists', async () => {
+    // Open a real bootstrap loop first.
+    const opened = await callTool(workspace, 'bclaw_coordinate', {
+      intent: 'ideate',
+      preset: 'bootstrap',
+      task: 'bootstrap with backing loop',
+      agent: 'claude-code',
+    });
+    assert.equal(opened.status, 'ok');
+
+    // Seed an orphan-shaped lock (old created_at) AFTER the loop exists.
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    saveClaim({
+      id: generateClaimId(),
+      agent: 'claude-code',
+      agent_id: undefined,
+      user: undefined,
+      project_id: undefined,
+      host_id: undefined,
+      session_id: undefined,
+      scope: lockScope,
+      description: 'stale lock with backing loop',
+      created_at: tenMinutesAgo,
+      status: 'active',
+      plan_id: undefined,
+      model: undefined,
+    }, workspace.dir);
+
+    // The backing loop short-circuits sweep — no release happens because the
+    // lock might be legitimate (a parallel coordinator about to detect the
+    // backing loop on its own re-check).
+    const sweepResult = sweepOrphanBootstrapLocks(workspace.dir);
+    assert.equal(sweepResult.released, 0, 'sweep must be a no-op when backing loop exists');
   });
 
   it('non-bootstrap ideate does NOT trigger the join-or-lock path', async () => {

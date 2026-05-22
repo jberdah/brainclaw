@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { acquireClaimScope, releaseClaim } from '../claims.js';
+import { acquireClaimScope, listClaims, releaseClaim } from '../claims.js';
 import { BOOTSTRAP_PRESET } from './presets/bootstrap.js';
 import { listLoops, openLoop } from './store.js';
 import type { LoopThread } from './types.js';
@@ -93,6 +93,62 @@ export function findExistingBootstrapLoop(cwd?: string): LoopThread | undefined 
   );
 }
 
+/**
+ * pln#518 step 4 — orphan-lock TTL sweep.
+ *
+ * A process crash between `saveClaim(lock)` and the release branches in
+ * `acquireBootstrapLoop` leaves the opportunistic coordination lock active
+ * forever. Subsequent bootstrap callers would surface
+ * `BootstrapCoordinationInProgressError` to the operator until manual
+ * cleanup. This sweep releases any active lock that:
+ *   - matches the bootstrap-coordination-lock scope key for `cwd`, AND
+ *   - is older than `ttlMs` (default 5 minutes), AND
+ *   - has NO backing bootstrap loop materialized (releasing while a loop
+ *     IS being opened would mask a real-time race; we only sweep true
+ *     orphans).
+ *
+ * Best-effort: never throws. Returns the count of locks released so callers
+ * can surface the action in warnings if useful.
+ */
+const DEFAULT_LOCK_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export function sweepOrphanBootstrapLocks(
+  cwd?: string,
+  opts: { ttlMs?: number; now?: Date } = {},
+): { released: number } {
+  const ttlMs = opts.ttlMs ?? DEFAULT_LOCK_TTL_MS;
+  const now = opts.now ?? new Date();
+  const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(cwd ?? process.cwd())}`;
+
+  // If a backing loop already exists, do NOT sweep — a concurrent acquire
+  // might be mid-flight and the lock is legitimate. The findExisting check
+  // in acquireBootstrapLoop will catch the loop before we even reach the
+  // lock check, so sweeping here would only catch stuck-mid-open cases.
+  const backingLoop = findExistingBootstrapLoop(cwd);
+  if (backingLoop) return { released: 0 };
+
+  let released = 0;
+  try {
+    const claims = listClaims(cwd);
+    for (const claim of claims) {
+      if (claim.status !== 'active' || claim.scope !== lockScope) continue;
+      const createdAt = new Date(claim.created_at).getTime();
+      if (Number.isNaN(createdAt)) continue;
+      const ageMs = now.getTime() - createdAt;
+      if (ageMs <= ttlMs) continue;
+      try {
+        releaseClaim(claim.id, cwd);
+        released += 1;
+      } catch {
+        /* best-effort */
+      }
+    }
+  } catch {
+    /* best-effort: never throw on sweep failure */
+  }
+  return { released };
+}
+
 // ---- main export ------------------------------------------------------------
 
 /**
@@ -121,6 +177,16 @@ export function acquireBootstrapLoop(
       `bootstrap loop already open on this project (${existing.id}, phase=${existing.current_phase}, status=${existing.status}); joined existing instead of opening a duplicate.`,
     );
     return { action: 'joined', loop: existing, warnings };
+  }
+
+  // Step 1b — sweep any stale orphan coordination locks before the acquire
+  // (pln#518 step 4). Without this, a crash between saveClaim(lock) and the
+  // release branches would block all future bootstrap callers indefinitely.
+  const sweep = sweepOrphanBootstrapLocks(cwd);
+  if (sweep.released > 0) {
+    warnings.push(
+      `released ${sweep.released} orphan bootstrap coordination lock(s) older than the TTL with no backing loop.`,
+    );
   }
 
   // Step 2 — atomically acquire the coordination-lock claim with a
