@@ -779,16 +779,18 @@ function fsmAssertsEnabled(): boolean {
 }
 
 function assertOpenQuestionsInvariant(thread: LoopThread, intent: string): void {
-  if (!fsmAssertsEnabled()) return;
   const canonical = new Set(reconcileOpenQuestions(thread));
   const persisted = new Set(thread.open_questions);
   if (canonical.size !== persisted.size || [...canonical].some((id) => !persisted.has(id))) {
-    // Log only — Phase 0 spec §5: "Don't fail in prod, just log warning."
-    // eslint-disable-next-line no-console
-    console.warn(
+    const message =
       `[brainclaw/loops/fsm] ${intent}: open_questions drift on loop ${thread.id} ` +
-      `— persisted=${JSON.stringify([...persisted])} canonical=${JSON.stringify([...canonical])}`,
-    );
+      `— persisted=${JSON.stringify([...persisted])} canonical=${JSON.stringify([...canonical])}`;
+    // Log in prod so drift is visible without taking down the engine.
+    // eslint-disable-next-line no-console
+    console.warn(message);
+    if (fsmAssertsEnabled()) {
+      throw new Error(message);
+    }
   }
 }
 
