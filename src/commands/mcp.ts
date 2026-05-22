@@ -615,6 +615,21 @@ const MCP_WRITE_TOOLS = [
     },
   },
   {
+    name: 'bclaw_init_project',
+    description: "Initialize brainclaw at an arbitrary path AND register it as a cross_project_link in the caller's store. Lets an agent operating in workspace A bootstrap a brainclaw project in folder B in one MCP call.",
+    annotations: { tier: 'standard', category: 'session', headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute or relative path of the target folder. Resolved via path.resolve(callerCwd, path).' },
+        force: { type: 'boolean', description: 'Pass --force to init (rebuild managed config). Default false.' },
+        project_mode: { type: 'string', description: 'Optional project mode (single-project, multi-project, auto).' },
+        link_as: { type: 'string', description: 'Optional name to register the cross_project_link under. Defaults to path basename.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'bclaw_write_note',
     description: 'Add a runtime note. Requires contributor trust level or above. Use crossProject to push a runtime-note signal to a linked project (requires role: publisher in cross_project_links config).',
     annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
@@ -2715,6 +2730,110 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
 
       return { response: toolResponse({ content: [{ type: 'text', text: `Unknown step: "${step}". Valid steps: project_roots, repo_selection, agent_selection.` }], structuredContent: { error: 'unknown_step', step } }, true) };
+    }
+
+    if (name === 'bclaw_init_project') {
+      const rawPath = typeof args.path === 'string' ? args.path.trim() : '';
+      if (!rawPath) {
+        return { response: createToolErrorResponse('validation_error', 'path is required') };
+      }
+      const force = args.force === true;
+      const projectModeArg = typeof args.project_mode === 'string' ? args.project_mode : undefined;
+      const linkAs = typeof args.link_as === 'string' && args.link_as.trim().length > 0
+        ? args.link_as.trim()
+        : undefined;
+
+      const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
+
+      let wasAlreadyInitialized = false;
+      if (memoryExists(resolvedPath) && !force) {
+        wasAlreadyInitialized = true;
+      } else {
+        if (!fs.existsSync(resolvedPath)) {
+          try {
+            fs.mkdirSync(resolvedPath, { recursive: true });
+          } catch (err) {
+            return {
+              response: createToolErrorResponse(
+                'init_project_failed',
+                `Failed to create target directory '${resolvedPath}': ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            };
+          }
+        }
+        try {
+          const { runInit } = await import('./init.js');
+          await runInit({
+            yes: true,
+            cwd: resolvedPath,
+            force,
+            ...(projectModeArg ? { projectMode: projectModeArg as 'single-project' | 'multi-project' | 'auto' } : {}),
+          });
+        } catch (err) {
+          return {
+            response: createToolErrorResponse(
+              'init_project_failed',
+              `runInit failed for '${resolvedPath}': ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          };
+        }
+      }
+
+      let projectName: string;
+      try {
+        projectName = loadConfig(resolvedPath).project_name;
+      } catch {
+        projectName = path.basename(resolvedPath);
+      }
+
+      let linkName: string;
+      try {
+        const { addCrossProjectLink } = await import('../core/cross-project.js');
+        const link = addCrossProjectLink({
+          path: resolvedPath,
+          name: linkAs ?? projectName,
+          cwd,
+          force,
+        });
+        linkName = link.name ?? path.basename(resolvedPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // Treat a duplicate link as idempotent success when the caller did
+        // not request --force; the project itself is initialised correctly
+        // and the existing link already points at it.
+        if (/already exists/i.test(message) && !force) {
+          try {
+            const { resolveCrossProjectLinks } = await import('../core/cross-project.js');
+            const existing = resolveCrossProjectLinks(cwd).find(
+              (l) => l.absolutePath === resolvedPath || l.path === rawPath,
+            );
+            linkName = existing?.name ?? linkAs ?? projectName;
+          } catch {
+            linkName = linkAs ?? projectName;
+          }
+        } else {
+          return {
+            response: createToolErrorResponse('init_project_failed', `Failed to register cross_project_link: ${message}`),
+          };
+        }
+      }
+
+      const summary = wasAlreadyInitialized
+        ? `✔ ${resolvedPath} already initialised; linked as '${linkName}'.`
+        : `✔ Initialised brainclaw at ${resolvedPath} and linked as '${linkName}'.`;
+
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: summary }],
+          structuredContent: {
+            status: 'ok',
+            project_name: projectName,
+            path: resolvedPath,
+            link_id: linkName,
+            was_already_initialized: wasAlreadyInitialized,
+          },
+        }),
+      };
     }
 
     if (name === 'bclaw_write_note') {
