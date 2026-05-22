@@ -7,6 +7,12 @@ import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import type { FacadeResponse } from '../../src/core/facade-schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { generateClaimId, listClaims, saveClaim } from '../../src/core/claims.js';
+import {
+  acquireBootstrapLoop,
+  BootstrapCoordinationInProgressError,
+  findExistingBootstrapLoop,
+  normalizeLockKey,
+} from '../../src/core/loops/bootstrap-acquire.js';
 
 /**
  * pln#513 step 5 — coverage for the bootstrap entry-point primitives:
@@ -131,7 +137,7 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
     assert.equal(result.preset, 'bootstrap');
 
     // Coordination lock acquired + released — must NOT be active anymore.
-    const lockScope = `bootstrap-coordination-lock:${workspace.dir}`;
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
     const activeLocks = listClaims(workspace.dir).filter(
       (c) => c.scope === lockScope && c.status === 'active',
     );
@@ -167,7 +173,7 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
     // Seed an orphan coordination lock — simulates a parallel coordinator
     // mid-acquire (saveClaim ran but openLoop hasn't completed yet) AND no
     // bootstrap loop on disk for the re-find to land on.
-    const lockScope = `bootstrap-coordination-lock:${workspace.dir}`;
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
     saveClaim({
       id: generateClaimId(),
       agent: 'claude-code',
@@ -219,4 +225,86 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
     assert.notEqual(r2result.loop_id, r1result.loop_id);
     assert.equal(r2result.joined_existing, undefined);
   });
+});
+
+describe('normalizeLockKey — lock scope path normalization (pln#518 step 2)', () => {
+  let workspace: TestWorkspace;
+  let previousTestMode: string | undefined;
+  let restoreCwd: (() => void) | undefined;
+
+  beforeEach(() => {
+    previousTestMode = process.env.BRAINCLAW_TEST_MODE;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    workspace = createTestWorkspace({ prefix: 'bclaw-bootstrap-normalize-', currentAgent: 'claude-code' });
+    restoreCwd = workspace.useCwd();
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (previousTestMode === undefined) {
+      delete process.env.BRAINCLAW_TEST_MODE;
+      return;
+    }
+    process.env.BRAINCLAW_TEST_MODE = previousTestMode;
+  });
+
+  it('second acquire with a dotted-segment path joins the existing loop', () => {
+    const cwdA = workspace.dir;
+    // Construct a path with an injected dot segment (avoid path.join which normalizes eagerly).
+    const cwdB = `${path.dirname(cwdA)}${path.sep}.${path.sep}${path.basename(cwdA)}`;
+
+    const first = acquireBootstrapLoop({ actor: 'test-agent' }, cwdA);
+    assert.equal(first.action, 'opened');
+
+    const second = acquireBootstrapLoop({ actor: 'test-agent' }, cwdB);
+    assert.equal(second.action, 'joined', 'second call with dotted path must join the existing loop');
+    assert.equal(second.loop.id, first.loop.id, 'must return the SAME loop id');
+  });
+
+  it('seeded lock with canonical scope is detected when caller uses a dotted path', () => {
+    const cwdA = workspace.dir;
+    const cwdB = `${path.dirname(cwdA)}${path.sep}.${path.sep}${path.basename(cwdA)}`;
+
+    // Simulate a concurrent caller holding the coordination lock via the
+    // canonical (normalized) path scope.
+    const scope = `bootstrap-coordination-lock:${normalizeLockKey(cwdA)}`;
+
+    saveClaim({
+      id: generateClaimId(),
+      agent: 'concurrent-agent',
+      agent_id: undefined,
+      user: undefined,
+      project_id: undefined,
+      host_id: undefined,
+      session_id: undefined,
+      scope,
+      description: 'seeded lock for normalization test',
+      created_at: new Date().toISOString(),
+      status: 'active',
+      plan_id: undefined,
+      model: undefined,
+    }, cwdA);
+
+    // A caller arriving with cwdB (dotted path) must detect the seeded lock.
+    assert.throws(
+      () => acquireBootstrapLoop({ actor: 'late-agent' }, cwdB),
+      (err: unknown) => err instanceof BootstrapCoordinationInProgressError,
+      'caller with dotted path must detect the lock held by canonical-path caller',
+    );
+  });
+
+  if (process.platform === 'win32') {
+    it('uppercase path joins the existing loop (Windows case-insensitive filesystem)', () => {
+      const cwdA = workspace.dir;
+      const cwdB = cwdA.toUpperCase();
+
+      const first = acquireBootstrapLoop({ actor: 'test-agent' }, cwdA);
+      assert.equal(first.action, 'opened');
+
+      const second = acquireBootstrapLoop({ actor: 'test-agent' }, cwdB);
+      assert.equal(second.action, 'joined', 'uppercase path must join the existing loop on Windows');
+      assert.equal(second.loop.id, first.loop.id);
+    });
+  }
 });

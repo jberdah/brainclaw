@@ -15,6 +15,9 @@
  *      `BootstrapCoordinationInProgressError`.
  *   3. Call `openLoop`, release the lock (success or fail).
  */
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { acquireClaimScope, releaseClaim } from '../claims.js';
 import { BOOTSTRAP_PRESET } from './presets/bootstrap.js';
 import { listLoops, openLoop } from './store.js';
@@ -60,6 +63,28 @@ export class BootstrapCoordinationInProgressError extends Error {
 
 // ---- internal helpers -------------------------------------------------------
 
+/**
+ * Resolve symlinks + relative segments and normalize casing on
+ * case-insensitive filesystems (Windows) so that two callers
+ * reaching the same directory via different path representations
+ * always produce the same lock scope key.
+ */
+export function normalizeLockKey(cwd: string): string {
+  let normalized: string;
+  try {
+    normalized = fs.realpathSync(cwd);
+  } catch {
+    // Path may not exist (yet) — fall back to path.resolve which still
+    // strips relative segments + normalizes separators.
+    normalized = path.resolve(cwd);
+  }
+  // Windows: case-insensitive filesystem, normalize to lower case.
+  if (process.platform === 'win32') {
+    normalized = normalized.toLowerCase();
+  }
+  return normalized;
+}
+
 /** Returns the first active/paused bootstrap loop, or undefined. */
 export function findExistingBootstrapLoop(cwd?: string): LoopThread | undefined {
   const all = listLoops({ kind: 'ideation' }, cwd);
@@ -98,8 +123,10 @@ export function acquireBootstrapLoop(
     return { action: 'joined', loop: existing, warnings };
   }
 
-  // Step 2 — atomically acquire the coordination-lock claim.
-  const lockScope = `bootstrap-coordination-lock:${cwd ?? process.cwd()}`;
+  // Step 2 — atomically acquire the coordination-lock claim with a
+  // normalized scope key (pln#518 step 2 — symlinks / Windows casing
+  // / relative-segment representations all map to the same key).
+  const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(cwd ?? process.cwd())}`;
   const acquireResult = acquireClaimScope({
     scope: lockScope,
     agent: opts.actor,
