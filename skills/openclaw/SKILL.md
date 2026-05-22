@@ -123,7 +123,7 @@ brainclaw search "<query>"
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.5.2 — do not edit manually.
+> Managed by brainclaw v1.6.0 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -152,6 +152,8 @@ _Escalation path (only when you orchestrate other agents) — by goal:_
 - Drive a turn in a loop already assigned to you → `bclaw_loop(intent=turn|complete_turn|advance|close)`
 
 Do NOT call `bclaw_loop(intent=open)` directly — it creates a loop structure without dispatch, so the reviewer/participant never gets the work. Use the goal entries above.
+
+_How to verify a dispatch actually worked:_ `execution_status="delivered_and_started"` only means the brief-ack sentinel was touched — it does NOT mean the worker is doing useful work. Always (1) `bclaw_find(entity="agent_run", filter={assignment_id})` to read the spawn record; (2) check OS pid liveness yourself (`Get-Process -Id <pid>` on Windows, `kill -0 <pid>` on POSIX); (3) if the worker is silent, read its captured streams at `.brainclaw/coordination/runtime/log/<assignment_id>.{stdout,stderr}.log`. Full FSM tables + diagnostic decision tree in `docs/concepts/dispatch-lifecycle.md`.
 
 ## brainclaw — user workflow
 
@@ -282,5 +284,5 @@ Action: update invoke_template in agent-capability.ts to include auto-approve fl
 
 ## brainclaw — active instructions
 
-- Use "dev" script: npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node dist/cli.js
+- Read memory before editing
 <!-- brainclaw:end -->
