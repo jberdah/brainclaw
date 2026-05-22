@@ -163,6 +163,60 @@ interface LoopConflictRecord {
 }
 ```
 
+## Artifact body shapes
+
+`LoopArtifact.body` has two known shape categories. Ref-based bodies keep large
+content out of the loop thread JSON and store only file metadata in `body`.
+Inline bodies keep the whole structured payload in `body` for small artifacts
+such as operator questions and answers.
+
+Ref-based bodies are JSON encoded as `RefBasedArtifactBody`:
+
+- `ref`: string filename within the loop's `artifacts/` directory.
+- `byte_count`: exact byte length of the referenced file at attach time.
+- `sha256`: lowercase hex SHA-256 digest of the referenced file content.
+
+The referenced file lives at
+`.brainclaw/loops/threads/<loop_id>/artifacts/<ref>`. The champion or driver
+code that calls `complete_turn` / `add_artifact` is responsible for writing the
+file before or during the attach call, then attaching only
+`JSON.stringify({ ref, byte_count, sha256 })` as the artifact body.
+
+These artifact types use the ref-based shape:
+
+- `signals_report`: structured discovery or bootstrap signals, often larger
+  than the inline body cap.
+- `project_md_draft`: draft `PROJECT.md` content prepared by a loop slot.
+- `project_md_final`: final `PROJECT.md` content accepted by the loop.
+- `file_diff`: unified diff or patch content produced for review or apply.
+
+Typical attach flow:
+
+```ts
+const body = '<content>';
+const ref = `<artifact-id>.<ext>`;
+const artifactsDir = path.join(memoryDir(cwd), 'loops', 'threads', loopId, 'artifacts');
+fs.mkdirSync(artifactsDir, { recursive: true });
+fs.writeFileSync(path.join(artifactsDir, ref), body, 'utf8');
+const byte_count = Buffer.byteLength(body, 'utf8');
+const sha256 = crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+complete_turn(
+  {
+    ...,
+    artifact: {
+      phase,
+      type,
+      body: JSON.stringify({ ref, byte_count, sha256 }),
+    },
+  },
+  cwd,
+);
+```
+
+`RefBasedArtifactBodySchema` in `src/core/loops/types.ts` is the authoritative
+validator for this metadata shape. `KNOWN_ARTIFACT_BODY_SCHEMAS` in the same
+file lists which artifact types are ref-based and which use inline JSON bodies.
+
 ## Lifecycle verbs
 
 The engine exposes four active verbs. Each one mutates state, appends an event, and returns the updated `LoopThread`. **All verbs are strictly synchronous-on-state and asynchronous-on-work**: any downstream dispatch (spawning a CLI, calling another MCP tool) is fire-and-forget from the commit window, so the per-loop lock is always released quickly.

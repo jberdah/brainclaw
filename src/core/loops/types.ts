@@ -341,16 +341,39 @@ export const REF_BASED_ARTIFACT_TYPES = new Set<string>([
  * Step 2 handlers (request_input/provide_input) parse `artifact.body` as
  * JSON and call `safeParse` on `KNOWN_ARTIFACT_BODY_SCHEMAS[type]`.
  *
+ * Body shapes fall into two categories:
+ * - RefBasedArtifactBodySchema: `body` is JSON metadata for a file written
+ *   under `.brainclaw/loops/threads/<loop_id>/artifacts/<ref>`.
+ * - Inline body schemas: `body` is the complete small JSON payload.
+ *
+ * Schema definitions live above in this file. Keep this table explicit so
+ * attach-call errors can name the expected shape for each known type.
+ *
  * Types not listed keep the legacy freeform-body behavior — no body schema
  * is enforced. This preserves backward compatibility with proposal / critique
  * / revision / plan_draft / change_summary artifacts produced before pln#508.
  */
 export const KNOWN_ARTIFACT_BODY_SCHEMAS = {
+  // inline JSON body: body = JSON.stringify({ ...fields per OperatorQuestionBodySchema })
   operator_question: OperatorQuestionBodySchema,
+
+  // inline JSON body: body = JSON.stringify({ ...fields per OperatorAnswerBodySchema })
   operator_answer: OperatorAnswerBodySchema,
+
+  // ref-based: body = JSON.stringify({ ref, byte_count, sha256 })
+  // Ref file lives at .brainclaw/loops/threads/<loop_id>/artifacts/<ref>
   project_md_draft: RefBasedArtifactBodySchema,
+
+  // ref-based: body = JSON.stringify({ ref, byte_count, sha256 })
+  // Ref file lives at .brainclaw/loops/threads/<loop_id>/artifacts/<ref>
   project_md_final: RefBasedArtifactBodySchema,
+
+  // ref-based: body = JSON.stringify({ ref, byte_count, sha256 })
+  // Ref file lives at .brainclaw/loops/threads/<loop_id>/artifacts/<ref>
   signals_report: RefBasedArtifactBodySchema,
+
+  // ref-based: body = JSON.stringify({ ref, byte_count, sha256 })
+  // Ref file lives at .brainclaw/loops/threads/<loop_id>/artifacts/<ref>
   file_diff: RefBasedArtifactBodySchema,
 } as const;
 export type KnownArtifactType = keyof typeof KNOWN_ARTIFACT_BODY_SCHEMAS;
