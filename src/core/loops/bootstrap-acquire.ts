@@ -27,6 +27,12 @@ export interface AcquireBootstrapOptions {
   actor: string;
   /** Optional agent_id for the claim + slot. */
   agent_id?: string;
+  /** Optional actor id/name to preserve the caller's existing openLoop creator. */
+  created_by?: string;
+  /** Optional loop title; CLI callers use the bootstrap default. */
+  title?: string;
+  /** Optional loop goal/scope; MCP callers pass the coordinate scope. */
+  goal?: string;
   /** Optional session_id written into the coordination-lock claim. */
   session_id?: string;
   /** Optional model tag written into the coordination-lock claim. */
@@ -121,9 +127,16 @@ export function acquireBootstrapLoop(
     const loop = openLoop(
       {
         kind: 'ideation',
-        title: 'Bootstrap PROJECT.md',
-        created_by: opts.actor,
-        slots: [{ role: 'champion', agent: opts.actor }],
+        title: opts.title ?? 'Bootstrap PROJECT.md',
+        goal: opts.goal,
+        created_by: opts.created_by ?? opts.agent_id ?? opts.actor,
+        slots: [
+          {
+            role: 'champion',
+            agent: opts.actor,
+            ...(opts.agent_id ? { agent_id: opts.agent_id } : {}),
+          },
+        ],
         phases: BOOTSTRAP_PRESET.phases,
         stop_condition: BOOTSTRAP_PRESET.stop_condition,
         protocol: BOOTSTRAP_PRESET.protocol,

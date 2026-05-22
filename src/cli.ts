@@ -216,8 +216,10 @@ program
       if (removed > 0) {
         logger.info(`Cleaned ${removed} orphan lock/tmp file(s) in ${memoryDir()}`);
       }
-    } else if (explicitCwd) {
-      // For init/setup, still respect explicit --cwd / --project but nothing else
+    } else if (explicitCwd && cmdName !== 'init') {
+      // For setup commands, still respect explicit --cwd / --project but nothing else.
+      // init receives cwd through runInit options so scaffold writers do not
+      // depend on changing process.cwd().
       process.chdir(path.resolve(explicitCwd));
     }
   });

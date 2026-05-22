@@ -5714,6 +5714,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // Both the CLI and this MCP handler converge on the same singleton
         // acquire path, eliminating the race where two concurrent callers both
         // passed the local scan and called openLoop directly.
+        const senderIdentity = (
+          (senderAgentId ? findAgentIdentityById(senderAgentId, dispatchCwd) : undefined)
+          ?? findAgentIdentityByName(senderAgent, dispatchCwd)
+          ?? ensureAgentRegisteredForDispatch(senderAgent, dispatchCwd)
+        );
+        const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
+        const creatorActor = authorAgentId ?? senderAgent;
         let bootstrapOpenedLoop: LoopThread | undefined;
         if (req.preset === 'bootstrap') {
           const { acquireBootstrapLoop, BootstrapCoordinationInProgressError: BcipError } =
@@ -5721,7 +5728,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           let acqResult: Awaited<ReturnType<typeof acquireBootstrapLoop>>;
           try {
             acqResult = acquireBootstrapLoop(
-              { actor: senderAgent, agent_id: senderAgentId, model: currentModel },
+              {
+                actor: senderAgent,
+                agent_id: authorAgentId,
+                created_by: creatorActor,
+                title: req.task.slice(0, 120),
+                goal: req.scope,
+                model: currentModel,
+              },
               dispatchCwd,
             );
           } catch (err) {
@@ -5753,14 +5767,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           // action === 'opened': helper already called openLoop + released lock.
           bootstrapOpenedLoop = acqResult.loop;
         }
-
-        const senderIdentity = (
-          (senderAgentId ? findAgentIdentityById(senderAgentId, dispatchCwd) : undefined)
-          ?? findAgentIdentityByName(senderAgent, dispatchCwd)
-          ?? ensureAgentRegisteredForDispatch(senderAgent, dispatchCwd)
-        );
-        const authorAgentId = senderIdentity?.agent_id ?? senderAgentId;
-        const creatorActor = authorAgentId ?? senderAgent;
 
         // pln#511 step 2 — bootstrap preset always runs in single-agent
         // mode: the champion drives the whole loop. Even when the caller
