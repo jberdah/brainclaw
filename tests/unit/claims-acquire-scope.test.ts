@@ -8,7 +8,7 @@ import {
   saveClaim,
 } from '../../src/core/claims.js';
 import { nowISO } from '../../src/core/ids.js';
-import { acquireBootstrapLoop } from '../../src/core/loops/bootstrap-acquire.js';
+import { acquireBootstrapLoop, normalizeLockKey } from '../../src/core/loops/bootstrap-acquire.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('acquireClaimScope', () => {
@@ -112,7 +112,7 @@ describe('acquireClaimScope', () => {
     assert.equal(result.action, 'opened');
     assert.match(result.loop.id, /^lop_/);
 
-    const lockScope = `bootstrap-coordination-lock:${workspace.dir}`;
+    const lockScope = `bootstrap-coordination-lock:${normalizeLockKey(workspace.dir)}`;
     const lockClaims = listClaims(workspace.dir).filter((claim) => claim.scope === lockScope);
     assert.equal(lockClaims.length, 1);
     assert.equal(lockClaims[0].session_id, 'sess_bootstrap');
