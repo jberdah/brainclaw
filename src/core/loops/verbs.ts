@@ -4,6 +4,7 @@ import { nowISO } from '../ids.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import {
   appendEvent,
+  closeLoop,
   generateMutationId,
   getLoop,
   listLoopEvents,
@@ -285,6 +286,24 @@ export function advance(input: AdvanceInput, cwd?: string): AdvanceResult {
     }
   }
 
+  // pln#514 post-validation fix (can_27ebf1a0) — evaluate stop_condition
+  // BEFORE decideNextPhase. The iteration engine throws "already at last
+  // phase" when current_phase has no successor, which would shadow the
+  // pre-advance auto-close branch below. For a loop whose stop_condition is
+  // satisfied AT the last phase (the bootstrap preset's converge case after
+  // project_md_final lands), the right behavior is auto-close, not throw.
+  // Field-observed during pln#514 v1.1 validation (run_79f8443a).
+  if (input.to_phase === undefined && evaluateStopCondition(current, current.stop_condition)) {
+    const finalStatus: Exclude<LoopStatus, 'open' | 'paused'> = stopHitsMaxIterations(
+      current,
+      current.stop_condition,
+    )
+      ? 'blocked'
+      : 'completed';
+    const closed = commitClosedTransition(current, finalStatus, input.actor, input.reason, cwd);
+    return { loop: closed, auto_closed: true };
+  }
+
   // Decide the next state. If the caller specified a to_phase, honour it
   // verbatim (used by `force`-style overrides and explicit jumps). Otherwise
   // consult the iteration engine, which knows about the cycle, exit_when,
@@ -416,6 +435,24 @@ function commitClosedTransition(
   reason: string | undefined,
   cwd: string | undefined,
 ): LoopThread {
+  // pln#514 post-validation fix (can_27ebf1a0, run_79f8443a) — when the
+  // auto-close path completes a bootstrap-preset loop, delegate to
+  // closeLoop() so its writeProjectMdSafe pre-hook runs. Without this
+  // delegation, the FSM auto-close via `advance` would bypass PROJECT.md
+  // materialization entirely, defeating pln#512 step 2. The pre-hook
+  // re-reads the thread from disk; the caller (advance) has already
+  // persisted the latest state via writeThreadFile before reaching here
+  // in both the pre- and post-advance auto-close branches.
+  //
+  // Non-bootstrap loops and non-completed closes (cancelled / blocked /
+  // timeout-driven) fall through to the streamlined commit below — the
+  // pre-hook is gated on final_status='completed' && preset='bootstrap'
+  // in closeLoop, so delegating other cases would be a no-op anyway, but
+  // delegation also costs a disk re-read. Avoid it when not needed.
+  if (final_status === 'completed' && thread.protocol?.preset === 'bootstrap') {
+    return closeLoop({ id: thread.id, final_status, reason, actor }, cwd);
+  }
+
   const now = nowISO();
   const mutation_id = generateMutationId();
   const version = thread.version + 1;

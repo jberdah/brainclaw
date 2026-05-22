@@ -500,6 +500,45 @@ describe('bclaw_loop facade — awaiting_file_apply_approval is surfaced structu
     }
   });
 
+  it('auto-close via advance() materializes PROJECT.md (regression for can_27ebf1a0, run_79f8443a)', async () => {
+    // Before the fix, the FSM auto-close path (advance() detecting
+    // stop_condition met) called commitClosedTransition directly and
+    // bypassed writeProjectMdSafe. Field-observed during pln#514 v1.1
+    // validation on anonymizer_3CX. This regression test guards the
+    // delegation in commitClosedTransition (verbs.ts) to closeLoop
+    // (store.ts) when bootstrap-preset + final_status='completed'.
+    const fixture = setupBootstrapLoop();
+    fixtures.push(fixture);
+    const target = path.join(fixture.cwd, 'PROJECT.md');
+    assert.equal(fs.existsSync(target), false, 'precondition: PROJECT.md must not exist');
+
+    // Drive advance() until the stop_condition fires + auto-close kicks in.
+    // The fixture's loop is at current_phase='converge' with a project_md_final
+    // artifact attached, which satisfies the bootstrap preset stop_condition
+    // (artifact_produced phase=converge type=project_md_final). The first
+    // advance call detects the stop pre-advance and calls commitClosedTransition.
+    const { advance } = await import('../../src/core/loops/index.js');
+    const result = advance({ id: fixture.loop.id, actor: 'agt_test' }, fixture.cwd);
+
+    assert.equal(result.auto_closed, true, 'advance() must auto-close at converge');
+    assert.equal(result.loop.status, 'completed');
+
+    // The critical assertion: PROJECT.md was materialized despite the close
+    // going through the FSM auto-close path (not the explicit closeLoop verb).
+    assert.equal(
+      fs.existsSync(target),
+      true,
+      'PROJECT.md must be materialized after auto-close — can_27ebf1a0 regression guard',
+    );
+    assert.equal(fs.readFileSync(target, 'utf8'), FINAL_BODY);
+
+    // file_apply_resolved event must also fire (symmetry with explicit close).
+    const events = listLoopEvents(fixture.loop.id, fixture.cwd);
+    const resolved = findEvent(events, 'file_apply_resolved');
+    assert.ok(resolved, 'file_apply_resolved event must be emitted on auto-close');
+    assert.equal(resolved.approved, true);
+  });
+
   it('close intent on a paused-overwrite loop returns code=awaiting_file_apply_approval with structured details', () => {
     const fixture = setupBootstrapLoop({ finalContent: '# new\n' });
     fixtures.push(fixture);
