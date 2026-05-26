@@ -378,6 +378,33 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
     hooks_support: false,
     instruction_file: '.continue/rules/',
   },
+  {
+    name: 'hermes',
+    detect: (home, env) => {
+      if (env.HERMES_SESSION_ID || env.HERMES_AGENT || env.HERMES_HOME) {
+        return { installed: true, method: 'HERMES_* env' };
+      }
+      if (fs.existsSync(path.join(home, '.hermes'))) {
+        return { installed: true, method: '~/.hermes directory' };
+      }
+      const cli = tryCommand('hermes', ['--version'], 3000);
+      if (cli.ok) {
+        return { installed: true, method: 'hermes CLI', version: cli.stdout.trim() };
+      }
+      return { installed: false, method: '' };
+    },
+    models: [
+      { name: 'model-agnostic' },
+    ],
+    native_tools: ['execute_code', 'shell', 'file_read', 'file_write', 'web_search', 'delegate_task'],
+    mcp_support: true,
+    mcp_config_format: '~/.hermes/config.yaml',
+    skills_support: true,
+    skills_path_pattern: '~/.hermes/skills/ and .agents/skills/',
+    rules_support: false,
+    hooks_support: false,
+    instruction_file: 'AGENTS.md',
+  },
 ];
 
 // ── Public API ─────────────────────────────────────────────────────────────────

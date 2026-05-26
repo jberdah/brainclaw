@@ -90,7 +90,7 @@ Machine-only onboarding. Detects available agents, writes the machine-level MCP/
 
 | Option | Description |
 |---|---|
-| `--agents <agents>` | Agents to configure: `all`, `detected`, or comma-separated names |
+| `--agents <agents>` | Agents to configure: `all`, `detected`/`installed`, comma-separated names, or numeric choices from the prompt |
 | `-y, --yes` | Accept all defaults non-interactively |
 
 ```bash
@@ -100,6 +100,8 @@ brainclaw setup-machine --agents codex,cursor
 ```
 
 Use this when Brainclaw is new on the current machine and you want to make the MCP surface visible to your coding agent before touching any project. The usual follow-up is `brainclaw init` inside the project you want to create or refresh.
+
+By default, `detected` means the current agent plus every installed coding agent Brainclaw can detect on the machine. In non-interactive `--yes` mode, Brainclaw configures that detected install set when it is non-empty; explicit `--agents ...` always wins.
 
 ---
 
@@ -128,7 +130,7 @@ brainclaw init --project-mode multi-project --project-strategy folder
 
 Common onboarding split:
 
-- new machine → `brainclaw setup-machine --yes`
+- new machine → `brainclaw setup-machine --yes` configures detected installed agents
 - current project (new or already using Brainclaw) → `brainclaw init`
 - explicit second agent on an existing Brainclaw project → `brainclaw enable-agent <agent-name>`
 
@@ -1398,7 +1400,7 @@ brainclaw register-agent my-bot --capability code-review --capability testing --
 ### `brainclaw enable-agent <name>`
 
 Enable an existing agent and optionally update its capabilities.
-Built-in integration names include `claude-code`, `cursor`, `windsurf`, `cline`, `codex`, `opencode`, `antigravity`, `continue`, `roo`, and `github-copilot`.
+Built-in integration names include `claude-code`, `cursor`, `windsurf`, `cline`, `codex`, `opencode`, `antigravity`, `continue`, `roo`, `kilocode`, `mistral-vibe`, `hermes`, and `github-copilot`.
 
 | Option | Description |
 |---|---|
@@ -1412,6 +1414,7 @@ Built-in integration names include `claude-code`, `cursor`, `windsurf`, `cline`,
 brainclaw enable-agent github-copilot --set-current
 brainclaw enable-agent opencode
 brainclaw enable-agent antigravity
+brainclaw enable-agent hermes
 brainclaw enable-agent my-bot --capability refactor --json
 ```
 

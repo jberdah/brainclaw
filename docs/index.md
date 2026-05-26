@@ -51,6 +51,7 @@ Use this page as the entry point into the packaged Markdown documentation.
 - [integrations/opencode.md](integrations/opencode.md)
 - [integrations/kilocode.md](integrations/kilocode.md)
 - [integrations/mistral-vibe.md](integrations/mistral-vibe.md)
+- [integrations/hermes.md](integrations/hermes.md)
 - [integrations/openclaw.md](integrations/openclaw.md)
 
 ## Audience Design Constraints

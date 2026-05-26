@@ -58,7 +58,7 @@ The agent gets dynamic context injected at every prompt. The instruction file ca
 
 The agent can call brainclaw tools but doesn't get automatic context injection. The instruction file is more directive — it tells the agent it MUST call specific tools before working, and includes the most critical traps statically. For agents without hooks, an opt-in `.live.md` companion (regenerated on session-end and handoff) carries plans, claims, traps, candidates, and handoffs as a parity backstop.
 
-**Today:** Cursor, Windsurf, Cline, Roo, Continue, Kilocode, OpenCode, Codex, GitHub Copilot, Antigravity/Gemini CLI, Mistral Vibe
+**Today:** Cursor, Windsurf, Cline, Roo, Continue, Kilocode, OpenCode, Codex, GitHub Copilot, Antigravity/Gemini CLI, Mistral Vibe, Hermes
 
 ### Limited integration (no MCP)
 
@@ -82,6 +82,7 @@ The agent cannot call brainclaw tools at all. The instruction file or SKILL.md b
 | **Gemini CLI** | ✔ global | GEMINI.md | — | — | — |
 | **GitHub Copilot** | ✔ global + project | .github/copilot-instructions.md | — | manual (per-call) | ✔ brainclaw-context |
 | **Mistral Vibe** | ✔ project + user (TOML) | AGENTS.md | — | `--auto-approve` flag | ✔ universal skill |
+| **Hermes** | ✔ global (YAML) | AGENTS.md | — | — | ✔ universal skill |
 | **OpenClaw** | — | — | — | — | ✔ brainclaw skill |
 
 **Legend:** ✔ = fully supported, ◐ = partial (static trigger, not dynamic injection), — = not available
@@ -124,5 +125,6 @@ See the README's "Current state" section for the full list of what works today a
 - [cline.md](cline.md)
 - [kilocode.md](kilocode.md)
 - [mistral-vibe.md](mistral-vibe.md)
+- [hermes.md](hermes.md)
 - [opencode.md](opencode.md)
 - [openclaw.md](openclaw.md)

@@ -32,6 +32,7 @@ describe('agent export registry', () => {
       ['continue',       'continue',             '.continue/rules/brainclaw.md'],
       ['roo',            'roo',                  '.roo/rules/brainclaw.md'],
       ['kilocode',       'kilocode',             '.kilo/rules/brainclaw.md'],
+      ['hermes',         'agents-md',            'AGENTS.md'],
     ];
     for (const [agentName, expectedFormat, expectedPath] of cases) {
       const target = resolveExportTarget(agentName);
@@ -62,7 +63,7 @@ describe('agent export registry', () => {
 
   it('AGENT_EXPORT_REGISTRY covers all known agents', () => {
     const names = AGENT_EXPORT_REGISTRY.map((t) => t.agentName);
-    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'codex', 'opencode', 'antigravity', 'continue', 'roo', 'kilocode']) {
+    for (const expected of ['github-copilot', 'claude-code', 'cursor', 'windsurf', 'cline', 'codex', 'opencode', 'antigravity', 'continue', 'roo', 'kilocode', 'hermes']) {
       assert.ok(names.includes(expected), `registry should contain ${expected}`);
     }
   });

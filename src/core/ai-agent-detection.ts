@@ -28,7 +28,8 @@ export interface DetectedAiAgent {
  * 9. Antigravity / Gemini CLI (ANTIGRAVITY_* env or ~/.gemini/antigravity/)
  * 10. Continue (CONTINUE_*)
  * 11. Roo Code (ROO_*)
- * 12. OpenClaw (~/.openclaw/ or OPENCLAW_*)
+ * 12. Hermes (HERMES_* or ~/.hermes/)
+ * 13. OpenClaw (~/.openclaw/ or OPENCLAW_*)
  */
 export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): DetectedAiAgent | undefined {
   // Explicit override
@@ -182,6 +183,22 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
       kind: 'agent',
       trust_level: 'trusted',
       detection_source: env.VIBE_HOME ? 'VIBE_HOME env var' : '~/.vibe directory',
+    };
+  }
+
+  // Hermes Agent — supports MCP and skills from ~/.hermes/. Detect after
+  // editor/CLI agents with stronger session env vars to avoid stealing mixed
+  // shells where Hermes is merely installed.
+  if (env.HERMES_SESSION_ID || env.HERMES_AGENT || env.HERMES_HOME || fs.existsSync(path.join(homeDir, '.hermes'))) {
+    return {
+      name: 'hermes',
+      kind: 'autonomous',
+      trust_level: 'trusted',
+      detection_source: env.HERMES_SESSION_ID || env.HERMES_AGENT
+        ? 'HERMES_* env var'
+        : env.HERMES_HOME
+          ? 'HERMES_HOME env var'
+          : '~/.hermes directory',
     };
   }
 

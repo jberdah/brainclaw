@@ -111,6 +111,7 @@ export type AgentName =
   | 'github-copilot'
   | 'kilocode'
   | 'mistral-vibe'
+  | 'hermes'
   | 'openclaw'
   | 'nanoclaw'
   | 'nemoclaw'
@@ -125,6 +126,7 @@ const AGENT_ALIASES: Record<string, AgentName> = {
   'gemini': 'antigravity',
   'mistral': 'mistral-vibe',
   'vibe': 'mistral-vibe',
+  'hermes-agent': 'hermes',
 };
 
 /** Resolve an alias to its canonical agent name, or return the input unchanged. */
@@ -332,6 +334,25 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'vibe',
     invoke_review_template: 'vibe --prompt "{prompt}" --auto-approve --max-turns 5',
     invoke_consult_template: 'vibe --prompt "{prompt}" --auto-approve --max-turns 3',
+  },
+
+  // Hermes Agent (Nous Research) — autonomous, skills-first agent with native
+  // MCP client support via ~/.hermes/config.yaml. Brainclaw uses Hermes as a
+  // Tier B surface for now: MCP + universal .agents/skills/ skill, no native
+  // Brainclaw hooks until a dedicated Hermes plugin is shipped and validated.
+  hermes: {
+    name: 'hermes', category: 'autonomous-agent', workflowModel: 'task-based',
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: false,
+    instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'B',
+    role_capabilities: ['execute', 'review', 'consult'],
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: false },
+    max_concurrent_tasks: 1,
+    prompt_delivery: { methods: ['inline_arg', 'temp_file'], preferred: 'inline_arg', max_inline_length: 8000 },
+    execution_env: { surface: 'cli' },
+    invoke_template: 'hermes chat -q "{prompt}"',
+    invoke_binary: 'hermes',
+    invoke_review_template: 'hermes chat -q "{prompt}"',
+    invoke_consult_template: 'hermes chat -q "{prompt}"',
   },
 
   // --- Autonomous agents (headless, task-based or scheduled) ---

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import yaml from 'yaml';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';
 import { getAgentCapabilityProfile } from './agent-capability.js';
 import type {
@@ -24,12 +25,18 @@ const SUPPORTED_AGENT_INTEGRATION_NAMES = new Set<AgentIntegrationName>([
   'continue',
   'roo',
   'kilocode',
+  'mistral-vibe',
+  'hermes',
   'openclaw',
   'nanoclaw',
   'nemoclaw',
   'picoclaw',
   'zeroclaw',
 ]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> = {
   'github-copilot': [
@@ -92,6 +99,16 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
   'kilocode': [
     { kind: 'instructions', location: 'workspace', path: '.kilo/rules/brainclaw.md' },
     { kind: 'mcp',          location: 'workspace', path: '.kilo/mcp.json' },
+    { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
+  ],
+  'mistral-vibe': [
+    { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
+    { kind: 'mcp',          location: 'workspace', path: '.vibe/config.toml' },
+    { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
+  ],
+  'hermes': [
+    { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
+    { kind: 'mcp',          location: 'machine',   path: '.hermes/config.yaml' },
     { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
   ],
   'openclaw': [
@@ -204,6 +221,24 @@ export function extractMcpCommandVal(agentName: string, expectedPath: string): {
       args,
       is_valid: true,
     };
+  }
+
+  if (expectedPath.endsWith('.yaml') || expectedPath.endsWith('.yml')) {
+    try {
+      const parsed = yaml.parse(content);
+      const root = isRecord(parsed) ? parsed : {};
+      const servers = isRecord(root.mcp_servers) ? root.mcp_servers : {};
+      const bc = isRecord(servers.brainclaw) ? servers.brainclaw : {};
+      const cmd = bc.command;
+      const args = bc.args;
+      return {
+        command: typeof cmd === 'string' ? cmd : undefined,
+        args: Array.isArray(args) ? args.filter((a): a is string => typeof a === 'string') : undefined,
+        is_valid: true,
+      };
+    } catch {
+      return { is_valid: false };
+    }
   }
 
   try {

@@ -1381,6 +1381,8 @@ export const AgentIntegrationNameSchema = z.enum([
   'continue',
   'roo',
   'kilocode',
+  'mistral-vibe',
+  'hermes',
   'openclaw',
   'nanoclaw',
   'nemoclaw',

@@ -13,7 +13,7 @@ describe('agent-capability', () => {
     const agents = [
       'claude-code', 'cursor', 'windsurf', 'cline', 'roo',
       'continue', 'opencode', 'codex', 'antigravity', 'github-copilot',
-      'kilocode', 'mistral-vibe', 'openclaw', 'nanoclaw', 'nemoclaw', 'picoclaw', 'zeroclaw',
+      'kilocode', 'mistral-vibe', 'hermes', 'openclaw', 'nanoclaw', 'nemoclaw', 'picoclaw', 'zeroclaw',
       'claude-sonnet',
     ];
     for (const name of agents) {
@@ -30,7 +30,7 @@ describe('agent-capability', () => {
 
   it('getAllAgentCapabilityProfiles returns all known agents', () => {
     const all = getAllAgentCapabilityProfiles();
-    assert.equal(all.length, 18);
+    assert.equal(all.length, 19);
   });
 
   it('isKnownAgent validates known names', () => {

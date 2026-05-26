@@ -412,6 +412,7 @@ export const AGENT_EXPORT_REGISTRY: AgentExportTarget[] = [
   { agentName: 'roo',            format: 'roo',                  relativePath: '.roo/rules/brainclaw.md' },
   { agentName: 'kilocode',       format: 'kilocode',             relativePath: '.kilo/rules/brainclaw.md' },
   { agentName: 'mistral-vibe',   format: 'agents-md',            relativePath: 'AGENTS.md' },
+  { agentName: 'hermes',         format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'opencode',       format: 'agents-md',            relativePath: 'AGENTS.md' },
   { agentName: 'antigravity',    format: 'gemini-md',            relativePath: 'GEMINI.md' },
   { agentName: 'brainclaw',      format: 'board-md',             relativePath: 'BOARD.md' },
@@ -559,6 +560,8 @@ const ROO_MCP_RELATIVE_PATH = '.roo/mcp.json';
 const KILOCODE_MCP_RELATIVE_PATH = '.kilo/mcp.json';
 const KILOCODE_CONFIG_RELATIVE_PATH = 'kilo.jsonc';
 const MISTRAL_VIBE_CONFIG_RELATIVE_PATH = '.vibe/config.toml';
+const HERMES_CONFIG_RELATIVE_PATH = '.hermes/config.yaml';
+const HERMES_EXTERNAL_SKILLS_RELATIVE_PATH = '.agents/skills';
 const CONTINUE_CONFIG_RELATIVE_PATH = '.continue/config.json';
 const CONTINUE_PERMISSIONS_RELATIVE_PATH = '.continue/permissions.yaml';
 const OPENCODE_CONFIG_RELATIVE_PATH = 'opencode.json';
@@ -598,6 +601,7 @@ export const LOCAL_ONLY_AGENT_WORKSPACE_FILES = [
   KILOCODE_MCP_RELATIVE_PATH,
   KILOCODE_CONFIG_RELATIVE_PATH,
   MISTRAL_VIBE_CONFIG_RELATIVE_PATH,
+  HERMES_CONFIG_RELATIVE_PATH,
   CONTINUE_CONFIG_RELATIVE_PATH,
   OPENCODE_CONFIG_RELATIVE_PATH,
   WINDSURF_MCP_RELATIVE_PATH,
@@ -1495,6 +1499,83 @@ export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
+const HERMES_BRAINCLAW_MCP_TOOLS = [
+  'bclaw_work',
+  'bclaw_context',
+  'bclaw_find',
+  'bclaw_get',
+  'bclaw_create',
+  'bclaw_update',
+  'bclaw_transition',
+];
+
+export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath?: string): AutoConfigWriteResult | undefined {
+  if (!homeDir) return undefined;
+
+  const filePath = path.join(homeDir, HERMES_CONFIG_RELATIVE_PATH);
+  let existing: JsonObject = {};
+  let existed = false;
+  if (fs.existsSync(filePath)) {
+    existed = true;
+    try {
+      const parsed = yaml.parse(fs.readFileSync(filePath, 'utf-8'));
+      existing = isJsonObject(parsed) ? { ...parsed } : {};
+    } catch {
+      existing = {};
+    }
+  }
+
+  const mcpServers = isJsonObject(existing.mcp_servers) ? { ...existing.mcp_servers } : {};
+  const current = isJsonObject(mcpServers.brainclaw) ? { ...mcpServers.brainclaw } : {};
+  const currentEnv = isJsonObject(current.env) ? { ...current.env } : {};
+  const currentTools = isJsonObject(current.tools) ? { ...current.tools } : {};
+  const skills = isJsonObject(existing.skills) ? { ...existing.skills } : {};
+  const externalDirs = Array.isArray(skills.external_dirs)
+    ? (skills.external_dirs as unknown[]).filter((value): value is string => typeof value === 'string')
+    : [];
+  if (workspacePath) {
+    const projectSkillsDir = path.resolve(workspacePath, HERMES_EXTERNAL_SKILLS_RELATIVE_PATH);
+    const normalized = projectSkillsDir.replace(/\\/g, '/').toLowerCase();
+    if (!externalDirs.some((dir) => dir.replace(/\\/g, '/').toLowerCase() === normalized)) {
+      externalDirs.push(projectSkillsDir);
+    }
+  }
+  const mcpCmd = getBrainclawMcpCommand();
+
+  mcpServers.brainclaw = {
+    ...current,
+    command: typeof current.command === 'string' ? current.command : mcpCmd.command,
+    args: Array.isArray(current.args) ? current.args : mcpCmd.args,
+    env: {
+      ...currentEnv,
+      BRAINCLAW_AGENT: 'hermes',
+    },
+    tools: {
+      ...currentTools,
+      include: Array.isArray(currentTools.include) ? currentTools.include : HERMES_BRAINCLAW_MCP_TOOLS,
+      prompts: typeof currentTools.prompts === 'boolean' ? currentTools.prompts : false,
+      resources: typeof currentTools.resources === 'boolean' ? currentTools.resources : false,
+    },
+  };
+
+  const nextConfig = {
+    ...existing,
+    mcp_servers: mcpServers,
+    ...(externalDirs.length > 0 ? { skills: { ...skills, external_dirs: externalDirs } } : {}),
+  };
+  const content = `# Managed by brainclaw — preserves existing Hermes settings\n${yaml.stringify(nextConfig)}`;
+  const { created, updated } = writeTextFileIfChanged(filePath, content);
+
+  return {
+    kind: 'mcp',
+    label: 'Hermes MCP settings',
+    created: !existed && created,
+    updated: existed && updated,
+    filePath,
+    relativePath: HERMES_CONFIG_RELATIVE_PATH,
+  };
+}
+
 export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | null {
   const codexHome = env.CODEX_HOME?.trim() || (homeDir ? path.join(homeDir, '.codex') : null);
   if (!codexHome) return null;
@@ -2097,6 +2178,12 @@ export function writeDetectedAgentAutoConfig(
       return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
     case 'mistral-vibe':
       return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+    case 'hermes': {
+      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
+      const mcp = ensureHermesMcpConfig(resolveHomeDir(env), cwd);
+      if (mcp) results.push(mcp);
+      return results;
+    }
     case 'codex': {
       const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
@@ -2190,6 +2277,8 @@ export function writeExportCompanionFiles(
       if (hooks) results.push(hooks);
       return results;
     }
+    case 'agents-md':
+      return [ensureUniversalBrainclawSkill(cwd)];
     default:
       return [];
   }
@@ -2238,6 +2327,7 @@ export function patchAllMcpConfigs(
       ensureAntigravityMcpConfig(homeDir),
       ensureOpenClawMcpConfig(homeDir),
       ensureCodexMcpConfig(homeDir, env),
+      ensureHermesMcpConfig(homeDir),
     ];
     for (const r of userConfigs) {
       if (r) results.push(r);

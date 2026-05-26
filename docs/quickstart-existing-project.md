@@ -56,7 +56,7 @@ If you want the explicit path for a different or additional agent, run:
 brainclaw enable-agent <agent-name>
 ```
 
-`<agent-name>` is one of `claude-code`, `codex`, `copilot`, `cursor`, `cline`, `windsurf`, `continue`, `kilocode`, `roo`, `opencode`, `antigravity`, etc. (see [docs/integrations/overview.md](integrations/overview.md) for the full list).
+`<agent-name>` is one of `claude-code`, `codex`, `copilot`, `cursor`, `cline`, `windsurf`, `continue`, `kilocode`, `mistral-vibe`, `hermes`, `roo`, `opencode`, `antigravity`, etc. (see [docs/integrations/overview.md](integrations/overview.md) for the full list).
 
 These commands:
 - Detect the agent in your environment (env vars, installed CLIs, IDE)

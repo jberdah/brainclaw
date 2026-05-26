@@ -5,7 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
-import { scanGitRepos } from '../../src/commands/setup.js';
+import {
+  getDetectedSetupAgentNames,
+  getInstalledAgentNames,
+  parseAgentSelection,
+  scanGitRepos,
+} from '../../src/commands/setup.js';
+import type { AgentInventory } from '../../src/core/agent-inventory.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -179,5 +185,38 @@ describe('setup/init guardrails', () => {
       tools?: Record<string, { allow?: boolean }>;
     };
     assert.equal(parsed.tools?.bclaw_work?.allow, true);
+  });
+});
+
+describe('setup agent selection', () => {
+  it('builds the detected setup set from current and installed agents', () => {
+    assert.deepEqual(
+      getDetectedSetupAgentNames('codex', ['hermes', 'cursor', 'unknown-agent']),
+      ['codex', 'cursor', 'hermes'],
+    );
+  });
+
+  it('maps inventory-installed agents to known setup agents', () => {
+    const inventory = {
+      schema_version: 1,
+      generated_at: new Date().toISOString(),
+      agents: [
+        { name: 'codex', installed: true, detection_method: '~/.codex', models: [], native_tools: [], mcp_support: true, skills_support: true, rules_support: false, hooks_support: false },
+        { name: 'hermes', installed: true, detection_method: '~/.hermes', models: [], native_tools: [], mcp_support: true, skills_support: true, rules_support: false, hooks_support: false },
+        { name: 'unknown-agent', installed: true, detection_method: 'test', models: [], native_tools: [], mcp_support: false, skills_support: false, rules_support: false, hooks_support: false },
+      ],
+    } satisfies AgentInventory;
+
+    assert.deepEqual(getInstalledAgentNames(inventory), ['codex', 'hermes']);
+  });
+
+  it('selects all detected installed agents for the detected choice', () => {
+    assert.deepEqual(parseAgentSelection('detected', 'codex', ['cursor', 'hermes']), ['codex', 'cursor', 'hermes']);
+    assert.deepEqual(parseAgentSelection('d', undefined, ['cursor', 'hermes']), ['cursor', 'hermes']);
+  });
+
+  it('keeps explicit agent names and numeric selections as overrides', () => {
+    assert.deepEqual(parseAgentSelection('hermes,codex', 'cursor', ['cursor']), ['hermes', 'codex']);
+    assert.deepEqual(parseAgentSelection('1,13', undefined, []), ['claude-code', 'hermes']);
   });
 });

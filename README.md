@@ -14,7 +14,7 @@ If you've ever:
 - watched two coworkers (or two agents) **edit the same files** without knowing it,
 - or **gave up running multiple agents in parallel** because keeping them in sync was a pain,
 
-brainclaw gives you durable shared state across sessions, agents, and teammates. Plans, claims, handoffs, decisions, and traps live in `.brainclaw/`, work identically across any compatible agent (Claude Code, Codex, Copilot, Cline, OpenCode, Cursor, Windsurf, Kilocode, Roo Code, Continue, Mistral Vibe, Antigravity/Gemini CLI, …), and stay accessible whether you orchestrate them in parallel or pick them up one after another.
+brainclaw gives you durable shared state across sessions, agents, and teammates. Plans, claims, handoffs, decisions, and traps live in `.brainclaw/`, work identically across any compatible agent (Claude Code, Codex, Copilot, Cline, OpenCode, Cursor, Windsurf, Kilocode, Roo Code, Continue, Mistral Vibe, Hermes, Antigravity/Gemini CLI, …), and stay accessible whether you orchestrate them in parallel or pick them up one after another.
 
 Use it two ways — **together or separately**:
 
@@ -82,6 +82,7 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 | Logo | Agent | Tier | What brainclaw configures |
 |---|---|---|---|
 | [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw) | **[OpenClaw](https://github.com/openclaw/openclaw)** | B | MCP + brainclaw skill (SKILL.md) for structured project memory |
+| [![Hermes](https://img.shields.io/badge/Hermes-111111?logoColor=white)](https://github.com/NousResearch/hermes-agent) | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | B | MCP + universal `.agents/skills/brainclaw/SKILL.md` |
 | [![NanoClaw](https://img.shields.io/badge/NanoClaw-4A90D9?logoColor=white)](https://github.com/qwibitai/nanoclaw) | **[NanoClaw](https://github.com/qwibitai/nanoclaw)** | C | brainclaw skill — messaging agent (WhatsApp, Telegram, Slack) |
 | [![NemoClaw](https://img.shields.io/badge/NemoClaw-76B900?logo=nvidia&logoColor=white)](https://github.com/NVIDIA/NemoClaw) | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | C | brainclaw skill — NVIDIA enterprise agent stack |
 | [![PicoClaw](https://img.shields.io/badge/PicoClaw-00ADD8?logo=go&logoColor=white)](https://github.com/sipeed/picoclaw) | **[PicoClaw](https://github.com/sipeed/picoclaw)** | C | brainclaw skill — edge/IoT agent (Go, <10MB RAM) |
@@ -132,7 +133,7 @@ npm install -g brainclaw
 brainclaw setup-machine --yes
 ```
 
-This detects the installed agents on the current machine, writes the machine-level MCP and user config Brainclaw manages, and does **not** scan or initialize repositories.
+This detects the installed coding agents on the current machine, writes the machine-level MCP and user config Brainclaw manages for that detected set, and does **not** scan or initialize repositories.
 
 ### 4. Initialize or refresh the current project
 
@@ -231,7 +232,7 @@ Still sharp:
 1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
 2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
 3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
-4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue, Kilocode, Mistral Vibe) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
+4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue, Kilocode, Mistral Vibe, Hermes) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
 Recommended use today:
 

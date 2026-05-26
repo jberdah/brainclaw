@@ -71,6 +71,7 @@ const REPRESENTATIVE_AGENTS = [
   'cursor',          // tier C — .cursor/rules/, IDE-only path
   'opencode',        // tier B — alt code-agent
   'mistral-vibe',    // tier B — recently added, regression target
+  'hermes',          // tier B — autonomous skills-first agent
 ];
 
 describe('instruction-templates autonomy contract fingerprint (pln#496)', () => {

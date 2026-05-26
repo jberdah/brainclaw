@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { spawnSync } from 'node:child_process';
@@ -6,7 +7,7 @@ import { runInit } from './init.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
 import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
 import { buildMachineProfile, saveMachineProfile, loadMachineProfile } from '../core/machine-profile.js';
-import { buildAgentInventory, saveAgentInventory, loadAgentInventory } from '../core/agent-inventory.js';
+import { buildAgentInventory, saveAgentInventory, loadAgentInventory, type AgentInventory } from '../core/agent-inventory.js';
 import {
   ensureClaudeCodeUserSettings,
   ensureClaudeCodeUserCommand,
@@ -16,6 +17,7 @@ import {
   ensureContinueUserMcpConfig,
   ensureContinueUserPermissions,
   ensureCodexMcpConfig,
+  ensureHermesMcpConfig,
   writeDetectedAgentAutoConfig,
   describeAutoConfigWrite,
   ensureGitignoreEntries,
@@ -62,6 +64,9 @@ export const ALL_KNOWN_AGENTS = [
   'antigravity',
   'continue',
   'roo',
+  'kilocode',
+  'mistral-vibe',
+  'hermes',
   'openclaw',
   'nanoclaw',
   'nemoclaw',
@@ -177,11 +182,53 @@ export function parseRepoSelection(
 
 // ─── Step 4: Agent selection ──────────────────────────────────────────────────
 
-export function parseAgentSelection(choice: string, detected: string | undefined): string[] {
+function uniqueKnownAgents(names: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const name of names) {
+    if (!name || !ALL_KNOWN_AGENTS.includes(name)) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    result.push(name);
+  }
+  return result;
+}
+
+export function getInstalledAgentNames(inventory: AgentInventory | undefined): string[] {
+  return uniqueKnownAgents(inventory?.agents.filter((agent) => agent.installed).map((agent) => agent.name) ?? []);
+}
+
+export function getDetectedSetupAgentNames(
+  detected: string | undefined,
+  installedAgents: string[] = [],
+): string[] {
+  return uniqueKnownAgents([
+    detected,
+    ...ALL_KNOWN_AGENTS.filter((agent) => installedAgents.includes(agent)),
+  ]);
+}
+
+export function parseAgentSelection(
+  choice: string,
+  detected: string | undefined,
+  installedAgents: string[] = [],
+): string[] {
   const c = choice.trim().toLowerCase();
   if (c === 'a' || c === 'all') return [...ALL_KNOWN_AGENTS];
-  if (c === 'd' || c === 'detected') return detected ? [detected] : [];
-  return c.split(',').map((a) => a.trim()).filter((a) => ALL_KNOWN_AGENTS.includes(a));
+  if (c === 'd' || c === 'detected' || c === 'installed') {
+    return getDetectedSetupAgentNames(detected, installedAgents);
+  }
+
+  const selected: string[] = [];
+  for (const token of c.split(',').map((a) => a.trim()).filter(Boolean)) {
+    const index = Number.parseInt(token, 10);
+    if (/^\d+$/.test(token) && index >= 1 && index <= ALL_KNOWN_AGENTS.length) {
+      selected.push(ALL_KNOWN_AGENTS[index - 1]!);
+      continue;
+    }
+    if (ALL_KNOWN_AGENTS.includes(token)) selected.push(token);
+  }
+  return uniqueKnownAgents(selected);
 }
 
 // ─── Step 5: Global install ───────────────────────────────────────────────────
@@ -281,6 +328,10 @@ export function runGlobalInstall(
   }
   if (selectedAgents.includes('codex')) {
     const r = ensureCodexMcpConfig(home, env);
+    if (r && (r.created || r.updated)) written.push(r.filePath);
+  }
+  if (selectedAgents.includes('hermes')) {
+    const r = ensureHermesMcpConfig(home);
     if (r && (r.created || r.updated)) written.push(r.filePath);
   }
   return written;
@@ -391,29 +442,35 @@ function logDetectedAgentSurfaces(
 async function resolveSelectedAgentsForSetup(
   options: { agents?: string; yes?: boolean },
   detectedName: string | undefined,
+  installedAgents: string[] = [],
 ): Promise<string[]> {
+  const detectedSetupAgents = getDetectedSetupAgentNames(detectedName, installedAgents);
   console.log('Supported agents:');
   ALL_KNOWN_AGENTS.forEach((a, i) => {
     const tag = a === detectedName ? ' ← detected' : '';
-    console.log(`  ${i + 1}) ${a}${tag}`);
+    const installedTag = installedAgents.includes(a) ? ' ← installed' : '';
+    console.log(`  ${i + 1}) ${a}${tag}${tag ? '' : installedTag}`);
   });
+  if (detectedSetupAgents.length > 0) {
+    console.log(`Detected install set: ${detectedSetupAgents.join(', ')}`);
+  }
 
   let agentChoice: string;
   if (options.agents) {
     agentChoice = options.agents;
   } else if (options.yes || !process.stdin.isTTY) {
-    agentChoice = detectedName ? 'detected' : 'all';
+    agentChoice = detectedSetupAgents.length > 0 ? 'detected' : 'all';
   } else {
-    const defaultChoice = detectedName ? 'detected' : 'all';
+    const defaultChoice = detectedSetupAgents.length > 0 ? 'detected' : 'all';
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     try {
-      agentChoice = (await rl.question(`Configure agents: (d)etected, (a)ll, or numbers e.g. 1,3 [${defaultChoice}]: `)).trim() || defaultChoice;
+      agentChoice = (await rl.question(`Configure agents: (d)etected installed, (a)ll, names, or numbers e.g. 1,3 [${defaultChoice}]: `)).trim() || defaultChoice;
     } finally {
       rl.close();
     }
   }
 
-  const selectedAgents = parseAgentSelection(agentChoice, detectedName);
+  const selectedAgents = parseAgentSelection(agentChoice, detectedName, installedAgents);
   console.log(`Selected agents: ${selectedAgents.length === 0 ? '(none)' : selectedAgents.join(', ')}`);
   return selectedAgents;
 }
@@ -424,12 +481,14 @@ export async function runSetupMachine(options: SetupMachineOptions = {}): Promis
   const detectedName = detectedAi?.name;
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   const detectedSurfaces = testMode ? [] : buildAiSurfaceInventory();
+  const agentInventory = testMode ? undefined : buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env);
+  const installedAgents = getInstalledAgentNames(agentInventory);
 
   console.log(BRAINCLAW_ASCII);
   console.log('Machine bootstrap only — no repositories will be scanned or initialized.');
   logDetectedAgentSurfaces(detectedName, detectedSurfaces);
 
-  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName);
+  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName, installedAgents);
 
   console.log('\n→ Installing machine-level brainclaw prerequisites...');
   const written = runGlobalInstall(selectedAgents, env);
@@ -553,8 +612,10 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   const detectedName = detectedAi?.name;
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   const detectedSurfaces = testMode ? [] : buildAiSurfaceInventory();
+  const agentInventory = testMode ? undefined : buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env);
+  const installedAgents = getInstalledAgentNames(agentInventory);
   logDetectedAgentSurfaces(detectedName, detectedSurfaces);
-  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName);
+  const selectedAgents = await resolveSelectedAgentsForSetup(options, detectedName, installedAgents);
 
   // Step 5: Global install
   console.log('\n→ Installing global brainclaw prerequisites...');

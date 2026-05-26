@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { buildClaimEnvPrefix } from '../core/execution-profile.js';
 import { fileURLToPath } from 'node:url';
@@ -59,14 +60,17 @@ import {
   parseRoots,
   parseRepoSelection,
   parseAgentSelection,
+  getDetectedSetupAgentNames,
+  getInstalledAgentNames,
   runGlobalInstall,
   initReposAndConfigureAgents,
   readSetupState,
   ALL_KNOWN_AGENTS,
 } from './setup.js';
+import { buildAgentInventory } from '../core/agent-inventory.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
-import { ensureUserStore } from '../core/setup-state.js';
+import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
 import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
@@ -2705,8 +2709,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const repos = scanGitRepos(roots);
         const selectedRepos = parseRepoSelection(choice, repos, cwd);
         const detected = detectAiAgent(env);
-        const agentList = ALL_KNOWN_AGENTS.map((a, i) => `  ${i + 1}) ${a}${a === detected?.name ? ' ← detected' : ''}`).join('\n');
-        return { response: toolResponse({ content: [{ type: 'text', text: `Selected ${selectedRepos.length} repo(s). Detected AI agent: ${detected?.name ?? 'none'}.\n\nAvailable agents:\n${agentList}\n\nAsk the user which agents to configure.` }], structuredContent: { pending_question: 'agent_selection', roots: rootsArg, repo_selection: choice, selected_repos: selectedRepos.map((r) => ({ path: r.path, name: r.name })), detected_agent: detected?.name ?? null, all_agents: ALL_KNOWN_AGENTS, prompt: 'Please ask the user: "Which agents to configure? Reply: (d)etected, (a)ll, or agent names like claude-code,cursor"' } }) };
+        const installedAgents = getInstalledAgentNames(buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env));
+        const detectedSetupAgents = getDetectedSetupAgentNames(detected?.name, installedAgents);
+        const agentList = ALL_KNOWN_AGENTS.map((a, i) => {
+          const tag = a === detected?.name ? ' ← detected' : installedAgents.includes(a) ? ' ← installed' : '';
+          return `  ${i + 1}) ${a}${tag}`;
+        }).join('\n');
+        const detectedLine = detectedSetupAgents.length > 0 ? `\nDetected install set: ${detectedSetupAgents.join(', ')}\n` : '\n';
+        return { response: toolResponse({ content: [{ type: 'text', text: `Selected ${selectedRepos.length} repo(s). Detected AI agent: ${detected?.name ?? 'none'}.${detectedLine}\nAvailable agents:\n${agentList}\n\nAsk the user which agents to configure.` }], structuredContent: { pending_question: 'agent_selection', roots: rootsArg, repo_selection: choice, selected_repos: selectedRepos.map((r) => ({ path: r.path, name: r.name })), detected_agent: detected?.name ?? null, installed_agents: installedAgents, detected_setup_agents: detectedSetupAgents, all_agents: ALL_KNOWN_AGENTS, prompt: 'Please ask the user: "Which agents to configure? Reply: (d)etected installed, (a)ll, or agent names like claude-code,cursor"' } }) };
       }
 
       if (step === 'agent_selection') {
@@ -2717,7 +2727,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const repos = scanGitRepos(roots);
         const selectedRepos = parseRepoSelection(repoSelectionArg, repos, cwd);
         const detected = detectAiAgent(env);
-        const selectedAgents = parseAgentSelection(choice, detected?.name);
+        const installedAgents = getInstalledAgentNames(buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env));
+        const selectedAgents = parseAgentSelection(choice, detected?.name, installedAgents);
         const summary: string[] = [];
         const written = runGlobalInstall(selectedAgents, env);
         for (const f of written) summary.push(`✔ Global config: ${f}`);
