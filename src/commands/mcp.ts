@@ -542,7 +542,7 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_dispatch',
-    description: 'Unified dispatch entry for sequence-lane parallelization (parallelize plans across lanes). To open a NEW review of a commit/branch, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` instead — bclaw_dispatch is for sequence-driven execution, NOT for opening reviews. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send to agents), review (routes an EXISTING already-reflected handoff to a reviewer — only for handoffs produced by `session-end --reflect-handoff` or similar). Consolidates the legacy bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review. Returns FacadeResponse; for verification semantics see the same response-validation guidance documented on `bclaw_coordinate`.',
+    description: 'Unified dispatch entry for sequence-lane parallelization (parallelize plans across lanes). To open a NEW review of a commit/branch, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` instead — bclaw_dispatch is for sequence-driven execution, NOT for opening new reviews. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send to agents), review (routes an EXISTING already-reflected handoff to a reviewer — only for handoffs produced by `session-end --reflect-handoff` or similar). Consolidates the legacy bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review. Returns FacadeResponse; for verification semantics see the same response-validation guidance documented on `bclaw_coordinate`.',
     annotations: { tier: 'facade', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1390,6 +1390,7 @@ export const FACADE_ORDER = [
   'bclaw_context',
   'bclaw_coordinate',
   'bclaw_dispatch',
+  'bclaw_dispatch_status',
   'bclaw_loop',
   'bclaw_setup',
 ] as const;

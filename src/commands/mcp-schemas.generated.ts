@@ -112,6 +112,25 @@ export const generatedSchemas = {
                 "properties": {
                   "kind": {
                     "type": "string",
+                    "const": "min_iterations"
+                  },
+                  "n": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "kind",
+                  "n"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
                     "const": "artifact_produced"
                   },
                   "phase": {
@@ -159,6 +178,19 @@ export const generatedSchemas = {
                   "type",
                   "n",
                   "scope"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "no_open_questions"
+                  }
+                },
+                "required": [
+                  "kind"
                 ],
                 "additionalProperties": false
               },
@@ -255,6 +287,7 @@ export const generatedSchemas = {
           "open",
           "assigned",
           "working",
+          "waiting_input",
           "done",
           "failed",
           "cancelled"
