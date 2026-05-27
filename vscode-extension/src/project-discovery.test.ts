@@ -78,9 +78,12 @@ describe('project discovery', () => {
     const root = tmpDir();
     try {
       fs.mkdirSync(path.join(root, '.brainclaw'), { recursive: true });
+      // Canonical project_mode value is 'multi-project' (ProjectModeSchema:
+      // single-project | multi-project | auto) — what `brainclaw init` writes.
+      // The abbreviated 'multi' never matches; this guards that real format.
       fs.writeFileSync(path.join(root, '.brainclaw', 'config.yaml'), [
         'project_name: root',
-        'project_mode: multi',
+        'project_mode: multi-project',
         'projects:',
         '  strategy: manual',
         '  known: []',

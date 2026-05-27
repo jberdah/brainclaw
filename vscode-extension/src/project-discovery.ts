@@ -119,8 +119,10 @@ function shouldScanNestedProjects(projectPath: string): boolean {
     return false;
   }
 
-  // Explicit multi-project mode → scan nested.
-  if (readScalar(config, 'project_mode') === 'multi') {
+  // Explicit multi-project mode → scan nested. The canonical value is
+  // `multi-project` (ProjectModeSchema: single-project | multi-project | auto),
+  // which is what `brainclaw init` writes — not the abbreviated `multi`.
+  if (readScalar(config, 'project_mode') === 'multi-project') {
     return true;
   }
 

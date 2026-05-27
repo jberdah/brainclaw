@@ -112,7 +112,10 @@ describe('refresh-diff — section caching + targeted fire', () => {
   });
 
   it('loads backlog plans by active status before applying per-query limits', () => {
-    const methodRegex = /case SECTION\.BACKLOG:[\s\S]*?return board;\n      \}/;
+    // Anchor on the loader's distinctive destructuring + sort, not on a
+    // `case SECTION.BACKLOG:` label (the loader is not under that case) nor on
+    // an exact `}` indentation — that source-regex was brittle (cf. trp#371).
+    const methodRegex = /\[\s*todoPlans\s*,\s*inProgressPlans[\s\S]{0,800}sortBacklogPlans\([\s\S]{0,200}return board;/;
     const match = methodRegex.exec(boardTreeSrc);
     assert.ok(match, 'could not locate backlog section loader');
     const body = match![0];
