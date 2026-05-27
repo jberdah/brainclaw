@@ -17,9 +17,28 @@ const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
 const distMcpUrl = pathToFileURL(path.resolve('./dist/commands/mcp.js'))
 const distRegUrl = pathToFileURL(path.resolve('./dist/core/entity-registry.js'))
+const distAgentCapabilityUrl = pathToFileURL(path.resolve('./dist/core/agent-capability.js'))
 
 const { MCP_TOOL_NAMES, PUBLISHED_TOOLS } = await import(distMcpUrl.href)
 const { ENTITY_NAMES, ENTITY_REGISTRY } = await import(distRegUrl.href)
+const { getAllAgentCapabilityProfiles } = await import(distAgentCapabilityUrl.href)
+
+const agentProfiles = getAllAgentCapabilityProfiles()
+  .map((profile) => ({
+    name: profile.name,
+    category: profile.category,
+    workflow_model: profile.workflowModel,
+    tier: profile.templateTier,
+    has_mcp: profile.hasMcp,
+    has_hooks: profile.hasHooks,
+    has_skills: profile.hasSkills,
+    has_rules: profile.hasRules,
+    instruction_file: profile.instructionFile,
+    mcp_config_scope: profile.mcpConfigScope,
+    role_capabilities: profile.role_capabilities,
+    max_concurrent_tasks: profile.max_concurrent_tasks,
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name))
 
 const facts = {
   version: pkg.version,
@@ -36,6 +55,11 @@ const facts = {
       ENTITY_NAMES.map((n) => [n, ENTITY_REGISTRY[n].shortLabelPrefix]),
     ),
   },
+  agent_integrations: {
+    count: agentProfiles.length,
+    names: agentProfiles.map((profile) => profile.name),
+    profiles: agentProfiles,
+  },
 }
 
 const jsContent =
@@ -48,5 +72,5 @@ writeFileSync('./dist/facts.js', jsContent, 'utf-8')
 writeFileSync('./dist/facts.json', JSON.stringify(facts, null, 2) + '\n', 'utf-8')
 
 console.log(
-  `✓ Generated dist/facts.js + dist/facts.json (v${facts.version}, ${facts.tools.count} tools, ${facts.entities.count} entities)`,
+  `✓ Generated dist/facts.js + dist/facts.json (v${facts.version}, ${facts.tools.count} tools, ${facts.entities.count} entities, ${facts.agent_integrations.count} agent integrations)`,
 )
