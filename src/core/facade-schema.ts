@@ -69,7 +69,14 @@ export const CoordinateRequestSchema = z.object({
    * dispatched work doesn't depend on the dirty files, or when running
    * tests). Has no effect when the source cwd is not a git repo.
    */
-  allow_dirty: z.boolean().optional(),
+  allow_dirty: z.preprocess(
+    // MCP clients that don't know allow_dirty is a boolean (it was previously
+    // absent from the published inputSchema) send the string "true"/"false".
+    // Coerce those so the documented escape hatch actually works; leave real
+    // booleans and undefined untouched.
+    (value) => (typeof value === 'string' ? value.trim().toLowerCase() === 'true' : value),
+    z.boolean().optional(),
+  ),
   /**
    * pln#511 step 2 — loop preset selector. When set on intent='ideate',
    * the handler bypasses the kind-default ideation phases and opens the
