@@ -371,6 +371,18 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   };
 }
 
+/**
+ * Read-path reconciliation for a `running` run whose tracked PID reads dead.
+ *
+ * IMPORTANT (pln#520): the tracked PID is NOT trustworthy. On Windows the
+ * ack-wrap spawn (shell:true) records the cmd.exe wrapper PID, not the real
+ * worker (cmd.exe -> claude.cmd -> node.exe), so a dead PID does NOT prove the
+ * worker died — empirically, 6 workers were cancelled here yet committed their
+ * work 4-7 min later. This function therefore NEVER cancels: it infers
+ * completion when work evidence exists, otherwise emits a non-mutating
+ * health-check event and leaves the run `running` for reconcileAgentRun's
+ * stale-threshold path to fail only after a fair, evidence-based delay.
+ */
 export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: string, options: ReconcileOptions = {}): ReconcileResult {
   const run = loadAgentRun(runId, cwd);
   if (!run) {
@@ -399,22 +411,39 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     };
   }
 
-  try {
-    transitionAgentRun(run.id, 'cancelled', {
-      actor: options.actor ?? 'reconciler',
-      status_reason: 'pid_dead_at_read',
-    }, cwd);
-    return {
-      run_id: run.id, action: 'cancelled_dead_pid', reason: 'pid_dead_at_read',
-      evidence, previous_status: run.status, current_status: 'cancelled',
-    };
-  } catch (err) {
-    return {
-      run_id: run.id, action: 'no_op',
-      reason: `cancel transition rejected: ${err instanceof Error ? err.message : String(err)}`,
-      evidence, previous_status: run.status, current_status: run.status,
-    };
+  // pid reads dead — but the tracked pid is NOT trustworthy (see doc above),
+  // so a bare dead pid NEVER cancels. Evidence of real work wins; otherwise
+  // surface the uncertainty non-destructively and leave the run `running` for
+  // reconcileAgentRun's stale-threshold path to fail it only after a fair,
+  // evidence-based delay.
+  const actor = options.actor ?? 'reconciler';
+
+  if (anyCompletionEvidence(evidence)) {
+    try {
+      transitionAgentRun(run.id, 'completed', {
+        actor,
+        status_reason: `inferred=true; evidence: ${describeEvidence(evidence)}`,
+      }, cwd);
+      return {
+        run_id: run.id, action: 'inferred_completed',
+        reason: `inferred=true; ${describeEvidence(evidence)}`,
+        evidence, previous_status: run.status, current_status: 'completed',
+      };
+    } catch (err) {
+      return {
+        run_id: run.id, action: 'no_op',
+        reason: `completion transition rejected: ${err instanceof Error ? err.message : String(err)}`,
+        evidence, previous_status: run.status, current_status: run.status,
+      };
+    }
   }
+
+  emitUnverifiedEvent(run, evidence, actor, cwd);
+  return {
+    run_id: run.id, action: 'health_check_unverified',
+    reason: `pid_dead_untrusted_no_evidence (age=${Math.round(evidence.age_ms / 1000)}s) — deferring to stale path`,
+    evidence, previous_status: run.status, current_status: run.status,
+  };
 }
 
 export function sweepDeadPidRunningAgentRunsAtRead(cwd?: string, options: ReconcileOptions = {}): ReconcileResult[] {
