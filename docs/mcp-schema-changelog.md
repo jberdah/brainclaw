@@ -82,11 +82,14 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:0a4ba280aeff142b`
-  (updated 2026-05-27: exposed `allow_dirty` in the bclaw_coordinate
-  inputSchema — trp#371. Prior value `sha256:e88c1a97fc29cfd1` came from
-  the pln#520 LoopPhase/LoopSlotInput schema resync, which itself
-  reconciled earlier unrecorded drift from `sha256:724085642dc3e2d7`.)
+- MCP public surface fingerprint: `sha256:4a6f612ad952fb52`
+  (updated 2026-05-27: added the `ref` property to the bclaw_coordinate
+  inputSchema — pln#520 Tier 2 / trp#371, the scope-aware dirty guard;
+  `ref` lets a dispatch build its worktree from an explicit git ref.
+  Prior value `sha256:0a4ba280aeff142b` exposed `allow_dirty` in the
+  bclaw_coordinate inputSchema. `sha256:e88c1a97fc29cfd1` came from the
+  pln#520 LoopPhase/LoopSlotInput schema resync, which itself reconciled
+  earlier unrecorded drift from `sha256:724085642dc3e2d7`.)
 
 See `docs/integrations/mcp.md` for the full canonical surface + an
 example gallery per verb. See `docs/concepts/mcp-governance.md` for

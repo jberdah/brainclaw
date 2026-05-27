@@ -7,7 +7,7 @@ import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { loadConfig } from './config.js';
-import { createWorktree } from './worktree.js';
+import { createWorktree, resetWorktreeToRef } from './worktree.js';
 import { appendAuditEntry } from './audit.js';
 import { refreshLiveCompanions } from '../commands/export.js';
 import { loadSessionById } from './identity.js';
@@ -565,10 +565,27 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   );
   if (existingScopeClaim) {
     if (existingScopeClaim.agent === options.agent) {
-      // Same agent already has this scope — reuse the claim (backward compat, same-agent multi-call).
+      // Same agent already has this scope — reuse the claim (backward compat,
+      // same-agent multi-call). If the caller pinned a base ref, the reused
+      // worktree MUST be re-pointed to it; otherwise a dispatch that relied on
+      // the ref (e.g. the dirty-guard bypass) would run the worker on a stale
+      // worktree — the same silent false-negative the guard exists to prevent
+      // (pln#520 Tier 2 / codex r2).
+      let reuseWarning: string | undefined;
+      if (options.worktreeBaseRef) {
+        if (existingScopeClaim.worktree_path) {
+          const reset = resetWorktreeToRef(existingScopeClaim.worktree_path, options.worktreeBaseRef);
+          if (!reset.ok) {
+            reuseWarning = `Reused claim ${existingScopeClaim.id} pinned to ref "${options.worktreeBaseRef}": ${reset.stderr.trim()}`;
+          }
+        } else {
+          reuseWarning = `Reused claim ${existingScopeClaim.id} has no worktree to pin to ref "${options.worktreeBaseRef}".`;
+        }
+      }
       return {
         claimId: existingScopeClaim.id,
         worktreePath: existingScopeClaim.worktree_path,
+        worktreeWarning: reuseWarning,
         reusedExisting: true,
       };
     }
@@ -595,7 +612,11 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
       sessionId: options.sessionId,
       agent: options.agent,
       baseRef: options.worktreeBaseRef,
-      resetExistingBranch: options.resetExistingWorktreeBranch,
+      // A pinned base ref implies the branch must be reset to it: createWorktree
+      // otherwise reuses a pre-existing feat/<scope> branch and ignores baseRef.
+      // Deriving it here (not only at the call site) keeps the invariant — "a
+      // pinned ref ⇒ the worktree reflects that ref" — owned by this chokepoint.
+      resetExistingBranch: options.resetExistingWorktreeBranch || Boolean(options.worktreeBaseRef),
     });
   } catch (err) {
     worktreeWarning = `Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`;

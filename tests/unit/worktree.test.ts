@@ -16,6 +16,7 @@ import {
   assertPathInWorktreesScope,
   safeRemoveWorktreeDir,
   detachWorktreeJunctions,
+  resetWorktreeToRef,
 } from '../../src/core/worktree.js';
 
 describe('worktreesBaseDir', () => {
@@ -163,6 +164,108 @@ describe('createWorktree reset guard', () => {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(externalWorktree, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resetWorktreeToRef (pln#520 Tier 2 — reused-claim ref pinning)', () => {
+  it('hard-resets an existing worktree to the given ref', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-wt-reset-ref-'));
+    const targetPath = resolveWorktreePath(repo, 'feat/pinned');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    const headOf = (cwd: string) => spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf-8' }).stdout.trim();
+
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c1']);
+      const firstSha = git(['rev-parse', 'HEAD']).stdout.trim();
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c2']);
+      const secondSha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+      // Worktree starts at HEAD (c2).
+      const wt = createWorktree(repo, 'feat/pinned', { baseRef: 'HEAD' });
+      assert.equal(headOf(wt), secondSha);
+
+      // Re-point it back to c1 — this is what a reused-claim ref dispatch needs.
+      const res = resetWorktreeToRef(wt, firstSha);
+      assert.ok(res.ok, res.stderr);
+      assert.equal(headOf(wt), firstSha);
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports (does not silently keep) untracked residue left after the reset', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-wt-reset-residue-'));
+    const targetPath = resolveWorktreePath(repo, 'feat/pinned');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c1']);
+      const firstSha = git(['rev-parse', 'HEAD']).stdout.trim();
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c2']);
+
+      const wt = createWorktree(repo, 'feat/pinned', { baseRef: 'HEAD' });
+      // Simulate stale artefacts from a prior worker run (untracked, non-ignored).
+      fs.writeFileSync(path.join(wt, 'stale-artifact.txt'), 'left over from last run');
+
+      const res = resetWorktreeToRef(wt, firstSha);
+      assert.equal(res.ok, false, 'untracked residue must be reported, not silently kept');
+      assert.match(res.stderr, /untracked file\(s\) remain/);
+      assert.match(res.stderr, /stale-artifact\.txt/);
+      // HEAD did still move to the ref — the report is about leftover untracked files.
+      assert.equal(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf-8' }).stdout.trim(), firstSha);
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores the brainclaw sidecar when checking for residue (clean reset → ok)', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-wt-reset-sidecar-'));
+    const targetPath = resolveWorktreePath(repo, 'feat/pinned');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c1']);
+      const firstSha = git(['rev-parse', 'HEAD']).stdout.trim();
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'c2']);
+
+      // createWorktree writes .brainclaw-worktree.json (untracked) — it must NOT
+      // be counted as residue.
+      const wt = createWorktree(repo, 'feat/pinned', { baseRef: 'HEAD' });
+      assert.ok(fs.existsSync(path.join(wt, '.brainclaw-worktree.json')));
+
+      const res = resetWorktreeToRef(wt, firstSha);
+      assert.ok(res.ok, `expected clean reset, got: ${res.stderr}`);
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('returns ok=false (never throws) for a non-existent worktree path', () => {
+    const res = resetWorktreeToRef(path.join(os.tmpdir(), 'bclaw-no-such-worktree-xyz'), 'HEAD');
+    assert.equal(res.ok, false);
+    assert.match(res.stderr, /does not exist/);
   });
 });
 

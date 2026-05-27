@@ -121,11 +121,20 @@ describe('bclaw_coordinate — schema', () => {
   });
 });
 
-describe('bclaw_coordinate — dirty-tree guard + allow_dirty escape hatch (trp#371)', () => {
+describe('bclaw_coordinate — scope-aware dirty-tree guard (trp#371 Tier 2)', () => {
+  // End-to-end wiring of the guard through executeMcpToolCall. The full
+  // allow/warn/block decision matrix is unit-tested with a mocked git runner
+  // in dirty-scope.test.ts; here we only exercise the safe paths that don't
+  // spawn a worktree (consult is exempt; block returns before claim/worktree
+  // creation) so the test never leaves worktree debris on disk.
   let workspace: TestWorkspace;
   let restoreCwd: (() => void) | undefined;
   let prevTestMode: string | undefined;
   let prevNoSpawn: string | undefined;
+
+  function git(...args: string[]) {
+    return spawnSync('git', ['-C', workspace.dir, ...args], { encoding: 'utf8' });
+  }
 
   beforeEach(() => {
     prevTestMode = process.env.BRAINCLAW_TEST_MODE;
@@ -135,9 +144,17 @@ describe('bclaw_coordinate — dirty-tree guard + allow_dirty escape hatch (trp#
     workspace = createTestWorkspace({ prefix: 'bclaw-coordinate-dirty-', currentAgent: 'claude-code' });
     workspace.registerAgent('codex');
     restoreCwd = workspace.useCwd();
-    // Make the source cwd a git repo with an unrelated uncommitted (out-of-scope) file.
-    spawnSync('git', ['init', '-q'], { cwd: workspace.dir });
-    fs.writeFileSync(path.join(workspace.dir, 'unrelated-dirty.txt'), 'uncommitted out-of-scope edit');
+    // Commit a clean baseline so later edits surface as specific TRACKED paths
+    // (untracked dirs collapse in porcelain output, which would make the
+    // scoped intersection non-deterministic). .brainclaw/ is gitignored so the
+    // coordination store never pollutes the probe — mirroring real projects.
+    fs.writeFileSync(path.join(workspace.dir, '.gitignore'), '.brainclaw/\nnode_modules/\n');
+    fs.mkdirSync(path.join(workspace.dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, 'src', 'feature.ts'), 'export const x = 1;\n');
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# baseline\n');
+    git('init', '-q');
+    git('add', '-A');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '-q', '-m', 'baseline');
   });
 
   afterEach(() => {
@@ -149,29 +166,42 @@ describe('bclaw_coordinate — dirty-tree guard + allow_dirty escape hatch (trp#
     else process.env.BRAINCLAW_NO_SPAWN = prevNoSpawn;
   });
 
-  function consult(extra: Record<string, unknown>) {
+  function dispatch(extra: Record<string, unknown>) {
     return executeMcpToolCall({
       name: 'bclaw_coordinate',
-      args: { intent: 'consult', task: 'review something', targetAgents: ['codex'], autoExecute: false, ...extra },
+      args: { task: 'do the work', targetAgents: ['codex'], autoExecute: false, ...extra },
       cwd: workspace.dir,
     });
   }
 
-  it('blocks the dispatch when the source tree is dirty and allow_dirty is absent', async () => {
-    const res = await consult({});
+  it('does NOT guard consult — no worktree is spawned, so dirt is irrelevant', async () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# dirty out-of-scope edit\n');
+    const res = await dispatch({ intent: 'consult', task: 'advise on X' });
+    assert.notEqual(res.response.isError, true);
+    assert.doesNotMatch(JSON.stringify(res.response), /dirty_working_tree/);
+  });
+
+  it('blocks assign when an uncommitted file OVERLAPS the resolved scope', async () => {
+    fs.writeFileSync(path.join(workspace.dir, 'src', 'feature.ts'), 'export const x = 2; // edited\n');
+    const res = await dispatch({ intent: 'assign', scope: 'src/feature.ts' });
+    assert.equal(res.response.isError, true);
+    assert.match(JSON.stringify(res.response), /dirty_working_tree/);
+    // No worktree was created because the guard returned first.
+    assert.equal(listClaims(workspace.dir).filter((c) => c.status === 'active').length, 0);
+  });
+
+  it('blocks assign when the scope is not resolvable to paths and the tree is dirty', async () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# dirty\n');
+    const res = await dispatch({ intent: 'assign', scope: 'pln#520' });
     assert.equal(res.response.isError, true);
     assert.match(JSON.stringify(res.response), /dirty_working_tree/);
   });
 
-  it('allow_dirty=true (boolean) bypasses the guard', async () => {
-    const res = await consult({ allow_dirty: true });
-    assert.doesNotMatch(JSON.stringify(res.response), /dirty_working_tree/);
-  });
-
-  it('allow_dirty="true" (string, as untyped MCP clients send) is coerced and bypasses the guard', async () => {
-    const res = await consult({ allow_dirty: 'true' });
-    assert.doesNotMatch(JSON.stringify(res.response), /dirty_working_tree/);
-  });
+  // NOTE: the scope-aware ALLOW path (dirty file OUT of scope → proceed) and the
+  // allow_dirty → warn downgrade are intentionally NOT exercised end-to-end here:
+  // a proceeding assign calls createCoordinatorClaim → createWorktree, which would
+  // leave a real worktree under ~/.brainclaw/worktrees on disk. Those paths are
+  // covered in dirty-scope.test.ts with a mocked git runner (no real worktree).
 });
 
 describe('bclaw_coordinate — assign without targetAgents uses getSpawnableAgents', () => {

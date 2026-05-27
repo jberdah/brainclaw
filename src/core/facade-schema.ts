@@ -78,6 +78,17 @@ export const CoordinateRequestSchema = z.object({
     z.boolean().optional(),
   ),
   /**
+   * pln#520 Tier 2 (P2c) — explicit git ref (commit / branch / tag) the
+   * dispatched worker should build its worktree from, instead of the default
+   * HEAD. When set on a worktree-creating intent (assign / review / reroute),
+   * the worktree is checked out at this ref, so uncommitted working-tree
+   * changes in the source are intentionally out of scope and the scope-aware
+   * dirty guard allows the dispatch. Passed through to
+   * createCoordinatorClaim's worktreeBaseRef. Ignored by intents that don't
+   * create a worktree (consult / ideate / summarize).
+   */
+  ref: z.string().min(1).optional(),
+  /**
    * pln#511 step 2 — loop preset selector. When set on intent='ideate',
    * the handler bypasses the kind-default ideation phases and opens the
    * loop with the named preset's phases / stop_condition / protocol.

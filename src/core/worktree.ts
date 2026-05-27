@@ -119,6 +119,66 @@ export function hasGitLock(cwd: string): boolean {
   return fs.existsSync(lockPath);
 }
 
+/**
+ * Re-points an EXISTING worktree to `ref` via a hard reset of its checked-out
+ * branch + working tree. Used when a dispatch reuses an existing claim/worktree
+ * but pins a base ref: the worktree must reflect that ref, not stale state,
+ * otherwise the dirty-guard ref bypass would let the worker run on stale code
+ * (pln#520 Tier 2 / codex r2). Returns ok=false (with stderr) rather than
+ * throwing, so callers surface a visible warning instead of a hard failure.
+ */
+export function resetWorktreeToRef(worktreePath: string, ref: string): { ok: boolean; stderr: string } {
+  if (!fs.existsSync(worktreePath)) {
+    return { ok: false, stderr: `worktree path does not exist: ${worktreePath}` };
+  }
+  if (hasGitLock(worktreePath)) {
+    return { ok: false, stderr: 'git index.lock present — another git operation is in progress' };
+  }
+  const res = runGit(['reset', '--hard', ref], worktreePath);
+  if (!res.ok) {
+    return { ok: false, stderr: res.stderr };
+  }
+
+  // `reset --hard` realigns HEAD + tracked files, but leaves UNTRACKED residue
+  // from a prior use of the worktree — files the worker could still compile or
+  // test against even though they don't exist at the pinned ref (codex r3).
+  // We do NOT auto-delete (a blind `git clean` would also remove the brainclaw
+  // sidecar and gitignored shared symlinks); instead we detect non-system
+  // untracked files and report them so the caller surfaces a visible warning
+  // rather than letting the stale state pass silently. Ignored files (e.g.
+  // node_modules) are not listed by --untracked-files=normal, so the symlinked
+  // shared paths are unaffected.
+  const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
+  if (!status.ok) {
+    // The reset succeeded but we cannot confirm the worktree is residue-free -
+    // surface it rather than silently reporting a clean reset (cardinal rule).
+    return {
+      ok: false,
+      stderr: `reset to ${ref} succeeded but the untracked-residue check (git status) failed: ${status.stderr.trim()}`,
+    };
+  }
+  if (status.stdout.length > 0) {
+    const residue = status.stdout
+      .split('\0')
+      .filter((entry) => entry.startsWith('?? '))
+      .map((entry) => entry.slice(3))
+      .filter((p) => {
+        const norm = p.replace(/\\/g, '/');
+        return norm !== '.brainclaw-worktree.json'
+          && !norm.startsWith('.brainclaw/')
+          && !norm.startsWith('.git/');
+      });
+    if (residue.length > 0) {
+      const sample = residue.slice(0, 5).join(', ');
+      return {
+        ok: false,
+        stderr: `reset to ${ref} succeeded but ${residue.length} untracked file(s) remain from prior worktree use (e.g. ${sample}) — the worker may see state absent at the ref. Remove them or dispatch with a fresh scope.`,
+      };
+    }
+  }
+  return { ok: true, stderr: '' };
+}
+
 export interface SharedCheckoutRisk {
   /** True if multiple brainclaw-session sidecars are found in the same worktree directory. */
   has_conflict: boolean;

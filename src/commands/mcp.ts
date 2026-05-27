@@ -1068,7 +1068,8 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
         project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
-        allow_dirty: { type: 'boolean', description: 'Bypass the pre-flight dirty-working-tree guard for review/assign/consult/ideate (the worker spawns from HEAD and will not see uncommitted edits). Set true when the dirty files are out of scope for the dispatched work. Boolean; the string "true"/"false" are also coerced. NB: the guard is currently repo-global, not scope-aware — see trap trp#371.' },
+        allow_dirty: { type: 'boolean', description: 'Override the scope-aware dirty-working-tree guard (trp#371 Tier 2). The guard runs only for worktree-spawning intents (assign/review/reroute) and blocks only when uncommitted files overlap — or cannot be proven disjoint from — the dispatch scope (the worker spawns from HEAD and will not see them). `.brainclaw/` and `.git/` are always excluded. Set true to proceed anyway (the block is downgraded to a warning that lists the overlapping files). Boolean; the string "true"/"false" are also coerced.' },
+        ref: { type: 'string', description: 'Optional git ref (commit/branch/tag) for assign/review/reroute: the dispatched worker builds its worktree from this ref instead of HEAD. When set, uncommitted working-tree changes are intentionally out of scope and the dirty guard allows the dispatch. Ignored by consult/ideate/summarize (no worktree).' },
       },
       required: ['intent', 'task'],
     },
@@ -4825,34 +4826,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
       }
 
-      // can_30c295b4 — pre-flight uncommitted-changes check.
-      // Dispatches that spawn a worker (review/assign/consult/ideate) clone
-      // the source repo at HEAD into a worktree. Any uncommitted edits in
-      // the source cwd are invisible to the worker, so the worker reviews
-      // stale code without any error signal. Refuse the dispatch by default
-      // when the source cwd is a git repo with a dirty working tree.
-      // Override via allow_dirty=true when the caller knows the dispatched
-      // work doesn't depend on the modified files (e.g. tests, docs-only
-      // worker tasks). Has no effect when cwd is not a git repo.
-      if (!req.allow_dirty && (req.intent === 'review' || req.intent === 'assign' || req.intent === 'consult' || req.intent === 'ideate')) {
-        try {
-          const { spawnSync } = await import('node:child_process');
-          const probe = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8', timeout: 5000 });
-          if (probe.status === 0 && typeof probe.stdout === 'string' && probe.stdout.trim().length > 0) {
-            const fileCount = probe.stdout.trim().split('\n').length;
-            return {
-              response: createToolErrorResponse(
-                'dirty_working_tree',
-                `Refusing to dispatch: source working tree has ${fileCount} uncommitted file(s). The spawned worker will not see these changes (worktrees branch from HEAD). Commit or stash before dispatching, or pass allow_dirty=true to override. Source cwd: ${cwd}`,
-              ),
-            };
-          }
-          // probe.status !== 0 → not a git repo (or git unavailable) → skip the check silently
-        } catch {
-          // best-effort: never block dispatch on a pre-flight check failure unrelated to the actual dirty state
-        }
-      }
-
+      // can_30c295b4 / trp#371 Tier 2 — the scope-aware dirty-working-tree
+      // guard runs LOWER DOWN, after dispatchCwd / isCrossProject are
+      // resolved (so it probes the dispatch TARGET, not the source, and only
+      // for the intents that actually spawn a worktree worker). See the
+      // assessDirtyDispatchGuard call after the cross-project block.
       const warnings: string[] = [];
       const artifacts: Array<{ type: string; id: string; path?: string }> = [];
       const side_effects: Array<{ action: string; entity: string; id: string }> = [];
@@ -4919,6 +4897,43 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         );
       }
       const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
+
+      // can_30c295b4 / trp#371 Tier 2 — scope-aware dirty-working-tree guard.
+      // Only intents that spawn a worktree worker from HEAD can review/edit
+      // stale code, so consult/ideate/summarize are NOT guarded (no worktree
+      // → nothing to protect). Cross-project dispatch is inbox-only (no local
+      // worktree spawned here) so it is skipped too — the target agent builds
+      // its own worktree later via bclaw_work. The guard compares the dirty
+      // files against the dispatch scope and only blocks when overlap can't be
+      // ruled out; allow_dirty=true downgrades a block to a warning, and an
+      // explicit ref makes working-tree dirt intentionally out of scope.
+      const WORKTREE_SPAWNING_INTENTS = new Set(['assign', 'review', 'reroute']);
+      if (!isCrossProject && WORKTREE_SPAWNING_INTENTS.has(req.intent)) {
+        // Probe with the SAME scope the dispatch will actually claim, so the
+        // resolution mirrors reality (codex r1): assign falls back to the task
+        // text (mcp ~assignScope), reroute to the targeted active claim's scope.
+        let guardScope = req.scope;
+        if (req.intent === 'assign') {
+          guardScope = req.scope ?? req.task;
+        } else if (req.intent === 'reroute' && !req.scope) {
+          guardScope = listClaims(dispatchCwd).find((c) => c.status === 'active')?.scope;
+        }
+        const { assessDirtyDispatchGuard } = await import('../core/dirty-scope.js');
+        const assessment = assessDirtyDispatchGuard({
+          cwd: dispatchCwd,
+          scope: guardScope,
+          allowDirty: req.allow_dirty,
+          checkoutRef: req.ref,
+        });
+        if (assessment.decision === 'block') {
+          return {
+            response: createToolErrorResponse('dirty_working_tree', `${assessment.reason} (cwd: ${dispatchCwd})`),
+          };
+        }
+        if (assessment.decision === 'warn') {
+          warnings.push(`dirty_working_tree: ${assessment.reason}`);
+        }
+      }
 
       /** Run E2E execution phase on prepared delivery entries. Returns overall execution status. */
       const runCoordinateExecution = async (
@@ -5211,6 +5226,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             dispatcherAgent: senderAgent,
             sessionId: connectionSessionId,
             cwd: dispatchCwd,
+            // createCoordinatorClaim guarantees the worktree reflects this ref
+            // (resets a stale branch / re-points a reused worktree) — see the
+            // worktreeBaseRef invariant there (pln#520 Tier 2).
+            worktreeBaseRef: req.ref,
           });
           const claimId = claimResult.claimId;
           if (claimResult.worktreeWarning) {
@@ -5490,6 +5509,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                   dispatcherAgent: senderAgent,
                   sessionId: connectionSessionId,
                   cwd: dispatchCwd,
+                  worktreeBaseRef: req.ref,
                 });
                 if (claimResult.worktreeWarning) out.warnings.push(claimResult.worktreeWarning);
                 out.artifacts.push({ type: 'claim', id: claimResult.claimId });
@@ -5691,6 +5711,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               dispatcherAgent: senderAgent,
               sessionId: connectionSessionId,
               cwd: dispatchCwd,
+              worktreeBaseRef: req.ref,
             });
             newClaimId = rerouteClaimResult.claimId;
             if (rerouteClaimResult.worktreeWarning) {
