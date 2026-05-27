@@ -9,6 +9,8 @@ import { saveClaim } from '../../src/core/claims.js';
 import {
   reconcileAgentRun,
   reconcileAllOpenRuns,
+  reconcileDeadPidRunningAgentRunAtRead,
+  sweepDeadPidRunningAgentRunsAtRead,
   isProcessAlive,
   collectEvidence,
   DEFAULT_HEALTH_CHECK_GRACE_MS,
@@ -297,5 +299,85 @@ describe('reconciler/exports', () => {
   it('exposes default thresholds', () => {
     assert.equal(typeof DEFAULT_HEALTH_CHECK_GRACE_MS, 'number');
     assert.ok(DEFAULT_HEALTH_CHECK_GRACE_MS > 0);
+  });
+});
+
+// ── reconcileDeadPidRunningAgentRunAtRead (pln#520) ─────────────────────────
+
+describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
+  it('NEVER cancels a dead pid with no evidence — leaves run running (pln#520 regression)', () => {
+    // 2026-05-26 scenario: the tracked pid reads dead (untrusted shell-wrapper
+    // pid) while the worker is still doing real work. Cancelling here threw
+    // away 6 valid worker outputs that committed minutes later.
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
+    assert.equal(result.action, 'health_check_unverified');
+    assert.notEqual(result.action, 'cancelled_dead_pid');
+    const reloaded = loadAgentRun(run.id, ws.dir)!;
+    assert.equal(reloaded.status, 'running');
+  });
+
+  it('infers completion when a dead pid coincides with a post-start commit', () => {
+    const repoDir = bootstrapGitWorktree();
+    const run = makeRun({ pid: 999_999, worktree_path: repoDir });
+    const sleepUntil = Date.now() + 1100; // git commit-time granularity is 1 s
+    while (Date.now() < sleepUntil) { /* spin */ }
+    commitInWorktree(repoDir, 'NEW.md', 'work');
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
+    assert.equal(result.action, 'inferred_completed');
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'completed');
+  });
+
+  it('infers completion when a dead pid coincides with a released claim', () => {
+    makeClaim({ status: 'released' });
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
+    assert.equal(result.action, 'inferred_completed');
+  });
+
+  it('no_op when the process is alive', () => {
+    const run = makeRun({ pid: process.pid });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
+    assert.equal(result.action, 'no_op');
+  });
+
+  it('no_op when the run is not running', () => {
+    const run = makeRun({ pid: 999_999, status: 'completed' });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir);
+    assert.equal(result.action, 'no_op');
+  });
+
+  it('infers FAILED when a dead pid persists past the stale window with no evidence (convergence)', () => {
+    // pln#520 review (codex): the read path routes `running` runs through THIS
+    // function, not reconcileAgentRun — so a genuine silent death MUST still
+    // converge to `failed` here, just not prematurely.
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 31 * 60_000, // past 30-min stale
+    });
+    assert.equal(result.action, 'inferred_failed');
+    const reloaded = loadAgentRun(run.id, ws.dir)!;
+    assert.equal(reloaded.status, 'failed');
+    assert.match(reloaded.status_reason ?? '', /silent_termination/);
+  });
+
+  it('does NOT fail a dead-pid run still inside the stale window (young)', () => {
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 5 * 60_000, // 5 min < 30 min stale
+    });
+    assert.equal(result.action, 'health_check_unverified');
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
+  });
+
+  it('sweep never cancels — defers dead-pid runs lacking evidence', () => {
+    const run = makeRun({ pid: 999_999 });
+    const results = sweepDeadPidRunningAgentRunsAtRead(ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 10 * 60_000,
+    });
+    const r = results.find((x) => x.run_id === run.id);
+    assert.ok(r, 'run should be swept');
+    assert.notEqual(r!.action, 'cancelled_dead_pid');
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
   });
 });
