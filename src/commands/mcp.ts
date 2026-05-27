@@ -1068,6 +1068,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
         project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
+        allow_dirty: { type: 'boolean', description: 'Bypass the pre-flight dirty-working-tree guard for review/assign/consult/ideate (the worker spawns from HEAD and will not see uncommitted edits). Set true when the dirty files are out of scope for the dispatched work. Boolean; the string "true"/"false" are also coerced. NB: the guard is currently repo-global, not scope-aware — see trap trp#371.' },
       },
       required: ['intent', 'task'],
     },

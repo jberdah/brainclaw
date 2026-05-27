@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CoordinateRequestSchema } from '../../src/core/facade-schema.js';
@@ -99,6 +100,77 @@ describe('bclaw_coordinate — schema', () => {
     });
     assert.ok(result.success);
     assert.deepEqual(result.data.constraints, { deadline: '2026-04-10', reviewRequired: true });
+  });
+
+  it('coerces allow_dirty string "true"/"false" to boolean and preserves real booleans (trp#371)', () => {
+    const asStringTrue = CoordinateRequestSchema.safeParse({ intent: 'review', task: 'r', allow_dirty: 'true' });
+    assert.ok(asStringTrue.success);
+    assert.equal(asStringTrue.data.allow_dirty, true);
+
+    const asStringFalse = CoordinateRequestSchema.safeParse({ intent: 'review', task: 'r', allow_dirty: 'false' });
+    assert.ok(asStringFalse.success);
+    assert.equal(asStringFalse.data.allow_dirty, false);
+
+    const asBool = CoordinateRequestSchema.safeParse({ intent: 'review', task: 'r', allow_dirty: true });
+    assert.ok(asBool.success);
+    assert.equal(asBool.data.allow_dirty, true);
+
+    const absent = CoordinateRequestSchema.safeParse({ intent: 'review', task: 'r' });
+    assert.ok(absent.success);
+    assert.equal(absent.data.allow_dirty, undefined);
+  });
+});
+
+describe('bclaw_coordinate — dirty-tree guard + allow_dirty escape hatch (trp#371)', () => {
+  let workspace: TestWorkspace;
+  let restoreCwd: (() => void) | undefined;
+  let prevTestMode: string | undefined;
+  let prevNoSpawn: string | undefined;
+
+  beforeEach(() => {
+    prevTestMode = process.env.BRAINCLAW_TEST_MODE;
+    prevNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    process.env.BRAINCLAW_NO_SPAWN = '1';
+    workspace = createTestWorkspace({ prefix: 'bclaw-coordinate-dirty-', currentAgent: 'claude-code' });
+    workspace.registerAgent('codex');
+    restoreCwd = workspace.useCwd();
+    // Make the source cwd a git repo with an unrelated uncommitted (out-of-scope) file.
+    spawnSync('git', ['init', '-q'], { cwd: workspace.dir });
+    fs.writeFileSync(path.join(workspace.dir, 'unrelated-dirty.txt'), 'uncommitted out-of-scope edit');
+  });
+
+  afterEach(() => {
+    restoreCwd?.();
+    workspace.cleanup();
+    if (prevTestMode === undefined) delete process.env.BRAINCLAW_TEST_MODE;
+    else process.env.BRAINCLAW_TEST_MODE = prevTestMode;
+    if (prevNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
+    else process.env.BRAINCLAW_NO_SPAWN = prevNoSpawn;
+  });
+
+  function consult(extra: Record<string, unknown>) {
+    return executeMcpToolCall({
+      name: 'bclaw_coordinate',
+      args: { intent: 'consult', task: 'review something', targetAgents: ['codex'], autoExecute: false, ...extra },
+      cwd: workspace.dir,
+    });
+  }
+
+  it('blocks the dispatch when the source tree is dirty and allow_dirty is absent', async () => {
+    const res = await consult({});
+    assert.equal(res.response.isError, true);
+    assert.match(JSON.stringify(res.response), /dirty_working_tree/);
+  });
+
+  it('allow_dirty=true (boolean) bypasses the guard', async () => {
+    const res = await consult({ allow_dirty: true });
+    assert.doesNotMatch(JSON.stringify(res.response), /dirty_working_tree/);
+  });
+
+  it('allow_dirty="true" (string, as untyped MCP clients send) is coerced and bypasses the guard', async () => {
+    const res = await consult({ allow_dirty: 'true' });
+    assert.doesNotMatch(JSON.stringify(res.response), /dirty_working_tree/);
   });
 });
 
