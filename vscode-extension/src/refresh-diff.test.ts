@@ -111,6 +111,16 @@ describe('refresh-diff — section caching + targeted fire', () => {
     }
   });
 
+  it('loads backlog plans by active status before applying per-query limits', () => {
+    const methodRegex = /case SECTION\.BACKLOG:[\s\S]*?return board;\n      \}/;
+    const match = methodRegex.exec(boardTreeSrc);
+    assert.ok(match, 'could not locate backlog section loader');
+    const body = match![0];
+    assert.match(body, /status: 'todo'/);
+    assert.match(body, /status: 'in_progress'/);
+    assert.match(body, /sortBacklogPlans/);
+  });
+
   it('REFRESHABLE_SECTION_IDS lists the five outcome sections', () => {
     const regex = /REFRESHABLE_SECTION_IDS[\s\S]*?\];/;
     const match = regex.exec(boardTreeSrc);
