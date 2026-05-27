@@ -347,6 +347,29 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     assert.equal(result.action, 'no_op');
   });
 
+  it('infers FAILED when a dead pid persists past the stale window with no evidence (convergence)', () => {
+    // pln#520 review (codex): the read path routes `running` runs through THIS
+    // function, not reconcileAgentRun — so a genuine silent death MUST still
+    // converge to `failed` here, just not prematurely.
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 31 * 60_000, // past 30-min stale
+    });
+    assert.equal(result.action, 'inferred_failed');
+    const reloaded = loadAgentRun(run.id, ws.dir)!;
+    assert.equal(reloaded.status, 'failed');
+    assert.match(reloaded.status_reason ?? '', /silent_termination/);
+  });
+
+  it('does NOT fail a dead-pid run still inside the stale window (young)', () => {
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 5 * 60_000, // 5 min < 30 min stale
+    });
+    assert.equal(result.action, 'health_check_unverified');
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
+  });
+
   it('sweep never cancels — defers dead-pid runs lacking evidence', () => {
     const run = makeRun({ pid: 999_999 });
     const results = sweepDeadPidRunningAgentRunsAtRead(ws.dir, {
