@@ -187,7 +187,15 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       assert.equal(result.items[0].id, match.id);
     });
 
-    it('lazy-reconciles running agent_run with dead pid to cancelled and persists it', async () => {
+    it('lazy-reconcile does NOT cancel a young running agent_run with a dead pid (pln#520)', async () => {
+      // Before pln#520 the read path cancelled any dead-pid `running` run on
+      // sight (status_reason 'pid_dead_at_read'). But on Windows the tracked
+      // pid is the untrusted cmd.exe shell-wrapper, not the real worker, so a
+      // dead pid does not prove death — 6 workers were cancelled here yet
+      // committed minutes later. The read reconciler now leaves a YOUNG
+      // dead-pid run `running` (non-destructive); genuine silent deaths
+      // converge to `failed` only past the stale window (unit-tested in
+      // agentrun-reconciler.test.ts).
       const run = createAgentRun({
         assignment_id: 'asgn_dead_pid',
         claim_id: 'clm_dead_pid',
@@ -204,8 +212,8 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       const result = content as FindResult;
       assert.equal(result.total, 1);
       assert.equal(result.items[0].id, run.id);
-      assert.equal(result.items[0].status, 'cancelled');
-      assert.equal(result.items[0].status_reason, 'pid_dead_at_read');
+      assert.equal(result.items[0].status, 'running');
+      assert.notEqual(result.items[0].status_reason, 'pid_dead_at_read');
 
       const getOutcome = await executeMcpToolCall({
         name: 'bclaw_get',
@@ -213,8 +221,7 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
         cwd: workspace.dir,
       });
       const getResult = getOutcome.response.structuredContent as unknown as { item?: { status?: string; status_reason?: string } };
-      assert.equal(getResult.item?.status, 'cancelled');
-      assert.equal(getResult.item?.status_reason, 'pid_dead_at_read');
+      assert.equal(getResult.item?.status, 'running');
     });
   });
 
