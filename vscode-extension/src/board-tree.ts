@@ -223,6 +223,28 @@ function openSessions(board: BoardData): number {
   return (board.other_agents ?? []).filter((agent: any) => agent.has_open_session).length;
 }
 
+function planSortKey(plan: any): string {
+  return String(plan.updated_at ?? plan.created_at ?? '');
+}
+
+function sortBacklogPlans(plans: any[]): any[] {
+  const priorityRank = (priority?: string) => {
+    switch (priority) {
+      case 'high': return 0;
+      case 'medium': return 1;
+      case 'low': return 2;
+      default: return 3;
+    }
+  };
+  const statusRank = (status?: string) => status === 'in_progress' ? 0 : 1;
+
+  return [...plans].sort((left, right) =>
+    statusRank(left.status) - statusRank(right.status)
+    || priorityRank(left.priority) - priorityRank(right.priority)
+    || planSortKey(right).localeCompare(planSortKey(left))
+    || String(left.id ?? '').localeCompare(String(right.id ?? '')));
+}
+
 
 const SECTION = {
   PROJECTS: 'projects',
@@ -1490,11 +1512,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         // (see default read filter in src/core/entity-operations.ts); without
         // the override, every trap captured before the provenance rollout
         // disappears from the Backlog. Operators still need to see those.
-        const [plans, traps] = await Promise.all([
-          this._findEntities(client, 'plan', { limit: 100, includeLegacy: true }),
+        const [todoPlans, inProgressPlans, traps] = await Promise.all([
+          this._findEntities(client, 'plan', { status: 'todo', limit: 100, includeLegacy: true }),
+          this._findEntities(client, 'plan', { status: 'in_progress', limit: 100, includeLegacy: true }),
           this._findEntities(client, 'trap', { status: 'active', limit: 100, includeLegacy: true }),
         ]);
-        board.active_plans = plans;
+        const plansById = new Map<string, any>();
+        for (const plan of [...inProgressPlans, ...todoPlans] as any[]) {
+          plansById.set(String(plan.id), plan);
+        }
+        board.active_plans = sortBacklogPlans([...plansById.values()]);
         board.known_traps = traps;
         return board;
       }
@@ -1812,7 +1839,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _buildBacklogChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
     const items: BrainclawTreeItem[] = [];
 
-    const backlogPlans = activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo');
+    const backlogPlans = sortBacklogPlans(activePlans(board).filter((p: any) => p.status === 'in_progress' || p.status === 'todo'));
     items.push(...this._buildPlanItems(backlogPlans, projectPath));
 
     const highTraps = (board.known_traps ?? [])
