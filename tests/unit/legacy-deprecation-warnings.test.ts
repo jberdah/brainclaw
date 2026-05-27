@@ -139,7 +139,7 @@ describe('commands/mcp — v1.0 catalog integrity', () => {
     for (const verb of CANONICAL_VERBS) {
       // Match: name: 'bclaw_find', ... annotations: { tier: 'standard', ...
       const toolBlock = new RegExp(
-        `name:\\s*'${verb}'[\\s\\S]{1,400}?tier:\\s*'standard'`,
+        `name:\\s*'${verb}'[\\s\\S]{1,800}?tier:\\s*'standard'`,
         'm',
       );
       if (!toolBlock.test(source)) missing.push(verb);

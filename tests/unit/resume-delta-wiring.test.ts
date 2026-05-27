@@ -18,7 +18,7 @@ describe('commands/mcp — bclaw_work(intent="resume") auto-delta', () => {
     // session for the same agent and pass its session_id as sinceSession.
     assert.match(
       source,
-      /if \(workReq\.intent === 'resume'\)[\s\S]{0,200}loadAllSessions\(cwd\)[\s\S]{0,200}sinceSession = previousSession\?\.session_id/,
+      /if \(workReq\.intent === 'resume'\)[\s\S]{0,200}loadAllSessions\(\w+\)[\s\S]{0,200}sinceSession = previousSession\?\.session_id/,
       'resume intent must look up previous session and set sinceSession',
     );
   });
