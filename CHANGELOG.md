@@ -5,6 +5,57 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-05-28
+
+Dispatch reliability plus a scope-aware coordination guard, with the Hermes
+agent integration.
+
+### Added
+
+- **Hermes agent integration** (Nous Research). MCP client config, SKILL, setup
+  writer, and detection wired through `setup` / `setup-machine`; new
+  `docs/integrations/hermes.md`. The detected-agent setup flow is generalized via
+  `agent-integrations.ts` / `agent-files.ts` / `agent-inventory.ts`.
+- **`ref` on `bclaw_coordinate`** (pln#520 Tier 2). `assign` / `review` / `reroute`
+  can build the dispatched worker's git worktree from an explicit ref
+  (commit/branch/tag) instead of HEAD. `createCoordinatorClaim` owns the
+  invariant "a pinned ref ⇒ the worktree reflects that ref" — it resets a stale
+  `feat/<scope>` branch, re-points a reused worktree, and reports untracked
+  residue rather than letting stale state pass silently.
+- **VS Code extension — backlog by status**. The backlog section loads `todo` +
+  `in_progress` plans by status before applying per-query limits; nested-project
+  discovery is gated by a dependency-free `config.yaml` read (canonical
+  `multi-project` mode).
+
+### Changed
+
+- **Scope-aware dispatch dirty-guard** (trp#371). `bclaw_coordinate`'s
+  uncommitted-changes guard is now scope- and intent-aware: it only guards
+  worktree-spawning intents (`assign` / `review` / `reroute`), probes the
+  dispatch target (`dispatchCwd`), excludes `.brainclaw/` + `.git/`, and blocks
+  only when dirty files overlap — or cannot be proven disjoint from — the
+  dispatch scope. `allow_dirty` is now exposed in the `bclaw_coordinate` input
+  schema (with `"true"`/`"false"` string coercion) and downgrades a would-be
+  block to a warning. `consult` / `ideate` / `summarize` are no longer guarded
+  (they spawn no worktree).
+- **MCP public surface fingerprint** → `sha256:4a6f612ad952fb52` (additive:
+  `allow_dirty` + `ref` on `bclaw_coordinate`).
+- **Build decoupling**: `emit-site-facts` is no longer part of `build` /
+  `build:cli`; it runs via the dedicated `emit:facts` script and at publish time
+  (`prepublishOnly`), so the package build no longer depends on site-sync
+  tooling. `dist/facts.json` now also exposes the agent-integration matrix.
+
+### Fixed
+
+- **Dispatch reliability — evidence-first reconciliation** (pln#520 P1). The
+  `agent_run` read-path reconciler no longer cancels a `running` run when its pid
+  is dead but untrusted. It infers completion from evidence (commits/claims),
+  converges genuinely-stale runs to `failed` after 30 minutes, and otherwise
+  leaves the run `running` (`health_check_unverified`) — eliminating both
+  false-positive and false-negative dispatch verdicts.
+- Six pre-existing unit-test failures (source-regex brittleness + MCP
+  surface-guard drift).
+
 ## [1.6.0] — 2026-05-23
 
 The bootstrap loop chantier — collaborative `PROJECT.md` materialization driven

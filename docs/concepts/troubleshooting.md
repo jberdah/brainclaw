@@ -54,6 +54,32 @@ brainclaw stale resolve <id>
 
 ---
 
+## `bclaw_coordinate` refused with `dirty_working_tree`
+
+**Symptom**: an `assign` / `review` / `reroute` dispatch returns
+`dirty_working_tree` instead of spawning.
+
+**Why**: the worker spawns from a worktree branched at HEAD, so uncommitted
+edits in the source repo are invisible to it. The guard (trp#371) is
+scope-aware — it refuses only when the uncommitted files **overlap**, or
+cannot be proven disjoint from, the dispatch `scope`. `.brainclaw/` and
+`.git/` are always ignored, and `consult` / `ideate` / `summarize` are never
+guarded (they spawn no worktree). A scope that is not a resolvable file path
+(a plan-id, loop-ref, or prose) cannot be proven disjoint, so the guard stays
+conservative and refuses while the tree is dirty.
+
+**Fixes**:
+
+- Commit or stash the overlapping files, then re-dispatch (cleanest).
+- Pass `allow_dirty: true` to proceed anyway — the block becomes a warning
+  that lists the overlapping files.
+- Pass a resolvable file `scope` (e.g. `src/foo.ts`) so the guard can prove the
+  dirty files are out of scope.
+- Pass `ref: <commit|branch|tag>` to build the worktree from an explicit ref —
+  uncommitted working-tree changes are then intentionally out of scope.
+
+---
+
 ## Dispatched worker finished work but never committed
 
 **Symptom**: a sequence's lane shows the worker as "task_complete" in the run log, but `git -C <worktree-path> status` shows uncommitted changes.
