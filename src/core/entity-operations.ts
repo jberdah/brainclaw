@@ -37,6 +37,12 @@ import {
   saveRuntimeNote,
 } from './runtime.js';
 import {
+  createSequence,
+  deleteSequence,
+  listSequences,
+  updateSequence,
+} from './sequence.js';
+import {
   createConstraint,
   createDecision,
   createTrap,
@@ -66,6 +72,7 @@ import {
   PlanTypeEnumSchema,
   PrioritySchema,
   RuntimeNoteTypeSchema,
+  SequenceStatusSchema,
   SeveritySchema,
 } from './schema.js';
 import type {
@@ -76,6 +83,8 @@ import type {
   PlanItem,
   Provenance,
   RuntimeNote,
+  SequenceItemInput,
+  SequenceStatus,
   Trap,
 } from './schema.js';
 
@@ -249,6 +258,7 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'handoff':             return loadState(cwd).open_handoffs;
     case 'candidate':           return listCandidates(undefined, cwd);
     case 'runtime_note':        return listRuntimeNotes(undefined, cwd);
+    case 'sequence':            return listSequences(cwd);
     case 'claim':               return listClaims(cwd);
     case 'action':              return listActionRequired(cwd);
     case 'assignment':          return listAssignments(cwd);
@@ -445,6 +455,19 @@ export function createEntity(
       saveCandidate(candidate, cwd);
       return { entity: name, id };
     }
+    case 'sequence': {
+      const res = createSequence({
+        name: requireString(data, 'name'),
+        description: data.description as string | undefined,
+        status: requireEnum(data, 'status', SequenceStatusSchema.options, { optional: true }),
+        items: Array.isArray(data.items) ? (data.items as SequenceItemInput[]) : undefined,
+        owner: data.owner as string | undefined,
+        author: requireString(data, 'author'),
+        authorId: data.agent_id as string | undefined,
+        tags: data.tags as string[] | undefined,
+      }, cwd);
+      return { entity: name, id: res.id, short_label: res.shortLabel };
+    }
     case 'cross_project_link': {
       const link = addCrossProjectLink({
         path: requireString(data, 'path'),
@@ -541,6 +564,20 @@ export function updateEntity(
       saveCandidate(patched, cwd);
       return { entity: name, id };
     }
+    case 'sequence': {
+      // `status` is intentionally NOT in sequence.updatable — lifecycle moves
+      // go through bclaw_transition. The invalidFields guard above already
+      // rejects it, so only name/description/tags/items/owner reach here.
+      const result = updateSequence({
+        id,
+        name: patch.name as string | undefined,
+        description: patch.description as string | undefined,
+        items: Array.isArray(patch.items) ? (patch.items as SequenceItemInput[]) : undefined,
+        owner: patch.owner as string | undefined,
+        tags: patch.tags as string[] | undefined,
+      }, cwd);
+      return { entity: name, id: result.id };
+    }
     case 'cross_project_link': {
       // In-place patch: find by id (= name/path), remove, re-add with merged
       // fields. Same path semantics as resolveCrossProjectTarget so callers can
@@ -596,6 +633,16 @@ export function removeEntity(
       const candidate = loadCandidate(id, cwd);
       archiveCandidate(candidate, 'rejected', cwd);
       return { entity: name, id, archived: true, purged: false };
+    }
+    case 'sequence': {
+      // purge → hard-delete the file; default → soft-archive (status='archived',
+      // the sequence terminal state) so the lane history stays auditable.
+      if (purge) {
+        const deleted = deleteSequence(id, cwd);
+        return { entity: name, id: deleted.id, archived: false, purged: true };
+      }
+      const archived = updateSequence({ id, status: 'archived' }, cwd);
+      return { entity: name, id: archived.id, archived: true, purged: false };
     }
     case 'cross_project_link': {
       const removed = removeCrossProjectLink(id, cwd);
@@ -682,6 +729,12 @@ export function transitionEntity(
         actor: 'brainclaw',
         status_reason: _reason,
       }, cwd);
+      return { entity: name, id, from, to, side_effects: sideEffects };
+    }
+    case 'sequence': {
+      // isValidTransition above already enforced the registry matrix
+      // (draft→active|archived, active→archived); updateSequence persists it.
+      updateSequence({ id, status: to as SequenceStatus }, cwd);
       return { entity: name, id, from, to, side_effects: sideEffects };
     }
     default:

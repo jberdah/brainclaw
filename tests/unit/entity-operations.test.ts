@@ -200,6 +200,88 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
     });
   });
 
+  describe('sequence (pln#520 step 37c6a777 — canonical grammar parity)', () => {
+    it('create → get → find → update → transition → remove round-trip', () => {
+      const created = createEntity('sequence', {
+        name: 'release lanes',
+        author: 'jberdah',
+        items: [{ planId: 'pln_aaa', rank: 1 }],
+      }, workspace.dir);
+      assert.ok(created.id.startsWith('seq_'), `expected seq_ id, got ${created.id}`);
+
+      const fetched = getEntity('sequence', created.id, workspace.dir) as {
+        id: string; name: string; status: string; items: unknown[];
+      };
+      assert.equal(fetched.id, created.id);
+      assert.equal(fetched.name, 'release lanes');
+      assert.equal(fetched.status, 'draft');
+      assert.equal(fetched.items.length, 1);
+
+      const listed = listEntities('sequence', workspace.dir, {});
+      assert.equal(listed.total, 1);
+      assert.equal((listed.items[0] as { id: string }).id, created.id);
+
+      updateEntity('sequence', created.id, { name: 'release lanes (v2)' }, workspace.dir);
+      const afterUpdate = getEntity('sequence', created.id, workspace.dir) as { name: string };
+      assert.equal(afterUpdate.name, 'release lanes (v2)');
+
+      const transitioned = transitionEntity('sequence', created.id, 'active', workspace.dir);
+      assert.equal(transitioned.from, 'draft');
+      assert.equal(transitioned.to, 'active');
+      assert.ok(transitioned.side_effects.includes('audit:sequence_activated'));
+      assert.equal((getEntity('sequence', created.id, workspace.dir) as { status: string }).status, 'active');
+
+      // Default remove soft-archives (status='archived'), keeping the lane history.
+      const removed = removeEntity('sequence', created.id, workspace.dir);
+      assert.equal(removed.archived, true);
+      assert.equal(removed.purged, false);
+      assert.equal((getEntity('sequence', created.id, workspace.dir) as { status: string }).status, 'archived');
+    });
+
+    it('get resolves by short_label too', () => {
+      const created = createEntity('sequence', { name: 'by label', author: 'u' }, workspace.dir);
+      const full = getEntity('sequence', created.id, workspace.dir) as { short_label?: string };
+      assert.ok(full.short_label, 'sequence should have a short_label');
+      const byLabel = getEntity('sequence', full.short_label!, workspace.dir) as { id: string };
+      assert.equal(byLabel.id, created.id);
+    });
+
+    it('create rejects a missing name', () => {
+      assert.throws(
+        () => createEntity('sequence', { author: 'u' }, workspace.dir),
+        /name/i,
+      );
+    });
+
+    it('update rejects status (lifecycle goes through transition)', () => {
+      const created = createEntity('sequence', { name: 's', author: 'u' }, workspace.dir);
+      assert.throws(
+        () => updateEntity('sequence', created.id, { status: 'active' }, workspace.dir),
+        /not updatable|status/i,
+      );
+    });
+
+    it('transition rejects an out-of-matrix move (archived is terminal)', () => {
+      const created = createEntity('sequence', { name: 's', author: 'u' }, workspace.dir);
+      transitionEntity('sequence', created.id, 'archived', workspace.dir);
+      assert.throws(
+        () => transitionEntity('sequence', created.id, 'active', workspace.dir),
+        InvalidTransitionError,
+      );
+    });
+
+    it('remove purge:true hard-deletes the sequence', () => {
+      const created = createEntity('sequence', { name: 'doomed', author: 'u' }, workspace.dir);
+      const removed = removeEntity('sequence', created.id, workspace.dir, true);
+      assert.equal(removed.purged, true);
+      assert.equal(removed.archived, false);
+      assert.throws(
+        () => getEntity('sequence', created.id, workspace.dir),
+        EntityNotFoundError,
+      );
+    });
+  });
+
   describe('unsupported entities', () => {
     it('list on unsupported entity throws', () => {
       assert.throws(
