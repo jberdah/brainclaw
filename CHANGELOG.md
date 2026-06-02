@@ -5,6 +5,25 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] — 2026-06-02
+
+Patch release for MCP project-context isolation in large multi-project
+workspaces.
+
+### Fixed
+
+- **`bclaw_switch` MCP session scoping**. MCP project switches now create or
+  reuse an agent session and never fall back to the shared global
+  `active-project.json` when `sessionOnly=true`. Session lookup now honors
+  explicit session IDs, avoids adopting another live process's session, and
+  detects Codex through the shared AI-agent detector (`CODEX_*` runtime env
+  vars), closing the DGX monorepo case where Codex could see another agent's
+  active project.
+- **`bclaw_switch(list=true)` session-aware output**. Project listings now mark
+  the session-scoped active project when present, expose `active_source`, and
+  include available `cross_project_links` so externally-linked projects can be
+  listed consistently with the switch path.
+
 ## [1.7.0] — 2026-05-28
 
 Dispatch reliability plus a scope-aware coordination guard, with the Hermes
@@ -172,4 +191,6 @@ preserved in the final document. Full report linked from `run_79f8443a`.
 See git history for releases before this changelog was introduced
 (commit `1f8c5dd` and earlier).
 
+[1.7.1]: https://github.com/jberdah/brainclaw/compare/v1.7.0...v1.7.1
+[1.7.0]: https://github.com/jberdah/brainclaw/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/jberdah/brainclaw/compare/v1.5.4...v1.6.0

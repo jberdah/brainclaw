@@ -345,6 +345,29 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.7.1
+
+- **MCP project context isolation fix** — `bclaw_switch` now keeps MCP switches
+  session-scoped even when the agent session has to be resolved or created on
+  the fly. Session lookup honors explicit session IDs, avoids adopting another
+  live process's session, detects Codex via native `CODEX_*` runtime variables,
+  and `bclaw_switch(list=true)` reports the session active project with
+  `active_source`.
+
+### v1.7.0
+
+- **Dispatch reliability + scope-aware dirty guard** — evidence-first
+  `agent_run` reconciliation avoids false terminal states, `bclaw_coordinate`
+  accepts pinned refs and a scope-aware `allow_dirty` guard, and the Hermes
+  agent integration joins the supported surfaces.
+
+### v1.6.0
+
+- **Bootstrap loop + cross-project agent workflow** — the bootstrap ideation
+  preset can materialize `PROJECT.md`, `bclaw_init_project` initializes and links
+  arbitrary project paths, and `project=` routing reaches `bclaw_work` /
+  `bclaw_loop` for linked-project operations.
+
 ### v1.5.3
 
 - **Cross-project canonical grammar + CLI parity** (pln#359, all phases) — the canonical grammar (`bclaw_find / get / create / update / remove / transition`), `bclaw_context`, and `bclaw_coordinate` now accept an optional `project: <name>` argument that routes the operation to a linked project. Two link kinds are recognised: `cross_project_links` (sibling/peer projects in `config.yaml`, `brainclaw link list`) and workspace store-chain children. Arbitrary directory paths are rejected — adoption requires an explicit link, which gives the user a single point of control over what an agent can reach. Identity is sourced from the caller's home registry; entity writes + audit log entries land in the target. Unknown project names throw `validation_error` with a hint listing the configured links — no silent fallback. Cross-project `bclaw_coordinate` is **inbox-only**: claim/assignment/message all land in the target, the target agent picks the brief up async via its own `bclaw_work`, and auto-spawn from the source process is force-disabled because the spawn cwd / worktree are tied to the target's git repo (a warning surfaces in `FacadeResponse.warnings`). The CLI exposes the same as a global `--project <name>` flag, mutually exclusive with `--cwd`. Refs: helper `resolveProjectCwd` in `src/core/cross-project.ts`, MCP write/read handler dispatch in `src/commands/mcp.ts` and `src/commands/mcp-read-handlers.ts`, `--project` plumbing in `src/cli.ts` preAction, surface advertisement in `src/core/instruction-templates.ts`, plus tests in `tests/unit/cross-project.test.ts` (10 unit cases on the helper), `tests/unit/bclaw-coordinate.test.ts` (4 cross-project routing cases), and `tests/cli-cross-project.test.ts` (5 e2e cases). Closes the `--cwd` workaround pattern that had been the day-to-day shape of multi-project sessions.
