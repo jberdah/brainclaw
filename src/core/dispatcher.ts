@@ -43,7 +43,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, resolveConcurrencyLimit, resolveResourceKey, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
@@ -90,10 +90,10 @@ export interface AgentCapacityEntry {
   agent: string;
   /** Number of active claims this agent has in the current sequence */
   active_claims: number;
-  /** Max concurrent tasks from agent capability profile */
-  max_tasks: number;
-  /** Remaining slots: max_tasks - active_claims */
-  slots_remaining: number;
+  /** Resolved concurrency limit (pln#520 step 3). `null` = unlimited (no arbitrary cap). */
+  max_tasks: number | null;
+  /** Remaining slots: `max_tasks - active_claims`, or `null` when unlimited. */
+  slots_remaining: number | null;
 }
 
 export interface DispatchAnalysis {
@@ -266,14 +266,21 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
 
   const agent_capacity: AgentCapacityEntry[] = allAgentNames.map(agent => {
     const active_claims = agentClaimCounts.get(agent) ?? 0;
-    const profile = getCapabilityProfile(agent);
-    const max_tasks = profile?.max_concurrent_tasks ?? 1;
-    return { agent, active_claims, max_tasks, slots_remaining: Math.max(0, max_tasks - active_claims) };
+    // pln#520 step 3: limit is resolved (default unlimited for parallelizable
+    // CLI agents), not the per-name structural constant.
+    const limit = resolveConcurrencyLimit(agent);
+    const slots = Number.isFinite(limit) ? Math.max(0, limit - active_claims) : Infinity;
+    return {
+      agent,
+      active_claims,
+      max_tasks: serializeConcurrencyLimit(limit),
+      slots_remaining: serializeConcurrencyLimit(slots),
+    };
   });
 
-  // Available agents: those with remaining capacity (slots_remaining > 0)
+  // Available agents: unlimited (null) or with remaining capacity (> 0).
   const available_agents = agent_capacity
-    .filter(a => a.slots_remaining > 0)
+    .filter(a => a.slots_remaining === null || a.slots_remaining > 0)
     .map(a => a.agent);
 
   return { sequence, ready, active, blocked, done, available_agents, agent_capacity };
@@ -597,15 +604,18 @@ export function scoreAgents(
     const canSpawn = profile?.runtime.canBeSpawnedCli ?? false;
     const capability = canExecute ? (canSpawn ? 1.0 : 0.5) : 0.1;
 
-    // Factor 3: Availability — graduated by utilization (claims / max_concurrent_tasks)
-    // Include in-cycle assignments so load-balance works within a single dispatch call
+    // Factor 3 & 4: Availability + load balance.
+    // pln#520 step 3: these are based on the agent's RAW load (active claims +
+    // in-cycle assignments), decoupled from any concurrency cap. Dividing by the
+    // cap (as before) made every agent look identically idle once concurrency
+    // went unlimited, collapsing load-balancing — work piled onto the single
+    // top-scored agent. A cap-independent load fraction keeps spreading work to
+    // the least-busy agent whether or not a cap is set. The hard cap is enforced
+    // separately by the capacity guard in the dispatch loop.
     const agentClaims = (claimCounts.get(agent) ?? 0) + (cycleAssignments?.get(agent) ?? 0);
-    const maxTasks = profile?.max_concurrent_tasks ?? 1;
-    const utilization = Math.min(1.0, agentClaims / maxTasks);
-    const availability = 1.0 - (utilization * 0.5); // range [0.5, 1.0]
-
-    // Factor 4: Load balance — normalized by agent's capacity, not raw claim count
-    const load_balance = 1.0 - utilization;
+    const loadFraction = agentClaims / (agentClaims + 1); // 0 when idle, →1 as load grows
+    const availability = 1.0 - loadFraction * 0.5; // range (0.5, 1.0]
+    const load_balance = 1.0 - loadFraction;       // range (0, 1]
 
     const score =
       preference * W_PREFERENCE +
@@ -639,6 +649,25 @@ export interface DispatchOptions {
   autoExecute?: boolean;
   /** Test/ops override for assignment startup acknowledgement. */
   handshakeTimeoutMs?: number;
+  /**
+   * pln#520 step 3 — opt-in concurrency cap, enforced per host-binary resource
+   * (not per agent identity). Omitted → unlimited for parallelizable CLI agents.
+   */
+  maxConcurrency?: number;
+}
+
+/**
+ * pln#520 step 3 — sum in-cycle assignments across every agent identity that
+ * shares the same host-binary resource (e.g. claude-code + claude-sonnet both
+ * map to `claude`). Pairs with `resolveResourceKey` so a concurrency cap pools
+ * by binary, not by agent name.
+ */
+function countCycleByResource(cycleAssignments: Map<string, number>, resourceKey: string): number {
+  let total = 0;
+  for (const [agent, count] of cycleAssignments) {
+    if (resolveResourceKey(agent) === resourceKey) total += count;
+  }
+  return total;
 }
 
 export interface WorktreeBaseSelection {
@@ -721,13 +750,17 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         // Claim released but message not archived: stale assignment, allow re-dispatch
       }
 
-      // Claim-based capacity guard: check claims (existing + this cycle) against max_concurrent_tasks.
-      // This is the authoritative capacity check — covers both options.agents and analysis.available_agents paths.
-      const existingClaims = allActiveClaims.filter(c => c.agent === candidate.agent).length;
-      const inCycleCount = cycleAssignments.get(candidate.agent) ?? 0;
-      const maxTasks = getCapabilityProfile(candidate.agent)?.max_concurrent_tasks ?? 1;
-      if (existingClaims + inCycleCount >= maxTasks) {
-        result.warnings.push(`${candidate.agent}: at capacity (${existingClaims + inCycleCount}/${maxTasks} claims)`);
+      // Claim-based capacity guard (pln#520 step 3): count usage per host-binary
+      // resource (claude-code + claude-sonnet share `claude`), compare against the
+      // resolved limit (default unlimited — no arbitrary per-identity throttle).
+      // This is the authoritative capacity check — covers both options.agents and
+      // analysis.available_agents paths.
+      const resourceKey = resolveResourceKey(candidate.agent);
+      const existingClaims = allActiveClaims.filter(c => resolveResourceKey(c.agent) === resourceKey).length;
+      const inCycleCount = countCycleByResource(cycleAssignments, resourceKey);
+      const limit = resolveConcurrencyLimit(candidate.agent, { override: options.maxConcurrency });
+      if (existingClaims + inCycleCount >= limit) {
+        result.warnings.push(`${candidate.agent}: at capacity (${existingClaims + inCycleCount}/${limit} ${resourceKey} slots)`);
         continue; // try next agent
       }
 
@@ -794,9 +827,10 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       result.messages_sent.push(deliveryEntry);
       assigned++;
       cycleAssignments.set(targetAgent, (cycleAssignments.get(targetAgent) ?? 0) + 1);
-      const dryExisting = allActiveClaims.filter(c => c.agent === targetAgent).length;
-      const dryCycle = cycleAssignments.get(targetAgent) ?? 0;
-      const dryMax = getCapabilityProfile(targetAgent)?.max_concurrent_tasks ?? 1;
+      const dryResourceKey = resolveResourceKey(targetAgent);
+      const dryExisting = allActiveClaims.filter(c => resolveResourceKey(c.agent) === dryResourceKey).length;
+      const dryCycle = countCycleByResource(cycleAssignments, dryResourceKey);
+      const dryMax = resolveConcurrencyLimit(targetAgent, { override: options.maxConcurrency });
       if (dryExisting + dryCycle >= dryMax) {
         const idx = agentPool.indexOf(targetAgent);
         if (idx >= 0) agentPool.splice(idx, 1);
@@ -923,10 +957,12 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     assigned++;
     // Track assignments this cycle for multi-slot capacity
     cycleAssignments.set(targetAgent, (cycleAssignments.get(targetAgent) ?? 0) + 1);
-    // Remove agent from pool only when at capacity (existing claims + this cycle's assignments)
-    const existingClaims = allActiveClaims.filter(c => c.agent === targetAgent).length;
-    const cycleCount = cycleAssignments.get(targetAgent) ?? 0;
-    const maxTasks = getCapabilityProfile(targetAgent)?.max_concurrent_tasks ?? 1;
+    // Remove agent from pool only when at capacity, counted per host-binary
+    // resource against the resolved limit (pln#520 step 3).
+    const liveResourceKey = resolveResourceKey(targetAgent);
+    const existingClaims = allActiveClaims.filter(c => resolveResourceKey(c.agent) === liveResourceKey).length;
+    const cycleCount = countCycleByResource(cycleAssignments, liveResourceKey);
+    const maxTasks = resolveConcurrencyLimit(targetAgent, { override: options.maxConcurrency });
     if (existingClaims + cycleCount >= maxTasks) {
       const idx = agentPool.indexOf(targetAgent);
       if (idx >= 0) agentPool.splice(idx, 1);

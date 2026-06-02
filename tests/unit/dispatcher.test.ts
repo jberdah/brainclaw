@@ -265,14 +265,15 @@ describe('core/dispatcher', () => {
       ]), testDir);
 
       const result = analyzeSequence(testDir)!;
-      // claude-code has max_concurrent_tasks=3, 1 claim → 2 slots remaining → still available
-      assert.ok(result.available_agents.includes('claude-code'), 'claude-code still available (1/3 slots used)');
+      // pln#520 step 3: claude-code is a parallelizable CLI agent → unlimited
+      // concurrency by default (max_tasks=null), so it stays available with claims.
+      assert.ok(result.available_agents.includes('claude-code'), 'claude-code still available (unlimited)');
       assert.ok(result.available_agents.includes('codex'), 'codex available (0 claims)');
-      // Check agent_capacity
+      // Check agent_capacity — unlimited is represented as null (JSON-safe).
       const claudeCapacity = result.agent_capacity.find(a => a.agent === 'claude-code')!;
       assert.equal(claudeCapacity.active_claims, 1);
-      assert.equal(claudeCapacity.max_tasks, 3);
-      assert.equal(claudeCapacity.slots_remaining, 2);
+      assert.equal(claudeCapacity.max_tasks, null);
+      assert.equal(claudeCapacity.slots_remaining, null);
     });
 
     it('handles parallel lanes correctly', () => {
@@ -433,21 +434,15 @@ describe('core/dispatcher', () => {
       assert.equal(agentDirs.length, 0);
     });
 
-    it('skips when all agents at full capacity', async () => {
-      // claude-code has max_concurrent_tasks=3, codex has 5
-      // Create enough plans+claims to saturate both
+    it('skips when all agents are at an opt-in concurrency cap', async () => {
+      // pln#520 step 3: there is no per-identity throttle by default. A cap is
+      // opt-in (--max-concurrency) and enforced per host-binary resource. With
+      // maxConcurrency=1 and one active claim on each binary, the only remaining
+      // ready plan has no agent under the cap → skipped.
       const plans = [
         makePlan({ id: 'pln_target', text: 'Target task', status: 'todo' }),
-        // 3 plans to saturate claude-code
         makePlan({ id: 'pln_cc1', text: 'CC1', status: 'in_progress' }),
-        makePlan({ id: 'pln_cc2', text: 'CC2', status: 'in_progress' }),
-        makePlan({ id: 'pln_cc3', text: 'CC3', status: 'in_progress' }),
-        // 5 plans to saturate codex
         makePlan({ id: 'pln_cx1', text: 'CX1', status: 'in_progress' }),
-        makePlan({ id: 'pln_cx2', text: 'CX2', status: 'in_progress' }),
-        makePlan({ id: 'pln_cx3', text: 'CX3', status: 'in_progress' }),
-        makePlan({ id: 'pln_cx4', text: 'CX4', status: 'in_progress' }),
-        makePlan({ id: 'pln_cx5', text: 'CX5', status: 'in_progress' }),
       ];
       persistState({
         version: 1, write_version: 1,
@@ -455,33 +450,56 @@ describe('core/dispatcher', () => {
         open_handoffs: [], plan_items: plans,
       }, testDir);
 
-      // Saturate claude-code (3 claims = max)
+      // One claim on each binary resource (claude, codex) → both at cap of 1.
       saveClaim({ schema_version: 2, id: 'clm_cc1', agent: 'claude-code', scope: 'a', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc1', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cc2', agent: 'claude-code', scope: 'b', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc2', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cc3', agent: 'claude-code', scope: 'c', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cc3', status: 'active' }, testDir);
-      // Saturate codex (5 claims = max)
       saveClaim({ schema_version: 2, id: 'clm_cx1', agent: 'codex', scope: 'd', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx1', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cx2', agent: 'codex', scope: 'e', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx2', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cx3', agent: 'codex', scope: 'f', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx3', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cx4', agent: 'codex', scope: 'g', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx4', status: 'active' }, testDir);
-      saveClaim({ schema_version: 2, id: 'clm_cx5', agent: 'codex', scope: 'h', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_cx5', status: 'active' }, testDir);
 
       saveSequence(makeSequence([
         { planId: 'pln_target', rank: 1, hard_after: [], soft_after: [] },
         { planId: 'pln_cc1', rank: 2, hard_after: [], soft_after: [] },
-        { planId: 'pln_cc2', rank: 3, hard_after: [], soft_after: [] },
-        { planId: 'pln_cc3', rank: 4, hard_after: [], soft_after: [] },
-        { planId: 'pln_cx1', rank: 5, hard_after: [], soft_after: [] },
-        { planId: 'pln_cx2', rank: 6, hard_after: [], soft_after: [] },
-        { planId: 'pln_cx3', rank: 7, hard_after: [], soft_after: [] },
-        { planId: 'pln_cx4', rank: 8, hard_after: [], soft_after: [] },
-        { planId: 'pln_cx5', rank: 9, hard_after: [], soft_after: [] },
+        { planId: 'pln_cx1', rank: 3, hard_after: [], soft_after: [] },
       ]), testDir);
 
-      const result = (await dispatch({ dispatcherAgent: 'coordinator' }, testDir))!;
-      assert.equal(result.result.messages_sent.length, 0, 'no messages — all agents at capacity');
+      const result = (await dispatch({
+        dispatcherAgent: 'coordinator',
+        agents: ['claude-code', 'codex'],
+        maxConcurrency: 1,
+      }, testDir))!;
+      assert.equal(result.result.messages_sent.length, 0, 'no messages — all agents at the cap');
       assert.equal(result.result.skipped.length, 1);
-      assert.ok(result.result.skipped[0]!.reason.includes('No available agent'));
+      assert.ok(
+        result.result.warnings.some(w => w.includes('at capacity')),
+        `expected a capacity warning, got: ${result.result.warnings.join(' | ')}`,
+      );
+    });
+
+    it('with no cap, claude-code + claude-sonnet do NOT oversubscribe the shared `claude` binary (can_dc4e4a11)', async () => {
+      // The historical bug: claude-code (3) and claude-sonnet (6) counted
+      // separately → up to 9 concurrent `claude`. Now they pool under the
+      // `claude` resource key; with maxConcurrency=1 a single claim on
+      // claude-code blocks claude-sonnet too.
+      const plans = [
+        makePlan({ id: 'pln_busy', text: 'Busy', status: 'in_progress' }),
+        makePlan({ id: 'pln_next', text: 'Next', status: 'todo' }),
+      ];
+      persistState({
+        version: 1, write_version: 1,
+        active_constraints: [], recent_decisions: [], known_traps: [],
+        open_handoffs: [], plan_items: plans,
+      }, testDir);
+      saveClaim({ schema_version: 2, id: 'clm_busy', agent: 'claude-code', scope: 'a', description: 'w', created_at: '2026-04-01T00:00:00Z', plan_id: 'pln_busy', status: 'active' }, testDir);
+      saveSequence(makeSequence([
+        { planId: 'pln_busy', rank: 1, hard_after: [], soft_after: [] },
+        { planId: 'pln_next', rank: 2, hard_after: [], soft_after: [] },
+      ]), testDir);
+
+      const result = (await dispatch({
+        dispatcherAgent: 'coordinator',
+        agents: ['claude-sonnet'],
+        maxConcurrency: 1,
+      }, testDir))!;
+      // claude-sonnet shares the `claude` binary already at the cap of 1.
+      assert.equal(result.result.messages_sent.length, 0, 'claude-sonnet blocked by claude-code claim (shared binary)');
     });
 
     it('filters by lane', async () => {

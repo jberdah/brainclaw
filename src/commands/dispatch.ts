@@ -21,6 +21,8 @@ export interface DispatchCommandOptions {
   agent?: string;
   json?: boolean;
   cwd?: string;
+  /** pln#520 step 3 — opt-in concurrency cap per host-binary resource. */
+  maxConcurrency?: number;
 }
 
 export function runDispatchAnalysis(options: DispatchCommandOptions): void {
@@ -109,6 +111,7 @@ export async function runDispatch(options: DispatchCommandOptions): Promise<void
     dryRun: options.dry,
     dispatcherAgent,
     autoExecute: options.spawn,
+    maxConcurrency: options.maxConcurrency,
   }, effectiveCwd);
 
   if (!result) {

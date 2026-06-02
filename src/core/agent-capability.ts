@@ -438,6 +438,52 @@ export function getCapabilityProfile(name: string): AgentCapabilityProfile | und
   return _customProfiles.get(resolved) ?? PROFILES[resolved as AgentName];
 }
 
+/**
+ * pln#520 step 3 — concurrency is a resolvable execution-config value, NOT a
+ * structural constant baked into agent identity.
+ *
+ * The host resource a concurrency cap actually protects is the binary on the
+ * machine (its API quota / its RAM/CPU footprint), not the agent label.
+ * `resolveResourceKey` returns that shared key so callers count usage across
+ * every identity that drives one binary. This kills the can_dc4e4a11 bug:
+ * `claude-code` and `claude-sonnet` are the SAME `claude` binary on the SAME
+ * host but were counted separately (3 + 6 → up to 9 concurrent `claude`
+ * processes, oversubscribing the machine + API).
+ */
+export function resolveResourceKey(name: string): string {
+  const profile = getCapabilityProfile(name);
+  return profile?.invoke_binary ?? resolveAgentAlias(name);
+}
+
+/**
+ * Resolve the concurrency limit for an agent. `Infinity` = unlimited.
+ *
+ * Resolution chain (highest priority first), decoupled from agent identity:
+ *   1. explicit `override` (e.g. `brainclaw dispatch --max-concurrency N`)
+ *   2. host opt-in cap via `BRAINCLAW_MAX_CONCURRENCY` (protect one machine / quota)
+ *   3. structural floor — agents that cannot run headless in parallel
+ *      (IDE / desktop agents, i.e. not CLI-spawnable) stay hard-capped at their
+ *      profile `max_concurrent_tasks` (you can't spawn N IDE windows headlessly)
+ *   4. default for parallelizable CLI agents: UNLIMITED. There is no arbitrary
+ *      per-identity throttle — the operator opts into a cap when they want one.
+ *
+ * When a finite cap applies it is enforced per host-binary resource
+ * (see `resolveResourceKey`), so all variants of one binary share the pool.
+ */
+export function resolveConcurrencyLimit(name: string, opts: { override?: number } = {}): number {
+  if (opts.override !== undefined && opts.override > 0) return opts.override;
+  const envCap = Number(process.env.BRAINCLAW_MAX_CONCURRENCY);
+  if (Number.isFinite(envCap) && envCap > 0) return envCap;
+  const profile = getCapabilityProfile(name);
+  if (!profile?.runtime?.canBeSpawnedCli) return profile?.max_concurrent_tasks ?? 1;
+  return Infinity;
+}
+
+/** JSON-safe rendering of a concurrency limit: `Infinity` → `null` (= unlimited). */
+export function serializeConcurrencyLimit(limit: number): number | null {
+  return Number.isFinite(limit) ? limit : null;
+}
+
 // ── Default invoke templates for CLI-spawnable agents ──────────────────────
 
 export type InvokeMode = 'worker' | 'reviewer' | 'consult';

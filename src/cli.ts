@@ -1546,6 +1546,7 @@ dispatchCmd
   .option('--agents <names>', 'Comma-separated list of agents to dispatch to')
   .option('--lanes <names>', 'Comma-separated list of lanes to dispatch')
   .option('--max <n>', 'Maximum assignments', parseInt)
+  .option('--max-concurrency <n>', 'Opt-in cap on concurrent instances per host-binary (default: unlimited)', parseInt)
   .option('--dry', 'Preview assignments without sending messages')
   .option('--spawn', 'Autonomously launch CLI agents with invoke templates')
   .option('--agent <name>', 'Dispatcher agent name')
@@ -1555,6 +1556,7 @@ dispatchCmd
       agents: options.agents,
       lanes: options.lanes,
       max: options.max,
+      maxConcurrency: options.maxConcurrency,
       dry: options.dry,
       spawn: options.spawn,
       agent: options.agent,

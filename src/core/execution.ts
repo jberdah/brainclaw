@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
+import { resolveConcurrencyLimit, resolveResourceKey, type InvokeCommand } from './agent-capability.js';
 import { appendAuditEntry } from './audit.js';
 import { loadAllSessions } from './identity.js';
 import { loadConfig } from './config.js';
@@ -113,9 +113,13 @@ export function checkActiveInstance(agentName: string, cwd: string): ActiveInsta
   const SESSION_STALE_MS = parseDurationMs(ttlStr);
   const now = Date.now();
 
+  // pln#520 step 3: pool active sessions by host-binary resource so all
+  // identities of one binary (e.g. claude-code + claude-sonnet → `claude`)
+  // count together against a shared cap.
+  const targetResource = resolveResourceKey(agentName);
   const activeSessions: string[] = [];
   for (const session of sessions) {
-    if (session.agent !== agentName) continue;
+    if (resolveResourceKey(session.agent) !== targetResource) continue;
     const lastSeen = new Date(session.last_seen_at).getTime();
     if (isNaN(lastSeen)) continue;
     if (now - lastSeen < SESSION_STALE_MS) {
@@ -123,10 +127,12 @@ export function checkActiveInstance(agentName: string, cwd: string): ActiveInsta
     }
   }
 
-  const profile = getCapabilityProfile(agentName);
-  const maxAllowed = profile?.max_concurrent_tasks ?? 1;
+  // Limit resolved from the chain (default unlimited for parallelizable CLI
+  // agents; structural floor for non-spawnable IDE agents). Infinity → no cap.
+  const maxAllowed = resolveConcurrencyLimit(agentName);
   const activeCount = activeSessions.length;
   const canSpawnMore = activeCount < maxAllowed;
+  const capLabel = Number.isFinite(maxAllowed) ? String(maxAllowed) : '∞';
 
   return {
     active: !canSpawnMore, // backward compat: active=true means "cannot spawn more"
@@ -134,8 +140,8 @@ export function checkActiveInstance(agentName: string, cwd: string): ActiveInsta
     activeCount,
     maxAllowed,
     reason: canSpawnMore
-      ? `Agent ${agentName} has capacity (${activeCount}/${maxAllowed} slots used)`
-      : `Agent ${agentName} at capacity (${activeCount}/${maxAllowed} slots used)`,
+      ? `Agent ${agentName} has capacity (${activeCount}/${capLabel} slots used)`
+      : `Agent ${agentName} at capacity (${activeCount}/${capLabel} slots used)`,
     activeSessions,
   };
 }
