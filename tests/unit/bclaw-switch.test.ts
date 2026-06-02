@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
-import { loadCurrentSession } from '../../src/core/identity.js';
+import { loadCurrentSession, loadSessionById, saveCurrentSession } from '../../src/core/identity.js';
 import { addCrossProjectLink } from '../../src/core/cross-project.js';
 
 /**
@@ -44,16 +44,20 @@ async function callTool(
 describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
   let workspace: TestWorkspace;
   let linkedProject: TestWorkspace;
+  let linkedProjectB: TestWorkspace;
   let previousTestMode: string | undefined;
   let previousCwdEnv: string | undefined;
+  let previousSessionId: string | undefined;
   let restoreCwd: (() => void) | undefined;
 
   beforeEach(() => {
     previousTestMode = process.env.BRAINCLAW_TEST_MODE;
     previousCwdEnv = process.env.BRAINCLAW_CWD;
+    previousSessionId = process.env.BRAINCLAW_SESSION_ID;
     process.env.BRAINCLAW_TEST_MODE = '1';
     workspace = createTestWorkspace({ prefix: 'bclaw-switch-host-', currentAgent: 'claude-code' });
     linkedProject = createTestWorkspace({ prefix: 'bclaw-switch-target-', currentAgent: 'claude-code' });
+    linkedProjectB = createTestWorkspace({ prefix: 'bclaw-switch-target-b-', currentAgent: 'claude-code' });
     restoreCwd = workspace.useCwd();
     // Anchor workspace resolution to the test dir so findOutermostWorkspaceRoot
     // does not walk up to the user's home directory.
@@ -64,12 +68,18 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
       name: 'target-project',
       cwd: workspace.dir,
     });
+    addCrossProjectLink({
+      path: linkedProjectB.dir,
+      name: 'target-project-b',
+      cwd: workspace.dir,
+    });
   });
 
   afterEach(() => {
     restoreCwd?.();
     workspace.cleanup();
     linkedProject.cleanup();
+    linkedProjectB.cleanup();
     if (previousTestMode === undefined) {
       delete process.env.BRAINCLAW_TEST_MODE;
     } else {
@@ -80,6 +90,11 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     } else {
       process.env.BRAINCLAW_CWD = previousCwdEnv;
     }
+    if (previousSessionId === undefined) {
+      delete process.env.BRAINCLAW_SESSION_ID;
+    } else {
+      process.env.BRAINCLAW_SESSION_ID = previousSessionId;
+    }
   });
 
   it('sets active_project to a cross_project_linked project', async () => {
@@ -87,9 +102,8 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     assert.equal(r.isError, false, `expected ok, got error: ${JSON.stringify(r.structuredContent)}`);
     assert.equal(r.structuredContent?.switched, true);
     assert.match(r.structuredContent?.path as string, /bclaw-switch-target-/);
-    // scope may be 'session' or 'global' depending on whether a session is
-    // active in this test workspace — both are valid switch outcomes.
-    assert.ok(['session', 'global'].includes(r.structuredContent?.scope as string));
+    assert.equal(r.structuredContent?.scope, 'session');
+    assert.match(loadCurrentSession(workspace.dir)?.active_project?.path ?? '', /bclaw-switch-target-/);
   });
 
   it('clears active_project with clear=true', async () => {
@@ -118,5 +132,59 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     const r = await callTool(workspace, { list: true });
     assert.equal(r.isError, false);
     assert.ok(Array.isArray(r.structuredContent?.projects), 'list response must include projects array');
+  });
+
+  it('list=true marks the session active project when one is set', async () => {
+    await callTool(workspace, { project: 'target-project' });
+
+    const r = await callTool(workspace, { list: true });
+    assert.equal(r.isError, false);
+    assert.equal(r.structuredContent?.active_source, 'session');
+    const projects = r.structuredContent?.projects as Array<{ path: string; active: boolean }>;
+    const active = projects.filter((p) => p.active);
+    assert.equal(active.length, 1);
+    assert.match(active[0]?.path ?? '', /bclaw-switch-target-/);
+  });
+
+  it('keeps active_project isolated between explicit parallel sessions for the same agent', async () => {
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_parallel_a',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: 111111,
+    }, workspace.dir);
+    saveCurrentSession({
+      session_id: 'sess_parallel_b',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: 222222,
+    }, workspace.dir);
+
+    process.env.BRAINCLAW_SESSION_ID = 'sess_parallel_a';
+    const first = await callTool(workspace, { project: 'target-project' });
+    assert.equal(first.isError, false, `expected ok, got error: ${JSON.stringify(first.structuredContent)}`);
+
+    process.env.BRAINCLAW_SESSION_ID = 'sess_parallel_b';
+    const second = await callTool(workspace, { project: 'target-project-b' });
+    assert.equal(second.isError, false, `expected ok, got error: ${JSON.stringify(second.structuredContent)}`);
+
+    assert.match(loadSessionById('sess_parallel_a', workspace.dir)?.active_project?.path ?? '', /bclaw-switch-target-/);
+    assert.match(loadSessionById('sess_parallel_b', workspace.dir)?.active_project?.path ?? '', /bclaw-switch-target-b-/);
+    assert.notEqual(
+      loadSessionById('sess_parallel_a', workspace.dir)?.active_project?.path,
+      loadSessionById('sess_parallel_b', workspace.dir)?.active_project?.path,
+    );
+
+    process.env.BRAINCLAW_SESSION_ID = 'sess_parallel_a';
+    assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_parallel_a');
+    process.env.BRAINCLAW_SESSION_ID = 'sess_parallel_b';
+    assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_parallel_b');
   });
 });
