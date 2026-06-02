@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
@@ -113,30 +114,44 @@ export function loadCurrentSession(cwd?: string): CurrentSessionState | undefine
   const dir = sessionsDir(cwd);
   const currentUser = resolveCurrentUser();
   const currentAgent = resolveCurrentAgentName();
+  const explicitSessionId = resolveExplicitSessionId();
+  const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
+  const now = Date.now();
 
-  // 1. Look in sessions/ directory for a matching session
+  if (explicitSessionId) {
+    const explicit = loadSessionById(explicitSessionId, cwd);
+    return explicit && isSessionAlive(explicit, ttlMs, now) ? explicit : undefined;
+  }
+
+  // 1. Look in sessions/ directory for the session owned by this process.
+  // Multiple parallel agents can have the same agent name/user in one repo;
+  // a live different PID is a different agent instance, not our session.
   if (fs.existsSync(dir) && currentAgent) {
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-    const ttlMs = parseDurationToMs(loadConfigSafe(cwd)?.implicit_session_ttl ?? '4h');
-    const now = Date.now();
+    const legacyPidlessCandidates: CurrentSessionState[] = [];
 
     for (const file of files) {
       try {
-        const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', path.join(dir, file));
-        const session = {
-          ...CurrentSessionStateSchema.parse(migration.document),
-          schema_version: migration.metadata.currentVersion,
-        };
+        const session = loadSessionFile(path.join(dir, file));
         // Strict match: agent name must match, user must match (when both are known)
         if (session.agent !== currentAgent) continue;
         const userMatch = !session.user || !currentUser || session.user === currentUser;
-        const alive = (now - Date.parse(session.last_seen_at)) <= ttlMs;
-        if (userMatch && alive) {
+        if (!userMatch || !isSessionAlive(session, ttlMs, now)) continue;
+
+        if (session.pid === process.pid) {
           return session;
+        }
+
+        if (session.pid === undefined) {
+          legacyPidlessCandidates.push(session);
         }
       } catch {
         // skip invalid session files
       }
+    }
+
+    if (legacyPidlessCandidates.length === 1) {
+      return legacyPidlessCandidates[0];
     }
   }
 
@@ -280,8 +295,27 @@ function resolveCurrentUser(): string | undefined {
 
 function resolveCurrentAgentName(): string | undefined {
   if (process.env.BRAINCLAW_AGENT_NAME) return process.env.BRAINCLAW_AGENT_NAME;
-  if (process.env.CLAUDE_CODE_VERSION) return 'claude-code';
-  return undefined;
+  return detectAiAgent()?.name;
+}
+
+function resolveExplicitSessionId(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.BRAINCLAW_SESSION_ID?.trim()
+    || env.OPENCLAW_SESSION_ID?.trim()
+    || env.CLAUDE_SESSION_ID?.trim()
+    || env.COPILOT_SESSION_ID?.trim()
+    || undefined;
+}
+
+function loadSessionFile(filepath: string): CurrentSessionState {
+  const migration = loadVersionedJsonFile<CurrentSessionState>('current_session', filepath);
+  return {
+    ...CurrentSessionStateSchema.parse(migration.document),
+    schema_version: migration.metadata.currentVersion,
+  };
+}
+
+function isSessionAlive(session: CurrentSessionState, ttlMs: number, now: number): boolean {
+  return now - Date.parse(session.last_seen_at) <= ttlMs;
 }
 
 function loadConfigSafe(cwd?: string): { implicit_session_ttl?: string } | undefined {

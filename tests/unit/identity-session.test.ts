@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   buildOperationalIdentity,
   loadCurrentSession,
+  saveCurrentSession,
   resolveCurrentSessionId,
 } from '../../src/core/identity.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -22,6 +23,7 @@ describe('core/identity implicit sessions', () => {
 
   afterEach(() => {
     delete process.env.BRAINCLAW_SESSION_ID;
+    delete process.env.CODEX_THREAD_ID;
     workspace.cleanup();
   });
 
@@ -39,6 +41,44 @@ describe('core/identity implicit sessions', () => {
     assert.ok(first.session_id);
     assert.equal(second.session_id, first.session_id);
     assert.equal(loadCurrentSession(workspace.dir)?.session_id, first.session_id);
+  });
+
+  it('does not load a different parallel session for the same agent without an explicit id', () => {
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_other_parallel',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: process.pid + 100000,
+    }, workspace.dir);
+
+    assert.equal(loadCurrentSession(workspace.dir), undefined);
+
+    process.env.BRAINCLAW_SESSION_ID = 'sess_other_parallel';
+    assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_other_parallel');
+  });
+
+  it('loads Codex sessions when only native Codex env vars identify the agent', () => {
+    const codex = workspace.registerAgent('codex');
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_codex_native_env',
+      started_at: now,
+      last_seen_at: now,
+      agent: codex.agent_name,
+      agent_id: codex.agent_id,
+      host_id: 'host-test',
+      pid: process.pid,
+    }, workspace.dir);
+
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT;
+    process.env.CODEX_THREAD_ID = 'codex-thread-dgx';
+
+    assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_codex_native_env');
   });
 
   it('rotates an expired implicit session', () => {

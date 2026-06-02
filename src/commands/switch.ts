@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
-import { loadCurrentSession, saveCurrentSession } from '../core/identity.js';
+import { buildOperationalIdentity, loadCurrentSession, saveCurrentSession } from '../core/identity.js';
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
-import { resolveProjectCwd } from '../core/cross-project.js';
+import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
 import { loadConfig } from '../core/config.js';
 
@@ -69,8 +69,12 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
   } catch { /* name is optional */ }
 
   const now = new Date().toISOString();
-  const session = loadCurrentSession(cwd);
   const sessionOnly = options.sessionOnly ?? true;
+  let session = loadCurrentSession(cwd);
+  if (!session && sessionOnly) {
+    buildOperationalIdentity(undefined, cwd, { persistImplicitSession: true });
+    session = loadCurrentSession(cwd);
+  }
 
   if (session && sessionOnly) {
     saveCurrentSession({
@@ -78,6 +82,10 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
       active_project: { path: resolved, name: projectName, switched_at: now },
     }, cwd);
     return { switched: true, path: resolved, name: projectName, scope: 'session', workspace_root: wsRoot };
+  }
+
+  if (sessionOnly) {
+    throw new Error('Cannot switch project without an active agent session. Start with bclaw_work or bclaw_session_start first.');
   }
 
   if (session) {
@@ -99,6 +107,7 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
 
 export interface ListProjectsResult {
   workspace_root: string;
+  active_source: 'session' | 'global' | 'none';
   projects: Array<{ name?: string; path: string; relative_path: string; active: boolean }>;
 }
 
@@ -111,15 +120,30 @@ export function listAvailableProjects(cwd?: string): ListProjectsResult {
     throw new Error('No brainclaw workspace found.');
   }
 
-  const active = loadActiveProject(wsRoot);
+  const sessionActive = loadCurrentSession(cwd)?.active_project;
+  const globalActive = loadActiveProject(wsRoot);
+  const active = sessionActive ?? globalActive;
+  const activeSource: ListProjectsResult['active_source'] = sessionActive ? 'session' : globalActive ? 'global' : 'none';
   const projects: ListProjectsResult['projects'] = [];
+  const seen = new Set<string>();
+
+  const addProject = (project: { name?: string; path: string; relative_path: string }): void => {
+    const projectPath = path.resolve(project.path);
+    if (seen.has(projectPath)) return;
+    seen.add(projectPath);
+    projects.push({
+      ...project,
+      path: projectPath,
+      active: active?.path ? path.resolve(active.path) === projectPath : false,
+    });
+  };
 
   if (memoryExists(wsRoot)) {
     try {
       const config = loadConfig(wsRoot);
-      projects.push({ name: config.project_name, path: wsRoot, relative_path: '.', active: active?.path === wsRoot });
+      addProject({ name: config.project_name, path: wsRoot, relative_path: '.' });
     } catch {
-      projects.push({ path: wsRoot, relative_path: '.', active: active?.path === wsRoot });
+      addProject({ path: wsRoot, relative_path: '.' });
     }
   }
 
@@ -128,10 +152,20 @@ export function listAvailableProjects(cwd?: string): ListProjectsResult {
     const childPath = path.resolve(child.path);
     if (childPath === wsRoot) continue;
     const rel = path.relative(wsRoot, childPath) || '.';
-    projects.push({ name: child.project_name, path: childPath, relative_path: rel, active: active?.path === childPath });
+    addProject({ name: child.project_name, path: childPath, relative_path: rel });
   }
 
-  return { workspace_root: wsRoot, projects };
+  for (const link of resolveCrossProjectLinks(wsRoot)) {
+    if (!link.available) continue;
+    const linkPath = path.resolve(link.absolutePath);
+    addProject({
+      name: link.projectName,
+      path: linkPath,
+      relative_path: path.relative(wsRoot, linkPath) || '.',
+    });
+  }
+
+  return { workspace_root: wsRoot, active_source: activeSource, projects };
 }
 
 export function runSwitch(projectRef: string | undefined, options: SwitchOptions = {}): void {
