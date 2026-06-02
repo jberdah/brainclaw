@@ -23,6 +23,8 @@ export interface DispatchCommandOptions {
   cwd?: string;
   /** pln#520 step 3 — opt-in concurrency cap per host-binary resource. */
   maxConcurrency?: number;
+  /** pln#520 step 3 — model override, decoupled from agent identity. */
+  model?: string;
 }
 
 export function runDispatchAnalysis(options: DispatchCommandOptions): void {
@@ -112,6 +114,7 @@ export async function runDispatch(options: DispatchCommandOptions): Promise<void
     dispatcherAgent,
     autoExecute: options.spawn,
     maxConcurrency: options.maxConcurrency,
+    model: options.model,
   }, effectiveCwd);
 
   if (!result) {

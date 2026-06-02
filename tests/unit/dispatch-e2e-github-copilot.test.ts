@@ -242,7 +242,7 @@ describe('dispatch-e2e-github-copilot/dispatch-cycle', () => {
     assert.equal(findLatestAgentRunForAssignment(aId, testDir)!.status, 'completed');
   });
 
-  it('max_concurrent_tasks=1: second dispatch is skipped', async () => {
+  it('opt-in cap of 1: second dispatch is skipped (pln#520 step 3)', async () => {
     // Saturate copilot with 1 active claim
     const { saveClaim } = await import('../../src/core/claims.js');
     saveClaim({
@@ -261,8 +261,8 @@ describe('dispatch-e2e-github-copilot/dispatch-cycle', () => {
       { planId: 'pln_cop_busy', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'] }, testDir))!;
-    assert.equal(result.result.messages_sent.length, 0, 'copilot at capacity (1/1)');
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['github-copilot'], maxConcurrency: 1 }, testDir))!;
+    assert.equal(result.result.messages_sent.length, 0, 'copilot at the opt-in cap (1/1)');
     assert.equal(result.result.skipped.length, 1);
   });
 });

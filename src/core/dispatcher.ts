@@ -43,7 +43,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, resolveConcurrencyLimit, resolveResourceKey, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
@@ -654,6 +654,12 @@ export interface DispatchOptions {
    * (not per agent identity). Omitted → unlimited for parallelizable CLI agents.
    */
   maxConcurrency?: number;
+  /**
+   * pln#520 step 3 — model override, decoupled from agent identity. Injected
+   * into the invoke command for agents that declare a `model_flag` (e.g.
+   * `claude-code --model sonnet`). Highest-priority link in the model chain.
+   */
+  model?: string;
 }
 
 /**
@@ -817,7 +823,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     if (options.dryRun) {
       const briefMode = resolveBriefMode(targetAgent);
       const brief = generateBrief(readyItem.plan, readyItem.item, cwd, briefMode, { claimId, worktreePath });
-      const invokeCmd = buildInvokeCommand(targetAgent, brief);
+      const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
       if (invokeCmd) {
         const cmdPrefix = buildEnvPrefix(claimId);
         result.commands.push({ agent: targetAgent, lane: readyItem.lane, command: `${cmdPrefix}${invokeCmd.bashCommand}`, shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh') });
@@ -875,7 +881,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
     });
 
     // Step 3: Build invoke command
-    const invokeCmd = buildInvokeCommand(targetAgent, brief);
+    const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
     if (invokeCmd) {
       const cmdPrefix = buildEnvPrefix(claimId);
       result.commands.push({

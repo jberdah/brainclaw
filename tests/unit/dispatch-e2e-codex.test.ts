@@ -250,7 +250,9 @@ describe('dispatch-e2e-codex/dispatch-cycle', () => {
       { planId: 'pln_busy', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir))!;
+    // pln#520 step 3: capacity is opt-in. Cap the `codex` binary at 5 so the
+    // 5 saturating claims put it at the cap and the new plan is skipped.
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], maxConcurrency: 5 }, testDir))!;
     assert.equal(result.result.messages_sent.length, 0);
     assert.equal(result.result.skipped.length, 1);
 

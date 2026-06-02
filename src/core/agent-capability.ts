@@ -96,6 +96,16 @@ export interface AgentCapabilityProfile {
   invoke_review_template?: string;
   /** CLI invoke template for consult mode (read-only, advisory). Falls back to invoke_review_template or invoke_template */
   invoke_consult_template?: string;
+  /**
+   * pln#520 step 3 — flag this binary uses to select a model (e.g. `--model`).
+   * When set, a resolved model is injected right after the binary so model
+   * choice is decoupled from agent identity (run `claude-code` with any model
+   * instead of needing a per-model pseudo-identity like `claude-sonnet`).
+   * Unset → the agent ignores model selection (model baked into its template).
+   */
+  model_flag?: string;
+  /** Default model for this agent, last link in the model resolution chain. */
+  default_model?: string;
 }
 
 export type AgentName =
@@ -151,6 +161,10 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'claude',
     invoke_review_template: 'claude -p --allowedTools "Read,Glob,Grep" {prompt}',
     invoke_consult_template: 'claude -p --allowedTools "Read,Glob,Grep" {prompt}',
+    // pln#520 step 3: model is selectable via `--model` — no need for a
+    // per-model pseudo-identity. `claude-sonnet` below is now redundant
+    // (run `claude-code --model sonnet`) and kept only for back-compat.
+    model_flag: '--model',
   },
   'claude-sonnet': {
     name: 'claude-sonnet', category: 'code-agent', workflowModel: 'interactive',
@@ -484,6 +498,21 @@ export function serializeConcurrencyLimit(limit: number): number | null {
   return Number.isFinite(limit) ? limit : null;
 }
 
+/**
+ * pln#520 step 3 — resolve the model for a dispatch, decoupled from agent
+ * identity. Chain (highest priority first): explicit override (e.g.
+ * `dispatch --model`) → lane model → identity model → profile default.
+ * Returns `undefined` when nothing in the chain specifies one (the agent's
+ * template default applies).
+ */
+export function resolveModel(
+  name: string,
+  opts: { override?: string; lane?: string; identity?: string } = {},
+): string | undefined {
+  const profile = getCapabilityProfile(name);
+  return opts.override ?? opts.lane ?? opts.identity ?? profile?.default_model;
+}
+
 // ── Default invoke templates for CLI-spawnable agents ──────────────────────
 
 export type InvokeMode = 'worker' | 'reviewer' | 'consult';
@@ -537,6 +566,12 @@ export interface BuildInvokeCommandOptions {
    * Defaults to a deterministic placeholder `/tmp/bclaw_prompt_<hash>.md`.
    */
   tempFilePath?: string;
+  /**
+   * pln#520 step 3 — model to run, decoupled from agent identity. Injected as
+   * `<profile.model_flag> <model>` right after the binary when the profile
+   * declares a `model_flag` and the template doesn't already pin a model.
+   */
+  model?: string;
 }
 
 /**
@@ -715,6 +750,13 @@ export function buildInvokeCommand(
   // ── 4. Parse the template and interpolate {prompt} ───────────────────────
   const rawTokens = parseTemplateString(templateStr);
   if (rawTokens.length === 0) return undefined;
+
+  // pln#520 step 3: inject the resolved model right after the binary so model
+  // choice is decoupled from agent identity. Only when the profile declares a
+  // `model_flag` and the template doesn't already pin a model (don't double it).
+  if (options.model && profile.model_flag && !rawTokens.includes(profile.model_flag)) {
+    rawTokens.splice(1, 0, profile.model_flag, options.model);
+  }
 
   const executable = rawTokens[0];
   const interpolatedTokens = rawTokens.slice(1).map((tok) =>

@@ -546,8 +546,9 @@ describe('dispatch-e2e/checkActiveInstance', { concurrency: false }, () => {
     const check = checkActiveInstance('claude-code', testDir);
     assert.equal(check.activeCount, 1, 'detects 1 active session');
     assert.ok(check.activeSessions.includes('ses_active'), 'reports session ID');
-    assert.equal(check.maxAllowed, 3, 'claude-code max=3');
-    assert.equal(check.canSpawnMore, true, '1/3 = still has capacity');
+    // pln#520 step 3: parallelizable CLI agents are unlimited by default.
+    assert.equal(check.maxAllowed, Infinity, 'claude-code unlimited by default');
+    assert.equal(check.canSpawnMore, true, 'unlimited → always has capacity');
   });
 
   it('ignores stale sessions (older than config TTL, default 4h)', () => {
@@ -702,7 +703,9 @@ describe('dispatch-e2e/review-findings', { concurrency: false }, () => {
       { planId: 'pln_busy', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'] }, testDir))!;
+    // pln#520 step 3: capacity is opt-in. Cap codex's `codex` binary at 5 so the
+    // 5 saturating claims put it at the cap and the new plan is skipped.
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex'], maxConcurrency: 5 }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     // Agent should be skipped — no claim, no inbox message created
     assert.equal(result.result.messages_sent.length, 0, 'no messages sent to busy agent');
@@ -742,8 +745,9 @@ describe('dispatch-e2e/review-findings', { concurrency: false }, () => {
       { planId: 'pln_fallback', rank: 1, hard_after: [], soft_after: [] },
     ]), testDir);
 
-    // Provide both codex and cline in the pool — codex is preferred (assignee) but active
-    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex', 'cline'] }, testDir))!;
+    // Provide both codex and cline in the pool — codex is preferred (assignee) but
+    // at the opt-in cap (5 claims on the `codex` binary), so dispatch falls back.
+    const result = (await dispatch({ dispatcherAgent: 'coordinator', agents: ['codex', 'cline'], maxConcurrency: 5 }, testDir))!;
     assert.ok(result, 'dispatch returns result');
     assert.equal(result.result.messages_sent.length, 1, 'one message sent');
     assert.equal(result.result.messages_sent[0]!.agent, 'cline', 'fell back to cline');
