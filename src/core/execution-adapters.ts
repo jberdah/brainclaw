@@ -4,6 +4,42 @@ import path from 'node:path';
 import { buildClaimEnvPrefix } from './execution-profile.js';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { nowISO } from './ids.js';
+import {
+  ensureRuntimeDirs,
+  getRuntimeLogPath,
+  getRuntimeSignalPath,
+} from './runtime-signals.js';
+
+/**
+ * pln#520 step 4 — wrap a spawn command so the worker shell (a) touches the
+ * pre-exec `ack` sentinel, (b) redirects the agent's stdout/stderr to per-
+ * assignment log files AT THE SHELL LEVEL (fds are not inherited through the
+ * cmd.exe → .cmd → node shim, which is why logs came back empty — can_f792cacd),
+ * and (c) emits a `completed` / `failed` sentinel MECHANICALLY from the agent's
+ * exit code so a dead wrapper pid is never misread as a silent failure.
+ *
+ * The agent command runs inside a group so it inherits the parent's stdin
+ * (prompt delivery via the pipe is preserved); only stdout/stderr are
+ * redirected.
+ */
+export interface AckWrapPaths {
+  ackPath: string;
+  completedPath: string;
+  failedPath: string;
+  stdoutLog: string;
+  stderrLog: string;
+}
+
+export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, isWin32: boolean): string {
+  const touch = isWin32
+    ? (p: string) => `type nul > "${p}"`
+    : (p: string) => `touch "${p}"`;
+  const redirected = `${bashCommand} > "${paths.stdoutLog}" 2> "${paths.stderrLog}"`;
+  return (
+    `${touch(paths.ackPath)} && ` +
+    `( ${redirected} && ${touch(paths.completedPath)} || ${touch(paths.failedPath)} )`
+  );
+}
 
 /**
  * Check if a binary is resolvable on the system PATH.
@@ -154,49 +190,34 @@ export class CliExecutionAdapter implements ExecutionAdapter {
 
     const needsStdin = invoke.promptDelivery === 'stdin_pipe' && invoke.promptText;
 
-    // pln#504: open per-assignment log files for stdout/stderr capture so silent
-    // worker deaths (trp#292) become diagnosable. Previously stdio used 'ignore'
-    // for stdout+stderr — anything the worker said vanished. Best-effort: on
-    // failure to open log files we fall back to the legacy 'ignore' behaviour
-    // rather than abort the spawn.
+    // pln#520 step 4: when we ack-wrap, the SHELL redirects stdout/stderr to the
+    // per-assignment log files (fds passed via stdio are NOT inherited through
+    // the cmd.exe → .cmd → node shim — the empty-logs bug of can_f792cacd), and
+    // the wrapper emits completed/failed sentinels mechanically. So the spawned
+    // process just ignores stdout/stderr here. stdin stays a pipe when the
+    // prompt is delivered that way (the grouped agent command inherits it).
     const useAckWrap = !!(options.assignmentId && (options.ackRoot ?? options.worktreePath));
-    let logFds: { stdout: number; stderr: number } | undefined;
-    if (useAckWrap) {
-      try {
-        const logRoot = options.ackRoot ?? options.worktreePath!;
-        const logDir = path.join(logRoot, '.brainclaw', 'coordination', 'runtime', 'log');
-        fs.mkdirSync(logDir, { recursive: true });
-        logFds = {
-          stdout: fs.openSync(path.join(logDir, `${options.assignmentId!}.stdout.log`), 'a'),
-          stderr: fs.openSync(path.join(logDir, `${options.assignmentId!}.stderr.log`), 'a'),
-        };
-      } catch {
-        // Log capture is best-effort — never block the spawn on logging issues.
-        logFds = undefined;
-      }
-    }
 
     const stdinTarget: 'pipe' | 'ignore' = needsStdin ? 'pipe' : 'ignore';
-    const stdoutTarget: number | 'ignore' = logFds ? logFds.stdout : 'ignore';
-    const stderrTarget: number | 'ignore' = logFds ? logFds.stderr : 'ignore';
-    const stdio: ('pipe' | 'ignore' | number)[] = [stdinTarget, stdoutTarget, stderrTarget];
+    const stdio: ('pipe' | 'ignore')[] = [stdinTarget, 'ignore', 'ignore'];
 
-    // pln#476: wrap the spawn command with a brief-ack step so the worker
-    // shell touches a sentinel file BEFORE the agent binary runs.
-    // waitForAssignmentHandshake checks that file as evidence the spawn
-    // executed — needed for codex (which lacks the brainclaw MCP context
-    // to call bclaw_assignment_update). When ackRoot/assignmentId are
-    // omitted, we keep the original direct-binary spawn.
+    // pln#476 + pln#520 step 4: wrap the spawn so the worker shell touches the
+    // pre-exec `ack` sentinel, redirects logs at the shell level, and emits a
+    // completed/failed sentinel from the agent's exit code. waitForAssignmentHandshake
+    // checks the ack file; the reconciler trusts the completed/failed/heartbeat
+    // sentinels rather than the (untrustworthy) wrapper pid. When ackRoot/
+    // assignmentId are omitted, we keep the original direct-binary spawn.
     let child;
     if (useAckWrap) {
-      const ackRoot = options.ackRoot ?? options.worktreePath!;
-      const ackDir = path.join(ackRoot, '.brainclaw', 'coordination', 'runtime', 'ack');
-      const ackPath = path.join(ackDir, `${options.assignmentId!}.ack`);
-      fs.mkdirSync(ackDir, { recursive: true });
-      const ackStep = isWin32
-        ? `type nul > "${ackPath}"`
-        : `touch "${ackPath}"`;
-      const wrappedCmd = `${ackStep} && ${invoke.bashCommand}`;
+      const signalRoot = options.ackRoot ?? options.worktreePath!;
+      ensureRuntimeDirs(signalRoot);
+      const wrappedCmd = buildAckWrapCommand(invoke.bashCommand, {
+        ackPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'ack'),
+        completedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'completed'),
+        failedPath: getRuntimeSignalPath(signalRoot, options.assignmentId!, 'failed'),
+        stdoutLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stdout'),
+        stderrLog: getRuntimeLogPath(signalRoot, options.assignmentId!, 'stderr'),
+      }, isWin32);
       child = spawn(wrappedCmd, [], {
         detached: !isWin32,
         shell: true,
@@ -230,13 +251,6 @@ export class CliExecutionAdapter implements ExecutionAdapter {
     }
 
     child.unref();
-
-    // Close the parent's copies of the log file descriptors. The child has its
-    // own dup'd copies and will keep writing to them after we return.
-    if (logFds) {
-      try { fs.closeSync(logFds.stdout); } catch { /* best-effort */ }
-      try { fs.closeSync(logFds.stderr); } catch { /* best-effort */ }
-    }
 
     const pid = child.pid;
     if (!pid) {

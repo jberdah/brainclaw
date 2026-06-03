@@ -8,8 +8,8 @@
  * @module
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { resolveConcurrencyLimit, resolveResourceKey, type InvokeCommand } from './agent-capability.js';
+import { getRuntimeSignalPath } from './runtime-signals.js';
 import { appendAuditEntry } from './audit.js';
 import { loadAllSessions } from './identity.js';
 import { loadConfig } from './config.js';
@@ -49,7 +49,7 @@ function sleep(ms: number): Promise<void> {
  * spawn anyway).
  */
 export function getAssignmentAckPath(cwd: string, assignmentId: string): string {
-  return path.join(cwd, '.brainclaw', 'coordination', 'runtime', 'ack', `${assignmentId}.ack`);
+  return getRuntimeSignalPath(cwd, assignmentId, 'ack');
 }
 
 function isAssignmentAcked(assignmentId: string, cwd: string): boolean {
