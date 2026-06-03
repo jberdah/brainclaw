@@ -46,7 +46,7 @@ export function buildAckWrapCommand(bashCommand: string, paths: AckWrapPaths, is
  * On Windows, `spawn({shell:true})` always succeeds (launches cmd.exe),
  * masking ENOENT for missing binaries. This pre-check catches that.
  */
-function resolveBinaryOnPath(binary: string): string | undefined {
+export function resolveBinaryOnPath(binary: string): string | undefined {
   // Absolute or relative path — check directly
   if (binary.includes('/') || binary.includes('\\')) {
     return fs.existsSync(binary) ? binary : undefined;

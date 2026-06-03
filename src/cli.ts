@@ -31,7 +31,7 @@ import { runInstruction } from './commands/instruction.js';
 import { runListAgents } from './commands/list-agents.js';
 import { runSurfaceTaskResource } from './commands/surface-task-resource.js';
 import { runListInstructions } from './commands/list-instructions.js';
-import { runDoctor } from './commands/doctor.js';
+import { runDoctor, runDoctorSpawnCheck } from './commands/doctor.js';
 import { runRepair } from './commands/repair.js';
 import { runStale } from './commands/stale.js';
 import { runRebuild } from './commands/rebuild.js';
@@ -721,7 +721,13 @@ program
   .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .option('--dispatch', 'Run dispatch-health diagnostic only: reconcile open agent_runs and report stuck/unverified/silent failures (pln#496 step stp_8c072d75)')
-  .action((options) => {
+  .option('--spawn-check', 'Real spawn round-trip per installed agent before dispatch (pln#520 step 2): validates delivery + handshake on this host, exits non-zero on any installed-agent failure')
+  .option('--spawn-check-timeout <ms>', 'Per-agent timeout for --spawn-check (default 15000)', parseInt)
+  .action(async (options) => {
+    if (options.spawnCheck) {
+      await runDoctorSpawnCheck({ cwd: options.cwd, json: options.json, timeoutMs: options.spawnCheckTimeout });
+      return;
+    }
     runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch });
   });
 

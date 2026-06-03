@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { reconcileAllOpenRuns } from '../core/agentrun-reconciler.js';
+import { runSpawnCheck, renderSpawnCheckReport, type SpawnCheckOptions } from '../core/spawn-check.js';
 import { loadAgentRun } from '../core/agentruns.js';
 import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
@@ -760,6 +761,21 @@ function renderDispatchHealthHumanReport(report: DispatchHealthReport): string {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * pln#520 step 2 — `brainclaw doctor --spawn-check`. Real spawn round-trip per
+ * installed agent on the current host. Exits non-zero if any installed agent
+ * fails (so it gates CI / a pre-dispatch pre-flight).
+ */
+export async function runDoctorSpawnCheck(options: SpawnCheckOptions & { json?: boolean } = {}): Promise<void> {
+  const report = await runSpawnCheck(options);
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(renderSpawnCheckReport(report));
+  }
+  if (report.exit_code !== 0) process.exit(report.exit_code);
 }
 
 export function runDoctor(options: DoctorOptions = {}): void {
