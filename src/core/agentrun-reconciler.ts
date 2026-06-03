@@ -40,6 +40,7 @@ import { loadClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
+import { readHeartbeat, readLogTail, signalExists } from './runtime-signals.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -58,6 +59,12 @@ export const DEFAULT_HEALTH_CHECK_GRACE_MS = 60_000;
 export const DEFAULT_STALE_AFTER_MS = 30 * 60_000;
 export const DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS = 5 * 60_000;
 export const DEFAULT_DEAD_PID_READ_SWEEP_LIMIT = 50;
+
+/**
+ * pln#520 step 1 — a heartbeat older than this (with no completion signal) means
+ * the worker reached its loop then went silent: `stalled`. Default 10 min.
+ */
+export const DEFAULT_HEARTBEAT_STALE_MS = 10 * 60_000;
 
 const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   'completed', 'failed', 'cancelled', 'timed_out', 'interrupted',
@@ -83,6 +90,18 @@ export interface ReconcileEvidence {
   assignment_completed: boolean;
   /** Process liveness: true=alive, false=dead, undefined=cannot determine. */
   process_alive: boolean | undefined;
+  /**
+   * pln#520 step 1 — sentinel evidence, the trustworthy liveness channel
+   * (the wrapper pid is NOT trustworthy; see runtime-signals.ts).
+   */
+  /** Wrapper wrote the `completed` sentinel (agent exited 0). */
+  completed_signal: boolean;
+  /** Wrapper wrote the `failed` sentinel (agent exited non-zero). */
+  failed_signal: boolean;
+  /** Worker wrote a `heartbeat` (work_loop_reached) at least once. */
+  heartbeat_exists: boolean;
+  /** Age of the heartbeat in ms (undefined when no heartbeat). */
+  heartbeat_age_ms?: number;
 }
 
 export interface ReconcileResult {
@@ -103,6 +122,8 @@ export interface ReconcileOptions {
   healthCheckGraceMs?: number;
   /** Override 30 min stale threshold for tests. */
   staleAfterMs?: number;
+  /** Override the heartbeat-stale threshold (pln#520 step 1, default 10 min). */
+  heartbeatStaleMs?: number;
   /** Override the wall clock for deterministic tests. */
   nowMs?: number;
   /** Actor name recorded on synthetic transitions / events. Default 'reconciler'. */
@@ -207,17 +228,51 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
 
   const process_alive = isProcessAlive(run.pid);
 
-  return { age_ms, has_post_start_commit, claim_released, assignment_completed, process_alive };
+  // pln#520 step 1 — sentinel evidence. Signals live under the project
+  // coordination dir (the dispatcher's ackRoot), which is `cwd` for the
+  // reconciler. Keyed by assignment_id.
+  const signalRoot = cwd ?? process.cwd();
+  let completed_signal = false;
+  let failed_signal = false;
+  let heartbeat_exists = false;
+  let heartbeat_age_ms: number | undefined;
+  try {
+    completed_signal = signalExists(signalRoot, run.assignment_id, 'completed');
+    failed_signal = signalExists(signalRoot, run.assignment_id, 'failed');
+    const hb = readHeartbeat(signalRoot, run.assignment_id);
+    heartbeat_exists = hb.exists;
+    if (hb.exists && hb.mtimeMs !== undefined) heartbeat_age_ms = now - hb.mtimeMs;
+  } catch { /* defensive */ }
+
+  return {
+    age_ms, has_post_start_commit, claim_released, assignment_completed, process_alive,
+    completed_signal, failed_signal, heartbeat_exists, heartbeat_age_ms,
+  };
 }
 
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
-  return evidence.has_post_start_commit
+  return evidence.completed_signal
+    || evidence.has_post_start_commit
     || evidence.claim_released
     || evidence.assignment_completed;
 }
 
+/**
+ * pln#520 step 1 — a short tail of the captured stderr (or stdout) for
+ * failed_silent / stalled diagnostics, so the verdict carries the worker's
+ * last words instead of just a status code.
+ */
+function logTailSuffix(run: AgentRun, cwd?: string): string {
+  const root = cwd ?? process.cwd();
+  const tail = (readLogTail(root, run.assignment_id, 'stderr', 500).trim()
+    || readLogTail(root, run.assignment_id, 'stdout', 500).trim());
+  if (!tail) return '';
+  return ` | log tail: ${tail.replace(/\s+/g, ' ').slice(0, 300)}`;
+}
+
 function describeEvidence(evidence: ReconcileEvidence): string {
   const reasons: string[] = [];
+  if (evidence.completed_signal) reasons.push('wrapper wrote completed sentinel');
   if (evidence.has_post_start_commit) reasons.push('post-start commit on worktree branch');
   if (evidence.claim_released) reasons.push('claim released');
   if (evidence.assignment_completed) reasons.push('assignment marked completed');
@@ -285,6 +340,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -339,18 +395,12 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
     }
   }
 
-  // Failure inference: stale + dead process + no evidence.
-  if (evidence.age_ms >= stale && evidence.process_alive === false) {
+  // pln#520 step 1 — sentinel-based failure (fast + trustworthy, pid-independent).
+  const heartbeatStale = options.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
+  const failHere = (reason: string): ReconcileResult => {
     try {
-      transitionAgentRun(runId, 'failed', {
-        actor,
-        status_reason: 'silent_termination_no_evidence',
-      }, cwd);
-      return {
-        run_id: runId, action: 'inferred_failed',
-        reason: 'silent_termination_no_evidence',
-        evidence, previous_status, current_status: 'failed',
-      };
+      transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
+      return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
       return {
         run_id: runId, action: 'no_op',
@@ -358,6 +408,28 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
         evidence, previous_status, current_status: run.status,
       };
     }
+  };
+
+  // `failed` sentinel — the wrapper saw a non-zero agent exit.
+  if (evidence.failed_signal) {
+    return failHere(`failed_silent: wrapper reported non-zero exit${logTailSuffix(run, cwd)}`);
+  }
+  // Heartbeat present but stale → reached the loop then went silent.
+  if (evidence.heartbeat_exists && evidence.heartbeat_age_ms !== undefined && evidence.heartbeat_age_ms >= heartbeatStale) {
+    return failHere(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago${logTailSuffix(run, cwd)}`);
+  }
+  // Fresh heartbeat → alive; trust it over the untrustworthy wrapper pid.
+  if (evidence.heartbeat_exists) {
+    return {
+      run_id: runId, action: 'no_op',
+      reason: `heartbeat fresh (${Math.round((evidence.heartbeat_age_ms ?? 0) / 1000)}s) — worker alive, pid untrusted`,
+      evidence, previous_status, current_status: run.status,
+    };
+  }
+
+  // Failure inference: stale + dead process + no evidence.
+  if (evidence.age_ms >= stale && evidence.process_alive === false) {
+    return failHere('silent_termination_no_evidence');
   }
 
   // Health-check window: past grace, not yet stale, no evidence either way.
@@ -399,6 +471,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     const evidence: ReconcileEvidence = {
       age_ms: 0, has_post_start_commit: false, claim_released: false,
       assignment_completed: false, process_alive: undefined,
+      completed_signal: false, failed_signal: false, heartbeat_exists: false,
     };
     return {
       run_id: runId, action: 'no_op', reason: 'run not found', evidence,
@@ -413,21 +486,28 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
       evidence, previous_status: run.status, current_status: run.status,
     };
   }
-  if (evidence.process_alive !== false) {
-    return {
-      run_id: run.id, action: 'no_op',
-      reason: evidence.process_alive === true ? 'process alive' : 'pid liveness unknown',
-      evidence, previous_status: run.status, current_status: run.status,
-    };
-  }
 
-  // pid reads dead — but the tracked pid is NOT trustworthy (see doc above),
-  // so a bare dead pid NEVER cancels. Evidence of real work wins; otherwise
-  // surface the uncertainty non-destructively and leave the run `running` for
-  // reconcileAgentRun's stale-threshold path to fail it only after a fair,
-  // evidence-based delay.
   const actor = options.actor ?? 'reconciler';
+  const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+  const heartbeatStale = options.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
 
+  const failRun = (reason: string): ReconcileResult => {
+    try {
+      transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
+      return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
+    } catch (err) {
+      return {
+        run_id: run.id, action: 'no_op',
+        reason: `failure transition rejected: ${err instanceof Error ? err.message : String(err)}`,
+        evidence, previous_status: run.status, current_status: run.status,
+      };
+    }
+  };
+
+  // ── pln#520 step 1: SENTINELS are authoritative, independent of the
+  // untrustworthy wrapper pid. Check them first. ──────────────────────────
+
+  // 1. Completion evidence (mechanical `completed` sentinel or work evidence).
   if (anyCompletionEvidence(evidence)) {
     try {
       transitionAgentRun(run.id, 'completed', {
@@ -448,32 +528,47 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
     }
   }
 
-  // Stale + provably dead + still no evidence -> genuine silent failure. This
-  // MUST converge HERE: the canonical read path (entity-operations.ts) and the
-  // MCP pre-read sweep route `running` runs through this function, never
-  // through reconcileAgentRun, so deferring would leave a crashed run `running`
-  // forever (trp#292). The 30-min stale window — vs the immediate cancel before
-  // pln#520 — gives a worker behind an untrusted pid ample time to leave
-  // evidence first. Reported as `failed` (it died), not `cancelled`.
-  const stale = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+  // 2. `failed` sentinel — the wrapper saw a non-zero agent exit. This is the
+  // FAST, TRUSTWORTHY failed_silent detector (vs the pid heuristic that caused
+  // can_f792cacd false negatives). Carries the captured log tail.
+  if (evidence.failed_signal) {
+    return failRun(`failed_silent: wrapper reported non-zero exit${logTailSuffix(run, cwd)}`);
+  }
+
+  // 3. Heartbeat present but STALE → the worker reached its loop then went
+  // silent (e.g. hung). pid-independent: a hung worker keeps the wrapper alive.
+  if (evidence.heartbeat_exists && evidence.heartbeat_age_ms !== undefined && evidence.heartbeat_age_ms >= heartbeatStale) {
+    return failRun(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago${logTailSuffix(run, cwd)}`);
+  }
+
+  // 4. Fresh heartbeat → the worker is alive and working; trust it OVER the
+  // (untrustworthy) wrapper pid. This is the can_f792cacd fix: never fail a
+  // live, heartbeating worker just because its wrapper pid reads dead.
+  if (evidence.heartbeat_exists) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: `heartbeat fresh (${Math.round((evidence.heartbeat_age_ms ?? 0) / 1000)}s) — worker alive, pid untrusted`,
+      evidence, previous_status: run.status, current_status: run.status,
+    };
+  }
+
+  // ── No sentinel, no heartbeat: fall back to the pid-conservative path. The
+  // wrapper writes completed/failed on any normal exit, so reaching here means
+  // the worker has not exited and never heartbeat. Do NOT fast-fail on a dead
+  // pid (it's the wrapper's, not the worker's). ──────────────────────────────
+  if (evidence.process_alive !== false) {
+    return {
+      run_id: run.id, action: 'no_op',
+      reason: evidence.process_alive === true ? 'process alive' : 'pid liveness unknown',
+      evidence, previous_status: run.status, current_status: run.status,
+    };
+  }
+
+  // pid dead + no sentinel + no heartbeat: only converge after the long stale
+  // window (trp#292 — must converge HERE since the read path never routes
+  // through reconcileAgentRun), giving an untrusted-pid worker ample time.
   if (evidence.age_ms >= stale) {
-    try {
-      transitionAgentRun(run.id, 'failed', {
-        actor,
-        status_reason: 'silent_termination_no_evidence',
-      }, cwd);
-      return {
-        run_id: run.id, action: 'inferred_failed',
-        reason: 'silent_termination_no_evidence',
-        evidence, previous_status: run.status, current_status: 'failed',
-      };
-    } catch (err) {
-      return {
-        run_id: run.id, action: 'no_op',
-        reason: `failure transition rejected: ${err instanceof Error ? err.message : String(err)}`,
-        evidence, previous_status: run.status, current_status: run.status,
-      };
-    }
+    return failRun('silent_termination_no_evidence');
   }
 
   emitUnverifiedEvent(run, evidence, actor, cwd);
@@ -525,7 +620,7 @@ export function reconcileAllOpenRuns(
       } catch {
         results.push({
           run_id: run.id, action: 'no_op', reason: 'reconcile threw — skipped',
-          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined },
+          evidence: { age_ms: 0, has_post_start_commit: false, claim_released: false, assignment_completed: false, process_alive: undefined, completed_signal: false, failed_signal: false, heartbeat_exists: false },
           previous_status: run.status, current_status: run.status,
         });
       }
