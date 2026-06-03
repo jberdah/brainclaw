@@ -44,6 +44,7 @@ import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { getRuntimeSignalPath } from './runtime-signals.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
@@ -302,6 +303,38 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
  * Protocol section IS useful to them — `resolveBriefMode` was updated to
  * return 'full' for that combination.
  */
+/**
+ * pln#520 step 5 — the liveness section of a generated brief. An imperative
+ * "do this first" instruction telling the worker to write its `work_loop_reached`
+ * heartbeat to an ABSOLUTE, writable signals path BEFORE any other action, then
+ * refresh it periodically. Zero-MCP (a plain shell redirect) so even sandboxed
+ * agents without the brainclaw MCP can comply. Completion is recorded
+ * mechanically by the spawn wrapper (step 4), so the agent only owns the
+ * heartbeat. This is the worker-side half of the liveness contract whose
+ * engine-side floor is the wrapper + reconciler (steps 4 + 1).
+ */
+export function buildLivenessSection(cwd: string, assignmentId: string): string {
+  const hbPath = getRuntimeSignalPath(cwd, assignmentId, 'heartbeat');
+  const isWin = process.platform === 'win32';
+  const writeCmd = isWin
+    ? `echo work_loop_reached ${assignmentId} > "${hbPath}"`
+    : `printf 'work_loop_reached ${assignmentId} %s' "$(date +%s)" > "${hbPath}"`;
+  return [
+    '## Liveness — DO THIS FIRST (step 0)',
+    'Before ANY other action, prove you reached your work loop by writing a heartbeat,',
+    'then refresh it every few minutes while you work. brainclaw uses this to tell',
+    '"alive and working" from "spawned but dead" — a missing/stale heartbeat marks the',
+    'run stalled. Completion is recorded automatically by the spawn wrapper; you do NOT',
+    'need to write a completed/failed signal.',
+    '',
+    '```sh',
+    writeCmd,
+    '```',
+    `Heartbeat file (absolute, writable): ${hbPath}`,
+    '',
+  ].join('\n');
+}
+
 export function buildProtocolSection(options?: { claimId?: string; worktreePath?: string; assignmentId?: string }): string {
   const parts: string[] = [];
 
@@ -426,6 +459,13 @@ export function generateBrief(
   if (plan.tags?.length) parts.push(`Tags: ${plan.tags.join(', ')}`);
   if (plan.estimated_effort) parts.push(`Estimated effort: ${plan.estimated_effort} minutes`);
   parts.push('');
+
+  // pln#520 step 5 — liveness heartbeat instruction, first actionable block so
+  // the worker writes work_loop_reached before anything else. Only when an
+  // assignment id is known (the heartbeat is keyed by it).
+  if (options?.assignmentId) {
+    parts.push(buildLivenessSection(cwd, options.assignmentId));
+  }
 
   // Steps if any
   if (plan.steps?.length) {
