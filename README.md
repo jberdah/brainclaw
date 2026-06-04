@@ -345,6 +345,14 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.7.2
+
+- **Sequence MCP tools are agent-first by default** — sequence creation,
+  listing, update, and deletion tools are now in the default MCP catalog, with
+  explicit lane item schemas (`planId`, optional `stepId`, `rank`,
+  dependencies, lane metadata) and matching canonical CRUD validation for
+  `entity="sequence"`.
+
 ### v1.7.1
 
 - **MCP project context isolation fix** — `bclaw_switch` now keeps MCP switches

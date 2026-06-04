@@ -5,6 +5,28 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] — 2026-06-04
+
+Patch release for sequence-driven parallel dispatch ergonomics in MCP clients.
+
+### Changed
+
+- **Sequence MCP tools are default-discoverable**. `bclaw_list_sequences`,
+  `bclaw_create_sequence`, `bclaw_update_sequence`, and
+  `bclaw_delete_sequence` now live in the default `standard` catalog instead of
+  the hidden `advanced` tier, so fresh agents can build and activate sequences
+  without requesting `catalog=all`.
+- **Sequence item schemas are explicit**. The MCP schema for sequence `items`
+  now documents the full lane item shape: `planId`, optional `stepId`, `rank`,
+  `hard_after`, `soft_after`, `lane`, `scope_hint`, and `rationale`.
+
+### Fixed
+
+- **Canonical sequence CRUD parity**. `bclaw_create/update(entity="sequence")`
+  now rejects malformed `items` clearly instead of silently ignoring non-array
+  payloads, while preserving the same item shape as the specialized sequence
+  tools.
+
 ## [1.7.1] — 2026-06-02
 
 Patch release for MCP project-context isolation in large multi-project
@@ -191,6 +213,7 @@ preserved in the final document. Full report linked from `run_79f8443a`.
 See git history for releases before this changelog was introduced
 (commit `1f8c5dd` and earlier).
 
+[1.7.2]: https://github.com/jberdah/brainclaw/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/jberdah/brainclaw/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/jberdah/brainclaw/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/jberdah/brainclaw/compare/v1.5.4...v1.6.0
