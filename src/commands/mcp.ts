@@ -103,6 +103,31 @@ export const MCP_PROTOCOL_VERSIONS: McpProtocolVersion[] = ['2025-11-25', '2024-
 export const MCP_SERVER_NOT_INITIALIZED = -32002;
 const MCP_RUNTIME_REPAIR_COMMAND = 'brainclaw doctor --repair';
 
+const SEQUENCE_ITEM_INPUT_SCHEMA = {
+  type: 'object',
+  description: 'Sequence lane item. planId is required; stepId optionally narrows dispatch/readiness to a specific plan step.',
+  properties: {
+    planId: { type: 'string', minLength: 1, description: 'Plan item ID referenced by this sequence item.' },
+    stepId: { type: 'string', minLength: 1, description: 'Optional plan step ID inside planId for step-level dispatch/readiness.' },
+    rank: { type: 'number', minimum: 1, description: 'Positive integer ordering key. Ranks must be unique within a sequence.' },
+    hard_after: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Sequence item planId values that must complete before this item becomes ready.',
+    },
+    soft_after: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Advisory predecessor planId values; they inform ordering but do not block readiness.',
+    },
+    lane: { type: 'string', description: 'Optional lane label used for parallel dispatch grouping and filtering.' },
+    scope_hint: { type: 'string', description: 'Optional file/path scope hint for claim and brief generation.' },
+    rationale: { type: 'string', description: 'Optional explanation for this item or dependency placement.' },
+  },
+  required: ['planId', 'rank'],
+  additionalProperties: false,
+} as const;
+
 export interface McpToolResponse {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: Record<string, unknown>;
@@ -278,7 +303,7 @@ export const MCP_READ_TOOLS = [
   {
     name: 'bclaw_list_sequences',
     description: 'List coordination sequences with optional filters on status and id.',
-    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'auto' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -743,7 +768,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_create_sequence',
     description: 'Create a coordination sequence shared by agents.',
-    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -751,7 +776,7 @@ const MCP_WRITE_TOOLS = [
         description: { type: 'string', description: 'Optional sequence description.' },
         status: { type: 'string', description: 'Status: draft, active, archived.' },
         owner: { type: 'string', description: 'Optional sequence owner.' },
-        items: { type: 'array', description: 'Sequence items in rank order.', items: { type: 'object' } },
+        items: { type: 'array', description: 'Sequence items in rank order.', items: SEQUENCE_ITEM_INPUT_SCHEMA },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
@@ -762,7 +787,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_update_sequence',
     description: 'Update a coordination sequence status, metadata, or items.',
-    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
@@ -771,7 +796,7 @@ const MCP_WRITE_TOOLS = [
         description: { type: 'string', description: 'Optional new description.' },
         status: { type: 'string', description: 'Status: draft, active, archived.' },
         owner: { type: 'string', description: 'Optional sequence owner.' },
-        items: { type: 'array', description: 'Optional replacement items array.', items: { type: 'object' } },
+        items: { type: 'array', description: 'Optional replacement items array.', items: SEQUENCE_ITEM_INPUT_SCHEMA },
         tags: { type: 'array', items: { type: 'string' }, description: 'Optional replacement tags.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
@@ -873,7 +898,7 @@ const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_delete_sequence',
     description: 'Delete a sequence by ID. Requires trusted or curator trust level.',
-    annotations: { tier: 'advanced', category: 'coordination' , headlessApproval: 'prompt' },
+    annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {

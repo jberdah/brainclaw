@@ -54,6 +54,8 @@ These rules apply to any feature that touches this audience:
 - `bclaw_add_step` / `bclaw_complete_step` / `bclaw_update_step` / `bclaw_delete_step` — plan sub-steps for granular tracking
 - `bclaw_create_sequence` / `bclaw_list_sequences` / `bclaw_update_sequence` — multi-step coordination sequences with lane analysis
 
+Sequence items are explicit lane records: `{ planId, stepId?, rank, hard_after?, soft_after?, lane?, scope_hint?, rationale? }`. `planId` and `rank` are required; `stepId` lets a sequence dispatch a specific plan step instead of the whole plan. A normal parallel flow is: create sequence as `draft`, update it to `active`, run `bclaw_dispatch(intent="analysis")`, then run `bclaw_dispatch(intent="execute", agents=[...])`.
+
 ### Multi-Agent Dispatch
 - `bclaw_dispatch(intent)` — `analysis` analyses an active sequence (ready/active/blocked/done per lane), `execute` fans out parallel work across lanes, `review` dispatches code reviews for completed handoffs
 - `bclaw_coordinate(intent)` — facade for `assign` / `consult` / `review` / `reroute` / `summarize`. Pass `open_loop: true` on `intent="review"` to also dispatch the reviewer turn (the recommended path).

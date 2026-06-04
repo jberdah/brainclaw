@@ -1933,7 +1933,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 | `bclaw_work(intent)` | Start a session, load context, and (for `intent="execute"`) claim a scope in one call. Returns a compact payload by default (pass `compact: false` for the full context). |
 | `bclaw_context(kind)` | Unified context read: `kind` is one of `memory`, `execution`, `board`, `board_summary`, or `delta`. |
 
-**Canonical grammar** — your main tool for working with memory entities (plan, decision, constraint, trap, handoff, runtime_note, candidate, claim, action, assignment, agent_run):
+**Canonical grammar** — your main tool for working with memory entities (plan, decision, constraint, trap, handoff, runtime_note, candidate, sequence, claim, action, assignment, agent_run):
 
 | Tool | Purpose |
 |---|---|
@@ -1952,6 +1952,10 @@ The default catalog is intentionally small and centred on the canonical grammar.
 | `bclaw_dispatch(intent)` | Parallelize execute across a sequence's lanes (analysis / execute / review). |
 | `bclaw_loop(intent)` | Drive a turn in an existing multi-turn loop (`turn`, `complete_turn`, `advance`, `close`). Do not call `bclaw_loop(intent="open")` directly without dispatch — use `bclaw_coordinate(intent="review", open_loop: true)` instead. |
 
+**Sequences**:
+
+`bclaw_list_sequences`, `bclaw_create_sequence`, `bclaw_update_sequence`, `bclaw_delete_sequence`. Sequence items use `{ planId, stepId?, rank, hard_after?, soft_after?, lane?, scope_hint?, rationale? }`. Create/update a sequence to `active`, inspect readiness with `bclaw_dispatch(intent="analysis")`, then dispatch ready lanes with `bclaw_dispatch(intent="execute")`.
+
 **Session, claims, plans, handoffs**:
 
 `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim`, `bclaw_add_step`, `bclaw_complete_step`, `bclaw_update_step`, `bclaw_delete_step`, `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_send_message`, `bclaw_correct_handoff`.
@@ -1960,7 +1964,7 @@ The default catalog is intentionally small and centred on the canonical grammar.
 
 `bclaw_write_note`, `bclaw_quick_capture`, `bclaw_search`, `bclaw_setup`, `bclaw_bootstrap`, `bclaw_switch`, `bclaw_release_notes`, `bclaw_doctor`.
 
-**Legacy per-entity tools** (`bclaw_list_plans` / `bclaw_list_claims` / `bclaw_list_candidates` / `bclaw_list_sequences`, `bclaw_get_context` / `bclaw_get_execution_context` / `bclaw_get_agent_board`, `bclaw_create_plan` / `bclaw_create_candidate`, `bclaw_update_plan` / `bclaw_update_handoff` / `bclaw_update_memory`, `bclaw_read_handoff` / `bclaw_delete_memory`, `bclaw_accept` / `bclaw_reject`, `bclaw_dispatch_analysis` / `bclaw_dispatch_review`, and others) were removed from the discoverable catalog at v1.0. Direct calls still succeed as a migration escape hatch but emit a redirect warning pointing at the canonical grammar. The full removal list and replacement map lives in [`docs/mcp-schema-changelog.md`](mcp-schema-changelog.md) under the v1.0 "Removed" section. Raw MCP clients can request the full advanced catalog with `tools/list` params `{ catalog: "all" }`.
+**Legacy per-entity tools** (`bclaw_list_plans` / `bclaw_list_claims` / `bclaw_list_candidates`, `bclaw_get_context` / `bclaw_get_execution_context` / `bclaw_get_agent_board`, `bclaw_create_plan` / `bclaw_create_candidate`, `bclaw_update_plan` / `bclaw_update_handoff` / `bclaw_update_memory`, `bclaw_read_handoff` / `bclaw_delete_memory`, `bclaw_accept` / `bclaw_reject`, `bclaw_dispatch_analysis` / `bclaw_dispatch_review`, and others) were removed from the discoverable catalog at v1.0. Direct calls still succeed as a migration escape hatch but emit a redirect warning pointing at the canonical grammar. The full removal list and replacement map lives in [`docs/mcp-schema-changelog.md`](mcp-schema-changelog.md) under the v1.0 "Removed" section. Raw MCP clients can request the full advanced catalog with `tools/list` params `{ catalog: "all" }`.
 
 ---
 

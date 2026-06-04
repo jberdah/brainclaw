@@ -73,4 +73,20 @@ describe('mcp facade ordering — fresh-agent tools/list', () => {
       `first standard tool at ${firstStandardIdx} must come after last facade at ${lastFacadeIdx}`,
     );
   });
+
+  it('sequence coordination tools are visible in the default catalog', () => {
+    const defaultNames = new Set((DEFAULT_PUBLISHED_TOOLS as PublishedTool[]).map((t) => t.name));
+    const required = [
+      'bclaw_list_sequences',
+      'bclaw_create_sequence',
+      'bclaw_update_sequence',
+      'bclaw_delete_sequence',
+    ];
+
+    assert.deepEqual(
+      required.filter((name) => !defaultNames.has(name)),
+      [],
+      'sequence tools are core agent-first coordination tools and must not be hidden behind catalog=all',
+    );
+  });
 });

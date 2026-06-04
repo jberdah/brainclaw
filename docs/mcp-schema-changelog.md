@@ -32,6 +32,17 @@ guarantees this changelog follows.
   affected — they bypass `handleBclawLoop` and invoke the core
   `openLoop()` directly.
 
+**Changed — sequence tools promoted to default discovery (pln#522)**
+- `bclaw_list_sequences`, `bclaw_create_sequence`,
+  `bclaw_update_sequence`, and `bclaw_delete_sequence` move from
+  `advanced` to `standard`, so fresh agents see them in the default
+  `tools/list` catalog. Sequences are a core agent-first coordination
+  primitive for parallel dispatch, not an advanced-only admin surface.
+- `bclaw_create_sequence.items` and `bclaw_update_sequence.items` now
+  expose the full item shape in JSON Schema: `planId`, optional
+  `stepId`, `rank`, `hard_after`, `soft_after`, `lane`, `scope_hint`,
+  and `rationale`.
+
 ---
 
 ## 1.0.0 (current)
@@ -82,7 +93,7 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:4a6f612ad952fb52`
+- MCP public surface fingerprint: `sha256:a1881ff57ddce377`
   (updated 2026-05-27: added the `ref` property to the bclaw_coordinate
   inputSchema — pln#520 Tier 2 / trp#371, the scope-aware dirty guard;
   `ref` lets a dispatch build its worktree from an explicit git ref.

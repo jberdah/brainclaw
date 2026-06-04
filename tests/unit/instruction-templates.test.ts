@@ -124,6 +124,10 @@ describe('instruction-templates', () => {
         'bclaw_complete_step',
         'bclaw_update_step',
         'bclaw_delete_step',
+        'bclaw_list_sequences',
+        'bclaw_create_sequence',
+        'bclaw_update_sequence',
+        'bclaw_delete_sequence',
         'bclaw_read_inbox',
         'bclaw_ack_message',
         'bclaw_send_message',
@@ -139,7 +143,8 @@ describe('instruction-templates', () => {
       for (const tool of toolNames) {
         assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
       }
-      assert.ok(result.content.includes('tools/list` params `{ catalog: "all" }`'));
+      assert.ok(result.content.includes('Item shape: `{ planId, stepId?, rank'));
+      assert.ok(result.content.includes('bclaw_dispatch(intent=analysis)'));
       assert.ok(!result.content.includes('57 tools are available via MCP'));
     });
 

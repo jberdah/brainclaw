@@ -205,7 +205,7 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       const created = createEntity('sequence', {
         name: 'release lanes',
         author: 'jberdah',
-        items: [{ planId: 'pln_aaa', rank: 1 }],
+        items: [{ planId: 'pln_aaa', stepId: 'stp_aaa', rank: 1 }],
       }, workspace.dir);
       assert.ok(created.id.startsWith('seq_'), `expected seq_ id, got ${created.id}`);
 
@@ -216,6 +216,7 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       assert.equal(fetched.name, 'release lanes');
       assert.equal(fetched.status, 'draft');
       assert.equal(fetched.items.length, 1);
+      assert.equal((fetched.items[0] as { stepId?: string }).stepId, 'stp_aaa');
 
       const listed = listEntities('sequence', workspace.dir, {});
       assert.equal(listed.total, 1);
@@ -236,6 +237,85 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       assert.equal(removed.archived, true);
       assert.equal(removed.purged, false);
       assert.equal((getEntity('sequence', created.id, workspace.dir) as { status: string }).status, 'archived');
+    });
+
+    it('canonical update accepts the full sequence item shape', () => {
+      const created = createEntity('sequence', { name: 'shape parity', author: 'u' }, workspace.dir);
+
+      updateEntity('sequence', created.id, {
+        items: [{
+          planId: 'pln_api',
+          stepId: 'stp_contract',
+          rank: 1,
+          hard_after: ['pln_bootstrap'],
+          soft_after: ['pln_docs'],
+          lane: 'api',
+          scope_hint: 'src/api/**',
+          rationale: 'API work can run independently after bootstrap.',
+        }],
+      }, workspace.dir);
+
+      const fetched = getEntity('sequence', created.id, workspace.dir) as {
+        items: Array<Record<string, unknown>>;
+      };
+      assert.deepEqual(fetched.items[0], {
+        planId: 'pln_api',
+        stepId: 'stp_contract',
+        rank: 1,
+        hard_after: ['pln_bootstrap'],
+        soft_after: ['pln_docs'],
+        lane: 'api',
+        scope_hint: 'src/api/**',
+        rationale: 'API work can run independently after bootstrap.',
+      });
+    });
+
+    it('canonical create/update reject malformed sequence items clearly', () => {
+      assert.throws(
+        () => createEntity('sequence', {
+          name: 'bad-items-type',
+          author: 'u',
+          items: { planId: 'pln_a', rank: 1 },
+        }, workspace.dir),
+        /items.*array/i,
+      );
+
+      assert.throws(
+        () => createEntity('sequence', {
+          name: 'missing-plan-id',
+          author: 'u',
+          items: [{ rank: 1 }],
+        }, workspace.dir),
+        /planId/i,
+      );
+
+      assert.throws(
+        () => createEntity('sequence', {
+          name: 'missing-rank',
+          author: 'u',
+          items: [{ planId: 'pln_a' }],
+        }, workspace.dir),
+        /rank/i,
+      );
+
+      assert.throws(
+        () => createEntity('sequence', {
+          name: 'bad-hard-after',
+          author: 'u',
+          items: [{ planId: 'pln_a', rank: 1, hard_after: 'pln_bootstrap' }],
+        }, workspace.dir),
+        /hard_after/i,
+      );
+
+      const created = createEntity('sequence', { name: 'bad-update', author: 'u' }, workspace.dir);
+      assert.throws(
+        () => updateEntity('sequence', created.id, { items: { planId: 'pln_a', rank: 1 } }, workspace.dir),
+        /items.*array/i,
+      );
+      assert.throws(
+        () => updateEntity('sequence', created.id, { items: [{ planId: 'pln_a', rank: 1 }, { planId: 'pln_b', rank: 1 }] }, workspace.dir),
+        /Duplicate sequence rank/,
+      );
     });
 
     it('get resolves by short_label too', () => {

@@ -460,7 +460,7 @@ export function createEntity(
         name: requireString(data, 'name'),
         description: data.description as string | undefined,
         status: requireEnum(data, 'status', SequenceStatusSchema.options, { optional: true }),
-        items: Array.isArray(data.items) ? (data.items as SequenceItemInput[]) : undefined,
+        items: optionalSequenceItems(data),
         owner: data.owner as string | undefined,
         author: requireString(data, 'author'),
         authorId: data.agent_id as string | undefined,
@@ -572,7 +572,7 @@ export function updateEntity(
         id,
         name: patch.name as string | undefined,
         description: patch.description as string | undefined,
-        items: Array.isArray(patch.items) ? (patch.items as SequenceItemInput[]) : undefined,
+        items: optionalSequenceItems(patch),
         owner: patch.owner as string | undefined,
         tags: patch.tags as string[] | undefined,
       }, cwd);
@@ -776,6 +776,14 @@ function requireString(data: Record<string, unknown>, field: string): string {
     throw new Error(`Missing required field: ${field}`);
   }
   return value;
+}
+
+function optionalSequenceItems(data: Record<string, unknown>): SequenceItemInput[] | undefined {
+  if (!('items' in data) || data.items === undefined || data.items === null) return undefined;
+  if (!Array.isArray(data.items)) {
+    throw new Error(`Invalid value for 'items': expected an array of sequence item objects`);
+  }
+  return data.items as SequenceItemInput[];
 }
 
 /**

@@ -163,3 +163,27 @@ describe('MCP tool inputSchemas — cross-validator conformance', () => {
     });
   }
 });
+
+describe('MCP sequence inputSchemas — agent-first item shape', () => {
+  for (const toolName of ['bclaw_create_sequence', 'bclaw_update_sequence']) {
+    it(`${toolName}: items schema documents planId/stepId/rank/dependencies`, () => {
+      const tool = (ALL_TOOLS as readonly McpToolDescriptor[]).find((entry) => entry.name === toolName);
+      assert.ok(tool, `${toolName} must be registered`);
+
+      const properties = tool.inputSchema.properties as Record<string, unknown> | undefined;
+      const itemsProperty = properties?.items as Record<string, unknown> | undefined;
+      const itemSchema = itemsProperty?.items as Record<string, unknown> | undefined;
+      const itemProperties = itemSchema?.properties as Record<string, unknown> | undefined;
+
+      assert.equal(itemsProperty?.type, 'array');
+      assert.ok(itemSchema, `${toolName}.items must define an item schema`);
+      assert.deepEqual(itemSchema.required, ['planId', 'rank']);
+      assert.equal(itemSchema.additionalProperties, false);
+      assert.deepEqual(
+        ['planId', 'stepId', 'rank', 'hard_after', 'soft_after', 'lane', 'scope_hint', 'rationale']
+          .filter((field) => !itemProperties?.[field]),
+        [],
+      );
+    });
+  }
+});

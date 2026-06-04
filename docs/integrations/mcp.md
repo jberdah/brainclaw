@@ -43,10 +43,10 @@ All 59 published MCP tools are discoverable via `tools/list`. Each tool carries 
 Every tool has one of three tiers in its `annotations.tier` field:
 
 - **facade** — High-level entry points for agents that don't need granular access. Start here.
-- **standard** — Day-to-day coordination tools: plans, claims, messaging, dispatch, review, memory. Returned by default alongside facades.
-- **advanced** — Specialized governance, audit, registry, sequences, and power tools.
+- **standard** — Day-to-day coordination tools: plans, claims, messaging, sequences, dispatch, review, memory. Returned by default alongside facades.
+- **advanced** — Specialized governance, audit, registry, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (34 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (38 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 Published tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
@@ -92,6 +92,10 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_complete_step` | coordination | Mark a plan sub-step as done |
 | `bclaw_update_step` | coordination | Update a plan sub-step's status, text, or assignee |
 | `bclaw_delete_step` | coordination | Remove a sub-step from a plan |
+| `bclaw_list_sequences` | coordination | Coordination sequence listing |
+| `bclaw_create_sequence` | coordination | Create a coordination sequence |
+| `bclaw_update_sequence` | coordination | Update a sequence's status, metadata, or items |
+| `bclaw_delete_sequence` | coordination | Delete a sequence by ID |
 | `bclaw_correct_handoff` | coordination | Write an immutable correction handoff that supersedes an earlier one |
 | `bclaw_assignment_update` | coordination | Report assignment lifecycle status |
 | `bclaw_assignment_action` | coordination | Resolve or reject a pending ActionRequired item |
@@ -123,12 +127,8 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_who` | discovery | List active agent sessions on workspace |
 | `bclaw_add_capability` | discovery | Register a project capability |
 | `bclaw_add_tool` | discovery | Register a project tool |
-| `bclaw_list_sequences` | coordination | Coordination sequence listing |
-| `bclaw_create_sequence` | coordination | Create a coordination sequence |
-| `bclaw_update_sequence` | coordination | Update a sequence's status, metadata, or items |
 | `bclaw_get_thread` | coordination | Get all messages in a thread across inboxes |
 | `bclaw_delete_plan` | coordination | Delete a plan item by ID |
-| `bclaw_delete_sequence` | coordination | Delete a sequence by ID |
 | `bclaw_delete_memory` | memory | Delete a memory item by ID |
 | `bclaw_update_memory` | memory | Update a memory item's text or metadata |
 | `bclaw_compact` | memory | LLM-driven semantic memory compaction (two-phase) |
@@ -157,10 +157,43 @@ for the full 1.0.0 changelog.
 | `bclaw_transition(entity, id, to, reason?)` | State machine transition with side-effect tags | `bclaw_accept`, `bclaw_reject`, status-update flows |
 
 Supported entities: plan, decision, constraint, trap, handoff,
-runtime_note, candidate, claim, action, assignment, agent_run
+runtime_note, candidate, sequence, claim, action, assignment, agent_run
 (with assignment lifecycle now writable through `bclaw_transition` and
 `bclaw_remove`; `agent_run` remains read-only). Declarative transition matrix +
 updatable field list live in [src/core/entity-registry.ts](../../src/core/entity-registry.ts).
+
+#### Sequence workflow
+
+Sequences are in the default catalog because they are the normal path
+for parallel agent work. Use the specialized sequence tools when
+building lanes; the canonical grammar can still read or patch the same
+entity when that is more convenient.
+
+Sequence items use this shape:
+
+```json
+{
+  "planId": "pln_xxx",
+  "stepId": "stp_xxx",
+  "rank": 1,
+  "hard_after": [],
+  "soft_after": [],
+  "lane": "api",
+  "scope_hint": "src/api/**",
+  "rationale": "Independent API lane"
+}
+```
+
+`planId` and `rank` are required. `stepId` is optional and narrows the
+sequence item to a specific plan step. `hard_after` blocks readiness
+until predecessor items complete; `soft_after` is advisory.
+
+Typical MCP flow:
+
+1. `bclaw_create_sequence({ name, status: "draft", items })`
+2. `bclaw_update_sequence({ id, status: "active" })`
+3. `bclaw_dispatch({ intent: "analysis" })`
+4. `bclaw_dispatch({ intent: "execute", agents: [...] })`
 
 For assignments specifically:
 - `bclaw_transition(entity="assignment", id=..., to="cancelled", reason=...)` is the canonical supervisor/admin cancel path.
