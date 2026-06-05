@@ -345,6 +345,20 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.7.3
+
+- **Multi-agent dispatch hardening for JS/TS monorepos** — dispatched worktrees
+  junction-link per-package `node_modules` (npm / yarn / pnpm workspaces), not
+  just the root, and surface failed links instead of swallowing them; `brainclaw
+  worktree clean` now garbage-collects merged worktrees past birth-noise instead
+  of skipping them all; the agent inventory reports an agent `spawnable` when its
+  binary is on PATH even if `--version` is slow to start; dispatch-verification
+  guidance leads with `bclaw_dispatch_status` (not the untrustworthy Windows
+  wrapper pid); and a new `LANE-RESULT.json` convention + `brainclaw harvest
+  <assignment_id>` give workers a standard, MCP-free result channel. The dispatch
+  dirty-guard also ignores `.claude/`, `.cursor/`, and `.codex/` agent-local
+  config. (pln#523, pln#524, pln#525, pln#526, trp#371, trp#427, trp#428)
+
 ### v1.7.2
 
 - **Sequence MCP tools are agent-first by default** — sequence creation,

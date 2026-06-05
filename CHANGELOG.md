@@ -5,6 +5,53 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] — 2026-06-05
+
+Patch release hardening multi-agent dispatch ergonomics on real JS/TS monorepos:
+worktree dependency provisioning, worktree garbage collection, dispatch
+verification guidance, and a standard worker-result channel.
+
+### Added
+
+- **`LANE-RESULT` convention + `brainclaw harvest <assignment_id>`** (pln#526).
+  A dispatched worker writes a single `LANE-RESULT.json` at its worktree root as
+  its final step — a brief-boilerplate-free channel that works even when MCP is
+  unavailable (e.g. sandboxed agents). The coordinator ingests it (status,
+  summary, files, artifacts) with `brainclaw harvest <assignment_id>` (or
+  `--all`), which emits a durable `lane_result_harvested` event and is idempotent
+  via a per-assignment marker.
+
+### Changed
+
+- **Dispatch verification leads with `bclaw_dispatch_status`** (pln#524, trp#428).
+  The generated session-protocol guidance and the `bclaw_coordinate` description
+  no longer tell agents to check liveness via the tracked pid — on Windows an
+  ack-wrapped spawn runs under `cmd.exe`, so `agent_run.pid` is the wrapper
+  (which exits early by design) and `Get-Process` reads it dead while the worker
+  is alive and committing. They now point at `bclaw_dispatch_status`, with the
+  wrapper-pid caveat spelled out.
+- **Agent inventory decouples spawnability from the `--version` probe** (trp#427).
+  An agent whose invoke binary resolves on PATH is reported `installed` (and
+  carries a `spawnable` flag) even when its cold-start `--version` probe times
+  out (timeout raised 3s → 8s). Fixes claude-code being shown "Not detected" and
+  wrongly excluded from dispatch.
+
+### Fixed
+
+- **Monorepo per-package `node_modules` in dispatched worktrees** (pln#523).
+  Worktrees now junction-link each workspace package's `node_modules` (npm / yarn
+  / bun `workspaces` + `pnpm-workspace.yaml`), not just the root, so a worker can
+  build/typecheck a sub-package instead of stalling on `tsc`. Failed links are
+  surfaced (worktree sidecar `symlink_warnings` + log) instead of silently
+  swallowed; `BRAINCLAW_NO_LINK_DEPS=1` opts out.
+- **Worktree garbage collection actually runs** (pln#525, trp#371).
+  `brainclaw worktree clean` no longer skips every merged worktree as
+  "uncommitted changes": it ignores worktree birth-noise (the
+  `.brainclaw-worktree.json` sidecar and a `.gitignore` flagged by Windows
+  autocrlf) and forces git's removal past the untracked sidecar. The dispatch
+  dirty-guard (`isSystemDirtyPath`) also excludes `.claude/`, `.cursor/`, and
+  `.codex/` agent-local config dirs.
+
 ## [1.7.2] — 2026-06-04
 
 Patch release for sequence-driven parallel dispatch ergonomics in MCP clients.
