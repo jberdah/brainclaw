@@ -9,6 +9,7 @@ import {
   type ExecutionProfile,
   type ResolvedExecutionProfile,
 } from './execution-profile.js';
+import { getCapabilityProfile } from './agent-capability.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,14 @@ export interface AgentInventoryEntry {
   detection_method: string;
   /** Version string if discoverable */
   version?: string;
+  /**
+   * trp#427 — whether brainclaw can SPAWN this agent as a worker: the capability
+   * profile is CLI-spawnable AND its invoke binary resolves on PATH. Decoupled
+   * from `installed` (a slow cold-start `--version` probe can false-negative the
+   * latter). The dispatch decision should trust this for spawnability. Optional
+   * for backward compatibility with inventories written before this field.
+   */
+  spawnable?: boolean;
   /** Models this agent can use (known or configured) */
   models: AgentModelInfo[];
   /** Native tools the agent provides (read, write, bash, etc.) */
@@ -87,6 +96,14 @@ interface AgentDefinition {
   instruction_file?: string;
 }
 
+/**
+ * trp#427 — cold-start CLI `--version` probes need headroom; a 3s timeout
+ * false-negatived claude-code on first launch. The spawnable check (binary on
+ * PATH) is the robust signal, so this only affects version-string capture
+ * latency, not the installed/spawnable decision.
+ */
+const VERSION_PROBE_TIMEOUT_MS = 8000;
+
 function tryCommand(command: string, args: string[], timeout = 5000): { ok: boolean; stdout: string } {
   try {
     const r = spawnSync(command, args, { encoding: 'utf-8', timeout, windowsHide: true });
@@ -96,12 +113,39 @@ function tryCommand(command: string, args: string[], timeout = 5000): { ok: bool
   }
 }
 
+/**
+ * trp#427 — fast PATH resolution for a binary (no process launch, unlike a
+ * `--version` probe). Uses `where` (Windows) / `which` (POSIX).
+ */
+function isBinaryOnPath(binary: string): boolean {
+  if (!binary) return false;
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    const r = spawnSync(cmd, [binary], { encoding: 'utf-8', timeout: 3000, windowsHide: true });
+    return r.status === 0 && (r.stdout ?? '').trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * trp#427 — an agent is SPAWNABLE when its capability profile is CLI-spawnable,
+ * declares an invoke binary, and that binary resolves on PATH. Decoupled from
+ * the `--version` health probe so a slow cold-start CLI is never misreported as
+ * "not installed" / undispatchable.
+ */
+export function detectSpawnable(agentName: string): boolean {
+  const profile = getCapabilityProfile(agentName);
+  if (!profile || !profile.runtime?.canBeSpawnedCli || !profile.invoke_binary) return false;
+  return isBinaryOnPath(profile.invoke_binary);
+}
+
 const AGENT_DEFINITIONS: AgentDefinition[] = [
   {
     name: 'claude-code',
     detect: (_home, env) => {
       // Check if claude CLI is available
-      const cli = tryCommand('claude', ['--version'], 3000);
+      const cli = tryCommand('claude', ['--version'], VERSION_PROBE_TIMEOUT_MS);
       if (cli.ok) {
         const ver = cli.stdout.trim().match(/(\d+\.\d+\.\d+)/)?.[1];
         return { installed: true, method: 'claude CLI', version: ver };
@@ -163,7 +207,7 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
       if (fs.existsSync(codexDir)) {
         return { installed: true, method: '~/.codex directory' };
       }
-      const cli = tryCommand('codex', ['--version'], 3000);
+      const cli = tryCommand('codex', ['--version'], VERSION_PROBE_TIMEOUT_MS);
       if (cli.ok) {
         const ver = cli.stdout.trim().match(/(\d+\.\d+\.\d+)/)?.[1];
         return { installed: true, method: 'codex CLI', version: ver };
@@ -331,7 +375,7 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
       if (fs.existsSync(path.join(home, '.gemini', 'antigravity'))) {
         return { installed: true, method: '~/.gemini/antigravity directory' };
       }
-      const cli = tryCommand('gemini', ['--version'], 3000);
+      const cli = tryCommand('gemini', ['--version'], VERSION_PROBE_TIMEOUT_MS);
       if (cli.ok) {
         return { installed: true, method: 'gemini CLI', version: cli.stdout.trim() };
       }
@@ -387,7 +431,7 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
       if (fs.existsSync(path.join(home, '.hermes'))) {
         return { installed: true, method: '~/.hermes directory' };
       }
-      const cli = tryCommand('hermes', ['--version'], 3000);
+      const cli = tryCommand('hermes', ['--version'], VERSION_PROBE_TIMEOUT_MS);
       if (cli.ok) {
         return { installed: true, method: 'hermes CLI', version: cli.stdout.trim() };
       }
@@ -415,14 +459,24 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
 export function buildAgentInventory(
   homeDir: string = os.homedir(),
   env: NodeJS.ProcessEnv = process.env,
+  opts: { spawnableResolver?: (name: string) => boolean } = {},
 ): AgentInventory {
+  const spawnableResolver = opts.spawnableResolver ?? detectSpawnable;
   const agents: AgentInventoryEntry[] = AGENT_DEFINITIONS.map(def => {
     const detection = def.detect(homeDir, env);
+    const spawnable = spawnableResolver(def.name);
+    // trp#427: an agent brainclaw can spawn (invoke binary on PATH) IS installed,
+    // even when the cold-start `--version` probe timed out. This decouples the
+    // dispatch decision (getInstalledAgentNames) from probe latency.
+    const installed = detection.installed || spawnable;
     return {
       name: def.name,
-      installed: detection.installed,
-      detection_method: detection.method,
+      installed,
+      detection_method: detection.installed
+        ? detection.method
+        : (spawnable ? 'spawnable: invoke binary on PATH' : detection.method),
       version: detection.version,
+      spawnable,
       models: def.models,
       native_tools: def.native_tools,
       mcp_support: def.mcp_support,
@@ -500,6 +554,7 @@ export function renderAgentInventorySummary(inventory: AgentInventory): string {
     if (agent.skills_support) features.push('Skills');
     if (agent.rules_support) features.push('Rules');
     if (agent.hooks_support) features.push('Hooks');
+    if (agent.spawnable) features.push('Spawnable');
     lines.push(`  Features: ${features.join(', ') || 'none'}`);
 
     if (agent.instruction_file) {
