@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
 import { logger } from './logger.js';
+import { parsePorcelainZ, isSystemDirtyPath } from './dirty-scope.js';
 
 /** Normalizes a path for use in git CLI arguments (forward slashes on Windows). */
 function gitPath(p: string): string {
@@ -703,6 +704,32 @@ export interface CleanResult {
 }
 
 /**
+ * Files brainclaw itself writes into a worktree AT BIRTH — they are never user
+ * work and must not count as "uncommitted changes" when deciding whether a
+ * merged worktree can be GC'd:
+ *   - `.gitignore`            — copied from the main repo by createWorktree; on
+ *                               Windows autocrlf flags it as ` M .gitignore`,
+ *                               which previously made EVERY brainclaw worktree
+ *                               look dirty and skipped the clean forever.
+ *   - `.brainclaw-worktree.json` — the sidecar metadata createWorktree writes.
+ * Combined with isSystemDirtyPath (.brainclaw/, .git/, agent config dirs).
+ */
+const WORKTREE_BIRTH_NOISE = new Set(['.gitignore', '.brainclaw-worktree.json']);
+
+/**
+ * True when a worktree's `git status --porcelain=v1 -z` output contains ONLY
+ * brainclaw birth artifacts / coordination-store noise — i.e. no real user work
+ * would be lost by removing it. Empty output (fully clean) also returns true.
+ */
+export function worktreeHasOnlyBirthNoise(statusZStdout: string): boolean {
+  const paths = parsePorcelainZ(statusZStdout);
+  return paths.every((p) => {
+    const norm = p.replace(/\\/g, '/');
+    return WORKTREE_BIRTH_NOISE.has(norm) || isSystemDirtyPath(norm);
+  });
+}
+
+/**
  * Removes worktrees whose branch has been fully merged into the current branch
  * (typically master/main after a merge). Also removes brainclaw-managed
  * worktree directories that no longer have a corresponding git worktree entry
@@ -741,10 +768,13 @@ export function cleanMergedWorktrees(
       continue;
     }
 
-    // Check for uncommitted changes
+    // Check for uncommitted changes — but ignore brainclaw birth-noise
+    // (.gitignore autocrlf, the sidecar, coordination store). Without this,
+    // every merged brainclaw worktree looked dirty and was skipped forever,
+    // so `worktree clean` removed nothing and worktrees accumulated (pln#525).
     if (!options.force) {
-      const status = runGit(['status', '--porcelain'], wt.path);
-      if (status.ok && status.stdout.trim().length > 0) {
+      const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], wt.path);
+      if (status.ok && !worktreeHasOnlyBirthNoise(status.stdout)) {
         result.skipped.push({ path: wt.path, reason: 'uncommitted changes' });
         continue;
       }
@@ -756,7 +786,12 @@ export function cleanMergedWorktrees(
     }
 
     try {
-      removeWorktree(mainWorktreePath, wt.path, { force: options.force });
+      // Reaching here means EITHER options.force OR the birth-noise gate above
+      // passed (no real user work). In both cases git's own `worktree remove`
+      // must be forced: otherwise it refuses on the untracked sidecar /
+      // autocrlf .gitignore that we already classified as discardable noise
+      // (pln#525 — the refusal that left every merged worktree un-GC-able).
+      removeWorktree(mainWorktreePath, wt.path, { force: true });
       result.removed.push(wt.path);
     } catch {
       result.skipped.push({ path: wt.path, reason: 'removal failed' });

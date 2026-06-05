@@ -86,13 +86,20 @@ function defaultRunGit(cwd: string, args: string[]): { ok: boolean; stdout: stri
   }
 }
 
-/** True for coordination/store paths that are dirty as a side effect of dispatching. */
+/**
+ * Top-level directories that are dirty as a side effect of coordination /
+ * agent tooling, never part of a dispatch's code scope:
+ *   - `.brainclaw`, `.git` — coordination store + VCS metadata.
+ *   - `.claude`, `.cursor`, `.codex` — per-agent local config (trp#371). A
+ *     worker leaving these dirty (Claude Code settings, etc.) must not block an
+ *     otherwise-safe dispatch of an unrelated code scope.
+ */
+const SYSTEM_DIRTY_DIRS = ['.brainclaw', '.git', '.claude', '.cursor', '.codex'];
+
+/** True for coordination/store/agent-config paths that are dirty as a side effect of tooling. */
 export function isSystemDirtyPath(p: string): boolean {
   const norm = p.replace(/\\/g, '/');
-  return norm === '.brainclaw'
-    || norm.startsWith('.brainclaw/')
-    || norm === '.git'
-    || norm.startsWith('.git/');
+  return SYSTEM_DIRTY_DIRS.some((dir) => norm === dir || norm.startsWith(dir + '/'));
 }
 
 /**
