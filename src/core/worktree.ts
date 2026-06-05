@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import yaml from 'yaml';
+import { logger } from './logger.js';
 
 /** Normalizes a path for use in git CLI arguments (forward slashes on Windows). */
 function gitPath(p: string): string {
@@ -35,6 +37,82 @@ export function detectStackSharedPaths(projectRoot: string): string[] {
     const hasMarker = markers.some((m) => fs.existsSync(path.join(projectRoot, m)));
     if (hasMarker) {
       for (const p of paths) result.add(p);
+    }
+  }
+  return [...result];
+}
+
+/**
+ * pln#523 — read declared monorepo workspace globs from npm/yarn/bun
+ * `workspaces` (package.json) and pnpm-workspace.yaml. Returns the raw
+ * patterns (e.g. "packages/*", "apps/api"); empty when the project is not a
+ * workspace root or the manifests are absent/invalid.
+ */
+export function readWorkspacePatterns(projectRoot: string): string[] {
+  const patterns: string[] = [];
+  // npm / yarn / bun: package.json "workspaces" (array, or { packages: [...] })
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')) as {
+      workspaces?: string[] | { packages?: string[] };
+    };
+    const ws = pkg.workspaces;
+    if (Array.isArray(ws)) patterns.push(...ws);
+    else if (ws && Array.isArray(ws.packages)) patterns.push(...ws.packages);
+  } catch { /* no / invalid package.json — not a node workspace root */ }
+  // pnpm: pnpm-workspace.yaml "packages"
+  try {
+    const parsed = yaml.parse(
+      fs.readFileSync(path.join(projectRoot, 'pnpm-workspace.yaml'), 'utf-8'),
+    ) as { packages?: string[] } | null;
+    if (parsed && Array.isArray(parsed.packages)) patterns.push(...parsed.packages);
+  } catch { /* no pnpm workspace file */ }
+  return [...new Set(patterns)];
+}
+
+/**
+ * pln#523 — resolve monorepo workspace globs to the per-package `node_modules`
+ * directories that actually exist on disk. Hoisted monorepos (all deps at the
+ * root) need only the root link from detectStackSharedPaths; this additionally
+ * covers packages that keep a LOCAL node_modules (pnpm, nohoist, partial
+ * hoisting) so a dispatched worker can build/typecheck a sub-package, not just
+ * the root — the exact gap behind a worker stalling on `tsc` in a worktree.
+ *
+ * Pattern shapes supported without a glob dependency (zero-runtime-dep policy):
+ *   - exact dir:       "apps/api"
+ *   - single wildcard: "packages/*"   → immediate child directories
+ *   - deep wildcard:   "packages/**"  → treated as one level ("packages/*")
+ * Negations ("!pkg/excluded") are skipped — they only narrow coverage and a
+ * missing link degrades gracefully to central validation.
+ *
+ * Returns relative paths with forward slashes (e.g. "apps/api/node_modules").
+ */
+export function detectWorkspaceNodeModules(projectRoot: string): string[] {
+  const patterns = readWorkspacePatterns(projectRoot);
+  if (patterns.length === 0) return [];
+  const result = new Set<string>();
+  const addIfHasNodeModules = (relPkgDir: string): void => {
+    const rel = `${relPkgDir.replace(/\\/g, '/').replace(/\/+$/, '')}/node_modules`;
+    if (fs.existsSync(path.join(projectRoot, rel))) result.add(rel);
+  };
+  for (const raw of patterns) {
+    const pattern = raw.trim();
+    if (!pattern || pattern.startsWith('!')) continue;
+    const wildcardIdx = pattern.indexOf('*');
+    if (wildcardIdx === -1) {
+      addIfHasNodeModules(pattern);
+      continue;
+    }
+    // Base dir = the path segment before the first wildcard.
+    const base = pattern.slice(0, wildcardIdx).replace(/\/+$/, '');
+    let children: string[] = [];
+    try {
+      children = fs
+        .readdirSync(path.join(projectRoot, base), { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch { /* base dir absent — skip this pattern */ }
+    for (const child of children) {
+      addIfHasNodeModules(base ? `${base}/${child}` : child);
     }
   }
   return [...result];
@@ -246,6 +324,7 @@ export function createWorktree(
     excludeShared?: string[];
   } = {},
 ): string {
+  const symlinkWarnings: string[] = [];
   const trySymlinkSharedPath = (entryName: string): void => {
     const sourcePath = path.join(mainWorktreePath, entryName);
     const linkPath = path.join(targetPath, entryName);
@@ -261,8 +340,21 @@ export function createWorktree(
         fs.mkdirSync(parentDir, { recursive: true });
       }
       fs.symlinkSync(sourcePath, linkPath, 'junction');
-    } catch {
-      // Non-fatal - shared paths are an optimization for agent worktrees
+    } catch (err) {
+      // pln#523: do NOT swallow silently. A missing node_modules junction is
+      // exactly what leaves a dispatched worker unable to build/typecheck in its
+      // worktree (it then stalls on `tsc` or npm scripts). Record a structured
+      // warning — surfaced in the worktree sidecar + logger — instead of an
+      // invisible degradation. Linking remains best-effort (non-fatal).
+      const sameVolume =
+        path.parse(sourcePath).root.toLowerCase() === path.parse(targetPath).root.toLowerCase();
+      const reason = err instanceof Error ? err.message : String(err);
+      const hint = sameVolume
+        ? ''
+        : ' (source and worktree are on different volumes — directory junctions require the same volume; deps cannot be linked here, validate builds centrally)';
+      const msg = `Failed to link '${entryName}' into worktree: ${reason}${hint}`;
+      symlinkWarnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
     }
   };
 
@@ -329,7 +421,15 @@ export function createWorktree(
   // pln#480: auto-detect shared paths from stack markers + config overrides.
   // `dist` intentionally excluded — build outputs must be per-worktree
   // (EBUSY during clean:dist when MCP/extension holds a handle on junction target).
-  const detected = detectStackSharedPaths(mainWorktreePath);
+  // pln#523: also link per-package node_modules for JS/TS monorepos so workers
+  // can build/typecheck sub-packages, not just the root. Set
+  // BRAINCLAW_NO_LINK_DEPS=1 to disable auto dependency linking (e.g. when the
+  // worktree lives on a different volume and central validation is preferred);
+  // explicit options.sharedPaths are still honored.
+  const linkDepsDisabled = process.env.BRAINCLAW_NO_LINK_DEPS === '1';
+  const detected = linkDepsDisabled
+    ? []
+    : [...detectStackSharedPaths(mainWorktreePath), ...detectWorkspaceNodeModules(mainWorktreePath)];
   const extra = options.sharedPaths ?? [];
   const excluded = new Set(options.excludeShared ?? []);
   const sharedPaths = [...new Set([...detected, ...extra])].filter((p) => !excluded.has(p));
@@ -357,6 +457,10 @@ export function createWorktree(
     base_ref: baseRef,
     reset_existing_branch: options.resetExistingBranch === true,
     git_advice: 'git add ONLY specific files, NEVER git add -A.',
+    // pln#523: surface any shared-path link failures (e.g. node_modules junction
+    // that could not be created) so the worker / supervisor can see why a build
+    // might fail, instead of an invisible degradation.
+    ...(symlinkWarnings.length > 0 ? { symlink_warnings: symlinkWarnings } : {}),
   };
   fs.writeFileSync(
     path.join(targetPath, '.brainclaw-worktree.json'),

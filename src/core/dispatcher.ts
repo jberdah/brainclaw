@@ -347,6 +347,13 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
   }
   if (options?.worktreePath) {
     parts.push(`Worktree: ${options.worktreePath}`);
+    // pln#523: tell the worker how dependencies are provisioned so it does not
+    // stall trying to install them. node_modules (and per-package node_modules in
+    // monorepos) are junction-linked from the main repo — run builds/typecheck
+    // directly. If they are missing, do NOT `npm install` in the worktree: check
+    // `.brainclaw-worktree.json` → `symlink_warnings` (a link may have failed,
+    // e.g. cross-volume) and validate the build centrally with the coordinator.
+    parts.push('Dependencies: node_modules is linked from the main repo (incl. monorepo per-package). Build/typecheck directly; if deps are missing, do NOT npm install here — see .brainclaw-worktree.json symlink_warnings and validate centrally.');
   }
   parts.push('');
 
