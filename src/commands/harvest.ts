@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { CandidateSchema, type Candidate } from '../core/schema.js';
+import { CandidateSchema, type Candidate, LaneResultSchema, type LaneResult } from '../core/schema.js';
 import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/candidates.js';
 import { createRuntimeEvent } from '../core/events.js';
 import { memoryExists } from '../core/io.js';
@@ -244,4 +244,168 @@ export function runHarvestCandidates(options: RunHarvestOptions = {}): void {
   }
 
   console.log(`\n✔ Harvest complete${dryTag}: ${result.harvested.length} imported, ${result.skipped.length} skipped, ${result.errors.length} error(s).`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pln#526 — LANE-RESULT convention
+//
+// A dispatched worker writes a single `LANE-RESULT.json` at its worktree root
+// as its final step. This is the standard, brief-boilerplate-free channel for a
+// worker (especially a sandboxed one that cannot reach MCP) to report its
+// outcome. The coordinator ingests it with `brainclaw harvest <assignment_id>`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Conventional path of a worker's lane-result file at the worktree root. */
+export function getLaneResultPath(worktreePath: string): string {
+  return path.join(worktreePath, 'LANE-RESULT.json');
+}
+
+/** Idempotency marker so a lane-result is harvested once. */
+function laneHarvestedMarkerPath(cwd: string, assignmentId: string): string {
+  return path.join(cwd, '.brainclaw', 'coordination', 'runtime', 'result', `${assignmentId}.harvested`);
+}
+
+export interface LaneHarvestOptions {
+  /** Only harvest the lane-result for this assignment id. Omit to harvest all. */
+  assignmentId?: string;
+  /** Explicit worktree paths to scan. Defaults to all managed worktrees. */
+  worktreePaths?: string[];
+  /** When true, nothing is written (no event, no marker). */
+  dryRun?: boolean;
+  cwd?: string;
+  agent?: string;
+}
+
+export interface LaneHarvestResult {
+  harvested: LaneResult[];
+  /** assignment_ids skipped because already harvested. */
+  skipped: string[];
+  errors: string[];
+}
+
+/**
+ * Scan worktrees for `LANE-RESULT.json`, validate, and ingest each: emit a
+ * `lane_result_harvested` runtime event (durable + queryable) and drop an
+ * idempotency marker so re-runs skip it. The worker's actual code lives in the
+ * worktree/branch; this surfaces the structured outcome (status + summary) the
+ * coordinator needs to converge the lane.
+ */
+export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarvestResult {
+  const cwd = options.cwd ?? process.cwd();
+  const agent = options.agent ?? 'coordinator';
+  const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [] };
+
+  const worktreePaths = (options.worktreePaths && options.worktreePaths.length > 0)
+    ? options.worktreePaths
+    : autoDetectWorktreePaths(cwd);
+
+  for (const worktreePath of worktreePaths) {
+    const file = getLaneResultPath(worktreePath);
+    if (!fs.existsSync(file)) continue;
+
+    let lane: LaneResult;
+    try {
+      lane = LaneResultSchema.parse(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    } catch (err) {
+      result.errors.push(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    // Assignment filter (when harvesting a specific lane).
+    if (options.assignmentId && lane.assignment_id !== options.assignmentId) continue;
+
+    const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
+    if (fs.existsSync(marker)) {
+      result.skipped.push(lane.assignment_id);
+      continue;
+    }
+
+    if (!options.dryRun) {
+      try {
+        createRuntimeEvent({
+          agent,
+          event_type: 'lane_result_harvested',
+          text: `Lane result for ${lane.assignment_id}: ${lane.status} — ${lane.summary.slice(0, 120)}`,
+          tags: ['harvest', 'lane-result', lane.status],
+          assignment_id: lane.assignment_id,
+          metadata: {
+            assignment_id: lane.assignment_id,
+            status: lane.status,
+            artifacts: lane.artifacts ?? [],
+            files_changed: lane.files_changed ?? [],
+            source_worktree: worktreePath,
+          },
+        }, cwd);
+        fs.mkdirSync(path.dirname(marker), { recursive: true });
+        fs.writeFileSync(marker, new Date(0).toISOString(), 'utf-8');
+      } catch (err) {
+        result.errors.push(`Failed to ingest lane result for ${lane.assignment_id}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    }
+
+    result.harvested.push(lane);
+  }
+
+  return result;
+}
+
+// --- CLI entry point: `brainclaw harvest <assignment_id>` ---
+
+export interface RunHarvestLaneOptions {
+  /** Harvest every lane-result instead of one assignment. */
+  all?: boolean;
+  dryRun?: boolean;
+  worktree?: string[];
+  json?: boolean;
+  cwd?: string;
+}
+
+export function runHarvestLane(assignmentId: string | undefined, options: RunHarvestLaneOptions = {}): void {
+  const cwd = options.cwd ?? process.cwd();
+
+  if (!memoryExists(cwd)) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+  if (!assignmentId && !options.all) {
+    console.error('Error: provide an <assignment_id>, or pass --all to harvest every lane result.');
+    process.exit(1);
+  }
+
+  const result = harvestLaneResults({
+    assignmentId: options.all ? undefined : assignmentId,
+    worktreePaths: options.worktree,
+    dryRun: options.dryRun,
+    cwd,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      harvested: result.harvested,
+      skipped: result.skipped,
+      errors: result.errors,
+    }, null, 2));
+    return;
+  }
+
+  const dryTag = options.dryRun ? ' (dry-run)' : '';
+  if (result.harvested.length === 0 && result.skipped.length === 0 && result.errors.length === 0) {
+    console.log(assignmentId ? `No LANE-RESULT.json found for ${assignmentId}.` : 'No lane results found in any worktree.');
+    return;
+  }
+
+  for (const lane of result.harvested) {
+    const verb = options.dryRun ? '  (dry-run) Would harvest' : '  ✔ Harvested';
+    console.log(`${verb} [${lane.assignment_id}] ${lane.status}: ${lane.summary.slice(0, 100)}`);
+    if (lane.files_changed?.length) console.log(`      files: ${lane.files_changed.slice(0, 8).join(', ')}`);
+    if (lane.notes) console.log(`      notes: ${lane.notes.slice(0, 120)}`);
+  }
+  for (const id of result.skipped) {
+    console.log(`  ⟳ Skipped (already harvested): ${id}`);
+  }
+  for (const err of result.errors) {
+    console.error(`  ✗ ${err}`);
+  }
+  console.log(`\n✔ Lane harvest complete${dryTag}: ${result.harvested.length} harvested, ${result.skipped.length} skipped, ${result.errors.length} error(s).`);
 }

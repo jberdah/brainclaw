@@ -371,6 +371,9 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     parts.push(`${options.worktreePath ? '7' : '6'}. Release the claim: bclaw_release_claim(${claimRef}, planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
     parts.push(`${options.worktreePath ? '8' : '7'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
     parts.push(`${options.worktreePath ? '9' : '8'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+    // pln#526: standard fallback channel — works even when MCP is unreachable
+    // (sandboxed agents). The coordinator ingests it with `brainclaw harvest`.
+    parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable, e.g. a sandboxed agent): write LANE-RESULT.json at the worktree root — {"assignment_id":"${options.assignmentId}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."],"artifacts":["..."]}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
   } else if (options?.claimId) {
     parts.push('1. Call bclaw_session_start to register your session');
     if (options.worktreePath) {
