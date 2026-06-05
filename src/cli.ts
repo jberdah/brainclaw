@@ -105,7 +105,7 @@ import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
 import { runRunProfile } from './commands/run-profile.js';
 import { runCompact } from './commands/compact.js';
-import { runHarvestCandidates } from './commands/harvest.js';
+import { runHarvestCandidates, runHarvestLane } from './commands/harvest.js';
 import { runQuestionsCommand, type QuestionStatus } from './commands/questions.js';
 import { runReplyCommand } from './commands/reply.js';
 import { requireRegisteredAgentIdentity } from './core/agent-registry.js';
@@ -1073,6 +1073,19 @@ program
   .action((options) => {
     const globalOpts = program.opts();
     runHarvestCandidates({ ...options, cwd: globalOpts.cwd });
+  });
+
+// --- harvest (lane results, pln#526) ---
+program
+  .command('harvest [assignment_id]')
+  .description('Harvest a worker LANE-RESULT.json from its worktree into the project (pass an assignment id, or --all)')
+  .option('--all', 'Harvest every lane result found across worktrees')
+  .option('--dry-run', 'Preview without writing events/markers')
+  .option('--worktree <path>', 'Explicit worktree path to scan (repeatable)', collect, [])
+  .option('--json', 'Output as JSON')
+  .action((assignmentId, options) => {
+    const globalOpts = program.opts();
+    runHarvestLane(assignmentId, { ...options, cwd: globalOpts.cwd });
   });
 
 // --- prune-candidates ---

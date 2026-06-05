@@ -994,8 +994,28 @@ export const RuntimeEventTypeSchema = z.enum([
   'run_interrupted',
   'plan_cascade_to_done',
   'candidate_harvested',
+  'lane_result_harvested',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
+
+/**
+ * pln#526 — LANE-RESULT convention. A dispatched worker writes a single
+ * `LANE-RESULT.json` at its worktree root as its final step (a fallback that
+ * works even when bclaw_assignment_update / MCP is unavailable, e.g. sandboxed
+ * agents). The coordinator ingests it with `brainclaw harvest <assignment_id>`.
+ */
+export const LaneResultSchema = z.object({
+  assignment_id: z.string(),
+  status: z.enum(['completed', 'blocked', 'failed']),
+  summary: z.string(),
+  /** Paths or refs the worker produced (commits, files, docs). */
+  artifacts: z.array(z.string()).optional(),
+  /** Files the worker changed in the worktree. */
+  files_changed: z.array(z.string()).optional(),
+  /** Free-form notes (blockers, follow-ups). */
+  notes: z.string().optional(),
+});
+export type LaneResult = z.infer<typeof LaneResultSchema>;
 
 export const RuntimeEventSchema = z.object({
   id: z.string(),
