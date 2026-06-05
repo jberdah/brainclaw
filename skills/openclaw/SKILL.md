@@ -123,7 +123,7 @@ brainclaw search "<query>"
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.7.1 — do not edit manually.
+> Managed by brainclaw v1.7.3 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project
@@ -284,5 +284,5 @@ Action: update invoke_template in agent-capability.ts to include auto-approve fl
 
 ## brainclaw — active instructions
 
-- Read memory before editing
+- Release checklist: when bumping the version (package.json + CHANGELOG.md + skills/*/SKILL.md stamp), ALSO update the changelog/release section mirrored in README.md. That README section does NOT auto-sync from CHANGELOG.md and had drifted to v1.5.3 as of the 1.7.0 release — so the next bump owes a 1.5.3->current catch-up of the README changelog block.
 <!-- brainclaw:end -->
