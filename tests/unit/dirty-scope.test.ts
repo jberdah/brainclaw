@@ -69,9 +69,17 @@ describe('isSystemDirtyPath', () => {
     assert.equal(isSystemDirtyPath('.brainclaw'), true);
   });
 
+  it('flags per-agent local config dirs (trp#371): .claude, .cursor, .codex', () => {
+    assert.equal(isSystemDirtyPath('.claude/settings.json'), true);
+    assert.equal(isSystemDirtyPath('.claude'), true);
+    assert.equal(isSystemDirtyPath('.cursor/rules/x.md'), true);
+    assert.equal(isSystemDirtyPath('.codex/config.toml'), true);
+  });
+
   it('does not flag real source paths', () => {
     assert.equal(isSystemDirtyPath('src/core/dirty-scope.ts'), false);
     assert.equal(isSystemDirtyPath('.brainclawignore'), false); // not a .brainclaw/ child
+    assert.equal(isSystemDirtyPath('.clauderc'), false); // not a .claude/ child
   });
 });
 
