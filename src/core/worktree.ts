@@ -199,6 +199,102 @@ export function hasGitLock(cwd: string): boolean {
 }
 
 /**
+ * True when `worktreePath` is a LINKED git worktree (created by `git worktree
+ * add`), NOT the main repository. The key invariant for pln#534's commit-on-
+ * behalf: brainclaw must NEVER commit into the integration repo, only into the
+ * isolated worktree it dispatched. A linked worktree's git-dir
+ * (`.git/worktrees/<name>`) differs from its git-common-dir (the main `.git`);
+ * for the main repo they are identical.
+ */
+export function isLinkedWorktree(worktreePath: string): boolean {
+  if (!fs.existsSync(worktreePath)) return false;
+  const gitDir = runGit(['rev-parse', '--absolute-git-dir'], worktreePath);
+  const commonDir = runGit(['rev-parse', '--git-common-dir'], worktreePath);
+  if (!gitDir.ok || !commonDir.ok) return false;
+  const g = path.resolve(gitDir.stdout.trim());
+  const c = path.resolve(worktreePath, commonDir.stdout.trim());
+  return g !== c;
+}
+
+export interface CommitOnBehalfResult {
+  committed: boolean;
+  sha?: string;
+  files_changed: string[];
+  /** Human-readable reason for the outcome (committed, clean, or refused). */
+  reason: string;
+}
+
+/**
+ * pln#534 (worktree-as-contract) — commit the uncommitted diff of a dispatched
+ * worktree ON BEHALF of a worker that cannot commit itself (a sandboxed agent
+ * whose root excludes `.git`, i.e. `dispatchCanCommit=false`). The worker's only
+ * contract is "edit files in this worktree + drop LANE-RESULT.json"; brainclaw
+ * carries the commit so the code lands on the lane branch and propagates.
+ *
+ * GUARDS (defence-in-depth, since this writes git history):
+ *   - the path must exist and be a LINKED worktree — NEVER the main repo;
+ *   - no commit when an index.lock is present (concurrent git op);
+ *   - no commit when the worktree is clean;
+ *   - all git runs are `spawnSync('git', [...])` with `-C <worktree>` semantics
+ *     (cwd-scoped, no shell) so nothing can escape the worktree.
+ * Returns a structured result instead of throwing so callers degrade gracefully.
+ */
+export function commitWorktreeOnBehalf(
+  worktreePath: string,
+  message: string,
+  options: { authorName?: string; authorEmail?: string } = {},
+): CommitOnBehalfResult {
+  if (!fs.existsSync(worktreePath)) {
+    return { committed: false, files_changed: [], reason: `worktree path does not exist: ${worktreePath}` };
+  }
+  if (!isLinkedWorktree(worktreePath)) {
+    return { committed: false, files_changed: [], reason: `refusing to commit: ${worktreePath} is not a linked git worktree (main-repo guard)` };
+  }
+  if (hasGitLock(worktreePath)) {
+    return { committed: false, files_changed: [], reason: 'git index.lock present — another git operation is in progress' };
+  }
+
+  const status = runGit(['status', '--porcelain'], worktreePath);
+  if (!status.ok) {
+    return { committed: false, files_changed: [], reason: `git status failed: ${status.stderr.trim()}` };
+  }
+  const files = status.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    // strip the 2-char XY status + space, and the `old -> new` rename arrow.
+    .map((l) => l.replace(/^\S{1,2}\s+/, '').replace(/^.*->\s*/, '').replace(/^"(.*)"$/, '$1'));
+  if (files.length === 0) {
+    return { committed: false, files_changed: [], reason: 'worktree clean — nothing to commit' };
+  }
+
+  const add = runGit(['add', '-A'], worktreePath);
+  if (!add.ok) {
+    return { committed: false, files_changed: files, reason: `git add failed: ${add.stderr.trim()}` };
+  }
+
+  const authorName = options.authorName ?? 'brainclaw (on behalf)';
+  const authorEmail = options.authorEmail ?? 'brainclaw@on-behalf.local';
+  const commit = runGit([
+    '-c', `user.name=${authorName}`,
+    '-c', `user.email=${authorEmail}`,
+    '-c', 'commit.gpgsign=false',
+    'commit', '-m', message,
+  ], worktreePath);
+  if (!commit.ok) {
+    return { committed: false, files_changed: files, reason: `git commit failed: ${commit.stderr.trim()}` };
+  }
+
+  const head = runGit(['rev-parse', 'HEAD'], worktreePath);
+  return {
+    committed: true,
+    sha: head.ok ? head.stdout.trim() : undefined,
+    files_changed: files,
+    reason: 'committed on behalf of worker',
+  };
+}
+
+/**
  * Re-points an EXISTING worktree to `ref` via a hard reset of its checked-out
  * branch + working tree. Used when a dispatch reuses an existing claim/worktree
  * but pins a base ref: the worktree must reflect that ref, not stale state,

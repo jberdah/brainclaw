@@ -1005,6 +1005,7 @@ export const RuntimeEventTypeSchema = z.enum([
   'plan_cascade_to_done',
   'candidate_harvested',
   'lane_result_harvested',
+  'lane_integrated',
 ]);
 export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 
