@@ -87,7 +87,7 @@ const plan: EntitySpec = {
   name: 'plan',
   shortLabelPrefix: 'pln',
   schema: PlanItemSchema,
-  updatable: ['text', 'priority', 'tags', 'assignee', 'estimated_effort', 'actual_effort', 'depends_on'],
+  updatable: ['text', 'priority', 'tags', 'assignee', 'estimated_effort', 'actual_effort', 'depends_on', 'related_paths'],
   statusField: 'status',
   transitions: {
     todo: ['in_progress', 'blocked', 'done', 'dropped'],
