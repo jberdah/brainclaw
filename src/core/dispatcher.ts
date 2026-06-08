@@ -65,6 +65,16 @@ export interface ReadyLane {
   lane?: string;
   /** Why it's ready */
   reason: string;
+  /**
+   * pln#529 — advisory when this lane unblocked via hard_after: gate-readiness
+   * (predecessor plan marked done / claim released) does NOT guarantee the
+   * predecessor's CODE is on the dispatch base. If the worker spawns from HEAD
+   * and the socle is uncommitted/unmerged, it silently misses that work. Surfaced
+   * so the coordinator commits/merges (or passes ref=<predecessor branch>) before
+   * dispatching. NOTE: the structural auto-fix (baseRef = predecessor branch, or
+   * an integration branch) is a separate, human-arbitrated design choice.
+   */
+  code_propagation_note?: string;
 }
 
 export interface BlockedLane {
@@ -257,6 +267,12 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
       plan,
       lane: item.lane,
       reason: `All hard dependencies met${softNote}`,
+      // pln#529 — readiness ≠ code-availability for gated lanes.
+      ...(item.hard_after.length > 0 ? {
+        code_propagation_note:
+          `Unblocked by hard_after [${item.hard_after.join(', ')}]. Ensure that work is committed AND on the dispatch base (HEAD), ` +
+          `or dispatch this lane with ref=<predecessor branch> — otherwise the worker spawns from HEAD without it.`,
+      } : {}),
     });
   }
 
