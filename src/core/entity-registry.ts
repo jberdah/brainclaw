@@ -176,7 +176,7 @@ const decision: EntitySpec = {
   name: 'decision',
   shortLabelPrefix: 'dec',
   schema: DecisionSchema,
-  updatable: ['text', 'tags', 'outcome', 'scope', 'related_paths'],
+  updatable: ['text', 'tags', 'outcome', 'scope', 'related_paths', 'verified_at', 'verify_cmd'],
   statusField: 'outcome',
   transitions: {
     pending: ['approved', 'rejected', 'deferred'],
@@ -208,7 +208,7 @@ const trap: EntitySpec = {
   name: 'trap',
   shortLabelPrefix: 'trp',
   schema: TrapSchema,
-  updatable: ['text', 'tags', 'severity', 'scope', 'related_paths', 'expires_at', 'platform_scope'],
+  updatable: ['text', 'tags', 'severity', 'scope', 'related_paths', 'expires_at', 'platform_scope', 'verified_at', 'verify_cmd'],
   statusField: 'status',
   transitions: {
     active: ['resolved', 'expired'],

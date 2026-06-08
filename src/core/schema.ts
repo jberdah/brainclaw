@@ -160,6 +160,11 @@ export const DecisionSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   tags: TagsSchema,
+  // pln#530 — anti-staleness: ISO timestamp this fact was last empirically
+  // verified, and an optional command to re-confirm it. For fast-perishable
+  // facts (tool behaviour, config values), probe before trusting the memory.
+  verified_at: z.string().optional(),
+  verify_cmd: z.string().optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -185,6 +190,11 @@ export const TrapSchema = z.object({
   host_id: z.string().optional(),
   expires_at: z.string().optional(),
   platform_scope: z.string().optional(),
+  // pln#530 — anti-staleness (see DecisionSchema): when did we last verify this
+  // is still true, and how to re-confirm it. Critical for environment/tool-fix
+  // traps that go stale (e.g. a service_tier value that the API later rejects).
+  verified_at: z.string().optional(),
+  verify_cmd: z.string().optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Trap = z.infer<typeof TrapSchema>;

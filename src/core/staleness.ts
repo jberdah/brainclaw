@@ -145,6 +145,40 @@ export function detectExpiredTraps(
   return warnings;
 }
 
+/** pln#530 — a perishable fact unverified for longer than this reads as stale. */
+const VERIFIED_STALE_DAYS = 30;
+
+/**
+ * pln#530 — flag perishable memories (traps that opted in by carrying a
+ * `verify_cmd` and/or `verified_at`) whose last empirical verification is stale
+ * or never happened, so an agent re-probes the live system instead of trusting a
+ * value that may have drifted (the LeaseUp `service_tier` trap that the API later
+ * rejected is the motivating case). Only traps with these fields are considered —
+ * durable facts are untouched.
+ */
+export function detectUnverifiedMemory(traps: Trap[], nowMs = Date.now()): StalenessWarning[] {
+  const warnings: StalenessWarning[] = [];
+  for (const trap of traps) {
+    if (trap.status !== 'active') continue;
+    if (!trap.verify_cmd && !trap.verified_at) continue; // opt-in: only perishable facts
+    const age = trap.verified_at ? ageDays(trap.verified_at, nowMs) : Infinity;
+    if (trap.verified_at && age < VERIFIED_STALE_DAYS) continue; // freshly verified
+    warnings.push({
+      id: trap.id,
+      entity: 'trap',
+      text: truncate(trap.text),
+      age_days: Number.isFinite(age) ? age : 9999,
+      reason: trap.verified_at
+        ? `Perishable fact last verified ${age} day${age === 1 ? '' : 's'} ago — re-confirm against the live system before trusting`
+        : `Perishable fact never empirically verified (verify_cmd set) — confirm before trusting`,
+      suggested_action: trap.verify_cmd
+        ? `Run \`${trap.verify_cmd}\`, then bclaw_update(trap, ${trap.short_label ?? trap.id}, { verified_at: <now> })`
+        : `Re-verify against the live system, then set verified_at via bclaw_update`,
+    });
+  }
+  return warnings;
+}
+
 /**
  * Detect open handoffs that have not been acted on for a long time.
  */
@@ -281,6 +315,7 @@ export function detectStaleness(
 
   const planWarnings = detectStalePlans(plans, nowMs);
   const trapWarnings = detectExpiredTraps(traps, nowIso, nowMs);
+  const unverifiedWarnings = detectUnverifiedMemory(traps, nowMs); // pln#530
   const handoffWarnings = detectStaleHandoffs(handoffs, nowMs);
   const candidateWarnings = detectStaleCandidates(candidates, nowMs);
   const noteWarnings = detectStaleRuntimeNotes(runtimeNotes, nowMs);
@@ -288,6 +323,7 @@ export function detectStaleness(
   const warnings = [
     ...planWarnings,
     ...trapWarnings,
+    ...unverifiedWarnings,
     ...handoffWarnings,
     ...candidateWarnings,
     ...noteWarnings,
