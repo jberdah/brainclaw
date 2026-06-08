@@ -43,7 +43,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { getRuntimeSignalPath } from './runtime-signals.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
@@ -540,6 +540,26 @@ export function generateBrief(
     parts.push(buildProtocolSection(options));
   }
 
+  // pln#528 — transport-aware addendum (debrief LeaseUp P1#2). When the agent is
+  // spawned sandboxed (no MCP + no git commit — e.g. codex --sandbox
+  // workspace-write), the MCP lifecycle lines in the Protocol section do NOT
+  // apply. Say so explicitly and make the FILE protocol authoritative, so the
+  // worker never receives instructions it cannot follow nor has to guess the
+  // fallback. (Note: resolveBriefMode still returns 'full' for codex per pln#496
+  // so the reconciler-independent path is preserved; this addendum disambiguates
+  // the transport rather than stripping the section — the full compact reversal
+  // is a separate human-owned call on the May-vs-June MCP-availability conflict.)
+  const briefProfile = options?.agent ? getCapabilityProfile(options.agent) : undefined;
+  if (briefProfile && !dispatchHasMcp(briefProfile)) {
+    parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
+    parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');
+    const asgn = options?.assignmentId ?? '<assignment_id>';
+    parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
+    parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
+    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates/commits it.');
+    parts.push('');
+  }
+
   // Codex-specific constraints: focus and speed guidance for sandboxed runs.
   // Gated on agent identity (not brief mode) so future non-codex compact consumers
   // don't inherit sandbox-specific wording. (Codex review cnd#561)
@@ -547,7 +567,6 @@ export function generateBrief(
     parts.push('## Constraints');
     parts.push('- Focus on specified files only — do not explore the broader codebase');
     parts.push('- Produce output quickly; if blocked, capture as trap candidate and move on');
-    parts.push('- Sandbox blocks MCP writes: use filesystem writes for candidates, coordinator harvests');
     parts.push('');
   }
 
@@ -595,12 +614,23 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
     }));
   }
 
+  // pln#528 — transport-aware addendum for sandboxed agents (see generateBrief).
+  const taskBriefProfile = options.agent ? getCapabilityProfile(options.agent) : undefined;
+  if (taskBriefProfile && !dispatchHasMcp(taskBriefProfile)) {
+    parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
+    parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');
+    const asgn = options.assignmentId ?? '<assignment_id>';
+    parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
+    parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
+    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates/commits it.');
+    parts.push('');
+  }
+
   // Codex-specific constraints: focus and speed guidance for sandboxed runs
   if (options.agent === 'codex') {
     parts.push('## Constraints');
     parts.push('- Focus on specified files only — do not explore the broader codebase');
     parts.push('- Produce output quickly; if blocked, capture as trap candidate and move on');
-    parts.push('- Sandbox blocks MCP writes: use filesystem writes for candidates, coordinator harvests');
     parts.push('');
   }
 
