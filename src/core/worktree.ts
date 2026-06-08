@@ -442,6 +442,15 @@ export function createWorktree(
   // shared store, creating session conflicts and potentially blocking agents
   // (especially Claude CLI which auto-detects .brainclaw/ presence).
 
+  // pln#479: opt-in per-worktree typecheck gate. Off by default — on large
+  // monorepos `tsc` is slow and a per-commit gate would be punishing — enable
+  // with BRAINCLAW_WORKTREE_TYPECHECK_GATE=1. Isolated to this worktree, so the
+  // main repo's commits are never affected.
+  let typecheckGate: { installed: boolean; reason?: string } | undefined;
+  if (process.env.BRAINCLAW_WORKTREE_TYPECHECK_GATE === '1') {
+    typecheckGate = installWorktreeTypecheckGate(mainWorktreePath, targetPath);
+  }
+
   const mainGitignorePath = path.join(mainWorktreePath, '.gitignore');
   const targetGitignorePath = path.join(targetPath, '.gitignore');
   if (fs.existsSync(mainGitignorePath)) {
@@ -462,6 +471,8 @@ export function createWorktree(
     // that could not be created) so the worker / supervisor can see why a build
     // might fail, instead of an invisible degradation.
     ...(symlinkWarnings.length > 0 ? { symlink_warnings: symlinkWarnings } : {}),
+    // pln#479: record whether the per-worktree typecheck gate is active.
+    ...(typecheckGate?.installed ? { typecheck_gate: true } : {}),
   };
   fs.writeFileSync(
     path.join(targetPath, '.brainclaw-worktree.json'),
@@ -469,6 +480,82 @@ export function createWorktree(
   );
 
   return targetPath;
+}
+
+/** Directory (relative to a worktree root) holding the per-worktree git hooks. */
+export const WORKTREE_HOOKS_DIRNAME = '.brainclaw-hooks';
+
+/**
+ * The pre-commit gate body (pln#479). Runs via `node -e` — same SIGPIPE-avoiding
+ * pattern as install-hooks.ts. Git runs hooks with cwd = worktree root, so the
+ * relative paths resolve there. `node` and the tsc entry point are invoked with
+ * forward-slash relative paths to stay cross-platform (no quoting/backslash
+ * pitfalls). If typescript is absent the gate degrades to a warning rather than
+ * blocking — a tooling gap must not trap a worker.
+ */
+export function buildTypecheckPreCommitScript(): string {
+  return `#!/bin/sh
+# brainclaw worktree typecheck gate (pln#479) — do not edit manually.
+# Blocks the commit when 'tsc --noEmit' fails. Bypass: git commit --no-verify.
+exec node -e "
+const fs = require('fs');
+const { execSync } = require('child_process');
+if (!fs.existsSync('tsconfig.json')) process.exit(0);
+if (!fs.existsSync('node_modules/typescript/bin/tsc')) {
+  process.stderr.write('\\\\n[brainclaw] typecheck gate: typescript not found in worktree node_modules — skipping (commit allowed).\\\\n');
+  process.exit(0);
+}
+try {
+  execSync('node node_modules/typescript/bin/tsc --noEmit', { stdio: 'inherit' });
+} catch (e) {
+  process.stderr.write('\\\\n[brainclaw] commit blocked: tsc --noEmit reported type errors (above). Fix them, or bypass with: git commit --no-verify\\\\n\\\\n');
+  process.exit(1);
+}
+" 2>&1 || exit $?
+`;
+}
+
+/**
+ * pln#479 — install an ISOLATED pre-commit gate in a dispatched worktree that
+ * blocks a commit when `tsc --noEmit` fails, so a worker cannot land code that
+ * breaks the type-check (observed: workers committing strict-mode-broken TS that
+ * only blew up at merge/build time, pln#466).
+ *
+ * Isolation is the crux: git hooks are shared across all worktrees of a repo by
+ * default, so we must NOT write into the common hooks dir — that would impose
+ * tsc on the human's main-repo commits too. Instead we point THIS worktree's
+ * `core.hooksPath` at a worktree-local dir via the `--worktree` config scope
+ * (enabling `extensions.worktreeConfig`), which leaves the main repo's hook
+ * setup completely untouched and is torn down with the worktree.
+ *
+ * No-ops when the worktree has no `tsconfig.json`. Depends on pln#523 having
+ * linked `node_modules` so `tsc` resolves.
+ */
+export function installWorktreeTypecheckGate(
+  mainWorktreePath: string,
+  worktreePath: string,
+): { installed: boolean; reason?: string } {
+  if (!fs.existsSync(path.join(worktreePath, 'tsconfig.json'))) {
+    return { installed: false, reason: 'no tsconfig.json — not a TypeScript worktree' };
+  }
+  try {
+    const hooksDir = path.join(worktreePath, WORKTREE_HOOKS_DIRNAME);
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(path.join(hooksDir, 'pre-commit'), buildTypecheckPreCommitScript(), {
+      encoding: 'utf-8',
+      mode: 0o755,
+    });
+    // Enable per-worktree config on the repo (idempotent, additive) so the
+    // hooksPath override stays scoped to THIS worktree only.
+    runGit(['config', 'extensions.worktreeConfig', 'true'], mainWorktreePath);
+    const set = runGit(['config', '--worktree', 'core.hooksPath', gitPath(hooksDir)], worktreePath);
+    if (!set.ok) {
+      return { installed: false, reason: `git config --worktree core.hooksPath failed: ${set.stderr.trim()}` };
+    }
+    return { installed: true };
+  } catch (err) {
+    return { installed: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
