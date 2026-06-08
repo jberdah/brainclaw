@@ -679,8 +679,8 @@ describe('dispatch-regression/generateDispatchBrief', () => {
       'codex constraints warn against broad exploration',
     );
     assert.ok(
-      brief.includes('Sandbox blocks MCP writes'),
-      'codex constraints mention sandbox MCP write limitation',
+      brief.includes('Transport: sandboxed run'),
+      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
     );
   });
 
@@ -692,8 +692,8 @@ describe('dispatch-regression/generateDispatchBrief', () => {
     });
     assert.ok(!brief.includes('## Constraints'), 'claude-code brief omits Constraints section');
     assert.ok(
-      !brief.includes('Sandbox blocks MCP writes'),
-      'claude-code brief omits codex sandbox warning',
+      !brief.includes('Transport: sandboxed run'),
+      'claude-code (MCP, non-sandboxed) brief omits the sandboxed-transport note',
     );
   });
 });
@@ -762,8 +762,8 @@ describe('dispatch-regression/brief-hardening', () => {
       'codex brief warns against broad exploration',
     );
     assert.ok(
-      brief.includes('Sandbox blocks MCP writes'),
-      'codex brief mentions sandbox MCP limitation',
+      brief.includes('Transport: sandboxed run'),
+      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
     );
   });
 
@@ -776,8 +776,8 @@ describe('dispatch-regression/brief-hardening', () => {
       scope: 'src/core/feature-y.ts',
     });
     assert.ok(
-      !brief.includes('Sandbox blocks MCP writes'),
-      'non-codex brief does not include codex sandbox constraint',
+      !brief.includes('Transport: sandboxed run'),
+      'non-codex (MCP) brief does not include the sandboxed-transport note',
     );
   });
 });

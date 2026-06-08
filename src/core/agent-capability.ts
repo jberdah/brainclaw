@@ -881,6 +881,38 @@ export function resolveBriefMode(agentName: string): BriefMode {
   return 'full';
 }
 
+// ── Dispatch-time capability matrix (pln#528) ──────────────────────────────
+
+/**
+ * pln#528 — capability matrix DERIVED from the spawn template, so it stays in
+ * sync with how each agent is actually invoked (no per-profile duplication).
+ *
+ * The motivating reality (debrief LeaseUp): codex is spawned with
+ * `--sandbox workspace-write`, which (a) does NOT wire the brainclaw MCP server
+ * and (b) puts `.git` outside the sandbox root — so a sandboxed worker can
+ * neither call `bclaw_*` nor `git commit`, regardless of the profile's nominal
+ * `runtime.mcp_direct` flag. These helpers expose that so the brief / handoff /
+ * harvest logic can adapt to the transport instead of issuing instructions the
+ * worker cannot follow.
+ */
+export function isSandboxedSpawn(profile: AgentCapabilityProfile): boolean {
+  return /--sandbox\b/.test(profile.invoke_template ?? '');
+}
+
+/** Whether the agent, AS SPAWNED by the dispatcher, can reach brainclaw MCP. */
+export function dispatchHasMcp(profile: AgentCapabilityProfile): boolean {
+  return profile.runtime.mcp_direct && !isSandboxedSpawn(profile);
+}
+
+/**
+ * Whether the spawned worker can `git commit`. A sandbox whose root excludes
+ * `.git` cannot — the coordinator must integrate the worker's output instead of
+ * relying on a self-commit handoff.
+ */
+export function dispatchCanCommit(profile: AgentCapabilityProfile): boolean {
+  return !isSandboxedSpawn(profile);
+}
+
 // ── getDefaultInvokeTemplate ───────────────────────────────────────────────
 
 /**
