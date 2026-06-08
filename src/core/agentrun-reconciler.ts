@@ -40,7 +40,7 @@ import { loadClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
-import { readHeartbeat, readLogTail, signalExists } from './runtime-signals.js';
+import { readHeartbeat, readLogTail, signalExists, latestActivityMs } from './runtime-signals.js';
 import type { AgentRun, AgentRunStatus } from './schema.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -102,6 +102,15 @@ export interface ReconcileEvidence {
   heartbeat_exists: boolean;
   /** Age of the heartbeat in ms (undefined when no heartbeat). */
   heartbeat_age_ms?: number;
+  /**
+   * pln#527 — age (ms) of the most recent FILESYSTEM activity: max mtime across
+   * captured stdout/stderr logs + any worktree file. The liveness signal for
+   * workers that emit no heartbeat during a long single operation (codex
+   * streaming to stderr; `claude -p` buffering stdout while editing files).
+   * undefined when nothing observable. A SMALL value = working, even if the
+   * heartbeat is stale.
+   */
+  fs_activity_age_ms?: number;
 }
 
 export interface ReconcileResult {
@@ -244,10 +253,28 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
     if (hb.exists && hb.mtimeMs !== undefined) heartbeat_age_ms = now - hb.mtimeMs;
   } catch { /* defensive */ }
 
+  // pln#527 — filesystem-activity liveness (logs + worktree). Independent of the
+  // heartbeat: a worker can be actively editing files / streaming to stderr while
+  // its heartbeat is frozen (written once at step 0).
+  let fs_activity_age_ms: number | undefined;
+  try {
+    const lastFs = latestActivityMs(signalRoot, run.assignment_id, run.worktree_path);
+    if (lastFs !== undefined) fs_activity_age_ms = now - lastFs;
+  } catch { /* defensive */ }
+
   return {
     age_ms, has_post_start_commit, claim_released, assignment_completed, process_alive,
-    completed_signal, failed_signal, heartbeat_exists, heartbeat_age_ms,
+    completed_signal, failed_signal, heartbeat_exists, heartbeat_age_ms, fs_activity_age_ms,
   };
+}
+
+/**
+ * pln#527 — true when the run shows filesystem activity within `windowMs`
+ * (logs growing / worktree files touched). Used to VETO a `stalled` verdict: a
+ * stale heartbeat with fresh fs activity means "working", not "hung".
+ */
+function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean {
+  return evidence.fs_activity_age_ms !== undefined && evidence.fs_activity_age_ms < windowMs;
 }
 
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
@@ -414,9 +441,18 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   if (evidence.failed_signal) {
     return failHere(`failed_silent: wrapper reported non-zero exit${logTailSuffix(run, cwd)}`);
   }
-  // Heartbeat present but stale → reached the loop then went silent.
+  // Heartbeat present but stale → reached the loop then went silent — UNLESS the
+  // filesystem shows recent activity (pln#527): a frozen heartbeat with fresh
+  // log/worktree writes means the worker is mid-operation, not hung.
   if (evidence.heartbeat_exists && evidence.heartbeat_age_ms !== undefined && evidence.heartbeat_age_ms >= heartbeatStale) {
-    return failHere(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago${logTailSuffix(run, cwd)}`);
+    if (fsActiveWithin(evidence, heartbeatStale)) {
+      return {
+        run_id: runId, action: 'no_op',
+        reason: `heartbeat stale (${Math.round(evidence.heartbeat_age_ms / 1000)}s) but fs active ${Math.round((evidence.fs_activity_age_ms ?? 0) / 1000)}s ago — working, not stalled`,
+        evidence, previous_status, current_status: run.status,
+      };
+    }
+    return failHere(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago, no fs activity${logTailSuffix(run, cwd)}`);
   }
   // Fresh heartbeat → alive; trust it over the untrustworthy wrapper pid.
   if (evidence.heartbeat_exists) {
@@ -538,7 +574,14 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   // 3. Heartbeat present but STALE → the worker reached its loop then went
   // silent (e.g. hung). pid-independent: a hung worker keeps the wrapper alive.
   if (evidence.heartbeat_exists && evidence.heartbeat_age_ms !== undefined && evidence.heartbeat_age_ms >= heartbeatStale) {
-    return failRun(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago${logTailSuffix(run, cwd)}`);
+    if (fsActiveWithin(evidence, heartbeatStale)) {
+      return {
+        run_id: run.id, action: 'no_op',
+        reason: `heartbeat stale (${Math.round(evidence.heartbeat_age_ms / 1000)}s) but fs active ${Math.round((evidence.fs_activity_age_ms ?? 0) / 1000)}s ago — working, not stalled`,
+        evidence, previous_status: run.status, current_status: run.status,
+      };
+    }
+    return failRun(`stalled: heartbeat last seen ${Math.round(evidence.heartbeat_age_ms / 1000)}s ago, no fs activity${logTailSuffix(run, cwd)}`);
   }
 
   // 4. Fresh heartbeat → the worker is alive and working; trust it OVER the

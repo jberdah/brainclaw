@@ -112,3 +112,66 @@ export function readLogTail(root: string, assignmentId: string, stream: 'stdout'
     return '';
   }
 }
+
+/**
+ * pln#527 — directories never worth walking for filesystem-activity (junction
+ * targets / VCS / coordination store). Skipping them keeps the worktree mtime
+ * scan cheap AND avoids following node_modules/dist junctions into the main repo.
+ */
+const FS_ACTIVITY_SKIP_DIRS = new Set(['.git', '.brainclaw', 'node_modules', 'dist', '.venv', 'venv', 'vendor']);
+
+/**
+ * pln#527 — most-recent file mtime (ms) under a worktree, via a bounded walk that
+ * NEVER follows symlinks/junctions (lstat) and skips dependency/VCS dirs. This is
+ * the liveness signal for workers that edit files but emit no heartbeat/stdout
+ * (e.g. `claude -p` buffers stdout; a long single edit pass refreshes no
+ * sentinel). Returns undefined when the path is absent/unreadable.
+ */
+export function latestWorktreeFileMtimeMs(worktreePath: string, maxDepth = 4): number | undefined {
+  let latest: number | undefined;
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue; // never follow junctions (node_modules/dist)
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (FS_ACTIVITY_SKIP_DIRS.has(entry.name)) continue;
+        walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        try {
+          const m = fs.statSync(full).mtimeMs;
+          if (latest === undefined || m > latest) latest = m;
+        } catch { /* ignore */ }
+      }
+    }
+  };
+  walk(worktreePath, 0);
+  return latest;
+}
+
+/**
+ * pln#527 — the most recent filesystem activity (ms since epoch) attributable to
+ * a dispatched run: the max mtime across its captured stdout/stderr logs AND any
+ * file in its worktree. Lets the reconciler / dispatch_status distinguish
+ * "no heartbeat BUT fs active" (working — e.g. codex streaming to stderr, or
+ * claude -p editing files) from "no heartbeat AND fs inert" (genuinely stalled),
+ * fixing the false-`stalled` verdict (debrief LeaseUp P1#1). Returns undefined
+ * when nothing is observable.
+ */
+export function latestActivityMs(root: string, assignmentId: string, worktreePath?: string): number | undefined {
+  let latest: number | undefined;
+  const bump = (ms: number | undefined): void => {
+    if (ms !== undefined && (latest === undefined || ms > latest)) latest = ms;
+  };
+  for (const stream of ['stdout', 'stderr'] as const) {
+    try { bump(fs.statSync(getRuntimeLogPath(root, assignmentId, stream)).mtimeMs); } catch { /* no log */ }
+  }
+  if (worktreePath) bump(latestWorktreeFileMtimeMs(worktreePath));
+  return latest;
+}
