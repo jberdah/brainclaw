@@ -5,6 +5,22 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.5] — 2026-06-09
+
+Security patch. **Upgrade from 1.7.4 (and any 1.7.x) is recommended.**
+
+### Security
+
+- **Fixed a git command-injection / RCE vector** (Socket AI, medium). Several
+  commands built `git` invocations as `execSync` shell strings that interpolated
+  a ref — notably one derived from the persisted session snapshot's `git_sha`
+  (`session-end.ts`), plus `release-claims.ts`, `release-notes.ts`, and
+  `sync.ts`. A `git_sha` (or ref) carrying shell metacharacters (`$(…)`, `;`,
+  backticks, `&&`) would execute arbitrary commands. All git calls now use
+  `execFileSync('git', [args])` (no shell — arguments are passed literally), and
+  `git_sha` is additionally validated as a hex SHA before it can reach a git ref
+  (untrusted values fall back to a safe literal). No functional/API change.
+
 ## [1.7.4] — 2026-06-08
 
 Multi-agent dispatch hardening, driven by a real cross-project field session
