@@ -26,6 +26,7 @@ import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
 import { isProcessAlive } from './agentrun-reconciler.js';
 import { latestActivityMs } from './runtime-signals.js';
+import { LaneResultSchema } from './schema.js';
 import type { Assignment, AgentRun, Claim } from './schema.js';
 import type { LoopThread } from './loops/types.js';
 
@@ -70,6 +71,12 @@ export interface DispatchRuntimeSnapshot {
    * even when its heartbeat / last_event_at is stale. undefined when unobservable.
    */
   last_fs_activity_ms?: number;
+  /**
+   * pln#532 — the worker's LANE-RESULT.json (if present at the worktree root).
+   * This is the #1 verdict signal: a worker that wrote it has FINISHED, even when
+   * it could not self-update the agent_run (sandboxed). undefined when absent.
+   */
+  lane_result?: { status: string; summary: string };
 }
 
 export interface DispatchDiagnosis {
@@ -234,6 +241,25 @@ function computeDiagnosis(
     };
   }
 
+  // pln#532 — RESULT is the #1 verdict signal. If the worker wrote LANE-RESULT.json
+  // it has FINISHED — regardless of pid / heartbeat / agent_run.status (a sandboxed
+  // worker frequently cannot self-update the run). This sits above every other
+  // signal, including the agent_run terminal/running checks below.
+  if (runtime.lane_result) {
+    const lr = runtime.lane_result;
+    const ok = lr.status === 'completed';
+    const stale = agentRun && agentRun.status !== 'completed'
+      ? ` (agent_run still ${agentRun.status}; the worker could not self-update — harvest reconciles it)`
+      : '';
+    return {
+      health: 'terminal',
+      summary: `worker reported done via LANE-RESULT.json: status=${lr.status} — ${lr.summary.slice(0, 140)}${stale}`,
+      recommended_next_action: ok
+        ? 'Worker finished. `brainclaw harvest <assignment_id>` to ingest the result, then commit/integrate its worktree diff and converge the lane.'
+        : `Worker reported "${lr.status}". Read the LANE-RESULT summary + stderr; address the blocker or reroute.`,
+    };
+  }
+
   if (!agentRun) {
     return {
       health: 'not_dispatched',
@@ -361,6 +387,16 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     if (lastFs !== undefined) lastFsActivityMs = nowMs - lastFs;
   }
 
+  // pln#532 — the #1 verdict signal: a LANE-RESULT.json at the worktree root means
+  // the worker FINISHED (even if it couldn't self-update the run). Read + validate it.
+  let laneResult: { status: string; summary: string } | undefined;
+  if (worktreeForFs) {
+    try {
+      const parsed = LaneResultSchema.parse(JSON.parse(fs.readFileSync(path.join(worktreeForFs, 'LANE-RESULT.json'), 'utf-8')));
+      laneResult = { status: parsed.status, summary: parsed.summary };
+    } catch { /* no / invalid LANE-RESULT.json */ }
+  }
+
   const runtime: DispatchRuntimeSnapshot = {
     pid: agentRun?.pid,
     pid_alive: isProcessAlive(agentRun?.pid),
@@ -373,6 +409,7 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
       stderr: stderrPath ? readLogTail(stderrPath, tailLines) : undefined,
     },
     last_fs_activity_ms: lastFsActivityMs,
+    lane_result: laneResult,
   };
 
   const diagnosis = computeDiagnosis(assignment, agentRun, runtime, { stallMs, nowMs });

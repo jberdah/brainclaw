@@ -8,6 +8,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { getDispatchStatus } from '../../src/core/dispatch-status.js';
@@ -299,5 +300,76 @@ describe('getDispatchStatus — runtime artefacts (ack + logs)', () => {
     assert.equal(status.runtime.log_files.stdout?.exists, true);
     assert.ok((status.runtime.log_files.stdout?.size_bytes ?? 0) > 0);
     assert.equal(status.runtime.log_files.stdout?.tail, undefined, 'tail should be omitted when tail_log_lines=0');
+  });
+});
+
+describe('getDispatchStatus — LANE-RESULT.json as #1 verdict signal (pln#532)', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    workspace = createTestWorkspace({ prefix: 'bclaw-disp-lr-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+    delete process.env.BRAINCLAW_TEST_MODE;
+  });
+
+  function seedWithWorktree(suffix: string, runOverrides: Partial<AgentRun> = {}): string {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), `bclaw-wt-${suffix}-`));
+    seedClaim(workspace, `clm_${suffix}`, { worktree_path: worktree });
+    seedAssignment(workspace, `asgn_${suffix}`, { claim_id: `clm_${suffix}` });
+    seedAgentRun(workspace, `run_${suffix}`, {
+      assignment_id: `asgn_${suffix}`,
+      claim_id: `clm_${suffix}`,
+      worktree_path: worktree,
+      status: 'running',
+      pid: process.pid,
+      last_event_at: nowISO(),
+      ...runOverrides,
+    });
+    return worktree;
+  }
+
+  it('reports terminal "worker done" when LANE-RESULT.json status=completed, even if run still running', () => {
+    const worktree = seedWithWorktree('lr1');
+    fs.writeFileSync(path.join(worktree, 'LANE-RESULT.json'), JSON.stringify({
+      assignment_id: 'asgn_lr1',
+      status: 'completed',
+      summary: 'Implemented the thing and committed on the lane branch.',
+    }));
+
+    const status = getDispatchStatus({ target_id: 'asgn_lr1', cwd: workspace.dir });
+    assert.equal(status.diagnosis.health, 'terminal');
+    assert.match(status.diagnosis.summary, /LANE-RESULT\.json/);
+    assert.match(status.diagnosis.summary, /status=completed/);
+    assert.equal(status.runtime.lane_result?.status, 'completed');
+    fs.rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('reports terminal for a blocked/failed LANE-RESULT and recommends inspection', () => {
+    const worktree = seedWithWorktree('lr2');
+    fs.writeFileSync(path.join(worktree, 'LANE-RESULT.json'), JSON.stringify({
+      assignment_id: 'asgn_lr2',
+      status: 'blocked',
+      summary: 'Could not resolve a merge conflict in schema.ts.',
+    }));
+
+    const status = getDispatchStatus({ target_id: 'asgn_lr2', cwd: workspace.dir });
+    assert.equal(status.diagnosis.health, 'terminal');
+    assert.equal(status.runtime.lane_result?.status, 'blocked');
+    assert.match(status.diagnosis.recommended_next_action, /blocked/i);
+    fs.rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('ignores a malformed LANE-RESULT.json and falls back to the normal verdict', () => {
+    const worktree = seedWithWorktree('lr3');
+    fs.writeFileSync(path.join(worktree, 'LANE-RESULT.json'), '{ not valid json');
+
+    const status = getDispatchStatus({ target_id: 'asgn_lr3', cwd: workspace.dir });
+    assert.equal(status.runtime.lane_result, undefined);
+    assert.notEqual(status.diagnosis.health, 'terminal');
+    fs.rmSync(worktree, { recursive: true, force: true });
   });
 });
