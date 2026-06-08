@@ -25,6 +25,7 @@ import { loadAgentRun, listAgentRuns } from './agentruns.js';
 import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
 import { isProcessAlive } from './agentrun-reconciler.js';
+import { latestActivityMs } from './runtime-signals.js';
 import type { Assignment, AgentRun, Claim } from './schema.js';
 import type { LoopThread } from './loops/types.js';
 
@@ -63,6 +64,12 @@ export interface DispatchRuntimeSnapshot {
     stdout: LogFileSnapshot | undefined;
     stderr: LogFileSnapshot | undefined;
   };
+  /**
+   * pln#527 — age (ms) of the most recent filesystem activity (max mtime across
+   * logs + worktree files). A small value means the worker is doing real work
+   * even when its heartbeat / last_event_at is stale. undefined when unobservable.
+   */
+  last_fs_activity_ms?: number;
 }
 
 export interface DispatchDiagnosis {
@@ -180,6 +187,39 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRun['status']> = new Set([
   'completed', 'failed', 'cancelled', 'timed_out', 'interrupted',
 ]);
 
+interface StderrSignature { summary: string; recommended_next_action: string; }
+
+/**
+ * pln#527 (#5) — recognize known fatal boot signatures in a worker's stderr tail
+ * so dispatch_status returns a targeted diagnosis + remediation instead of a
+ * generic silent_death. These are agent/CLI/config faults (NOT brainclaw bugs)
+ * that a coordinator can fix and re-dispatch. Patterns sourced from field traps
+ * (trp#292 codex service_tier / model mismatch).
+ */
+export function recognizeStderrSignature(tail: string[] | undefined): StderrSignature | undefined {
+  if (!tail || tail.length === 0) return undefined;
+  const text = tail.join('\n');
+  if (/service_tier/i.test(text) && /flex|unsupported/i.test(text)) {
+    return {
+      summary: 'codex rejected an unsupported `service_tier` (e.g. flex) — a config/model mismatch at boot, not a brainclaw fault',
+      recommended_next_action: 'Fix ~/.codex/config.toml `service_tier` (remove it or set a supported value) or upgrade codex, then re-dispatch. See trap trp#292.',
+    };
+  }
+  if (/unknown variant/i.test(text)) {
+    return {
+      summary: 'codex CLI rejected an unknown config variant — the installed codex does not support a value in ~/.codex/config.toml (e.g. model/approval)',
+      recommended_next_action: 'Reconcile ~/.codex/config.toml with the installed codex (`codex --version`) or upgrade codex, then re-dispatch.',
+    };
+  }
+  if (/\b400\b/.test(text) && /(unsupported|requires a newer|model)/i.test(text)) {
+    return {
+      summary: 'the model API returned 400 (unsupported model / needs a newer CLI) — the worker died at boot, before doing work',
+      recommended_next_action: 'Check the configured model vs the installed CLI version; upgrade the agent CLI or pick a supported model, then re-dispatch.',
+    };
+  }
+  return undefined;
+}
+
 function computeDiagnosis(
   assignment: Assignment | undefined,
   agentRun: AgentRun | undefined,
@@ -220,18 +260,40 @@ function computeDiagnosis(
   const stallAge = options.nowMs - lastEventMs;
 
   if (runtime.pid_alive === false) {
+    // pln#527 (#5) — surface a TARGETED diagnosis when the captured stderr matches
+    // a known fatal boot signature (codex model/service_tier mismatch, API 400)
+    // instead of a generic "silent_death".
+    const sig = recognizeStderrSignature(runtime.log_files.stderr?.tail);
     return {
       health: 'silent_death',
-      summary: `agent_run.status="${agentRun.status}" but pid ${runtime.pid} is dead — worker exited without self-reporting; lazy reconciler will mark it failed after the stale window (default 30min)`,
-      recommended_next_action: 'Read .stderr.log for the exit reason; then trigger reconciliation by calling bclaw_find(entity="agent_run") again, or cancel + reroute.',
+      summary: sig
+        ? `agent_run.status="${agentRun.status}", pid ${runtime.pid} dead — ${sig.summary}`
+        : `agent_run.status="${agentRun.status}" but pid ${runtime.pid} is dead — worker exited without self-reporting; lazy reconciler will mark it failed after the stale window (default 30min)`,
+      recommended_next_action: sig?.recommended_next_action
+        ?? 'Read .stderr.log for the exit reason; then trigger reconciliation by calling bclaw_find(entity="agent_run") again, or cancel + reroute.',
+    };
+  }
+
+  // pln#527 — a stale last_event_at is NOT "stalled" when the filesystem is still
+  // active (logs streaming / worktree files edited). Workers emit no heartbeat
+  // during a long single operation (codex→stderr, claude -p buffering stdout),
+  // so fs activity is the truer liveness signal and vetoes the false-stalled.
+  const fsAge = runtime.last_fs_activity_ms;
+  const fsActive = fsAge !== undefined && fsAge < options.stallMs;
+
+  if (runtime.pid_alive === true && stallAge > options.stallMs && fsActive) {
+    return {
+      health: 'healthy',
+      summary: `agent_run alive (pid=${runtime.pid}); last_event_at stale (${Math.round(stallAge / 1000)}s) but filesystem active ${Math.round((fsAge ?? 0) / 1000)}s ago — working through a long op without a heartbeat`,
+      recommended_next_action: 'No action — the worker is actively writing to logs/worktree. Re-check periodically until terminal.',
     };
   }
 
   if (runtime.pid_alive === true && stallAge > options.stallMs) {
     return {
       health: 'stalled',
-      summary: `agent_run alive (pid=${runtime.pid}) but no activity for ${Math.round(stallAge / 1000)}s; last_event_at=${agentRun.last_event_at ?? '(never)'}`,
-      recommended_next_action: 'Tail the stdout/stderr log to see whether the worker is doing useful work; if truly hung, kill the pid and reroute.',
+      summary: `agent_run alive (pid=${runtime.pid}) but no activity for ${Math.round(stallAge / 1000)}s AND no filesystem writes${fsAge !== undefined ? ` (last fs ${Math.round(fsAge / 1000)}s ago)` : ' (no logs/worktree mtime)'}; last_event_at=${agentRun.last_event_at ?? '(never)'}`,
+      recommended_next_action: 'Worker appears genuinely hung (no log/file writes). Tail stderr to confirm, then kill the pid and reroute.',
     };
   }
 
@@ -289,6 +351,16 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   const stdoutPath = assignmentId ? path.join(runtimeRoot, 'log', `${assignmentId}.stdout.log`) : undefined;
   const stderrPath = assignmentId ? path.join(runtimeRoot, 'log', `${assignmentId}.stderr.log`) : undefined;
 
+  // pln#527 — filesystem-activity age: max mtime across the captured logs + the
+  // run's worktree files (skipping junctions). The truer liveness signal when
+  // the heartbeat / last_event_at is stale during a long single operation.
+  const worktreeForFs = agentRun?.worktree_path ?? claim?.worktree_path;
+  let lastFsActivityMs: number | undefined;
+  if (assignmentId) {
+    const lastFs = latestActivityMs(projectRoot, assignmentId, worktreeForFs);
+    if (lastFs !== undefined) lastFsActivityMs = nowMs - lastFs;
+  }
+
   const runtime: DispatchRuntimeSnapshot = {
     pid: agentRun?.pid,
     pid_alive: isProcessAlive(agentRun?.pid),
@@ -300,6 +372,7 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
       stdout: stdoutPath ? readLogTail(stdoutPath, tailLines) : undefined,
       stderr: stderrPath ? readLogTail(stderrPath, tailLines) : undefined,
     },
+    last_fs_activity_ms: lastFsActivityMs,
   };
 
   const diagnosis = computeDiagnosis(assignment, agentRun, runtime, { stallMs, nowMs });
