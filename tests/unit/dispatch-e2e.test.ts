@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   analyzeSequence,
   dispatch,
@@ -55,6 +56,40 @@ function createTestStore(): string {
 
 function cleanupTestStore(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * Turn a test store into a real git repo with one commit so the dispatcher's
+ * worktree-isolation step (createCoordinatorClaim → createWorktree) succeeds.
+ * pln#531 refuses to spawn a worker without a worktree, so any test that
+ * exercises the real spawn path must give the dispatcher a repo to branch from.
+ */
+function gitInitStore(dir: string): void {
+  const run = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf-8' });
+  run('init', '-q');
+  run('config', 'user.email', 'dispatch-e2e@brainclaw.local');
+  run('config', 'user.name', 'Dispatch E2E');
+  run('config', 'commit.gpgsign', 'false');
+  run('add', '.');
+  run('commit', '-q', '-m', 'bootstrap');
+}
+
+/**
+ * Point os.homedir() (USERPROFILE on Windows, HOME on POSIX) at a temp dir so
+ * brainclaw-managed worktrees land under it instead of the real user home,
+ * keeping the test self-contained and cleaned up by cleanupTestStore.
+ * Returns a restore fn. Safe because each test file runs in its own process
+ * (scripts/run-tests.mjs) and this describe block is concurrency:false.
+ */
+function redirectHomedir(toDir: string): () => void {
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = toDir;
+  process.env.HOME = toDir;
+  return () => {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+  };
 }
 
 function installFakeAgentBinary(dir: string, name: string): () => void {
@@ -243,6 +278,10 @@ describe('dispatch-e2e/per-agent-cycle', { concurrency: false }, () => {
     const restorePath = installFakeAgentBinary(testDir, 'codex');
     const currentNoSpawn = process.env.BRAINCLAW_NO_SPAWN;
     delete process.env.BRAINCLAW_NO_SPAWN;
+    // pln#531: the dispatcher now refuses to spawn without an isolated worktree,
+    // so this real-spawn path needs a git repo + a homedir-redirected worktree base.
+    gitInitStore(testDir);
+    const restoreHome = redirectHomedir(testDir);
     try {
       persistState({
         version: 1, write_version: 1,
@@ -276,6 +315,7 @@ describe('dispatch-e2e/per-agent-cycle', { concurrency: false }, () => {
       assert.equal(run!.status, 'running');
       assert.equal(run!.pid, entry.pid);
     } finally {
+      restoreHome();
       restorePath();
       if (currentNoSpawn === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
       else process.env.BRAINCLAW_NO_SPAWN = currentNoSpawn;
