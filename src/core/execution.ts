@@ -30,7 +30,7 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
-  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity';
+  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity' | 'spawn_no_worktree';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -201,6 +201,13 @@ export async function attemptExecution(
     cwd?: string;
     handshakeTimeoutMs?: number;
     adapter?: ExecutionAdapter;
+    /**
+     * pln#531 — isolation invariant. When true (set by real worker-dispatch
+     * callers), refuse to spawn if no worktree is present rather than fall back
+     * to the integration cwd. Off by default so non-isolated/test spawns are
+     * unaffected.
+     */
+    requireWorktree?: boolean;
   },
 ): Promise<ExecutionResult> {
   const adapter = options.adapter ?? defaultExecutionAdapter;
@@ -220,6 +227,32 @@ export async function attemptExecution(
       execution_status: 'command_ready_manual',
       command: manual.command,
       shell: manual.shell,
+    };
+  }
+
+  // pln#531 — isolation invariant: a spawned worker MUST run in its own
+  // worktree. If a worktree was required but none exists (creation failed, or a
+  // claim was reused/re-dispatched without one), REFUSE to spawn instead of
+  // falling back to options.cwd — which is the integration repo, where the
+  // worker would edit the main tree directly (dangerous for an autonomous fleet,
+  // debrief LeaseUp). Return the command for manual, isolated execution.
+  if (options.requireWorktree && !options.worktreePath) {
+    appendAuditEntry({
+      actor: options.dispatcherAgent,
+      actor_id: options.dispatcherAgentId,
+      action: 'spawn_failed',
+      item_id: options.claimId,
+      item_type: 'claim',
+      scope: options.agent,
+      after: { reason: 'no_worktree', refused: true },
+    }, options.cwd);
+    const manual = adapter.prepareManualCommand(invoke, options);
+    return {
+      execution_status: 'command_ready_manual',
+      command: manual.command,
+      shell: manual.shell,
+      error: 'Refusing to spawn without an isolated worktree: with no worktree the worker would run in the integration repo and edit the main tree. Fix worktree creation (see claim worktreeWarning) or run the command manually inside a worktree.',
+      failure_kind: 'spawn_no_worktree',
     };
   }
 

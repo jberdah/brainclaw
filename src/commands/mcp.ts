@@ -4983,6 +4983,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             dispatcherAgent: opts.senderAgent,
             dispatcherAgentId: opts.senderAgentId,
             cwd: opts.cwd,
+            requireWorktree: true, // pln#531: never spawn a worker in the integration repo
           });
           entry.execution_status = execResult.execution_status;
           if (execResult.pid) entry.pid = execResult.pid;

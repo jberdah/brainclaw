@@ -1091,6 +1091,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         dispatcherAgentId: options.dispatcherAgentId,
         cwd,
         handshakeTimeoutMs: options.handshakeTimeoutMs,
+        requireWorktree: true, // pln#531: never spawn a worker in the integration repo
       });
       entry.execution_status = execResult.execution_status;
       if (execResult.pid) entry.pid = execResult.pid;
