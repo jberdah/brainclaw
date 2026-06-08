@@ -20,6 +20,7 @@ import {
   createEntity,
   getEntity,
   listEntities,
+  boundListResult,
   removeEntity,
   transitionEntity,
   updateEntity,
@@ -1153,7 +1154,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_assignment_update',
-    description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief.',
+    description: 'Report assignment lifecycle status. Part of the Agent SDK runtime protocol. Workers call this to report: accepted (acknowledging receipt), started (work begun), progress (heartbeat), completed (done with artifacts), failed (error), or blocked (external blocker). The assignment_id is provided in the dispatch brief. OWNERSHIP (trp#291): only the agent the assignment is OWNED BY (the dispatched worker) may update it — a different agent (e.g. the coordinator) gets `Agent <x> cannot update assignment owned by <y>`. If you are the coordinator and need to converge a worker run, do NOT call this; verify via bclaw_dispatch_status instead (the reconciler infers completion from sentinels/commits).',
     annotations: { tier: 'standard', category: 'coordination', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -1231,7 +1232,7 @@ const MCP_WRITE_TOOLS = [
   // Promoted to `standard` tier at the v1.0 cut.
   {
     name: 'bclaw_find',
-    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Tag filters accept `tag: string` for one tag or `tags: string[]` for any-match. For entity="agent_run", filters also accept assignment_id, claim_id, and message_id. Pass `project` to query a linked project instead of the current one.',
+    description: 'Canonical list query over a brainclaw entity. Default read filter excludes records with provenance.kind="legacy" and auto_reflect records below 0.6 confidence — override via filter.includeLegacy / filter.minAutoReflectConfidence. Tag filters accept `tag: string` for one tag or `tags: string[]` for any-match. For entity="agent_run", filters also accept assignment_id, claim_id, and message_id. Pass `project` to query a linked project instead of the current one. PAGINATION & SIZE (pln#491): returns at most filter.limit items (default 50), and the page is additionally shrunk if it would exceed the MCP size budget. The response carries `total` (full match count), `returned`, and — when more remain — `has_more: true`, `next_offset`, and a `hint`; pass `filter.offset=<next_offset>` (or a narrower filter) to page rather than expecting everything at once. ORDERING: results follow on-disk/load order, NOT recency — do not assume the first item is the newest (trp#291); filter explicitly (e.g. status, plan_id) to target what you need.',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -6332,6 +6333,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
         const result = listEntities(entity, targetCwd, filter);
+        // pln#491 — bound the payload (count is already capped by applyPaging;
+        // this caps SIZE) so a verbose result set never overflows the MCP token
+        // cap and silently pushes the agent to the CLI (trp#449). Advertises
+        // has_more / next_offset / hint for explicit pagination.
+        const offset = Math.max(0, Number(filter.offset) || 0);
+        const bounded = boundListResult(result, offset);
         const warnings = collectLoadValidationWarnings(entity, targetCwd);
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
@@ -6339,10 +6346,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // response body, which got dropped by the MCP protocol wrapper so
         // `result.items` arrived as undefined on the client — the root cause
         // of the VS Code Backlog section rendering empty.
+        const moreNote = bounded.has_more ? ` (returned ${bounded.returned}; ${result.total - bounded.returned} more — offset ${bounded.next_offset})` : '';
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)` }],
-            structuredContent: { ...result, warnings },
+            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}` }],
+            structuredContent: { ...bounded, warnings },
           }),
         };
       } catch (error: unknown) {
