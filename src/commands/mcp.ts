@@ -696,7 +696,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_claim',
-    description: 'Claim a work scope (advisory lock). Automatically creates an isolated git worktree for this claim. Requires contributor trust level or above.',
+    description: 'Claim a work scope (advisory lock). By default creates an isolated git worktree for the claim (multi-agent safety). Pass advisory:true (or worktree:false) for an advisory-only lock with NO worktree — use this when the work already lives uncommitted in the main tree and a fresh worktree would be counterproductive (trp#431). Requires contributor trust level or above.',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
@@ -709,6 +709,8 @@ const MCP_WRITE_TOOLS = [
         project: { type: 'string', description: 'Project name or path. Use this when working on a project different from the MCP server workspace (e.g. CLI agents in a different directory).' },
         store: { type: 'string', description: 'Target store level: local (default), repo, workspace.' },
         worktreeBranch: { type: 'string', description: 'Branch name for the worktree. Defaults to feat/<scope-slug>.' },
+        worktree: { type: 'boolean', description: 'Whether to create an isolated git worktree (default true). Pass false for an advisory-only lock with no worktree (trp#431) — for in-place work in the main tree.' },
+        advisory: { type: 'boolean', description: 'Alias for worktree:false — advisory-only lock with no worktree (trp#431).' },
         handoffMode: { type: 'string', enum: ['self-commit', 'integrator'], description: 'Handoff mode: "self-commit" (worker commits+merges) or "integrator" (another agent reviews+merges). Default: self-commit.' },
       },
       required: ['scope', 'description'],
@@ -3260,9 +3262,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const claimId = generateClaimId();
       let worktreePath: string | undefined;
       let worktreeWarn = '';
-      // Always create worktree in MCP context for multi-agent isolation.
-      // The createWorktree param is no longer exposed in the schema.
-      {
+      // trp#431: advisory mode skips worktree creation. Default is to create an
+      // isolated worktree (multi-agent safety), but when the work already lives
+      // (uncommitted) in the main tree a fresh worktree is counterproductive and
+      // the agent ends up skipping the claim. Pass advisory:true (or
+      // worktree:false) for an advisory-only lock with no worktree.
+      const advisoryClaim = args.advisory === true || args.worktree === false;
+      if (!advisoryClaim) {
         const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
         const worktreeBranch = (args.worktreeBranch as string | undefined)?.trim() || `feat/${branchSlug}`;
         try {
