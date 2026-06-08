@@ -52,7 +52,7 @@ brainclaw session-end --auto-release
 ```
 
 <!-- brainclaw:start -->
-> Managed by brainclaw v1.7.3 — do not edit manually.
+> Managed by brainclaw v1.7.4 — do not edit manually.
 > Regenerate: brainclaw export --format agents-md --write
 
 ## brainclaw — this project

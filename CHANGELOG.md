@@ -5,6 +5,64 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.4] — 2026-06-08
+
+Multi-agent dispatch hardening, driven by a real cross-project field session
+(NestJS/React monorepo, sequence dispatch + codex review loop). Focus: spawn
+observability that reflects real work, transport-aware briefs, worker DX, and
+lifecycle GC.
+
+### Added
+
+- **Advisory claims** (trp#431). `bclaw_claim` accepts `advisory: true` (or
+  `worktree: false`) to take an advisory-only lock with NO worktree — for
+  in-place work that already lives uncommitted in the main tree, where a fresh
+  worktree was counterproductive (agents had to skip the claim).
+- **Opt-in per-worktree typecheck gate** (pln#479). With
+  `BRAINCLAW_WORKTREE_TYPECHECK_GATE=1`, a dispatched worktree gets an isolated
+  `pre-commit` running `tsc --noEmit` (via `--worktree core.hooksPath`, so the
+  main repo is never affected) — blocks a worker from committing type-broken
+  code. Default off (tsc can be slow on large monorepos).
+
+### Changed
+
+- **Dispatch liveness reflects real work** (pln#527). The reconciler and
+  `bclaw_dispatch_status` now fold a filesystem-activity signal (max mtime of the
+  captured stdout/stderr logs + a junction-safe worktree walk) into the verdict:
+  a stale heartbeat with active fs is "working", not `stalled` — fixing the
+  false-`stalled` that fired while a worker was actively editing files or
+  streaming to stderr. `bclaw_dispatch_status` also recognizes known codex boot
+  stderr signatures (model 400 / `service_tier`) and returns a targeted
+  diagnosis instead of a generic `silent_death`.
+- **Transport-aware briefs + capability matrix** (pln#528). Derived
+  `dispatchHasMcp` / `dispatchCanCommit` / `isSandboxedSpawn` expose that a
+  sandboxed worker (codex `--sandbox workspace-write`) can neither call MCP nor
+  `git commit`. The generated brief now appends an explicit "sandboxed — no MCP,
+  no commit" note making the file protocol (`LANE-RESULT.json`) authoritative,
+  so a sandboxed worker no longer receives `bclaw_*` instructions it cannot
+  follow.
+- **`bclaw_find` payloads are size-bounded** (pln#491). A verbose page is shrunk
+  to fit a char budget (count was already capped) and the response advertises
+  `returned` / `has_more` / `next_offset` / a hint, so a large result set never
+  silently overflows the MCP token cap and pushes the agent to the terminal. The
+  tool description documents pagination, the size bound, and load-order semantics.
+- **MCP doc fixes** (trp#291): `bclaw_assignment_update` documents its
+  cross-agent ownership rule; `bclaw_find` documents ordering/pagination.
+- **`code_propagation_note` on gated ready lanes** (pln#529, advisory). When a
+  lane unblocks via `hard_after`, `analyzeSequence` flags that gate-readiness ≠
+  code-availability (commit/merge the predecessor, or dispatch with
+  `ref=<predecessor branch>`) — making the silent "spawn from HEAD without the
+  socle" risk visible. (The structural auto-fix is tracked separately.)
+
+### Fixed
+
+- **`plan.related_paths` is now updatable** (trp#434) — it was settable at create
+  but rejected by `bclaw_update` (decision/constraint/trap already allowed it).
+- **GC cascade on inferred failure** (trp#433). When the reconciler infers a run
+  `failed` (silent_death / stalled past the stale window), it auto-releases the
+  linked claim so dead runs stop leaving claims + worktrees accumulating for
+  manual cleanup.
+
 ## [1.7.3] — 2026-06-05
 
 Patch release hardening multi-agent dispatch ergonomics on real JS/TS monorepos:
