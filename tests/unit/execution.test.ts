@@ -187,6 +187,23 @@ describe('attemptExecution', () => {
     assert.equal(result.shell, expectedShell);
   });
 
+  it('pln#531 — refuses to spawn a worker when a worktree is required but missing', async () => {
+    const invoke = buildInvokeCommand('claude-code', 'test prompt');
+    assert.ok(invoke);
+    const result = await attemptExecution(invoke, {
+      agent: 'claude-code',
+      autoExecute: true,
+      requireWorktree: true,
+      // worktreePath intentionally omitted → must NOT fall back to the integration cwd
+      dispatcherAgent: 'test',
+      cwd: process.cwd(),
+    });
+    assert.equal(result.execution_status, 'command_ready_manual');
+    assert.equal(result.failure_kind, 'spawn_no_worktree');
+    assert.match(result.error ?? '', /worktree/i);
+    assert.ok(result.command, 'still returns the command for manual isolated execution');
+  });
+
   it('manual fallback prefixes claim_id differently on POSIX and Windows', async () => {
     const invoke = buildInvokeCommand('codex', 'test prompt');
     assert.ok(invoke, 'codex should produce an invoke command');
