@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { memoryExists } from '../core/io.js';
 import { loadState } from '../core/state.js';
 import { listCandidates } from '../core/candidates.js';
@@ -78,7 +78,9 @@ export function runSync(options: SyncOptions = {}): void {
   // Check git status of .brainclaw/
   let gitStatus = '';
   try {
-    gitStatus = execSync(`git status --porcelain ${pathSpec}`, {
+    // Security: execFileSync (no shell) + scopePaths spread as separate args so
+    // path specs cannot inject (Socket 2026-06-08 class).
+    gitStatus = execFileSync('git', ['status', '--porcelain', ...scopePaths], {
       encoding: 'utf-8',
       cwd: options.cwd ?? process.cwd(),
       timeout: 5000,
@@ -103,11 +105,12 @@ export function runSync(options: SyncOptions = {}): void {
     const msg = options.message ?? `chore: sync brainclaw (${new Date().toISOString().slice(0, 10)})`;
 
     try {
-      execSync(`git add ${pathSpec}`, {
+      execFileSync('git', ['add', ...scopePaths], {
         cwd: options.cwd ?? process.cwd(),
         timeout: 5000,
       });
-      execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, {
+      // commit message passed as a literal arg — no shell, no escaping needed.
+      execFileSync('git', ['commit', '-m', msg], {
         encoding: 'utf-8',
         cwd: options.cwd ?? process.cwd(),
         timeout: 10000,

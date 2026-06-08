@@ -345,6 +345,15 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.7.5
+
+- **Security patch (recommended upgrade)** — fixes a git command-injection / RCE
+  vector flagged by Socket AI: several commands interpolated a git ref (notably
+  one derived from the persisted session `git_sha`) into `execSync` shell
+  strings. All git calls now use `execFileSync` (no shell) and `git_sha` is
+  validated as a hex SHA. No functional change. (session-end, release-claims,
+  release-notes, sync)
+
 ### v1.7.4
 
 - **Dispatch observability + worker DX hardening** (from a real cross-project
