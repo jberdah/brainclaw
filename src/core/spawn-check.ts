@@ -25,6 +25,7 @@ import {
 } from './agent-capability.js';
 import { defaultExecutionAdapter, resolveBinaryOnPath } from './execution-adapters.js';
 import { signalExists, readLogTail } from './runtime-signals.js';
+import { recognizeStderrSignature } from './dispatch-status.js';
 
 export type SpawnCheckStatus =
   | 'ok'                      // ack + completed round-trip
@@ -41,6 +42,8 @@ export interface SpawnCheckEntry {
   completed: boolean;
   duration_ms: number;
   detail: string;
+  /** Captured stderr tail lines on a fault, for boot-signature recognition (pln#533). */
+  stderr_tail?: string[];
 }
 
 export interface SpawnCheckReport {
@@ -111,17 +114,22 @@ export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions 
     const failed = signalExists(root, assignmentId, 'failed');
     const duration_ms = Date.now() - start;
 
+    // Capture the stderr tail once (used both for the detail string and for
+    // pln#533 boot-signature recognition on the preflight path).
+    const stderrRaw = readLogTail(root, assignmentId, 'stderr', 800).trim();
+    const stderrTail = stderrRaw ? stderrRaw.split(/\r?\n/).filter(Boolean) : undefined;
+
     if (completed) {
       return { agent, binary, status: 'ok', delivered, completed: true, duration_ms, detail: 'ack + completed round-trip' };
     }
     if (failed) {
-      const tail = readLogTail(root, assignmentId, 'stderr', 400).trim() || readLogTail(root, assignmentId, 'stdout', 400).trim();
-      return { agent, binary, status: 'failed', delivered, completed: false, duration_ms, detail: `wrapper reported failure${tail ? ` — ${tail.replace(/\s+/g, ' ').slice(0, 200)}` : ''}` };
+      const tail = stderrRaw || readLogTail(root, assignmentId, 'stdout', 400).trim();
+      return { agent, binary, status: 'failed', delivered, completed: false, duration_ms, detail: `wrapper reported failure${tail ? ` — ${tail.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`, stderr_tail: stderrTail };
     }
     if (delivered) {
-      return { agent, binary, status: 'delivered_no_completion', delivered: true, completed: false, duration_ms, detail: `spawned + ack but no completion within ${timeout}ms (silent-death symptom)` };
+      return { agent, binary, status: 'delivered_no_completion', delivered: true, completed: false, duration_ms, detail: `spawned + ack but no completion within ${timeout}ms (silent-death symptom)`, stderr_tail: stderrTail };
     }
-    return { agent, binary, status: 'failed', delivered: false, completed: false, duration_ms, detail: `no ack within ${timeout}ms — delivery failed` };
+    return { agent, binary, status: 'failed', delivered: false, completed: false, duration_ms, detail: `no ack within ${timeout}ms — delivery failed`, stderr_tail: stderrTail };
   } finally {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
@@ -172,4 +180,114 @@ export function renderSpawnCheckReport(report: SpawnCheckReport): string {
     lines.push('✗ One or more installed agents failed their spawn round-trip — fix before dispatching.');
   }
   return lines.join('\n');
+}
+
+// ── pln#533: pre-flight spawn gate ──────────────────────────────────────────
+//
+// Before engaging a sequence / review-loop on a target agent, run ONE trivial
+// validation spawn so an environment death (config rejected, auth fail, model
+// mismatch) surfaces instantly AND with a clear reason — instead of a generic
+// "did not acknowledge 30000ms" verdict after the loop has already burned a
+// cycle. Field proof (LeaseUp frontier, can_9a3dccbe): codex died 2× at boot
+// (service_tier), gemini died at auth (no subscription); both showed only the
+// generic timeout after the loop opened. The fix reuses checkAgentSpawn for the
+// round-trip and recognizeStderrSignature (pln#527 #5) for the human reason.
+
+export interface PreflightResult {
+  agent: string;
+  /** true ⇒ safe to engage; false ⇒ block / skip this agent with `reason`. */
+  ok: boolean;
+  status: SpawnCheckStatus | 'skipped';
+  /** Short, agent-facing reason a pre-flight failed (or why it was skipped). */
+  reason: string;
+  /** Targeted remediation when a known boot signature matched. */
+  recommended_next_action?: string;
+}
+
+/**
+ * Pre-flight a single target agent. Pass criteria:
+ *   - `ok` (ack + completed) → pass.
+ *   - `delivered_no_completion` (ack but the trivial probe didn't finish in the
+ *     short window) → PASS: the ack proves spawn + wrapper + delivery work; a
+ *     boot death never acks. We don't want a slow-but-healthy agent to block.
+ *   - `failed` / no-ack → BLOCK with a reason (enriched by a recognized boot
+ *     signature when the stderr matches one).
+ *   - `not_installed` / `no_template` → BLOCK: the agent cannot be spawned here,
+ *     so opening a loop on it would only time out.
+ * When BRAINCLAW_NO_SPAWN is set (tests/CI), pre-flight is skipped (ok:true).
+ */
+/**
+ * Pure mapper: SpawnCheckEntry → PreflightResult. No spawning — exposed so the
+ * pass/block policy (and the boot-signature enrichment) can be unit-tested with
+ * synthetic entries.
+ */
+export function preflightResultFromEntry(entry: SpawnCheckEntry): PreflightResult {
+  const agent = entry.agent;
+
+  if (entry.status === 'ok' || entry.status === 'delivered_no_completion') {
+    return { agent, ok: true, status: entry.status, reason: entry.detail };
+  }
+
+  if (entry.status === 'not_installed') {
+    return {
+      agent, ok: false, status: entry.status,
+      reason: `${agent} binary not on PATH — cannot spawn it here`,
+      recommended_next_action: `Install the ${agent} CLI (or target a different agent), then retry.`,
+    };
+  }
+  if (entry.status === 'no_template') {
+    return {
+      agent, ok: false, status: entry.status,
+      reason: `${agent} has no CLI spawn template — it cannot be auto-dispatched (IDE-only?)`,
+      recommended_next_action: `Target a CLI-spawnable agent, or hand this work to ${agent} interactively.`,
+    };
+  }
+
+  // failed (or no-ack) — try to attach a recognized boot signature.
+  const sig = recognizeStderrSignature(entry.stderr_tail);
+  return {
+    agent, ok: false, status: entry.status,
+    reason: sig?.summary ?? `${agent} failed its pre-flight spawn — ${entry.detail}`,
+    recommended_next_action: sig?.recommended_next_action
+      ?? `Inspect the ${agent} CLI config/auth (run \`brainclaw doctor --spawn-check\` for detail), fix it, then retry.`,
+  };
+}
+
+export async function preflightAgentSpawn(agent: string, options: SpawnCheckOptions = {}): Promise<PreflightResult> {
+  if (process.env.BRAINCLAW_NO_SPAWN === '1') {
+    return { agent, ok: true, status: 'skipped', reason: 'pre-flight skipped (BRAINCLAW_NO_SPAWN)' };
+  }
+
+  // Pre-flight uses a tighter window than the full doctor round-trip: a boot
+  // death fails fast, and an ack is enough to pass, so we don't need to wait
+  // out a healthy agent's full probe completion.
+  const entry = await checkAgentSpawn(agent, { timeoutMs: 8_000, ...options });
+  return preflightResultFromEntry(entry);
+}
+
+/**
+ * Pre-flight a set of target agents (deduped), one trivial probe each. Returns
+ * the per-agent results plus `blocked` (the agents that failed). Callers use
+ * `blocked` to skip those agents and surface their reasons instead of opening a
+ * loop / dispatching work that would only time out.
+ */
+export async function preflightAgents(agents: string[], options: SpawnCheckOptions = {}): Promise<{
+  results: PreflightResult[];
+  blocked: PreflightResult[];
+  all_ok: boolean;
+}> {
+  const unique = [...new Set(agents)];
+  const results: PreflightResult[] = [];
+  for (const agent of unique) {
+    try {
+      results.push(await preflightAgentSpawn(agent, options));
+    } catch (err) {
+      results.push({
+        agent, ok: false, status: 'failed',
+        reason: `pre-flight threw: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+  const blocked = results.filter((r) => !r.ok);
+  return { results, blocked, all_ok: blocked.length === 0 };
 }

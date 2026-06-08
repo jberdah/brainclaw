@@ -45,6 +45,16 @@ export const CoordinateRequestSchema = z.object({
    */
   review_mode: z.enum(['asymmetric', 'symmetric']).optional(),
   /**
+   * pln#533: when opening a review Loop (open_loop=true), run a trivial
+   * validation spawn against each reviewer agent first so an environment death
+   * (config rejected, auth fail, model mismatch) surfaces instantly with a
+   * clear reason instead of a generic loop timeout. Defaults to true for
+   * open_loop reviews; set false to skip (e.g. when you have just spawn-checked
+   * the agents yourself). Ignored when open_loop is false or BRAINCLAW_NO_SPAWN
+   * is set.
+   */
+  preflight: z.boolean().optional(),
+  /**
    * Caller-minted ULID/UUIDv7 for idempotent retries. Today this is observed
    * on intent='review' + open_loop=true: a retry with the same
    * client_request_id returns the cached {candidate_id, loop_id} response

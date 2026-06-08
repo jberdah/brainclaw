@@ -1093,6 +1093,7 @@ const MCP_WRITE_TOOLS = [
         autoExecute: { type: 'boolean', description: 'Attempt to spawn target agents after delivery (default: true). When false, returns command_ready_manual with bash commands for the supervisor to run.' },
         open_loop: { type: 'boolean', description: 'For intent=review only: also open a review Loop on top of the candidate (author + reviewer slots, advance to `findings`, dispatch turns). Default false — existing review callers are unaffected. See docs/concepts/loop-engine.md §Automation.' },
         review_mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Optional review Loop mode when open_loop=true. `asymmetric` (default) keeps the classical author→reviewer handoff; `symmetric` lets each reviewer turn also apply fixes directly, halving round-trips for spec/doc reviews. Ignored when open_loop is false.' },
+        preflight: { type: 'boolean', description: 'pln#533: when open_loop=true, run a trivial validation spawn per reviewer agent BEFORE opening the loop so an environment death (config rejected, auth fail, model mismatch) surfaces instantly with a clear reason instead of a generic loop timeout. Reviewers that fail pre-flight are dropped (with a targeted warning); if all fail, loop creation is skipped. Default true; set false to skip (e.g. you already ran `brainclaw doctor --spawn-check`). Ignored when open_loop is false or BRAINCLAW_NO_SPAWN is set.' },
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
         project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
@@ -5398,6 +5399,33 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           preReviewWarnings.push(
             `open_loop: implicit reviewer fan-out capped at ${REVIEW_OPEN_LOOP_FANOUT_CAP} of ${resolvedAgents.length} spawnable agents; pass targetAgents to override`,
           );
+        }
+
+        // pln#533 — pre-flight the reviewer agents with a trivial validation
+        // spawn BEFORE opening the loop, so an environment death (config
+        // rejected, auth fail, model mismatch) surfaces instantly with a clear
+        // reason instead of a generic "did not acknowledge" loop timeout. Drop
+        // the agents that fail and surface their reasons; if none survive the
+        // existing length===0 guard skips loop creation. Skipped when open_loop
+        // is off, preflight=false, or BRAINCLAW_NO_SPAWN is set (handled inside
+        // preflightAgents). Cross-project dispatch never auto-spawns, so skip.
+        if (req.open_loop === true && req.preflight !== false && !req.project && loopReviewerAgents.length > 0) {
+          try {
+            const { preflightAgents } = await import('../core/spawn-check.js');
+            const pf = await preflightAgents(loopReviewerAgents, { cwd: dispatchCwd });
+            if (pf.blocked.length > 0) {
+              const healthy = loopReviewerAgents.filter((a) => !pf.blocked.some((b) => b.agent === a));
+              for (const b of pf.blocked) {
+                preReviewWarnings.push(
+                  `pre-flight: dropped reviewer '${b.agent}' — ${b.reason}.${b.recommended_next_action ? ` ${b.recommended_next_action}` : ''}`,
+                );
+              }
+              loopReviewerAgents = healthy;
+            }
+          } catch (pfErr) {
+            // Pre-flight is best-effort: a failure here must not block the review.
+            preReviewWarnings.push(`pre-flight: skipped (check threw: ${pfErr instanceof Error ? pfErr.message : String(pfErr)})`);
+          }
         }
 
         type ReviewOutput = {
