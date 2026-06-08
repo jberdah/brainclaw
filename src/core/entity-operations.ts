@@ -249,6 +249,61 @@ export function listEntities(
   return { entity: name, total: filtered.length, items: paged };
 }
 
+export interface BoundedListResult<T = unknown> extends ListResult<T> {
+  /** Items actually returned (≤ total; may be < page size when size-bounded). */
+  returned: number;
+  /** True when more items exist beyond what was returned (pagination or size-bounding). */
+  has_more: boolean;
+  /** Offset to pass on the next bclaw_find call to continue. Present only when has_more. */
+  next_offset?: number;
+  /** Items dropped from this page solely to keep the payload under the size budget. */
+  omitted_for_size?: number;
+  /** Hint on how to fetch the rest. Present only when has_more. */
+  hint?: string;
+}
+
+/** Default serialized-items budget (chars) — keeps a bclaw_find payload well under the ~25k-token MCP cap (trp#449). */
+export const DEFAULT_FIND_CHAR_BUDGET = 40000;
+
+/**
+ * pln#491 — bound a list payload so a verbose result set never overflows the MCP
+ * token cap (which makes agents silently fall back to the CLI, trp#449).
+ * `listEntities` already caps COUNT (default 50 via applyPaging); this additionally
+ * caps SIZE: if the serialized items exceed `charBudget`, the page is shrunk until
+ * it fits (always keeping at least one item). Either way the result advertises
+ * has_more / next_offset / a hint so the caller paginates explicitly instead of
+ * guessing or falling back to the terminal.
+ */
+export function boundListResult<T = unknown>(
+  result: ListResult<T>,
+  offset: number,
+  charBudget = DEFAULT_FIND_CHAR_BUDGET,
+): BoundedListResult<T> {
+  let items = result.items;
+  let omittedForSize = 0;
+  while (items.length > 1 && JSON.stringify(items).length > charBudget) {
+    const drop = Math.max(1, Math.ceil(items.length * 0.25));
+    items = items.slice(0, items.length - drop);
+    omittedForSize = result.items.length - items.length;
+  }
+  const returned = items.length;
+  const hasMore = offset + returned < result.total;
+  const bounded: BoundedListResult<T> = {
+    ...result,
+    items,
+    returned,
+    has_more: hasMore,
+    ...(omittedForSize > 0 ? { omitted_for_size: omittedForSize } : {}),
+  };
+  if (hasMore) {
+    bounded.next_offset = offset + returned;
+    bounded.hint = omittedForSize > 0
+      ? `Payload size-bounded: returned ${returned} of ${result.total} ${result.entity} item(s). Fetch more with filter.offset=${bounded.next_offset}, or narrow the filter (status/tag/author).`
+      : `Returned ${returned} of ${result.total} ${result.entity} item(s). Page with filter.offset=${bounded.next_offset}, or narrow the filter.`;
+  }
+  return bounded;
+}
+
 function loadAll(name: EntityName, cwd: string): unknown[] {
   switch (name) {
     case 'plan':                return loadState(cwd).plan_items;
