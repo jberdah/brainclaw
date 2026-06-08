@@ -371,6 +371,11 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     parts.push(`${options.worktreePath ? '7' : '6'}. Release the claim: bclaw_release_claim(${claimRef}, planStatus: "done") — required for hard_after gating to unblock downstream tasks`);
     parts.push(`${options.worktreePath ? '8' : '7'}. If blocked: bclaw_assignment_update(status: "blocked", blocker: "...")`);
     parts.push(`${options.worktreePath ? '9' : '8'}. If failed: bclaw_assignment_update(status: "failed", error_message: "...")`);
+    // pln#479: compile-check contract for code workers — a per-worktree
+    // pre-commit gate may HARD-block a commit that fails tsc (opt-in).
+    if (options.worktreePath) {
+      parts.push('**Compile check**: before every commit, `tsc --noEmit` (or the project build) must pass — a per-worktree pre-commit gate may enforce this and reject the commit otherwise. Do not bypass with --no-verify unless you intend to hand off a known-broken state.');
+    }
     // pln#526: standard fallback channel — works even when MCP is unreachable
     // (sandboxed agents). The coordinator ingests it with `brainclaw harvest`.
     parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable, e.g. a sandboxed agent): write LANE-RESULT.json at the worktree root — {"assignment_id":"${options.assignmentId}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."],"artifacts":["..."]}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
