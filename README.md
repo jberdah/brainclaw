@@ -345,6 +345,22 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.7.4
+
+- **Dispatch observability + worker DX hardening** (from a real cross-project
+  field session) — `bclaw_dispatch_status` and the reconciler now derive liveness
+  from filesystem activity (log + worktree mtime), so a worker actively editing
+  files is no longer falsely flagged `stalled`, and known codex boot-failure
+  stderr signatures get a targeted diagnosis; briefs are transport-aware (a
+  sandboxed agent without MCP/commit gets the file protocol, not instructions it
+  can't follow), backed by a derived capability matrix
+  (`dispatchHasMcp`/`dispatchCanCommit`); `bclaw_claim` gains an advisory
+  (no-worktree) mode; `bclaw_find` payloads are size-bounded with pagination
+  metadata; an opt-in per-worktree `tsc --noEmit` pre-commit gate; gated ready
+  lanes carry a code-propagation advisory; the reconciler auto-releases the claim
+  of a run it infers failed; and `plan.related_paths` is now updatable.
+  (pln#479, pln#491, pln#527, pln#528, pln#529, trp#291, trp#431, trp#433, trp#434)
+
 ### v1.7.3
 
 - **Multi-agent dispatch hardening for JS/TS monorepos** — dispatched worktrees
