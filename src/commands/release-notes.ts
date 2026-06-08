@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { loadConfig } from '../core/config.js';
 import { memoryExists } from '../core/io.js';
 import {
@@ -27,7 +27,8 @@ export function generateAgentReleaseNotes(
 
   let commits: string[];
   try {
-    const raw = execSync(`git log ${baseRef}..HEAD --oneline --no-decorate`, {
+    // Security: execFileSync (no shell) so baseRef cannot inject (Socket 2026-06-08 class).
+    const raw = execFileSync('git', ['log', `${baseRef}..HEAD`, '--oneline', '--no-decorate'], {
       cwd,
       encoding: 'utf-8',
       timeout: 10000,
@@ -76,7 +77,7 @@ export function generateAgentReleaseNotes(
 
 function findLastVersionTag(cwd: string): string | undefined {
   try {
-    const tag = execSync('git describe --tags --abbrev=0 HEAD', {
+    const tag = execFileSync('git', ['describe', '--tags', '--abbrev=0', 'HEAD'], {
       cwd,
       encoding: 'utf-8',
       timeout: 5000,

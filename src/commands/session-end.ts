@@ -1,5 +1,23 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+
+/**
+ * Security (Socket alert 2026-06-08, medium): a session snapshot's `git_sha` is
+ * persisted state and must be treated as untrusted — it must NEVER be
+ * interpolated into a shell command. The fix has two layers: (1) every git call
+ * below uses execFileSync (NO shell, args passed literally → no metacharacter
+ * interpretation), and (2) git_sha is validated as a plain hex SHA before it can
+ * reach a git ref. Either layer alone closes the command-injection vector; both
+ * are kept as defense in depth.
+ */
+export const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
+export function isValidGitSha(gitSha: string | undefined): gitSha is string {
+  return typeof gitSha === 'string' && GIT_SHA_RE.test(gitSha);
+}
+/** A trusted start ref: the snapshot SHA only if it is a valid hex SHA, else a safe literal. */
+export function safeStartRef(gitSha: string | undefined): string {
+  return isValidGitSha(gitSha) ? gitSha : 'HEAD~10';
+}
 import { memoryExists } from '../core/io.js';
 import { buildOperationalIdentity, clearCurrentSession } from '../core/identity.js';
 import { buildContextDiff } from '../core/context-diff.js';
@@ -247,11 +265,11 @@ export async function endSession(options: SessionEndOptions = {}): Promise<Sessi
     try {
       const snapshot = loadSessionSnapshot(sessionId, options.cwd);
       const startSha = snapshot?.git_sha;
-      const ref = startSha ?? 'HEAD~10';
+      const ref = safeStartRef(startSha);
       const cwd = options.cwd ?? process.cwd();
 
-      const commits = execSync(`git log --oneline ${ref}..HEAD`, { encoding: 'utf-8', cwd }).trim();
-      const diffStat = execSync(`git diff --stat ${ref}..HEAD`, { encoding: 'utf-8', cwd }).trim();
+      const commits = execFileSync('git', ['log', '--oneline', `${ref}..HEAD`], { encoding: 'utf-8', cwd }).trim();
+      const diffStat = execFileSync('git', ['diff', '--stat', `${ref}..HEAD`], { encoding: 'utf-8', cwd }).trim();
 
       if (commits) {
         const releasedClaims = listClaims(options.cwd)
@@ -262,7 +280,7 @@ export async function endSession(options: SessionEndOptions = {}): Promise<Sessi
         let filesTouched: string[] = [];
         let fullDiff: string | undefined;
         try {
-          fullDiff = execSync(`git diff ${ref}..HEAD`, { encoding: 'utf-8', cwd, maxBuffer: 10 * 1024 * 1024 }).trim();
+          fullDiff = execFileSync('git', ['diff', `${ref}..HEAD`], { encoding: 'utf-8', cwd, maxBuffer: 10 * 1024 * 1024 }).trim();
           filesTouched = extractFilesFromDiff(fullDiff);
         } catch { /* fall back to empty */ }
 
@@ -812,8 +830,9 @@ function countSessionEditedFiles(sessionId: string, cwd?: string): number {
 
   try {
     const touched = new Set<string>();
-    if (snapshot?.git_sha) {
-      for (const pathEntry of execSync(`git diff --name-only ${snapshot.git_sha}..HEAD`, {
+    const sha = snapshot?.git_sha;
+    if (isValidGitSha(sha)) {
+      for (const pathEntry of execFileSync('git', ['diff', '--name-only', `${sha}..HEAD`], {
         cwd: repoCwd,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -821,14 +840,14 @@ function countSessionEditedFiles(sessionId: string, cwd?: string): number {
         touched.add(pathEntry);
       }
     }
-    for (const pathEntry of execSync('git diff --name-only HEAD', {
+    for (const pathEntry of execFileSync('git', ['diff', '--name-only', 'HEAD'], {
       cwd: repoCwd,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).split(/\r?\n/).filter((entry) => Boolean(entry) && shouldCountEditedPath(entry))) {
       touched.add(pathEntry);
     }
-    for (const pathEntry of execSync('git ls-files --others --exclude-standard', {
+    for (const pathEntry of execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
       cwd: repoCwd,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],

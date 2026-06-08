@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { memoryExists } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
 import { listClaims, releaseClaim } from '../core/claims.js';
@@ -35,7 +35,8 @@ export function runReleaseClaims(options: ReleaseClaimsOptions = {}): void {
     const ref1 = options.ref1 ?? 'ORIG_HEAD';
     const ref2 = options.ref2 ?? 'HEAD';
     try {
-      const output = execSync(`git diff --name-only ${ref1} ${ref2}`, { encoding: 'utf-8' });
+      // Security: execFileSync (no shell) so ref1/ref2 cannot inject (Socket 2026-06-08 class).
+      const output = execFileSync('git', ['diff', '--name-only', ref1, ref2], { encoding: 'utf-8' });
       changedFiles = output.split('\n').map((f) => f.trim()).filter(Boolean);
     } catch {
       process.exit(0); // not in git or no diff — skip silently
