@@ -36,7 +36,7 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { loadAgentRun, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
-import { loadClaim } from './claims.js';
+import { loadClaim, releaseClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';
 import { createRuntimeEvent } from './events.js';
 import { nowISO } from './ids.js';
@@ -277,6 +277,35 @@ function fsActiveWithin(evidence: ReconcileEvidence, windowMs: number): boolean 
   return evidence.fs_activity_age_ms !== undefined && evidence.fs_activity_age_ms < windowMs;
 }
 
+/**
+ * trp#433 — when a run is reconciled to `failed` (silent_death / stalled), release
+ * its linked claim so dead runs stop leaving active claims (and their worktrees)
+ * accumulating for manual cleanup. Best-effort + idempotent: only an active claim
+ * is released, and any error is swallowed (GC must never break reconciliation).
+ * Inference only fires after the stale window with no life evidence, so this is
+ * conservative. (Loop auto-close on failure is a follow-up.)
+ */
+function cascadeReleaseOnFailure(run: AgentRun, actor: string, cwd?: string): void {
+  if (!run.claim_id) return;
+  try {
+    const claim = loadClaim(run.claim_id, cwd);
+    if (claim && claim.status === 'active') {
+      releaseClaim(run.claim_id, cwd);
+      createRuntimeEvent({
+        agent: actor,
+        session_id: run.session_id,
+        event_type: 'run_failed',
+        text: `Auto-released claim ${run.claim_id} after run ${run.id} was reconciled to failed (trp#433 GC cascade)`,
+        tags: ['reconciler', 'gc', 'claim-release'],
+        assignment_id: run.assignment_id,
+        run_id: run.id,
+        claim_id: run.claim_id,
+        status_reason: 'gc_cascade_release_on_failure',
+      }, cwd);
+    }
+  } catch { /* best-effort — never let GC break reconciliation */ }
+}
+
 function anyCompletionEvidence(evidence: ReconcileEvidence): boolean {
   return evidence.completed_signal
     || evidence.has_post_start_commit
@@ -427,6 +456,7 @@ export function reconcileAgentRun(runId: string, cwd?: string, options: Reconcil
   const failHere = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(runId, 'failed', { actor, status_reason: reason }, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd);
       return { run_id: runId, action: 'inferred_failed', reason, evidence, previous_status, current_status: 'failed' };
     } catch (err) {
       return {
@@ -530,6 +560,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   const failRun = (reason: string): ReconcileResult => {
     try {
       transitionAgentRun(run.id, 'failed', { actor, status_reason: reason }, cwd);
+      cascadeReleaseOnFailure(run, actor, cwd);
       return { run_id: run.id, action: 'inferred_failed', reason, evidence, previous_status: run.status, current_status: 'failed' };
     } catch (err) {
       return {

@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createAgentRun, loadAgentRun, transitionAgentRun } from '../../src/core/agentruns.js';
 import { createAssignment, transitionAssignment } from '../../src/core/assignments.js';
-import { saveClaim } from '../../src/core/claims.js';
+import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import {
   reconcileAgentRun,
   reconcileAllOpenRuns,
@@ -368,6 +368,25 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     });
     assert.equal(result.action, 'health_check_unverified');
     assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
+  });
+
+  it('trp#433 — auto-releases the linked claim when the run is reconciled to failed', () => {
+    makeClaim({ status: 'active' });
+    const run = makeRun({ pid: 999_999 });
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 31 * 60_000, // past stale → inferred failed
+    });
+    assert.equal(result.action, 'inferred_failed');
+    assert.equal(loadClaim('clm_test', ws.dir).status, 'released', 'linked claim GC-released on failure');
+  });
+
+  it('trp#433 — leaves the claim active while the run has not failed (young dead pid)', () => {
+    makeClaim({ status: 'active' });
+    const run = makeRun({ pid: 999_999 });
+    reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 5 * 60_000, // inside stale window
+    });
+    assert.equal(loadClaim('clm_test', ws.dir).status, 'active', 'claim untouched while run still running');
   });
 
   it('sweep never cancels — defers dead-pid runs lacking evidence', () => {
