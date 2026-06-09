@@ -5,6 +5,49 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-06-09
+
+Multi-agent dispatch convergence — the "new frontier", driven by a real
+cross-project field session (NestJS/React monorepo "LeaseUp") where a sandboxed
+codex worker could neither commit nor reach MCP and the coordinator had to carry
+every lifecycle step by hand. Theme: reduce the worker's contract and let
+brainclaw carry the rest. Builds on the 1.7.5 security patch.
+
+### Added
+
+- **Worktree-as-contract** (pln#534) — the headline lever. The worker's contract
+  shrinks to "edit files in this worktree + drop `LANE-RESULT.json`". For a
+  worker that cannot self-commit (`dispatchCanCommit=false`, i.e. a sandboxed
+  agent whose root excludes `.git`), `brainclaw harvest --integrate` now commits
+  the worktree diff on its behalf onto the lane branch, then completes the
+  assignment and releases the claim with plan cascade. Strictly additive +
+  opt-in (`integrateLaneResults()` / the `--integrate` flag); existing harvest
+  stays report-only. The commit is hard-guarded to the linked worktree only
+  (`isLinkedWorktree` — never the main repo).
+- **Pre-flight spawn validation** (pln#533) — `bclaw_coordinate(open_loop=true)`
+  runs one trivial validation spawn per reviewer agent before opening the loop,
+  so an environment death (config rejected, auth fail, model mismatch) surfaces
+  instantly with a clear reason (via `recognizeStderrSignature`) instead of a
+  generic "did not acknowledge" loop timeout. Reviewers that fail are dropped
+  with a targeted warning; opt-out with `preflight: false`; skipped under
+  `BRAINCLAW_NO_SPAWN` or cross-project dispatch.
+- **Perishable-memory anti-staleness** (pln#530) — decisions and traps accept
+  `verified_at` + `verify_cmd`; staleness detection flags an active trap whose
+  verification is older than 30 days (or never run) and surfaces the
+  `verify_cmd` to re-confirm it.
+
+### Changed
+
+- **`LANE-RESULT.json` is the #1 verdict signal** (pln#532) — `dispatch_status`
+  now treats a `LANE-RESULT.json` at the worktree root as the top-priority
+  verdict: the worker FINISHED (even if it could not self-update its
+  `agent_run`), returning `health: terminal` above every pid/heartbeat/run-status
+  check.
+- **No-worktree ⇒ refuse-spawn** (pln#531) — the dispatcher refuses to spawn a
+  worker without an isolated worktree (returns `command_ready_manual` with
+  `failure_kind: spawn_no_worktree`) rather than running it in the integration
+  repo. New `requireWorktree` option on the real worker-dispatch path.
+
 ## [1.7.5] — 2026-06-09
 
 Security patch. **Upgrade from 1.7.4 (and any 1.7.x) is recommended.**

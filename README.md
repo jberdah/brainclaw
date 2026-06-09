@@ -345,6 +345,22 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.8.0
+
+- **Multi-agent dispatch convergence — "worktree-as-contract"** (from a real
+  cross-project field session where a sandboxed worker could neither commit nor
+  reach MCP). The worker's contract shrinks to "edit files in this worktree +
+  drop `LANE-RESULT.json`": `brainclaw harvest --integrate` commits the worktree
+  diff on behalf of a worker that can't self-commit (hard-guarded to the linked
+  worktree, never the main repo), then completes the assignment and releases the
+  claim with plan cascade. A `LANE-RESULT.json` is now the #1 verdict signal in
+  `bclaw_dispatch_status` (worker FINISHED, even without self-update); the
+  dispatcher refuses to spawn without an isolated worktree; `open_loop` reviews
+  pre-flight each reviewer agent with a trivial validation spawn (clear
+  boot-failure reason instead of a generic loop timeout); and decisions/traps
+  gain `verified_at`/`verify_cmd` so perishable facts can be flagged stale.
+  Additive + opt-in throughout. (pln#530, pln#531, pln#532, pln#533, pln#534, trp#468)
+
 ### v1.7.5
 
 - **Security patch (recommended upgrade)** — fixes a git command-injection / RCE
