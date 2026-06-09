@@ -158,9 +158,14 @@ describe('integrateLaneResults — worktree-as-contract (pln#534)', () => {
     const plan = loadState(ws.dir).plan_items.find((p) => p.id === 'pln_lane');
     assert.equal(plan?.status, 'done', 'last-claim release cascades the plan to done');
 
-    // The diff is actually on the lane branch now.
-    assert.match(git(wt, 'log', '-1', '--name-only', '--format=').stdout, /feature\.ts/);
-    assert.equal(git(wt, 'status', '--porcelain').stdout, '', 'worktree clean after on-behalf commit');
+    // The deliverable diff is on the lane branch now…
+    const committed = git(wt, 'log', '-1', '--name-only', '--format=').stdout;
+    assert.match(committed, /feature\.ts/);
+    // …but the worker's transient LANE-RESULT.json must NOT be committed (it would
+    // otherwise pollute the branch and master on merge).
+    assert.doesNotMatch(committed, /LANE-RESULT\.json/, 'LANE-RESULT.json must be excluded from the on-behalf commit');
+    // The only thing left dirty is that excluded report file (still untracked).
+    assert.equal(git(wt, 'status', '--porcelain').stdout.trim(), '?? LANE-RESULT.json', 'only the transient report remains uncommitted');
   });
 
   it('worker that CAN self-commit (claude-code): lifecycles but does NOT author a commit', () => {
@@ -184,6 +189,29 @@ describe('integrateLaneResults — worktree-as-contract (pln#534)', () => {
     assert.equal(e.claim_released, true);
     // The worktree diff is left for the worker's own handoff — still dirty.
     assert.notEqual(git(wt, 'status', '--porcelain').stdout, '');
+  });
+
+  it('sandboxed worker with ONLY a LANE-RESULT.json (no deliverable diff): nothing committed, but still lifecycled', () => {
+    const wt = addLinkedWorktree(ws.dir, 'feat/lane-empty'); created.push(wt);
+    persistState({
+      version: 1, write_version: 1, active_constraints: [], recent_decisions: [],
+      known_traps: [], open_handoffs: [], plan_items: [makePlan('pln_empty', 'Empty work')],
+    }, ws.dir);
+    seedClaim(ws, 'clm_empty', { plan_id: 'pln_empty', worktree_path: wt });
+    seedAssignment(ws, 'asgn_empty', { claim_id: 'clm_empty', agent: 'codex', worktree_path: wt });
+    // Only the transient report — no actual code change.
+    fs.writeFileSync(getLaneResultPath(wt), JSON.stringify({
+      assignment_id: 'asgn_empty', status: 'completed', summary: 'reported only',
+    }));
+
+    const res = integrateLaneResults({ worktreePaths: [wt], cwd: ws.dir });
+    const e = res.integrated[0]!;
+    assert.equal(e.committed_on_behalf, false, 'a lone LANE-RESULT.json is not a committable change');
+    assert.match(e.reason, /only transient/);
+    assert.equal(e.assignment_completed, true, 'lifecycle still converges');
+    assert.equal(e.claim_released, true);
+    // No commit was authored on the lane branch.
+    assert.equal(git(wt, 'log', '--oneline').stdout.split(/\r?\n/).filter(Boolean).length, 1, 'only the bootstrap commit exists');
   });
 
   it('dry-run: reports the plan but writes no commit, no lifecycle', () => {

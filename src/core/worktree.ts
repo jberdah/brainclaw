@@ -258,19 +258,29 @@ export function commitWorktreeOnBehalf(
   if (!status.ok) {
     return { committed: false, files_changed: [], reason: `git status failed: ${status.stderr.trim()}` };
   }
-  const files = status.stdout
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    // strip the 2-char XY status + space, and the `old -> new` rename arrow.
-    .map((l) => l.replace(/^\S{1,2}\s+/, '').replace(/^.*->\s*/, '').replace(/^"(.*)"$/, '$1'));
-  if (files.length === 0) {
+  if (status.stdout.trim().length === 0) {
     return { committed: false, files_changed: [], reason: 'worktree clean — nothing to commit' };
   }
 
+  // Stage everything, then UNSTAGE the transient files that must never land on
+  // the lane branch: the worker's own `LANE-RESULT.json` report and any
+  // `.brainclaw/` coordination state. Committing those would pollute the branch
+  // (and master, on merge) with non-deliverable artefacts.
   const add = runGit(['add', '-A'], worktreePath);
   if (!add.ok) {
-    return { committed: false, files_changed: files, reason: `git add failed: ${add.stderr.trim()}` };
+    return { committed: false, files_changed: [], reason: `git add failed: ${add.stderr.trim()}` };
+  }
+  runGit(['reset', '-q', '--', 'LANE-RESULT.json', '.brainclaw'], worktreePath);
+
+  // The files actually staged for this commit (post-exclusion) — also the
+  // truthful files_changed report.
+  const staged = runGit(['diff', '--cached', '--name-only'], worktreePath);
+  const files = staged.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (files.length === 0) {
+    // Only transient files changed — nothing deliverable to commit. Restore the
+    // index so the worktree is left exactly as the worker left it.
+    runGit(['reset', '-q'], worktreePath);
+    return { committed: false, files_changed: [], reason: 'no committable changes (only transient LANE-RESULT.json / .brainclaw)' };
   }
 
   const authorName = options.authorName ?? 'brainclaw (on behalf)';

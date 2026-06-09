@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   buildInvokeCommand,
   getSpawnableAgents,
@@ -76,6 +77,23 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Make the probe's temp dir a real (empty) git repo so the round-trip is
+ * representative of a real dispatch (workers always run inside a git worktree)
+ * and so CLIs with a boot-time git-repo / trusted-directory check don't refuse
+ * it (pln#533 fix). Best-effort: if git is unavailable the probe still runs.
+ */
+function initProbeGitRepo(root: string): void {
+  try {
+    const run = (...args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf-8', timeout: 5000 });
+    run('init', '-q');
+    run('config', 'user.email', 'spawn-check@brainclaw.local');
+    run('config', 'user.name', 'brainclaw spawn-check');
+    run('config', 'commit.gpgsign', 'false');
+    run('commit', '--allow-empty', '-q', '-m', 'spawn-check probe');
+  } catch { /* git absent or failed — probe proceeds without it */ }
+}
+
 /** Check one agent's spawn round-trip. Exposed for focused testing. */
 export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions = {}): Promise<SpawnCheckEntry> {
   const start = Date.now();
@@ -97,6 +115,11 @@ export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions 
 
   // Isolated signals root so the probe never pollutes the project's runtime dir.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `bclaw-spawncheck-${agent}-`));
+  // pln#533 fix: make the probe dir a real git repo. Real workers run inside a
+  // git worktree, and some CLIs refuse a non-git / untrusted dir at boot (codex:
+  // "Not inside a trusted directory and --skip-git-repo-check was not specified")
+  // — a non-git temp dir would otherwise produce a false-negative spawn failure.
+  initProbeGitRepo(root);
   const assignmentId = 'spawn_check';
   try {
     defaultExecutionAdapter.start(invoke, { agent, assignmentId, ackRoot: root, worktreePath: root });
