@@ -150,6 +150,23 @@ You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back
 
 ---
 
+## Worktree-as-contract harvest
+
+Some dispatched workers cannot self-commit or call MCP. For example, a sandboxed Codex run may have `dispatchCanCommit=false` because its writable root is the linked worktree, while `.git` lives outside that root. In that case the worker contract is intentionally small:
+
+1. Edit files inside the dispatched worktree.
+2. Write `LANE-RESULT.json` at the worktree root.
+
+The worker does not need to commit, call `bclaw_assignment_update`, or release the claim itself. The worktree is the contract.
+
+When the coordinator runs `brainclaw harvest <assignment_id> --integrate`, brainclaw reads the worker's `LANE-RESULT.json`, commits the linked worktree diff on the worker's behalf onto the lane branch, then completes the assignment and releases the claim, including the normal plan-status cascade.
+
+The on-behalf commit is guarded by the linked-worktree check (`isLinkedWorktree`): integration only targets the worktree associated with the assignment, never the main repository. This keeps sandboxed-worker harvesting from turning into an accidental main-repo commit path.
+
+Integration is strictly additive and opt-in. Plain `brainclaw harvest <assignment_id>` remains report-only; it reads and reports the lane result without committing or mutating assignment / claim state. The on-behalf commit and lifecycle completion happen only when the coordinator passes `--integrate`.
+
+---
+
 ## Diagnostic playbook
 
 When a dispatch hangs, work top-down through these checks. For the symptom-driven variant see [troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived](troubleshooting.md#inbox-messages-stuck--brief-ack-never-arrived).
