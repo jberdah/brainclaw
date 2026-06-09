@@ -16,7 +16,9 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 15000,
+    // Generous: a cold CLI spawn can exceed 15s on a slow/loaded runner or over
+    // a DrvFs mount (WSL /mnt/c), which produced false SIGTERM→exit-1 timeouts.
+    timeout: 60000,
     env: {
       ...process.env,
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

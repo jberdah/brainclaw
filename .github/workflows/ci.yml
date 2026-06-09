@@ -11,7 +11,11 @@ jobs:
     name: Build & Test (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      # Surface ALL platform/Node failures in one run instead of cancelling
+      # sibling jobs — a cancelled job hides cross-platform failures (a Windows-
+      # only failure stayed invisible behind Linux failures during the 1.8.0
+      # CI repair, costing an extra round-trip). See pln#536 / trp#482.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [20, 22, 24]
