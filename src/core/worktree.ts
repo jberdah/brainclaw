@@ -202,18 +202,27 @@ export function hasGitLock(cwd: string): boolean {
  * True when `worktreePath` is a LINKED git worktree (created by `git worktree
  * add`), NOT the main repository. The key invariant for pln#534's commit-on-
  * behalf: brainclaw must NEVER commit into the integration repo, only into the
- * isolated worktree it dispatched. A linked worktree's git-dir
- * (`.git/worktrees/<name>`) differs from its git-common-dir (the main `.git`);
- * for the main repo they are identical.
+ * isolated worktree it dispatched.
+ *
+ * Detection uses the canonical, platform-stable signal: in a linked worktree
+ * the entry at `<worktree>/.git` is a FILE (a `gitdir: …` pointer into the main
+ * repo's `.git/worktrees/<name>`), whereas the main repository's `.git` is a
+ * DIRECTORY. (An earlier implementation compared `git rev-parse
+ * --absolute-git-dir` against `--git-common-dir`, but those returned
+ * differently-normalized paths on the Windows CI runner — short 8.3 names /
+ * drive-letter case — so the main repo was misread as linked. The file-vs-dir
+ * check needs no path normalization.)
  */
 export function isLinkedWorktree(worktreePath: string): boolean {
   if (!fs.existsSync(worktreePath)) return false;
-  const gitDir = runGit(['rev-parse', '--absolute-git-dir'], worktreePath);
-  const commonDir = runGit(['rev-parse', '--git-common-dir'], worktreePath);
-  if (!gitDir.ok || !commonDir.ok) return false;
-  const g = path.resolve(gitDir.stdout.trim());
-  const c = path.resolve(worktreePath, commonDir.stdout.trim());
-  return g !== c;
+  try {
+    const dotGit = path.join(worktreePath, '.git');
+    const st = fs.statSync(dotGit);
+    // main repo → .git is a directory; linked worktree → .git is a file pointer.
+    return st.isFile();
+  } catch {
+    return false; // no .git entry → not a git worktree
+  }
 }
 
 export interface CommitOnBehalfResult {
