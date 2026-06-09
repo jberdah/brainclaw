@@ -39,14 +39,17 @@ async function waitFor(predicate: () => boolean, maxMs: number): Promise<boolean
  * on having codex/claude installed in the test environment.
  */
 function nodeInvoke(snippet: string): InvokeCommand {
-  const isWin32 = process.platform === 'win32';
-  // Escape double quotes for the embedded snippet
   const arg = `-e`;
-  const escapedSnippet = isWin32 ? snippet.replace(/"/g, '\\"') : snippet;
+  // bashCommand runs through a shell:true spawn (cmd on Windows, sh on Linux)
+  // inside the ack-wrap; `\"` is the correct in-double-quote escape for BOTH
+  // shells. Escaping only on Windows left the Linux/sh command broken — node
+  // got a split, syntactically-invalid script and wrote nothing (CI red on
+  // ubuntu, green on windows). args[] is for the no-shell path → raw snippet.
+  const escapedForShell = snippet.replace(/"/g, '\\"');
   return {
     executable: 'node',
-    args: [arg, escapedSnippet],
-    bashCommand: `node ${arg} "${escapedSnippet}"`,
+    args: [arg, snippet],
+    bashCommand: `node ${arg} "${escapedForShell}"`,
     promptDelivery: 'inline_arg',
     shell: false,
   } as InvokeCommand;

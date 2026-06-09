@@ -60,11 +60,12 @@ describe('buildAckWrapCommand (pln#520 step 4)', () => {
 });
 
 function nodeInvoke(snippet: string): InvokeCommand {
-  const isWin32 = process.platform === 'win32';
-  const escaped = isWin32 ? snippet.replace(/"/g, '\\"') : snippet;
+  // `\"` is the correct in-double-quote escape for BOTH cmd and sh; escaping
+  // only on Windows broke the Linux/sh ack-wrap path. args[] = raw snippet.
+  const escaped = snippet.replace(/"/g, '\\"');
   return {
     executable: 'node',
-    args: ['-e', escaped],
+    args: ['-e', snippet],
     bashCommand: `node -e "${escaped}"`,
     promptDelivery: 'inline_arg',
     shell: false,

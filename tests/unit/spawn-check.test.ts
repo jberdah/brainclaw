@@ -30,10 +30,12 @@ function fakeProfile(name: string, binary: string): AgentCapabilityProfile {
 }
 
 function nodeInvoke(snippet: string): InvokeCommand {
-  const isWin = process.platform === 'win32';
-  const escaped = isWin ? snippet.replace(/"/g, '\\"') : snippet;
+  // bashCommand runs via shell:true (cmd/sh) in the ack-wrap; `\"` is the right
+  // in-double-quote escape for BOTH shells. Escaping only on Windows broke the
+  // Linux/sh probe (snippets with embedded quotes never ran). args[] = raw.
+  const escaped = snippet.replace(/"/g, '\\"');
   return {
-    executable: 'node', args: ['-e', escaped],
+    executable: 'node', args: ['-e', snippet],
     bashCommand: `node -e "${escaped}"`,
     promptDelivery: 'inline_arg', shell: false,
   } as InvokeCommand;

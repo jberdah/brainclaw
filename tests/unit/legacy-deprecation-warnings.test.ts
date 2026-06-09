@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { REMOVED_IN_V1_TOOLS } from '../../src/commands/mcp.js';
+import { REMOVED_IN_V1_TOOLS, PUBLISHED_TOOLS } from '../../src/commands/mcp.js';
 
 /**
  * Phase 3 slice 3g — verify every tool deprecated by the canonical
@@ -135,15 +135,14 @@ describe('commands/mcp — v1.0 catalog integrity', () => {
   });
 
   it('canonical verbs are annotated tier:standard (appear in default catalog)', () => {
-    const missing: string[] = [];
-    for (const verb of CANONICAL_VERBS) {
-      // Match: name: 'bclaw_find', ... annotations: { tier: 'standard', ...
-      const toolBlock = new RegExp(
-        `name:\\s*'${verb}'[\\s\\S]{1,800}?tier:\\s*'standard'`,
-        'm',
-      );
-      if (!toolBlock.test(source)) missing.push(verb);
-    }
+    // Check the actual published tool annotations rather than matching source
+    // text by proximity — the old regex window (≤800 chars name→tier) was
+    // brittle and broke once bclaw_find's description/schema grew past it,
+    // even though the tier:standard annotation was present (CI 1.7.x).
+    const missing = CANONICAL_VERBS.filter((verb) => {
+      const tool = PUBLISHED_TOOLS.find((t) => t.name === verb);
+      return !tool || tool.annotations?.tier !== 'standard';
+    });
     assert.equal(
       missing.length,
       0,
