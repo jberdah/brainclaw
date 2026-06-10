@@ -6447,6 +6447,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_create') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
+        // Execution entities stay local: the signaling-only cross-project
+        // boundary applies to the canonical verbs too, not just legacy tools.
+        if (entity === 'claim' || entity === 'plan') {
+          const crossProjectError = blockCrossProjectExecution(entity, args);
+          if (crossProjectError) return { response: crossProjectError };
+        }
         const rawData = (args.data ?? {}) as Record<string, unknown>;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
 
@@ -6528,6 +6534,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_transition') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
+        // Same signaling-only boundary as bclaw_create: no remote lifecycle
+        // driving of execution entities through the canonical grammar.
+        if (entity === 'claim' || entity === 'plan') {
+          const crossProjectError = blockCrossProjectExecution(entity, args);
+          if (crossProjectError) return { response: crossProjectError };
+        }
         const id = String(args.id ?? '');
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;

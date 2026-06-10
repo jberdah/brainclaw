@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { McpServerConnection, StdioTransport } from '../../src/commands/mcp.js';
+import { McpServerConnection, StdioTransport, executeMcpToolCall } from '../../src/commands/mcp.js';
 import { resolveProjectRef } from '../../src/core/store-resolution.js';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { saveConfig, defaultConfig } from '../../src/core/config.js';
@@ -329,5 +329,79 @@ describe('McpServerConnection: connectionSessionId pinned across calls', () => {
     assert.equal(payloads[1]?.connectionSessionId, SESSION_ID, 'call 2: session pinned');
     assert.equal(payloads[2]?.connectionSessionId, SESSION_ID, 'call 3: session pinned');
     assert.equal(payloads[3]?.connectionSessionId, SESSION_ID, 'call 4: session pinned');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. Cross-project signaling-only boundary on canonical verbs
+// ---------------------------------------------------------------------------
+
+describe('canonical verbs: cross-project execution boundary', () => {
+  let projDir: string;
+
+  before(() => {
+    projDir = makeTmpDir('bclaw-canon-boundary-');
+    initProject(projDir, 'boundary-project');
+  });
+
+  after(() => {
+    fs.rmSync(projDir, { recursive: true, force: true });
+  });
+
+  it('blocks bclaw_create of a claim with a project routing arg', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_create',
+      args: {
+        entity: 'claim',
+        project: 'some-linked-project',
+        data: { scope: 'src/x.ts', description: 'remote claim attempt', agent: 'tester' },
+      },
+      cwd: projDir,
+      connectionSessionId: undefined,
+    });
+    const structured = outcome.response.structuredContent as { error?: { kind?: string; message?: string } };
+    assert.equal(structured?.error?.kind, 'validation_error');
+    assert.match(structured?.error?.message ?? '', /signaling/i, 'boundary message should explain signaling-only policy');
+  });
+
+  it('blocks bclaw_create of a plan with a project routing arg', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_create',
+      args: {
+        entity: 'plan',
+        project: 'some-linked-project',
+        data: { text: 'remote plan attempt' },
+      },
+      cwd: projDir,
+      connectionSessionId: undefined,
+    });
+    const structured = outcome.response.structuredContent as { error?: { kind?: string } };
+    assert.equal(structured?.error?.kind, 'validation_error');
+  });
+
+  it('blocks bclaw_transition of a plan with a project routing arg', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_transition',
+      args: { entity: 'plan', id: 'pln_whatever', to: 'in_progress', project: 'some-linked-project' },
+      cwd: projDir,
+      connectionSessionId: undefined,
+    });
+    const structured = outcome.response.structuredContent as { error?: { kind?: string } };
+    assert.equal(structured?.error?.kind, 'validation_error');
+  });
+
+  it('still allows bclaw_create of a signaling entity (candidate) without project arg locally', async () => {
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_create',
+      args: {
+        entity: 'candidate',
+        data: { type: 'trap', text: 'local candidate — boundary must not block local writes', author: 'tester' },
+      },
+      cwd: projDir,
+      connectionSessionId: undefined,
+    });
+    const structured = outcome.response.structuredContent as { error?: unknown; id?: string };
+    assert.equal(structured?.error, undefined, 'local create must not be blocked');
+    assert.ok((structured?.id as string)?.startsWith('can_'), 'candidate should be created locally');
   });
 });
