@@ -71,7 +71,7 @@ import {
 } from './setup.js';
 import { buildAgentInventory } from '../core/agent-inventory.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
+import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
@@ -2826,20 +2826,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
         summary.push('✔ Full brainclaw MCP catalog activates automatically; reload your agent session only if new tools do not appear.');
 
-        // Check if bootstrap is available and generate preview
+        // Bootstrap route follows the shared empty-memory rule; the preview
+        // already embeds the same recommendation text when memory is empty.
         const probe = probeForQuickSetup(cwd);
         const bootstrapAvailable = probe.hasContent;
+        const emptyMemoryRec = resolveEmptyMemoryRecommendation(cwd);
         const preview = buildOnboardingPreview(cwd);
 
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: summary.join('\n') + (bootstrapAvailable ? '\n\nThe repo has existing content. Run bclaw_bootstrap to extract initial project context.' : '') + '\n\n' + preview }],
+            content: [{ type: 'text', text: summary.join('\n') + '\n\n' + preview }],
             structuredContent: {
               setup_complete: true,
               project_type: projectType,
               topology,
               detected_agent: detected?.name ?? null,
               bootstrap_available: bootstrapAvailable,
+              bootstrap_route: emptyMemoryRec.route,
+              next_action: emptyMemoryRec.mcp_next_action,
               preview,
               summary,
             },
@@ -4973,10 +4977,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       // pln#513 step 1 — bootstrap hint. When the project lacks a usable
       // PROJECT.md (absent or 0 bytes), surface a hint so the agent knows
       // the canonical entry-point. Cheap probe — one fs.statSync, no
-      // gating flag. The literal next_action mirrors the documented
-      // canonical-grammar call so callers can suggest it verbatim.
+      // gating flag. The route follows the shared empty-memory rule
+      // (resolveEmptyMemoryRecommendation): repo with content → extract via
+      // bclaw_bootstrap; greenfield → bootstrap loop. Both chainable.
       let bootstrapRecommended: boolean | undefined;
       let nextAction: string | undefined;
+      let emptyMemoryRec: EmptyMemoryRecommendation | undefined;
       try {
         const fsMod = await import('node:fs');
         const pathMod = await import('node:path');
@@ -4990,7 +4996,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
         bootstrapRecommended = needsBootstrap;
         if (needsBootstrap) {
-          nextAction = "bclaw_coordinate(intent='ideate', preset='bootstrap')";
+          emptyMemoryRec = resolveEmptyMemoryRecommendation(targetCwd);
+          nextAction = emptyMemoryRec.mcp_next_action;
         }
       } catch {
         // Best-effort: never block bclaw_work on the probe.
@@ -4999,8 +5006,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       // Self-teaching affordances (pln#542): each response carries the
       // recommended follow-up calls with exact shapes.
       const nextActions: NonNullable<FacadeResponse['next_actions']> = [];
-      if (bootstrapRecommended) {
-        nextActions.push({ tool: 'bclaw_coordinate', args: { intent: 'ideate', preset: 'bootstrap' }, when: 'PROJECT.md is missing — open a bootstrap loop before assuming context' });
+      if (bootstrapRecommended && emptyMemoryRec) {
+        if (emptyMemoryRec.route === 'extract') {
+          nextActions.push({ tool: 'bclaw_bootstrap', args: {}, when: `project vision is missing and the ${emptyMemoryRec.reason} — extract initial context, then chain ${emptyMemoryRec.chained_mcp_action} if the vision is still missing` });
+        } else {
+          nextActions.push({ tool: 'bclaw_coordinate', args: { intent: 'ideate', preset: 'bootstrap' }, when: `project vision is missing and the repo is greenfield — open a bootstrap loop before assuming context, then chain ${emptyMemoryRec.chained_mcp_action} once content exists` });
+        }
       }
       if (claimId) {
         nextActions.push({ tool: 'bclaw_release_claim', args: { id: claimId, planStatus: 'done' }, when: 'implementation complete and committed' });
@@ -5034,8 +5045,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         summaryParts.push(`Δ since last look: ${contextResult.context_diff.summary}`);
       }
       if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
-      if (bootstrapRecommended) {
-        summaryParts.push(`💡 PROJECT.md missing — call ${nextAction} to open a bootstrap loop`);
+      if (bootstrapRecommended && emptyMemoryRec) {
+        summaryParts.push(`💡 ${emptyMemoryRec.text}`);
       }
       if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 

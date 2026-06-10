@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { probeForQuickSetup, buildQuickSetupProbeResponse } from '../../src/core/setup-flow.js';
+import { probeForQuickSetup, buildQuickSetupProbeResponse, resolveEmptyMemoryRecommendation, repoHasContent } from '../../src/core/setup-flow.js';
 
 function tmpDir(prefix: string = 'bclaw-setup-flow-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -117,6 +117,41 @@ describe('setup-flow', () => {
       const response = buildQuickSetupProbeResponse(probe);
       const probeData = response.structured.probe as Record<string, unknown>;
       assert.ok(Array.isArray(probeData.nearby_stores));
+    });
+  });
+
+  describe('resolveEmptyMemoryRecommendation — the shared empty-memory rule', () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = tmpDir('bclaw-empty-memory-');
+    });
+
+    afterEach(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('routes greenfield repos (only git/brainclaw plumbing) to the bootstrap loop', () => {
+      initGitRepo(dir);
+      fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
+      assert.equal(repoHasContent(dir), false);
+      const rec = resolveEmptyMemoryRecommendation(dir);
+      assert.equal(rec.route, 'ideate');
+      assert.equal(rec.mcp_next_action, "bclaw_coordinate(intent='ideate', preset='bootstrap')");
+      assert.equal(rec.cli_next_action, 'brainclaw bootstrap-loop');
+      assert.equal(rec.chained_mcp_action, 'bclaw_bootstrap()');
+      assert.match(rec.text, /greenfield/);
+    });
+
+    it('routes repos with content to bclaw_bootstrap extraction', () => {
+      fs.writeFileSync(path.join(dir, 'README.md'), '# hello', 'utf-8');
+      assert.equal(repoHasContent(dir), true);
+      const rec = resolveEmptyMemoryRecommendation(dir);
+      assert.equal(rec.route, 'extract');
+      assert.equal(rec.mcp_next_action, 'bclaw_bootstrap()');
+      assert.equal(rec.cli_next_action, 'brainclaw bootstrap');
+      assert.equal(rec.chained_mcp_action, "bclaw_coordinate(intent='ideate', preset='bootstrap')");
+      assert.match(rec.text, /chain a bootstrap loop/);
     });
   });
 });

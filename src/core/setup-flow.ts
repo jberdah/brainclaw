@@ -45,6 +45,67 @@ export interface QuickSetupProbe {
   analysisReasons: string[];
 }
 
+/** Entries that don't count as "repo content" when deciding the bootstrap route. */
+const CONTENT_IGNORED = new Set(['.git', '.brainclaw', '.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db']);
+
+/** True when cwd contains anything beyond git/brainclaw plumbing. */
+export function repoHasContent(cwd: string): boolean {
+  try {
+    return fs.readdirSync(cwd).some((e) => !CONTENT_IGNORED.has(e));
+  } catch {
+    return false;
+  }
+}
+
+export type EmptyMemoryRoute = 'extract' | 'ideate';
+
+export interface EmptyMemoryRecommendation {
+  route: EmptyMemoryRoute;
+  reason: string;
+  /** Exact MCP call to suggest, verbatim. */
+  mcp_next_action: string;
+  /** Exact CLI command to suggest, verbatim. */
+  cli_next_action: string;
+  /** The follow-up once the first route completes — the two routes are chainable. */
+  chained_mcp_action: string;
+  /** Shared one-line message, identical on every surface. */
+  text: string;
+}
+
+/**
+ * THE decision rule for "the memory store is empty — what now?", emitted
+ * identically by the three onboarding surfaces (bclaw_work hint, quick_init
+ * preview, init preflight):
+ *
+ *   - repo with existing content → bclaw_bootstrap (extract context from docs/manifests/history)
+ *   - greenfield (nothing to extract) → bootstrap loop (ideate the vision first)
+ *
+ * The two routes are chainable: extraction first, then a bootstrap loop for
+ * whatever vision the docs could not provide — or ideation first, then
+ * extraction once content exists.
+ * Documented in docs/concepts/workspace-bootstrapping.md ("Empty memory: one rule").
+ */
+export function resolveEmptyMemoryRecommendation(cwd: string = process.cwd()): EmptyMemoryRecommendation {
+  if (repoHasContent(cwd)) {
+    return {
+      route: 'extract',
+      reason: 'repo has existing content to extract from',
+      mcp_next_action: 'bclaw_bootstrap()',
+      cli_next_action: 'brainclaw bootstrap',
+      chained_mcp_action: "bclaw_coordinate(intent='ideate', preset='bootstrap')",
+      text: "Memory is empty and the repo has existing content → run bclaw_bootstrap (CLI: brainclaw bootstrap) to extract initial context. If the project vision is still missing afterwards, chain a bootstrap loop: bclaw_coordinate(intent='ideate', preset='bootstrap').",
+    };
+  }
+  return {
+    route: 'ideate',
+    reason: 'greenfield repo — nothing to extract yet',
+    mcp_next_action: "bclaw_coordinate(intent='ideate', preset='bootstrap')",
+    cli_next_action: 'brainclaw bootstrap-loop',
+    chained_mcp_action: 'bclaw_bootstrap()',
+    text: "Memory is empty and the repo is greenfield → open a bootstrap loop to ideate the project vision: bclaw_coordinate(intent='ideate', preset='bootstrap') (CLI: brainclaw bootstrap-loop). Once content exists, chain bclaw_bootstrap to extract it.",
+  };
+}
+
 /**
  * Probe the current working directory to understand what we're working with.
  * This is the first step of the quick setup flow — no questions yet, just detection.
@@ -68,15 +129,7 @@ export function probeForQuickSetup(cwd: string = process.cwd()): QuickSetupProbe
   // Scan nearby stores
   const nearbyStores = resolveStoreChain(cwd);
 
-  // Has content?
-  const IGNORED = new Set(['.git', '.brainclaw', '.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db']);
-  let hasContent = false;
-  try {
-    const entries = fs.readdirSync(cwd);
-    hasContent = entries.some((e) => !IGNORED.has(e));
-  } catch {
-    // empty or unreadable
-  }
+  const hasContent = repoHasContent(cwd);
 
   // Analyze repo for project type suggestion
   let suggestedProjectType: 'standalone' | 'workspace' | 'linked' = 'standalone';
@@ -214,7 +267,7 @@ export function buildOnboardingPreview(cwd: string): string {
     const plans = state.plan_items.filter((p) => p.status === 'in_progress' || p.status === 'todo');
 
     if (constraints.length === 0 && traps.length === 0 && plans.length === 0) {
-      return 'Memory is empty. Run bclaw_bootstrap to extract initial context from this repo.';
+      return resolveEmptyMemoryRecommendation(cwd).text;
     }
 
     const lines: string[] = ['Here is what your agent will see:'];
@@ -232,6 +285,6 @@ export function buildOnboardingPreview(cwd: string): string {
     }
     return lines.join('\n');
   } catch {
-    return 'Memory is empty. Run bclaw_bootstrap to extract initial context from this repo.';
+    return resolveEmptyMemoryRecommendation(cwd).text;
   }
 }

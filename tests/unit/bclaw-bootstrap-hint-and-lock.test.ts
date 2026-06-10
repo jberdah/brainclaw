@@ -72,25 +72,30 @@ describe('bclaw_work — bootstrap_recommended hint (pln#513 step 1, seq #50)', 
     process.env.BRAINCLAW_TEST_MODE = previousTestMode;
   });
 
-  it('returns bootstrap_recommended=true with next_action when PROJECT.md is absent', async () => {
+  it('returns bootstrap_recommended=true with the ideate route on a greenfield repo', async () => {
     const projectMd = path.join(workspace.dir, 'PROJECT.md');
     assert.equal(fs.existsSync(projectMd), false, 'precondition: PROJECT.md must not exist');
 
     const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
     assert.equal(r.status, 'ok');
     assert.equal(r.bootstrap_recommended, true);
+    // Greenfield (no repo content beyond .brainclaw) → bootstrap loop.
     assert.equal(
       r.next_action,
       "bclaw_coordinate(intent='ideate', preset='bootstrap')",
     );
   });
 
-  it('returns bootstrap_recommended=true when PROJECT.md exists but is 0 bytes', async () => {
+  it('returns the extract route when the repo has content but PROJECT.md is missing or empty', async () => {
     fs.writeFileSync(path.join(workspace.dir, 'PROJECT.md'), '', 'utf8');
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# readme\n', 'utf8');
 
     const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
     assert.equal(r.bootstrap_recommended, true);
-    assert.equal(r.next_action, "bclaw_coordinate(intent='ideate', preset='bootstrap')");
+    // Repo with content → bclaw_bootstrap extraction (shared empty-memory rule).
+    assert.equal(r.next_action, 'bclaw_bootstrap()');
+    const bootstrapAction = r.next_actions?.find((a) => a.tool === 'bclaw_bootstrap');
+    assert.ok(bootstrapAction, 'next_actions must carry the bclaw_bootstrap affordance');
   });
 
   it('returns bootstrap_recommended=false (no next_action) when PROJECT.md exists with content', async () => {
