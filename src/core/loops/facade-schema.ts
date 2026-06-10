@@ -79,6 +79,8 @@ export const BclawLoopTurnSchema = z.object({
   role: z.string().optional(),
   input: z.string().optional(),
   assignment_id: z.string().optional(),
+  /** pln#562 step 4 — claim binding the turn's slot to a dispatched instance. */
+  claim_id: z.string().optional(),
   dispatch: z.boolean().optional(),
   expected_version: z.number().int().nonnegative().optional(),
   ...CallerEnvelopeFields,

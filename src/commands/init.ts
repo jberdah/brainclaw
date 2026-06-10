@@ -113,7 +113,9 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     ? registerAgentIdentity({
         agentName: detectedAi.name,
         kind: detectedAi.kind,
-        trustLevel: detectedAi.trust_level,
+        // pln#562 step 2 — auto-registration never exceeds contributor;
+        // elevation is an explicit curator act (set-trust / register-agent).
+        trustLevel: 'contributor',
         cwd,
         preferredDirName: storageDir,
       })

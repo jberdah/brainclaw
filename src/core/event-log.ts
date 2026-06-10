@@ -66,6 +66,12 @@ export interface MemoryEvent {
   ts: string;
   agent: string;
   agent_id?: string;
+  /**
+   * Session that emitted this event (pln#562 step 4). Enables instance-level
+   * self-exclusion: two live instances of the SAME agent name see each
+   * other's events instead of being mutually invisible.
+   */
+  session_id?: string;
   /** OS user who triggered this event. */
   user?: string;
   action: EventAction;
@@ -82,6 +88,7 @@ export function appendEvent(event: Partial<MemoryEvent> & { action: EventAction;
       ts: event.ts ?? nowISO(),
       agent: event.agent ?? 'unknown',
       agent_id: event.agent_id,
+      session_id: event.session_id ?? (process.env.BRAINCLAW_SESSION_ID?.trim() || undefined),
       user: event.user ?? process.env.USER ?? process.env.USERNAME,
       action: event.action,
       item_type: event.item_type,
@@ -121,41 +128,79 @@ export interface AgentCursor {
   last_read: string;
 }
 
+/**
+ * Instance-aware reader handle (pln#562 step 4). Cursors are keyed by
+ * session_id when available — two live instances of the same agent name each
+ * track their own read position instead of consuming each other's events.
+ * A bare string reader keeps the legacy name-keyed behavior.
+ */
+export interface EventLogReader {
+  agent: string;
+  session_id?: string;
+}
+
+function normalizeReader(reader: string | EventLogReader): EventLogReader {
+  return typeof reader === 'string' ? { agent: reader } : reader;
+}
+
 function cursorsDir(cwd?: string): string {
   return path.join(memoryDir(cwd), CURSORS_DIR);
 }
 
-function cursorPath(agent: string, cwd?: string): string {
-  return path.join(cursorsDir(cwd), `${agent}.json`);
+/** Cursor files are keyed by session_id when present, else by agent name. */
+function cursorKey(reader: EventLogReader): string {
+  return reader.session_id?.trim() || reader.agent;
 }
 
-function loadCursor(agent: string, cwd?: string): AgentCursor {
-  const fp = cursorPath(agent, cwd);
-  if (!fs.existsSync(fp)) return { offset: 0, last_read: '' };
-  try {
-    return JSON.parse(fs.readFileSync(fp, 'utf-8')) as AgentCursor;
-  } catch {
-    return { offset: 0, last_read: '' };
+function cursorPath(key: string, cwd?: string): string {
+  return path.join(cursorsDir(cwd), `${key}.json`);
+}
+
+function loadCursor(reader: EventLogReader, cwd?: string): AgentCursor {
+  const fp = cursorPath(cursorKey(reader), cwd);
+  if (fs.existsSync(fp)) {
+    try {
+      return JSON.parse(fs.readFileSync(fp, 'utf-8')) as AgentCursor;
+    } catch {
+      return { offset: 0, last_read: '' };
+    }
   }
+  // name→instance migration: a session-keyed cursor that does not exist yet
+  // seeds from the legacy name-keyed cursor, so an upgraded instance does not
+  // replay the whole log. Cursors are caches — worst case is a re-read.
+  if (reader.session_id?.trim()) {
+    const legacy = cursorPath(reader.agent, cwd);
+    if (fs.existsSync(legacy)) {
+      try {
+        return JSON.parse(fs.readFileSync(legacy, 'utf-8')) as AgentCursor;
+      } catch { /* fall through to fresh cursor */ }
+    }
+  }
+  return { offset: 0, last_read: '' };
 }
 
-function saveCursor(agent: string, cursor: AgentCursor, cwd?: string): void {
+function saveCursor(reader: EventLogReader, cursor: AgentCursor, cwd?: string): void {
   const dir = cursorsDir(cwd);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(cursorPath(agent, cwd), JSON.stringify(cursor), 'utf-8');
+  fs.writeFileSync(cursorPath(cursorKey(reader), cwd), JSON.stringify(cursor), 'utf-8');
 }
 
 /**
- * Read events unseen by this agent since their last read.
+ * Read events unseen by this reader since their last read.
  * Updates the cursor after reading.
+ *
+ * Self-exclusion is by SESSION when both sides carry one (pln#562 step 4):
+ * an instance skips only its own events, not those of a same-named sibling.
+ * Events or readers without session info fall back to name exclusion.
  */
-export function readUnseenEvents(agent: string, cwd?: string): MemoryEvent[] {
+export function readUnseenEvents(reader: string | EventLogReader, cwd?: string): MemoryEvent[] {
+  const effectiveReader = normalizeReader(reader);
   const logPath = eventLogPath(cwd);
   if (!fs.existsSync(logPath)) return [];
 
-  const cursor = loadCursor(agent, cwd);
+  const cursor = loadCursor(effectiveReader, cwd);
   const stat = fs.statSync(logPath);
 
   if (stat.size <= cursor.offset) return [];
@@ -172,8 +217,10 @@ export function readUnseenEvents(agent: string, cwd?: string): MemoryEvent[] {
   for (const line of lines) {
     try {
       const evt = JSON.parse(line) as MemoryEvent;
-      // Exclude events from self
-      if (evt.agent !== agent) {
+      const isSelf = effectiveReader.session_id && evt.session_id
+        ? evt.session_id === effectiveReader.session_id
+        : evt.agent === effectiveReader.agent;
+      if (!isSelf) {
         events.push(evt);
       }
     } catch {
@@ -182,7 +229,7 @@ export function readUnseenEvents(agent: string, cwd?: string): MemoryEvent[] {
   }
 
   // Update cursor
-  saveCursor(agent, { offset: stat.size, last_read: nowISO() }, cwd);
+  saveCursor(effectiveReader, { offset: stat.size, last_read: nowISO() }, cwd);
 
   return events;
 }

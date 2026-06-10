@@ -209,13 +209,34 @@ export interface AckMessageResult {
   status: MessageStatus;
 }
 
-export function ackMessage(messageId: string, agent: string, cwd: string): AckMessageResult {
+export interface AckMessageOptions {
+  /**
+   * Caller's claim_id (pln#562 step 4 — instance scoping). When BOTH the
+   * caller and the message carry a claim_id, they must match: an instance can
+   * only ack messages routed to ITS claim, not a same-named sibling's.
+   * Messages without a claim_id (broadcast/info) stay ackable by anyone in
+   * the inbox.
+   */
+  claimId?: string;
+}
+
+export function ackMessage(messageId: string, agent: string, cwd: string, options: AckMessageOptions = {}): AckMessageResult {
   return mutate({ cwd }, () => {
     const dir = agentInboxDir(agent, cwd);
     const messages = loadMessagesFromDir(dir);
     const msg = messages.find(m => m.id === messageId || m.short_label === messageId);
     if (!msg) {
       throw new Error(`Message '${messageId}' not found in ${agent}'s inbox.`);
+    }
+
+    const callerClaimId = options.claimId?.trim();
+    const messageClaimId = msg.claim_id
+      ?? ((msg.payload as Record<string, unknown> | undefined)?.claim_id as string | undefined);
+    if (callerClaimId && messageClaimId && messageClaimId !== callerClaimId) {
+      throw new Error(
+        `Message '${msg.id}' is bound to claim '${messageClaimId}' but the caller holds claim '${callerClaimId}'. `
+        + 'Only the instance holding the message\'s claim may acknowledge it.',
+      );
     }
 
     const timestamp = nowISO();

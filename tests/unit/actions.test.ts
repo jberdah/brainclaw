@@ -17,6 +17,17 @@ afterEach(() => {
   workspace.cleanup();
 });
 
+/**
+ * pln#562 step 3 — the MCP connection principal is pinned from server-side
+ * env, and caller args can no longer impersonate another agent. Simulate a
+ * separate connection per agent by switching the env identity.
+ */
+function actAs(identity: { agent_name: string; agent_id: string }): void {
+  process.env.BRAINCLAW_AGENT_NAME = identity.agent_name;
+  process.env.BRAINCLAW_AGENT = identity.agent_name;
+  process.env.BRAINCLAW_AGENT_ID = identity.agent_id;
+}
+
 describe('Agent SDK ActionRequired', () => {
   it('creates an action from blocked worker state and resolves back to running/started', async () => {
     const worker = workspace.registerAgent('worker');
@@ -51,6 +62,7 @@ describe('Agent SDK ActionRequired', () => {
     transitionAgentRun(run.id, 'waiting_input', { actor: 'dispatcher' }, workspace.dir);
     transitionAgentRun(run.id, 'running', { actor: worker.agent_name, session_id: 'sess_worker_1' }, workspace.dir);
 
+    actAs(worker);
     const blocked = await executeMcpToolCall({
       name: 'bclaw_assignment_update',
       args: {
@@ -84,6 +96,7 @@ describe('Agent SDK ActionRequired', () => {
     assert.equal(listedStructured.actions[0].id, actionId);
     assert.equal(listedStructured.actions[0].kind, 'approval');
 
+    actAs(supervisor);
     const resolved = await executeMcpToolCall({
       name: 'bclaw_assignment_action',
       args: {
@@ -130,6 +143,7 @@ describe('Agent SDK ActionRequired', () => {
     }, workspace.dir);
     transitionAgentRun(run.id, 'running', { actor: worker.agent_name, session_id: 'sess_worker_2' }, workspace.dir);
 
+    actAs(worker);
     const blocked = await executeMcpToolCall({
       name: 'bclaw_assignment_update',
       args: {
@@ -151,6 +165,7 @@ describe('Agent SDK ActionRequired', () => {
     assert.ok(actionId);
     assert.equal(listActionRequired(workspace.dir, { status: 'pending' }).length, 1);
 
+    actAs(supervisor);
     const rejected = await executeMcpToolCall({
       name: 'bclaw_assignment_action',
       args: {
@@ -196,6 +211,7 @@ describe('Agent SDK ActionRequired', () => {
     }, workspace.dir);
     transitionAgentRun(run.id, 'running', { actor: worker.agent_name, session_id: 'sess_self' }, workspace.dir);
 
+    actAs(worker);
     const blocked = await executeMcpToolCall({
       name: 'bclaw_assignment_update',
       args: {

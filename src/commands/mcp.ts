@@ -45,8 +45,11 @@ import {
   AgentTrustError,
   findAgentIdentityById,
   findAgentIdentityByName,
+  hasMinimumTrustLevel,
+  normalizeAgentName,
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
+  resolveCurrentAgentIdentity,
   resolveCurrentModel,
   ensureAgentRegisteredForDispatch,
 } from '../core/agent-registry.js';
@@ -1733,10 +1736,126 @@ function getCancelledRequestId(params: Record<string, unknown>): JsonRpcId | und
   return undefined;
 }
 
+// ── Authenticated connection principal (pln#562 step 3) ──────────────────────
+
+/**
+ * Identity pinned for the lifetime of an MCP connection. Resolved ONCE from
+ * server-side facts (BRAINCLAW_CLAIM_ID assignment binding, then process-env
+ * detection) — never from caller-supplied tool args, which any client can
+ * spoof. Mutations verify caller args against this pin; only a curator may
+ * explicitly override it.
+ */
+export interface PinnedConnectionPrincipal {
+  agent_name: string;
+  agent_id: string;
+  session_id?: string;
+  pid: number;
+  source: 'claim_binding' | 'server_detection';
+}
+
+let principalCache: { key: string; value: PinnedConnectionPrincipal | undefined } | undefined;
+
+/** Test hook — the principal is otherwise pinned for the process lifetime. */
+export function __resetConnectionPrincipalForTests(): void {
+  principalCache = undefined;
+}
+
+/**
+ * Resolve the connection principal. The MCP server is one process per
+ * connection, so a process-level pin IS the per-connection pin; the cache key
+ * guards the identity-bearing env vars so in-process test harnesses that
+ * switch agents between calls re-resolve instead of leaking the first pin.
+ */
+function resolveConnectionPrincipal(cwd?: string, sessionId?: string): PinnedConnectionPrincipal | undefined {
+  const env = process.env;
+  const key = [
+    env.BRAINCLAW_CLAIM_ID ?? '', env.BRAINCLAW_AGENT_ID ?? '',
+    env.BRAINCLAW_AGENT_NAME ?? '', env.BRAINCLAW_AGENT ?? '',
+    cwd ?? '', sessionId ?? '',
+  ].join('|');
+  if (principalCache && principalCache.key === key) return principalCache.value;
+
+  let value: PinnedConnectionPrincipal | undefined;
+
+  // 1. Assignment binding: a dispatched worker carries BRAINCLAW_CLAIM_ID; the
+  //    claim names the identity the coordinator dispatched — authoritative.
+  const claimId = env.BRAINCLAW_CLAIM_ID?.trim();
+  if (claimId) {
+    try {
+      const claim = loadClaim(claimId, cwd);
+      const identity = (claim.agent_id ? findAgentIdentityById(claim.agent_id, cwd) : undefined)
+        ?? findAgentIdentityByName(claim.agent, cwd);
+      if (identity) {
+        value = {
+          agent_name: identity.agent_name,
+          agent_id: identity.agent_id,
+          session_id: claim.session_id ?? sessionId,
+          pid: process.pid,
+          source: 'claim_binding',
+        };
+      }
+    } catch { /* claim may not exist in this store — fall through */ }
+  }
+
+  // 2. Server-side detection (env-pinned or detected REGISTERED identity —
+  //    read-only since pln#562 step 2, never mints).
+  if (!value) {
+    const identity = resolveCurrentAgentIdentity(cwd);
+    if (identity) {
+      value = {
+        agent_name: identity.agent_name,
+        agent_id: identity.agent_id,
+        session_id: sessionId,
+        pid: process.pid,
+        source: 'server_detection',
+      };
+    }
+  }
+
+  principalCache = { key, value };
+  return value;
+}
+
 function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameField: string; idField: string }, cwd?: string, sessionId?: string) {
   try {
+    const explicitName = typeof args[fields.nameField] === 'string' ? String(args[fields.nameField]) : undefined;
+    const explicitId = typeof args[fields.idField] === 'string' ? String(args[fields.idField]) : undefined;
+
+    // pln#562 step 3 — pinned connection principal. When the server resolved
+    // an authenticated principal, caller args are verified against it:
+    // matching/absent args → principal; mismatching args → curator-only
+    // explicit override, otherwise the spoofable args are IGNORED and the
+    // mutation is attributed to the principal.
+    const principal = resolveConnectionPrincipal(cwd, sessionId);
+    if (principal) {
+      // Re-load per call (cheap) so trust changes propagate mid-connection;
+      // the BINDING (who you are) stays pinned.
+      const principalDoc = findAgentIdentityById(principal.agent_id, cwd);
+      if (principalDoc) {
+        const mismatch =
+          (explicitName !== undefined && normalizeAgentName(explicitName) !== normalizeAgentName(principal.agent_name))
+          || (explicitId !== undefined && explicitId !== principal.agent_id);
+        if (!mismatch) {
+          return { identity: principalDoc };
+        }
+        if ((principalDoc.trust_level ?? 'contributor') === 'curator') {
+          return {
+            identity: requireRegisteredAgentIdentity({
+              agentName: explicitName,
+              agentId: explicitId,
+              cwd,
+              allowCurrent: true,
+              allowEnv: true,
+            }),
+          };
+        }
+        return { identity: principalDoc };
+      }
+    }
+
+    // No pinned principal (unregistered connection): legacy chain.
     // Session-pinned identity: if no explicit agent in args, use the session's pinned agent
-    let agentName = typeof args[fields.nameField] === 'string' ? String(args[fields.nameField]) : undefined;
+    let agentName = explicitName;
     if (!agentName && sessionId) {
       const session = loadSessionById(sessionId, cwd);
       if (session?.agent) {
@@ -1746,7 +1865,7 @@ function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameFi
     return {
       identity: requireRegisteredAgentIdentity({
         agentName,
-        agentId: typeof args[fields.idField] === 'string' ? String(args[fields.idField]) : undefined,
+        agentId: explicitId,
         cwd,
         allowCurrent: true,
         allowEnv: true,
@@ -1807,12 +1926,15 @@ function ensureTrust(
 
 /**
  * Resolve the agent identity for canonical-grammar mutation verbs
- * (bclaw_create/update/remove/transition). Returns a best-effort identity so
- * that handlers can auto-fill required fields (e.g. plan.author) instead of
- * letting the create land on disk with a missing field — which would then be
- * silently GC'd by the state sync loop (see fix plan pln_5f44426c).
+ * (bclaw_create/update/remove/transition), so handlers can auto-fill required
+ * fields (e.g. plan.author) instead of letting the create land on disk with a
+ * missing field — which would then be silently GC'd by the state sync loop
+ * (see fix plan pln_5f44426c).
  *
- * Falls back to args.agent if resolution fails, and finally to 'unknown'.
+ * pln#562 step 3 — resolution failure is a HARD error. The old fallback to
+ * author:'unknown' produced records that passed creation but were schema-
+ * invalid on read and silently GC'd: a write that lies about succeeding.
+ * Callers map the throw to a validation_error tool response.
  */
 function resolveCanonicalAuthor(
   args: Record<string, unknown>,
@@ -1831,8 +1953,11 @@ function resolveCanonicalAuthor(
       agent_id: resolved.identity.agent_id,
     };
   }
-  const explicit = typeof args.agent === 'string' ? args.agent : undefined;
-  return { agent_name: explicit ?? 'unknown' };
+  const detail = 'error' in resolved && resolved.error ? resolved.error.message : 'no registered agent identity resolved';
+  throw new Error(
+    `cannot resolve mutation author: ${detail} `
+    + 'Start a session (bclaw_session_start) or pass a registered agent before writing.',
+  );
 }
 
 function explicitSessionIdFromEnv(): string | undefined {
@@ -3446,10 +3571,28 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      const cascadeResult = releaseClaimWithCascade(claimId, {
-        planStatus: args.planStatus as string | undefined,
-        cwd,
-      });
+      // pln#562 step 5 — release is ownership-checked like acquisition and
+      // adoption. The resolved principal must own the claim; trusted+ callers
+      // (coordinators) may release others' claims, with an audit entry.
+      const releaseIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, cwd, connectionSessionId);
+      const releaseAuth = 'identity' in releaseIdentity && releaseIdentity.identity
+        ? {
+            agent: releaseIdentity.identity.agent_name,
+            agent_id: releaseIdentity.identity.agent_id,
+            session_id: connectionSessionId,
+            override: hasMinimumTrustLevel(releaseIdentity.identity.trust_level ?? 'contributor', 'trusted'),
+          }
+        : undefined;
+      let cascadeResult;
+      try {
+        cascadeResult = releaseClaimWithCascade(claimId, {
+          planStatus: args.planStatus as string | undefined,
+          cwd,
+          auth: releaseAuth,
+        });
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('trust_error', err instanceof Error ? err.message : String(err)) };
+      }
       const { planTransitioned, planWarning, planId: cascadePlanId, newPlanStatus: cascadeNewStatus } = cascadeResult;
       const summaryText = [
         `✔ Released claim [${claimId}]`,
@@ -3967,7 +4110,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         if (status === 'accepted' && assignment.message_id) {
           try {
             const { ackMessage } = await import('../core/messaging.js');
-            ackMessage(assignment.message_id, callerAgent, cwd);
+            // pln#562 step 4 — scope the ack to this assignment's claim so a
+            // same-named sibling instance cannot consume the message.
+            ackMessage(assignment.message_id, callerAgent, cwd, { claimId: assignment.claim_id });
           } catch { /* best-effort: don't fail the update if ack fails */ }
         }
 
@@ -4138,7 +4283,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
       try {
-        const result = ackMessage(msgId, resolved.identity!.agent_name, cwd);
+        // pln#562 step 4 — a dispatched instance (BRAINCLAW_CLAIM_ID) may only
+        // ack messages bound to its own claim.
+        const result = ackMessage(msgId, resolved.identity!.agent_name, cwd, {
+          claimId: process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined,
+        });
         appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'message' }, cwd);
         return {
           response: toolResponse({
@@ -6412,6 +6561,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           ),
         };
       }
+      // pln#562 step 4 — dispatching a turn hands work to another agent; gate
+      // it at the same trust bar as the other dispatch surfaces.
+      if (args?.intent === 'turn' && args?.dispatch === true) {
+        const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+        if (resolved.error) {
+          return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+        }
+      }
       const { handleBclawLoop } = await import('./loops-handlers.js');
       const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
       const result = handleBclawLoop({ args: args as unknown, cwd: targetCwd });
@@ -6610,20 +6767,31 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         // Auto-fill identity fields. Without this, a caller who omits author/agent
         // creates a schema-invalid record that is silently dropped on read and
-        // GC'd from disk on the next mutation. Fallback chain:
-        // resolved MCP identity → args.agent → 'unknown'.
+        // GC'd from disk on the next mutation.
         // Identity is resolved against the SOURCE cwd (the agent's own
         // project/registry), not the target — an agent doesn't need to be
-        // registered in the target project to write into it.
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        // registered in the target project to write into it. An explicitly
+        // supplied data.author is honored as content-level attribution
+        // (cross-project signaling writers may not be registered locally);
+        // when author is MISSING, resolution is mandatory and failure is a
+        // hard validation_error (pln#562 step 3) — never author:'unknown'.
         const data: Record<string, unknown> = { ...rawData };
-        if (data.author === undefined) data.author = agent_name;
-        if (data.agent === undefined) data.agent = agent_name;
-        if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
+        let actor = typeof data.author === 'string' ? data.author : undefined;
+        let actorId = typeof data.agent_id === 'string' ? data.agent_id : undefined;
+        if (data.author === undefined) {
+          const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+          data.author = agent_name;
+          if (data.agent === undefined) data.agent = agent_name;
+          if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
+          actor = agent_name;
+          actorId = agent_id;
+        } else if (data.agent === undefined) {
+          data.agent = data.author;
+        }
 
         const result = createEntity(entity, data, targetCwd);
         appendAuditEntry(
-          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'create', item_id: result.id, item_type: entity },
+          { actor: actor ?? 'unknown', ...(actorId ? { actor_id: actorId } : {}), action: 'create', item_id: result.id, item_type: entity },
           targetCwd,
         );
         return {

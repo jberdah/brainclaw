@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isKnownAgent, getCapabilityProfile } from './agent-capability.js';
+import { isKnownAgent, getCapabilityProfile, resolveAgentAlias } from './agent-capability.js';
+import { isAgentInstalledPerInventory } from './agent-inventory.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
@@ -95,8 +96,13 @@ function agentStore(cwd?: string, preferredDirName?: string): JsonStore<AgentIde
   });
 }
 
+/**
+ * Canonical agent name: lowercased, trimmed, and alias-resolved at the
+ * registry level (pln#562 step 2) — 'copilot' and 'github-copilot' are ONE
+ * identity, not two. All registry lookups and writes go through this.
+ */
 export function normalizeAgentName(agentName: string): string {
-  return agentName.trim().toLowerCase();
+  return resolveAgentAlias(agentName.trim().toLowerCase());
 }
 
 function normalizeCapability(capability: string): string | undefined {
@@ -132,8 +138,43 @@ function codexHome(env: NodeJS.ProcessEnv = process.env): string {
   return explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), '.codex');
 }
 
-function agentKeyPath(agentId: string, env: NodeJS.ProcessEnv = process.env): string {
+/**
+ * ed25519 identity keys (pln#562 step 5).
+ *
+ * RESERVED for the federated identity model — these keys are not consumed by
+ * any verification path today; the identity proposal (origin signing)
+ * activates them. Do NOT delete them as debris.
+ *
+ * Private keys live under the NEUTRAL brainclaw home (~/.brainclaw/keys/),
+ * not under ~/.codex/: agent identity belongs to brainclaw, and parking
+ * private key material inside another vendor's config directory both
+ * misattributes it and exposes it to that vendor's tooling/sync.
+ */
+function agentKeyPath(agentId: string): string {
+  return path.join(os.homedir(), MEMORY_DIR, 'keys', `${agentId}.ed25519.pem`);
+}
+
+/** Pre-step-5 location (inside CODEX_HOME) — read for one-time migration. */
+function legacyAgentKeyPath(agentId: string, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(codexHome(env), 'brainclaw', 'keys', `${agentId}.ed25519.pem`);
+}
+
+/**
+ * Move a key file from the legacy ~/.codex location to the neutral path.
+ * Best-effort: a failed unlink leaves a duplicate, never a missing key.
+ */
+function migrateLegacyAgentKey(agentId: string, env: NodeJS.ProcessEnv = process.env): void {
+  const legacy = legacyAgentKeyPath(agentId, env);
+  const target = agentKeyPath(agentId);
+  if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
+  try {
+    ensureParentDir(target);
+    fs.copyFileSync(legacy, target);
+    try { fs.unlinkSync(legacy); } catch { /* duplicate is safe */ }
+    logger.debug(`Migrated agent identity key ${agentId} from ${legacy} to ${target}`);
+  } catch (err) {
+    logger.debug('Failed to migrate legacy agent key:', err);
+  }
 }
 
 function ensureParentDir(filepath: string): void {
@@ -148,7 +189,8 @@ function fingerprintPublicKey(publicKey: string): string {
 }
 
 function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env, forceRegenerate: boolean = false): AgentIdentityDocument['identity_key'] {
-  const filepath = agentKeyPath(agentId, env);
+  migrateLegacyAgentKey(agentId, env);
+  const filepath = agentKeyPath(agentId);
   const createdAt = nowISO();
 
   let publicKeyPem: string;
@@ -241,11 +283,24 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     return updated;
   }
 
+  // Identity hardening (pln#562 step 1): a NEW identity claiming the name of
+  // an agent the inventory knows is NOT installed on this machine is suspect.
+  // Warn (the inventory is consultative) — it never blocks or mints identity.
+  const normalizedNewName = normalizeAgentName(input.agentName);
+  try {
+    if (isAgentInstalledPerInventory(normalizedNewName) === false) {
+      logger.warn(
+        `Registering identity '${normalizedNewName}' but the agent inventory reports it is not installed on this machine. `
+        + 'Verify the claimed identity or refresh the inventory.',
+      );
+    }
+  } catch { /* inventory consultation is best-effort */ }
+
   let created: AgentIdentityDocument = {
     schema_version: 2,
     version: 1,
     agent_id: generateAgentId(),
-    agent_name: normalizeAgentName(input.agentName),
+    agent_name: normalizedNewName,
     created_at: nowISO(),
     kind: input.kind ?? 'unknown',
     trust_level: input.trustLevel ?? 'contributor',
@@ -273,12 +328,16 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   }
 
   // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID, CODEX_THREAD_ID).
-  // If detected agent is not registered, auto-register it as trusted agent.
   // This is the primary identification path for MCP servers and CLI hooks.
-  const detected = detectAiAgent(process.env, homeDir);
+  //
+  // pln#562 step 2 — registration is an EXPLICIT act (setup selection, session
+  // start, dispatcher spawn). Resolution is a read path and must never mint an
+  // identity as a side effect; a detected-but-unregistered agent resolves to
+  // undefined and the caller decides whether to register explicitly.
+  const detected = detectAiAgent(process.env);
   if (detected) {
     // If the detected name matches an explicit env var that was already tried
-    // and not found, don't auto-register — the caller expects a "not registered" error.
+    // and not found, the caller expects a "not registered" error.
     if (normalizeAgentName(detected.name) === normalizeAgentName(envAgentName)) {
       return undefined;
     }
@@ -286,21 +345,10 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
     const byDetected = findAgentIdentityByName(detected.name, cwd, preferredDirName);
     if (byDetected) return byDetected;
 
-    // Auto-register detected agent so it's immediately usable.
-    // This avoids the "not registered" error for agents detected for the first time.
-    try {
-      const autoRegistered = registerAgentIdentity({
-        agentName: normalizeAgentName(detected.name),
-        kind: detected.kind,
-        trustLevel: detected.trust_level,
-        cwd,
-        preferredDirName,
-      });
-      logger.debug(`Auto-registered detected agent: ${detected.name} (${autoRegistered.agent_id})`);
-      return autoRegistered;
-    } catch {
-      // Non-fatal: registration may fail if store is read-only
-    }
+    logger.debug(
+      `Detected agent '${detected.name}' is not registered; read-path resolution does not auto-register `
+      + '(register via setup, session start, or dispatch).',
+    );
   }
 
   // config.current_agent is NOT used for identity resolution — it's a singleton global
@@ -466,10 +514,12 @@ export function resolveOrAutoRegisterAgentIdentity(
   } catch (err) {
     if (!(err instanceof AgentIdentityResolutionError)) throw err;
 
-    // Last-resort: derive a name from explicit arg or env and auto-register.
-    // This allows session_start to succeed even for agents not yet registered.
+    // Last-resort: derive a name from explicit arg, env, or runtime detection
+    // and auto-register. Session start is an EXPLICIT act (pln#562 step 2), so
+    // it is allowed to register — unlike read-path resolution, which is not.
     const candidateName = options.agentName?.trim()
-      || (options.allowEnv !== false ? resolveEnvAgentName(options.env ?? process.env) : undefined);
+      || (options.allowEnv !== false ? resolveEnvAgentName(options.env ?? process.env) : undefined)
+      || detectAiAgent(options.env ?? process.env)?.name;
     if (!candidateName) throw err;
 
     const normalizedName = normalizeAgentName(candidateName);
@@ -571,10 +621,10 @@ export function resolveCurrentModel(cwd?: string): string | undefined {
  * Note: config.current_agent is intentionally NOT used here — it's a singleton
  * global that causes cross-agent confusion in multi-agent setups.
  */
-export function resolveCurrentAgentName(cwd?: string, homeDir?: string): string {
+export function resolveCurrentAgentName(cwd?: string, _homeDir?: string): string {
   const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
   if (fromEnv) return fromEnv;
-  const detected = detectAiAgent(process.env, homeDir);
+  const detected = detectAiAgent(process.env);
   if (detected) return detected.name;
   return process.env.USER ?? process.env.USERNAME ?? 'unknown';
 }
@@ -670,4 +720,90 @@ export function agentCanCurate(agentNameOrId?: string, cwd?: string): boolean {
   if (!agentNameOrId) return false;
   const level = getAgentTrustLevel(agentNameOrId, cwd);
   return level === 'curator';
+}
+
+// ── Debris identity cleanup (pln#562 step 2) ────────────────────────────────
+
+/**
+ * Identity names known to be registration debris: test fixtures and
+ * model-as-identity artifacts that leaked into real stores through the old
+ * permissive auto-registration paths.
+ */
+export const DEBRIS_AGENT_NAMES: readonly string[] = ['testuser', 'contributor-bot', 'claude-sonnet'];
+
+export interface DebrisAgentIdentity {
+  identity: AgentIdentityDocument;
+  reason: string;
+}
+
+/**
+ * List identities that look like registration debris:
+ *  - names on the known-debris list (test fixtures, model-as-identity)
+ *  - identities stored under an alias of a canonical agent name (e.g. a
+ *    'copilot' document now shadowed by the registry-level alias merge)
+ *
+ * Read-only — cleanup is a separate, guarded act (removeAgentIdentity).
+ */
+export function listDebrisAgentIdentities(cwd?: string, preferredDirName?: string): DebrisAgentIdentity[] {
+  const debris: DebrisAgentIdentity[] = [];
+  for (const identity of listAgentIdentities(cwd, preferredDirName)) {
+    const stored = identity.agent_name.trim().toLowerCase();
+    if (DEBRIS_AGENT_NAMES.includes(stored)) {
+      debris.push({ identity, reason: `'${stored}' is a known debris identity name` });
+      continue;
+    }
+    const canonical = resolveAgentAlias(stored);
+    if (canonical !== stored) {
+      debris.push({
+        identity,
+        reason: `'${stored}' is an alias of '${canonical}' — superseded by the registry-level alias merge`,
+      });
+    }
+  }
+  return debris;
+}
+
+/**
+ * Remove a registered agent identity — guarded, never silent.
+ *
+ * Refuses unless the identity is flagged as debris (listDebrisAgentIdentities)
+ * or the caller passes force:true. Curator identities are never removed
+ * without force. Returns the removed document so callers can report exactly
+ * what was deleted.
+ */
+export function removeAgentIdentity(
+  agentNameOrId: string,
+  options: { cwd?: string; preferredDirName?: string; force?: boolean } = {},
+): AgentIdentityDocument {
+  const { cwd, preferredDirName, force } = options;
+  const identity = findAgentIdentityById(agentNameOrId, cwd, preferredDirName)
+    ?? findAgentIdentityByName(agentNameOrId, cwd, preferredDirName)
+    // Alias-debris docs are unreachable via normalized name lookup — match the raw stored name.
+    ?? listAgentIdentities(cwd, preferredDirName).find(
+      (a) => a.agent_name.trim().toLowerCase() === agentNameOrId.trim().toLowerCase(),
+    );
+  if (!identity) {
+    throw new AgentIdentityResolutionError(`Agent '${agentNameOrId}' not found.`, { agent_name: agentNameOrId });
+  }
+
+  if (!force) {
+    if (identity.trust_level === 'curator') {
+      throw new AgentTrustError(
+        `Refusing to remove curator identity '${identity.agent_name}' without force.`,
+        { agent_id: identity.agent_id, agent_name: identity.agent_name },
+      );
+    }
+    const isDebris = listDebrisAgentIdentities(cwd, preferredDirName)
+      .some((d) => d.identity.agent_id === identity.agent_id);
+    if (!isDebris) {
+      throw new AgentIdentityResolutionError(
+        `Refusing to remove '${identity.agent_name}': not a known debris identity. Pass force to override.`,
+        { agent_id: identity.agent_id, agent_name: identity.agent_name },
+      );
+    }
+  }
+
+  agentStore(cwd, preferredDirName).delete(identity.agent_id);
+  logger.debug(`Removed agent identity ${identity.agent_name} (${identity.agent_id})`);
+  return identity;
 }

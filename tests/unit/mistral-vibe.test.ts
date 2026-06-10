@@ -26,6 +26,7 @@ import {
   getAgentCapabilityProfile,
 } from '../../src/core/agent-capability.js';
 import { detectAiAgent } from '../../src/core/ai-agent-detection.js';
+import { buildAgentInventory } from '../../src/core/agent-inventory.js';
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -181,37 +182,30 @@ describe('Mistral Vibe — MCP config writer', () => {
 
 describe('Mistral Vibe — auto-detection', () => {
   it('detects via VIBE_HOME env var', () => {
-    const homeDir = tempDir('bclaw-vibe-home-');
-    try {
-      const detected = detectAiAgent({ VIBE_HOME: '/custom/vibe' }, homeDir);
-      assert.ok(detected);
-      assert.equal(detected!.name, 'mistral-vibe');
-      assert.match(detected!.detection_source, /VIBE_HOME/);
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
+    const detected = detectAiAgent({ VIBE_HOME: '/custom/vibe' });
+    assert.ok(detected);
+    assert.equal(detected!.name, 'mistral-vibe');
+    assert.match(detected!.detection_source, /VIBE_HOME/);
   });
 
-  it('detects via ~/.vibe directory presence', () => {
+  // pln#562 step 1 — directory presence proves installation (inventory),
+  // never identity: detectAiAgent is env-only.
+  it('~/.vibe directory presence marks mistral-vibe installed in the inventory, not detected', () => {
     const homeDir = tempDir('bclaw-vibe-dir-');
     try {
       fs.mkdirSync(path.join(homeDir, '.vibe'));
-      const detected = detectAiAgent({}, homeDir);
-      assert.ok(detected);
-      assert.equal(detected!.name, 'mistral-vibe');
-      assert.match(detected!.detection_source, /~\/\.vibe directory/);
+      assert.equal(detectAiAgent({}), undefined, 'no env markers → no detected identity');
+      const inv = buildAgentInventory(homeDir, {}, { spawnableResolver: () => false });
+      const vibe = inv.agents.find((a) => a.name === 'mistral-vibe');
+      assert.equal(vibe?.installed, true);
+      assert.match(vibe!.detection_method, /~\/\.vibe directory/);
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
-  it('does NOT detect when ~/.vibe is absent and VIBE_HOME is unset', () => {
-    const homeDir = tempDir('bclaw-vibe-empty-');
-    try {
-      const detected = detectAiAgent({}, homeDir);
-      assert.equal(detected, undefined);
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
+  it('does NOT detect when VIBE_HOME is unset', () => {
+    const detected = detectAiAgent({});
+    assert.equal(detected, undefined);
   });
 });

@@ -92,7 +92,9 @@ describe('core/agent-registry identity contract', () => {
     assert.deepEqual(created.capabilities, ['code-generation', 'review']);
     assert.ok(created.identity_key?.fingerprint);
     const firstFingerprint = created.identity_key?.fingerprint;
-    const keyPath = path.join(process.env.CODEX_HOME as string, 'brainclaw', 'keys', `${created.agent_id}.ed25519.pem`);
+    // pln#562 step 5 — keys live under the neutral ~/.brainclaw/keys, no
+    // longer inside CODEX_HOME.
+    const keyPath = path.join(workspace.fakeHome, '.brainclaw', 'keys', `${created.agent_id}.ed25519.pem`);
     assert.equal(fs.existsSync(keyPath), true);
 
     const merged = registerAgentIdentity({

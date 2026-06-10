@@ -497,6 +497,12 @@ export interface TurnInput {
   input?: string;
   dispatch?: boolean;
   assignment_id?: string;
+  /**
+   * pln#562 step 4 — claim that binds this turn to a dispatched INSTANCE.
+   * Recorded on the slot so complete_turn can verify the caller is the same
+   * instance, not merely a process running the same agent name.
+   */
+  claim_id?: string;
   actor: string;
 }
 
@@ -532,6 +538,7 @@ export function turn(input: TurnInput, cwd?: string): LoopThread {
           status: 'assigned' as const,
           phase: current.current_phase,
           assignment_id: input.assignment_id ?? slot.assignment_id,
+          claim_id: input.claim_id ?? slot.claim_id,
         }
       : slot,
   );
@@ -578,6 +585,13 @@ export interface CompleteTurnInput {
   admin_override?: boolean;
   /** For future MCP wiring: the caller's registered agent id. Used to enforce slot ownership. */
   caller_agent_id?: string;
+  /**
+   * pln#562 step 4 — the caller's claim_id (BRAINCLAW_CLAIM_ID of a
+   * dispatched instance). When the slot is claim-bound, ownership is decided
+   * by claim equality, not agent identity: two instances of the same agent
+   * are different principals.
+   */
+  caller_claim_id?: string;
 }
 
 export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThread {
@@ -589,7 +603,13 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
 
   // Slot-bound auth. Only enforced when caller_agent_id is supplied (MCP entry path).
   if (input.caller_agent_id !== undefined && !input.admin_override) {
-    const ownerMatches = slot.agent_id !== undefined && slot.agent_id === input.caller_agent_id;
+    // Instance binding (pln#562 step 4): a claim-bound slot is owned by the
+    // INSTANCE holding that claim. When both sides carry claim info, claim
+    // equality decides; otherwise fall back to the legacy agent_id check.
+    const claimBound = slot.claim_id !== undefined && input.caller_claim_id !== undefined;
+    const ownerMatches = claimBound
+      ? slot.claim_id === input.caller_claim_id
+      : slot.agent_id !== undefined && slot.agent_id === input.caller_agent_id;
     const creatorMatches = current.created_by === input.caller_agent_id;
     if (!ownerMatches && !creatorMatches) {
       throw new Error('unauthorized_slot_write');

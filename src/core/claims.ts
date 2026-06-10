@@ -162,19 +162,76 @@ export function listClaims(cwd?: string): Claim[] {
   return Array.from(byId.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
-export function releaseClaim(id: string, cwd?: string): Claim {
-  return mutate({ cwd }, () => {
+/**
+ * Caller identity for release ownership checks (pln#562 step 5).
+ * Acquisition and adoption are guarded; release must be too — otherwise any
+ * process can release another instance's claim and break hard_after gating.
+ *
+ * When omitted (legacy internal callers: stale sweeps, reconciler, session
+ * end on own claims), no check is applied. When provided, the caller must
+ * match the claim's session/agent identity, or carry `override` (coordinator
+ * privilege) — which is audited.
+ */
+export interface ReleaseClaimAuth {
+  agent?: string;
+  agent_id?: string;
+  session_id?: string;
+  /** Coordinator override: allowed to release another principal's claim. Audited. */
+  override?: boolean;
+}
+
+function assertReleaseOwnership(claim: Claim, auth: ReleaseClaimAuth | undefined): { overrideUsed: boolean } {
+  if (!auth) return { overrideUsed: false };
+  const ownerMatches =
+    (auth.session_id !== undefined && claim.session_id !== undefined && auth.session_id === claim.session_id)
+    || (auth.agent_id !== undefined && claim.agent_id !== undefined && auth.agent_id === claim.agent_id)
+    || (auth.agent !== undefined && claim.agent === auth.agent);
+  if (ownerMatches) return { overrideUsed: false };
+  if (auth.override) return { overrideUsed: true };
+  throw new Error(
+    `claim '${claim.id}' is held by '${claim.agent}'${claim.session_id ? ` (session ${claim.session_id})` : ''}; `
+    + `caller '${auth.agent ?? auth.agent_id ?? auth.session_id ?? 'unknown'}' does not own it. `
+    + 'Coordinator-level callers may release with override.',
+  );
+}
+
+function auditReleaseOverride(claim: Claim, auth: ReleaseClaimAuth, cwd?: string): void {
+  appendAuditEntry(
+    {
+      actor: auth.agent ?? 'coordinator',
+      actor_id: auth.agent_id,
+      action: 'release_claim',
+      item_id: claim.id,
+      item_type: 'claim',
+      scope: claim.scope,
+      session_id: auth.session_id,
+      after: { ownership_override: true, claim_owner: claim.agent },
+    },
+    cwd,
+  );
+}
+
+export function releaseClaim(id: string, cwd?: string, auth?: ReleaseClaimAuth): Claim {
+  let overrideUsed = false;
+  const released = mutate({ cwd }, () => {
     const claim = loadClaim(id, cwd);
+    overrideUsed = assertReleaseOwnership(claim, auth).overrideUsed;
     claim.status = 'released';
     claim.released_at = nowISO();
     saveClaimUnlocked(claim, cwd);
     return claim;
   });
+  if (overrideUsed && auth) {
+    auditReleaseOverride(released, auth, cwd);
+  }
+  return released;
 }
 
 export interface ReleaseClaimCascadeOptions {
   planStatus?: string;
   cwd?: string;
+  /** Caller identity for the release ownership check (pln#562 step 5). */
+  auth?: ReleaseClaimAuth;
 }
 
 export interface ReleaseClaimCascadeResult {
@@ -202,7 +259,8 @@ export function releaseClaimWithCascade(
   id: string,
   options: ReleaseClaimCascadeOptions = {},
 ): ReleaseClaimCascadeResult {
-  const { planStatus, cwd } = options;
+  const { planStatus, cwd, auth } = options;
+  let overrideUsed = false;
 
   const result = mutate({ cwd }, () => {
     // Release the claim (idempotent: already-released claims are returned as-is)
@@ -210,6 +268,7 @@ export function releaseClaimWithCascade(
     if (claim.status === 'released') {
       return { claim, planTransitioned: false } as ReleaseClaimCascadeResult;
     }
+    overrideUsed = assertReleaseOwnership(claim, auth).overrideUsed;
     claim.status = 'released';
     claim.released_at = nowISO();
     saveClaimUnlocked(claim, cwd);
@@ -279,6 +338,10 @@ export function releaseClaimWithCascade(
     },
     cwd,
   );
+
+  if (overrideUsed && auth) {
+    auditReleaseOverride(result.claim, auth, cwd);
+  }
 
   if (result.planWarning && result.planId) {
     appendAuditEntry(

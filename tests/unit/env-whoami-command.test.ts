@@ -113,7 +113,8 @@ describe('commands/env + whoami', () => {
 
     assert.equal(output.errors.length, 0);
     const parsed = JSON.parse(output.logs.at(-1) as string);
-    assert.equal(parsed.resolved_agent, 'copilot');
+    // pln#562 step 2 — registry-level alias merge: 'copilot' IS 'github-copilot'.
+    assert.equal(parsed.resolved_agent, 'github-copilot');
     assert.ok(parsed.execution_context);
     assert.equal(parsed.brainclaw_version.status, 'update_available');
     assert.equal(parsed.brainclaw_version.upgrade_message, 'Includes improved doctor/env/whoami upgrade guidance.');

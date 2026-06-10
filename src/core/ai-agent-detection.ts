@@ -1,19 +1,22 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import type { AgentKind } from './schema.js';
 
 export interface DetectedAiAgent {
   name: string;
   kind: AgentKind;
-  trust_level: 'trusted';
   detection_source: string;
 }
 
 /**
  * Detects the AI coding agent running in the current environment by inspecting
- * environment variables and well-known config paths. Returns the first confident
+ * PROCESS-SCOPED environment variables ONLY. Returns the first confident
  * match, or undefined if no agent is detected.
+ *
+ * Identity hardening (pln#562 step 1): directory-presence fallbacks
+ * (~/.config/opencode, ~/.gemini/antigravity, ~/.openclaw, ~/.vibe, ~/.hermes)
+ * were removed — a config directory proves an agent is INSTALLED on the
+ * machine, not that it is the agent driving THIS process. Installed-ness is
+ * now answered exclusively by agent-inventory (buildAgentInventory). The
+ * inventory never mints identity; this function never consults the disk.
  *
  * Detection order (highest confidence first — agents with dedicated env vars
  * are tested before agents detected via passive/ambient env vars):
@@ -23,21 +26,21 @@ export interface DetectedAiAgent {
  * 4. Windsurf (WINDSURF_SESSION_ID — set by Windsurf itself)
  * 5. Cline (CLINE_AGENT — set by Cline itself)
  * 6. GitHub Copilot (GITHUB_COPILOT_PRODUCT — passive VS Code env, tested after active agents)
- * 7. Codex CLI (~/.codex/ directory exists)
- * 8. OpenCode (OPENCODE_* env or ~/.config/opencode/)
- * 9. Antigravity / Gemini CLI (ANTIGRAVITY_* env or ~/.gemini/antigravity/)
+ * 7. Codex CLI (CODEX_THREAD_ID / CODEX_CI / …)
+ * 8. OpenCode (OPENCODE_*)
+ * 9. Antigravity / Gemini CLI (ANTIGRAVITY_*)
  * 10. Continue (CONTINUE_*)
  * 11. Roo Code (ROO_*)
- * 12. Hermes (HERMES_* or ~/.hermes/)
- * 13. OpenClaw (~/.openclaw/ or OPENCLAW_*)
+ * 12. OpenClaw (OPENCLAW_*)
+ * 13. Mistral Vibe (VIBE_HOME)
+ * 14. Hermes (HERMES_*)
  */
-export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): DetectedAiAgent | undefined {
+export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiAgent | undefined {
   // Explicit override
   if (env.BRAINCLAW_AGENT?.trim()) {
     return {
       name: env.BRAINCLAW_AGENT.trim(),
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'BRAINCLAW_AGENT env var',
     };
   }
@@ -54,7 +57,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'claude-code',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: source,
     };
   }
@@ -64,7 +66,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'cursor',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CURSOR_* env var',
     };
   }
@@ -74,7 +75,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'windsurf',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'WINDSURF_* env var',
     };
   }
@@ -84,7 +84,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'cline',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CLINE_* env var',
     };
   }
@@ -101,7 +100,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'github-copilot',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: env.GITHUB_COPILOT_PRODUCT ? 'GITHUB_COPILOT_PRODUCT env var' : 'GITHUB_COPILOT_TOKEN env var',
     };
   }
@@ -118,28 +116,25 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'codex',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: source,
     };
   }
 
   // OpenCode
-  if (env.OPENCODE_SESSION_ID || env.OPENCODE_AGENT || fs.existsSync(path.join(homeDir, '.config', 'opencode'))) {
+  if (env.OPENCODE_SESSION_ID || env.OPENCODE_AGENT) {
     return {
       name: 'opencode',
       kind: 'agent',
-      trust_level: 'trusted',
-      detection_source: env.OPENCODE_SESSION_ID || env.OPENCODE_AGENT ? 'OPENCODE_* env var' : '~/.config/opencode directory',
+      detection_source: 'OPENCODE_* env var',
     };
   }
 
   // Antigravity (Google Gemini CLI)
-  if (env.ANTIGRAVITY_SESSION_ID || env.ANTIGRAVITY_AGENT || fs.existsSync(path.join(homeDir, '.gemini', 'antigravity'))) {
+  if (env.ANTIGRAVITY_SESSION_ID || env.ANTIGRAVITY_AGENT) {
     return {
       name: 'antigravity',
       kind: 'agent',
-      trust_level: 'trusted',
-      detection_source: env.ANTIGRAVITY_SESSION_ID || env.ANTIGRAVITY_AGENT ? 'ANTIGRAVITY_* env var' : '~/.gemini/antigravity directory',
+      detection_source: 'ANTIGRAVITY_* env var',
     };
   }
 
@@ -148,7 +143,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'continue',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CONTINUE_* env var',
     };
   }
@@ -158,47 +152,39 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env, homeDir: str
     return {
       name: 'roo',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'ROO_* env var',
     };
   }
 
-  // OpenClaw (~/.openclaw/ presence or OPENCLAW_* env)
-  if (env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT || fs.existsSync(path.join(homeDir, '.openclaw'))) {
+  // OpenClaw
+  if (env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT) {
     return {
       name: 'openclaw',
       kind: 'agent',
-      trust_level: 'trusted',
-      detection_source: env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT ? 'OPENCLAW_* env var' : '~/.openclaw directory',
+      detection_source: 'OPENCLAW_* env var',
     };
   }
 
-  // Mistral Vibe — no dedicated session env var documented (per pln#489 research).
-  // Detect via the user-level config dir (~/.vibe/) which Mistral creates on first
-  // run, or via VIBE_HOME override. Tested last so other agents with dedicated
-  // session env vars take precedence.
-  if (env.VIBE_HOME || fs.existsSync(path.join(homeDir, '.vibe'))) {
+  // Mistral Vibe — no dedicated session env var documented (per pln#489
+  // research). VIBE_HOME is the only process-scoped marker; the ~/.vibe
+  // directory check moved to agent-inventory.
+  if (env.VIBE_HOME) {
     return {
       name: 'mistral-vibe',
       kind: 'agent',
-      trust_level: 'trusted',
-      detection_source: env.VIBE_HOME ? 'VIBE_HOME env var' : '~/.vibe directory',
+      detection_source: 'VIBE_HOME env var',
     };
   }
 
-  // Hermes Agent — supports MCP and skills from ~/.hermes/. Detect after
-  // editor/CLI agents with stronger session env vars to avoid stealing mixed
-  // shells where Hermes is merely installed.
-  if (env.HERMES_SESSION_ID || env.HERMES_AGENT || env.HERMES_HOME || fs.existsSync(path.join(homeDir, '.hermes'))) {
+  // Hermes Agent — detect after editor/CLI agents with stronger session env
+  // vars to avoid stealing mixed shells where Hermes is merely installed.
+  if (env.HERMES_SESSION_ID || env.HERMES_AGENT || env.HERMES_HOME) {
     return {
       name: 'hermes',
       kind: 'autonomous',
-      trust_level: 'trusted',
       detection_source: env.HERMES_SESSION_ID || env.HERMES_AGENT
         ? 'HERMES_* env var'
-        : env.HERMES_HOME
-          ? 'HERMES_HOME env var'
-          : '~/.hermes directory',
+        : 'HERMES_HOME env var',
     };
   }
 
