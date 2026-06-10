@@ -4090,7 +4090,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         if (status === 'accepted' && assignment.message_id) {
           try {
             const { ackMessage } = await import('../core/messaging.js');
-            ackMessage(assignment.message_id, callerAgent, cwd);
+            // pln#562 step 4 — scope the ack to this assignment's claim so a
+            // same-named sibling instance cannot consume the message.
+            ackMessage(assignment.message_id, callerAgent, cwd, { claimId: assignment.claim_id });
           } catch { /* best-effort: don't fail the update if ack fails */ }
         }
 
@@ -4261,7 +4263,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       }
       try {
-        const result = ackMessage(msgId, resolved.identity!.agent_name, cwd);
+        // pln#562 step 4 — a dispatched instance (BRAINCLAW_CLAIM_ID) may only
+        // ack messages bound to its own claim.
+        const result = ackMessage(msgId, resolved.identity!.agent_name, cwd, {
+          claimId: process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined,
+        });
         appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'message' }, cwd);
         return {
           response: toolResponse({
@@ -6534,6 +6540,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             "bclaw_loop(intent='open') is not exposed standalone: it creates a loop structure without dispatching any turn, so the work never starts. Use bclaw_coordinate(intent='review', open_loop=true, targetAgents=[…]) or bclaw_coordinate(intent='ideate') — they open the loop AND dispatch the first turn.",
           ),
         };
+      }
+      // pln#562 step 4 — dispatching a turn hands work to another agent; gate
+      // it at the same trust bar as the other dispatch surfaces.
+      if (args?.intent === 'turn' && args?.dispatch === true) {
+        const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
+        if (resolved.error) {
+          return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
+        }
       }
       const { handleBclawLoop } = await import('./loops-handlers.js');
       const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);

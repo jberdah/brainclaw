@@ -415,6 +415,7 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
               input: req.input,
               dispatch: req.dispatch,
               assignment_id: req.assignment_id,
+              claim_id: req.claim_id,
               actor,
             },
             options.cwd,
@@ -452,6 +453,9 @@ export function handleBclawLoop(options: HandleBclawLoopOptions): HandleBclawLoo
                 : undefined,
               actor,
               caller_agent_id: req.agentId,
+              // pln#562 step 4 — a dispatched instance proves itself via its
+              // claim env; claim-bound slots reject same-named siblings.
+              caller_claim_id: process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined,
             },
             options.cwd,
           );
