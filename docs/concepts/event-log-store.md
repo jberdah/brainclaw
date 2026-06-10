@@ -53,10 +53,10 @@ Normative rules:
 
 - **Payload = full entity snapshot** (post-image), never a diff. Required
   iff the action mutates a persisted entity; lifecycle/observability actions
-  (`session_start`, `run_*` notifications) are payload-free. The exact
-  action-union → payload-requirement mapping goes to Codex review (§6).
+  (`session_start`, notification verbs) are payload-free. The normative
+  action-class → payload-requirement mapping is §2.1.1.
 - **Tombstones**: `action: "delete"`, payload omitted. No redundant
-  `deleted` boolean.
+  `deleted` boolean. Per-item_type semantics in §2.1.3.
 - **`(seq, writer)` is the normative event identity.** Bare `seq` is an
   address, valid only where the lock guarantees held (see §2.2 anomaly
   handling). Federation idempotency keys, dedup, and the dup-seq reducer all
@@ -67,15 +67,161 @@ Normative rules:
   concurrency for future API writes, and is the local half of federation
   conflict detection.
 - **New event kinds** introduced by this spec: `checkpoint_ref` (§2.4),
-  `journal_note` (§2.6), `seq_repair` (§2.2), `backfill` (§4). Schemas to
-  Codex review.
+  `journal_note` (§2.6), `seq_repair` (§2.2), `backfill` (§4). Normative
+  schemas in §2.1.2.
 - **Writer identity** is pid + per-process random start-nonce. Pid reuse
   makes bare pid unreliable over a journal's lifetime; agent name is
   metadata, not identity.
-- **Max record size, enforced at write time**: warn at 64 KB, hard-fail at
-  256 KB with a pointer to a future `payload_ref` mechanism. The cap is the
-  tripwire that tells us when the snapshot-everywhere assumption expires
-  (see falsifier, §2.8).
+- **Max record size, enforced at write time**: payloads > 64 KB are
+  externalized via `payload_ref` (§2.10); the *envelope line* hard-fails at
+  256 KB (with payload_ref no legitimate record approaches it). The cap is
+  the tripwire that tells us when the snapshot-everywhere assumption expires
+  (see falsifier, §2.8 — it fired on handoffs in phase 0, hence §2.10).
+
+#### 2.1.1 Action taxonomy → payload requirement (C1 resolution)
+
+The v2 `action` field extends today's `EventAction` union
+(`src/core/event-log.ts`, 32 members) with four journal-meta actions
+(`checkpoint_ref`, `journal_note`, `seq_repair`, `backfill`) and classifies
+every action into exactly one of five classes. The zod schema is a
+discriminated union over these classes; `EventItemType` gains `journal`
+(journal-meta records) and, at registry unification (§4 phase 3), `loop`.
+
+| Class | Actions | `payload` | `item_id` | `entity_rev` |
+|---|---|---|---|---|
+| entity-state | `create`, `update`, `accept`, `reject`, `claim`, `release_claim`, `rollback`, `upgrade`, `backfill` | REQUIRED — versioned post-image (§2.1.4) or `payload_ref` (§2.10) | REQUIRED | REQUIRED, bumped |
+| tombstone | `delete` | FORBIDDEN | REQUIRED | REQUIRED, bumped |
+| journal-meta | `checkpoint_ref`, `journal_note`, `seq_repair` | REQUIRED — meta-schema per action (§2.1.2), never an entity post-image | FORBIDDEN (`item_type: "journal"`) | absent |
+| observability | `session_start`, `session_end`, `assignment_offered`*, `assignment_progress` | FORBIDDEN | optional | absent |
+| registry-lifecycle | `assignment_created/accepted/started/completed/cancelled/failed/blocked/timed_out/expired/retrying/rerouted`, all `run_*` | OPTIONAL until registry families go journal-primary (J4 phase 1.5); REQUIRED post-image from then on | REQUIRED | absent until phase 1.5, then REQUIRED, bumped |
+
+\* `assignment_offered` is a status transition of the assignment doc and
+moves to registry-lifecycle at phase 1.5; until then it is notification-only.
+
+Holes found by the adversarial enumeration, resolved as follows:
+
+- **`item_id` is optional in today's `MemoryEvent`.** v2 makes it REQUIRED
+  for entity-state, tombstone, and registry-lifecycle records — a
+  payload-carrying or rev-bumping record without an addressable entity is
+  unreplayable and rejected at write time.
+- **`assignment_progress` is heartbeat-class** (§2.8): it never bumps
+  `entity_rev`, never carries a payload, and is excluded from replay. The
+  underlying doc fields it reflects (`last_progress`, heartbeat timestamps)
+  are ephemeral-class. It stays in the union as a notification verb only.
+- **Whole-store operations** (`rollback`, `upgrade` — today emitted once
+  with `item_type: "state"`): in v2 the diff choke point (§2.8) emits them
+  *per entity* (entity-state class, post-image each), plus one
+  `journal_note` kind `store_marker` recording the store-level operation
+  for audit. The coarse `item_type: "state"` event class disappears; the
+  `state` item_type survives only inside `store_marker` notes.
+- **Compactor archival vs deletion**: archival removal emits `delete` with
+  `summary: "archived"` (the archived copy lives outside live dirs and is
+  not journal-visible). Restore emits `create` continuing the entity_rev
+  counter. **`entity_rev` is per item_id and never resets**, including
+  across delete→recreate — required by federation LWW (§2.11).
+- **Sessions stay observability-class.** `current_session` /
+  `session_snapshot` docs remain projection-only (ephemeral-class, like
+  heartbeats); if sessions ever need replay they move to entity-state, but
+  nothing today consumes a replayed session.
+
+#### 2.1.2 Journal-meta record schemas (C1 resolution)
+
+All journal-meta records use `item_type: "journal"`, omit `item_id` and
+`entity_rev`, and carry a payload discriminated as follows:
+
+```jsonc
+// checkpoint_ref — appended AFTER manifest fsync (§2.4)
+{ "action": "checkpoint_ref", "item_type": "journal", "payload": {
+    "file": "ckpt-00018000.json",  // name under checkpoints/
+    "sha256": "…",                  // hash of the manifest bytes
+    "head_seq": 18342,              // last seq the manifest covers
+    "entities": 913,                // live entity count
+    "bytes": 481332,
+    "blobs": ["…"]                  // payload_ref closure (§2.10); [] if none
+} }
+
+// journal_note — discriminated by payload.kind
+{ "action": "journal_note", "item_type": "journal", "payload": {
+    "kind": "torn_tail_adjudicated",
+    "segment": "seg-00018000.jsonl",
+    "byte_start": 104832, "byte_end": 105219,
+    "sha256": "…" } }                // hash of the adjudicated fragment
+{ "payload": { "kind": "genesis",    // phase-1 migration marker (§4)
+    "migrated_from": "v1", "v1_events_parked": 17727,
+    "backfill_count": 913, "tool_version": "…" } }
+{ "payload": { "kind": "redaction",  // J1 audit trail — doctor redact
+    "segments": ["seg-00000001.jsonl"],
+    "redacted": [{ "seq": 1234, "writer": "w_…" }],
+    "reason": "…", "by": "…" } }
+{ "payload": { "kind": "store_marker",  // whole-store ops (§2.1.1)
+    "op": "rollback",                   // "rollback" | "upgrade"
+    "detail": "…" } }
+
+// seq_repair — tail-validation correction (§2.2)
+{ "action": "seq_repair", "item_type": "journal", "payload": {
+    "meta_next_seq": 18301,    // stale value found in meta.json
+    "tail_seq": 18342,         // observed at the active-segment tail
+    "repaired_next_seq": 18343 } }
+```
+
+`backfill` is **entity-state class**, not journal-meta: normal envelope
+with `item_type`/`item_id`/`entity_rev`/payload. Genesis (§4 phase 1) = one
+`journal_note` kind `genesis` followed by one `backfill` per live entity
+with `entity_rev: 1`, all under a single lock hold. Doctor-initiated
+re-syncs reuse `backfill` with the entity's current rev + 1.
+
+#### 2.1.3 Tombstone semantics per item_type (C1 resolution)
+
+- Payload FORBIDDEN; `item_id` REQUIRED; `entity_rev` bumped. The rev
+  counter survives deletion (§2.1.1 — never resets per item_id).
+- Projection unlink happens iff a tombstone is applied (§2.8). The
+  never-unlink-unparseable guard **wins over the tombstone**: the file is
+  preserved and the divergence is a *persistent, counted* doctor item —
+  divergence-by-design, distinct from corruption.
+- Singleton item types (`state`, `session`) never tombstone —
+  schema-forbidden; an encountered one is a doctor error.
+- Claims: lifecycle release is `release_claim` (entity-state, post-image
+  with `status: released`); `delete` on a claim appears only from prune.
+- Archival is `delete` + `summary: "archived"` (§2.1.1), not a distinct
+  action.
+
+#### 2.1.4 Payload schema versioning (C2 resolution)
+
+Decision: **version-in-payload + migration-on-replay, reusing the existing
+versioned-document registry** (`src/core/migration.ts`). No new envelope
+field.
+
+- Every entity payload — and every checkpoint post-image — is persisted
+  exactly as its projection file is today: the document carries
+  `schema_version` and is registered in the migration registry keyed by
+  `VersionedDocumentType`.
+- Replay runs each payload through the same detect → stepwise-migrate →
+  zod-validate path projections already use (`loadVersionedJsonFile`
+  semantics). One mechanism, one registry, one set of migration tests —
+  the journal adds zero new versioning machinery.
+- The envelope's `v: 2` governs ONLY envelope shape (seq/writer/action
+  fields). Envelope and payload version independently.
+- **Migration-retention invariant (normative):** journal immutability makes
+  migration paths load-bearing — a stepwise migration may never be deleted
+  while any non-archived segment, or either of the **two** newest verified
+  checkpoints, contains a payload at the pre-migration version. (Two, not
+  one: the §2.4 fallback chain replays from the second-newest checkpoint,
+  so the version floor is the state of the *second-newest* checkpoint.)
+  Checkpoints rewrite post-images at current schema versions when written,
+  so each checkpoint advances the floor; in the common case replay spans
+  only the post-checkpoint tail (weeks of records, ≤ 1–2 schema versions).
+  Archived segments may outlive migration paths: doctor warns
+  "archive predates migration floor" rather than promising eternal
+  replayability of archives.
+- **Replay validation failure** (unknown version / migration throws / zod
+  fails): skip + count + doctor (the §2.6 mid-file rule). If the failed
+  record is the entity's *newest*, the projection keeps its current content
+  (never-regress, §2.7) and the entity is flagged divergent — rebuild never
+  silently regresses to the previous snapshot.
+
+Alternatives rejected (recorded in Appendix A): per-record envelope
+schema-version (redundant — payloads self-describe); segment-rewrite
+migration (violates immutability and J1's audited-rewrite-only rule).
 
 ### 2.2 Seq and ordering
 
@@ -101,7 +247,27 @@ Normative rules:
   wholesale), and doctor emits a warning. Detection via `(seq, writer)`;
   containment via tail validation above. The journal's two-writer story is
   only as rare as lock.ts's steal rate; the spec depends on lock.ts
-  identifying owners by token, not pid.
+  identifying owners by pid + random token (verified against today's
+  `lockIsOwnedByCurrentProcess` — token-based, pid reuse alone cannot forge
+  ownership).
+- **Dup-seq reducer semantics (normative, C1 resolution).** Replay
+  processes records strictly in (segment, file-line) order — never sorted
+  by seq. Collision cases:
+  1. Identical `(seq, writer)`, identical payload bytes → idempotent
+     duplicate (e.g. ambiguous-retry residue): second occurrence skipped,
+     doctor counter.
+  2. Identical `(seq, writer)`, different content → doctor **ERROR**
+     (should be impossible — a writer never reuses its own seq); both
+     applied in file order, later wins, entity flagged.
+  3. Same `seq`, different writers → the lock-steal anomaly above: both
+     applied in file order, doctor **WARNING**.
+  4. `entity_rev` ties produced by case 3 on the same entity: later file
+     order wins wholesale; the never-regress guard (§2.7) treats
+     equal-rev-different-writer as a doctor-flagged overwrite, not a
+     regression.
+  5. `entity_rev` *gaps* during replay (expected prev+1, observed larger):
+     doctor warning (possible lost event) — snapshot payloads self-heal
+     state, the counter records that history is incomplete.
 - **Scope boundary (stated so the assumption is visible when it breaks):**
   global-seq-under-lock welds event capture to lock availability. Sandboxed
   or worktree workers that cannot reach the store produce zero journal
