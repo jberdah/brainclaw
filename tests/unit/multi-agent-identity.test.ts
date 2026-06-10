@@ -104,7 +104,7 @@ describe('multi-agent identity on shared host', () => {
     assert.equal(copilot.name, 'github-copilot');
 
     clearAgentEnv();
-    const nothing = detectAiAgent(process.env, '/nonexistent');
+    const nothing = detectAiAgent(process.env);
     assert.equal(nothing, undefined);
   });
 

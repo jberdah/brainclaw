@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isKnownAgent, getCapabilityProfile } from './agent-capability.js';
+import { isAgentInstalledPerInventory } from './agent-inventory.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { loadConfig, saveConfig } from './config.js';
 import { nowISO } from './ids.js';
@@ -241,11 +242,24 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
     return updated;
   }
 
+  // Identity hardening (pln#562 step 1): a NEW identity claiming the name of
+  // an agent the inventory knows is NOT installed on this machine is suspect.
+  // Warn (the inventory is consultative) — it never blocks or mints identity.
+  const normalizedNewName = normalizeAgentName(input.agentName);
+  try {
+    if (isAgentInstalledPerInventory(normalizedNewName) === false) {
+      logger.warn(
+        `Registering identity '${normalizedNewName}' but the agent inventory reports it is not installed on this machine. `
+        + 'Verify the claimed identity or refresh the inventory.',
+      );
+    }
+  } catch { /* inventory consultation is best-effort */ }
+
   let created: AgentIdentityDocument = {
     schema_version: 2,
     version: 1,
     agent_id: generateAgentId(),
-    agent_name: normalizeAgentName(input.agentName),
+    agent_name: normalizedNewName,
     created_at: nowISO(),
     kind: input.kind ?? 'unknown',
     trust_level: input.trustLevel ?? 'contributor',
@@ -273,9 +287,9 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   }
 
   // Auto-detect from native agent env vars (e.g. CLAUDECODE, CURSOR_TRACE_ID, CODEX_THREAD_ID).
-  // If detected agent is not registered, auto-register it as trusted agent.
+  // If detected agent is not registered, auto-register it.
   // This is the primary identification path for MCP servers and CLI hooks.
-  const detected = detectAiAgent(process.env, homeDir);
+  const detected = detectAiAgent(process.env);
   if (detected) {
     // If the detected name matches an explicit env var that was already tried
     // and not found, don't auto-register — the caller expects a "not registered" error.
@@ -571,10 +585,10 @@ export function resolveCurrentModel(cwd?: string): string | undefined {
  * Note: config.current_agent is intentionally NOT used here — it's a singleton
  * global that causes cross-agent confusion in multi-agent setups.
  */
-export function resolveCurrentAgentName(cwd?: string, homeDir?: string): string {
+export function resolveCurrentAgentName(cwd?: string, _homeDir?: string): string {
   const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
   if (fromEnv) return fromEnv;
-  const detected = detectAiAgent(process.env, homeDir);
+  const detected = detectAiAgent(process.env);
   if (detected) return detected.name;
   return process.env.USER ?? process.env.USERNAME ?? 'unknown';
 }

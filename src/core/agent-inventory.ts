@@ -423,6 +423,51 @@ const AGENT_DEFINITIONS: AgentDefinition[] = [
     instruction_file: '.continue/rules/',
   },
   {
+    name: 'openclaw',
+    detect: (home, env) => {
+      if (env.OPENCLAW_SESSION_ID || env.OPENCLAW_AGENT) {
+        return { installed: true, method: 'OPENCLAW_* env' };
+      }
+      if (fs.existsSync(path.join(home, '.openclaw'))) {
+        return { installed: true, method: '~/.openclaw directory' };
+      }
+      return { installed: false, method: '' };
+    },
+    models: [
+      { name: 'model-agnostic' },
+    ],
+    native_tools: ['shell', 'file_read', 'file_write', 'file_edit'],
+    mcp_support: true,
+    mcp_config_format: '~/.openclaw/mcp.json',
+    skills_support: false,
+    rules_support: false,
+    hooks_support: false,
+    instruction_file: 'AGENTS.md',
+  },
+  {
+    name: 'mistral-vibe',
+    detect: (home, env) => {
+      if (env.VIBE_HOME?.trim()) {
+        return { installed: true, method: 'VIBE_HOME env' };
+      }
+      if (fs.existsSync(path.join(home, '.vibe'))) {
+        return { installed: true, method: '~/.vibe directory' };
+      }
+      return { installed: false, method: '' };
+    },
+    models: [
+      { name: 'devstral', context_window: 256000 },
+      { name: 'mistral-large', context_window: 128000 },
+    ],
+    native_tools: ['shell', 'file_read', 'file_write', 'file_edit'],
+    mcp_support: true,
+    mcp_config_format: '~/.vibe/mcp.json',
+    skills_support: false,
+    rules_support: false,
+    hooks_support: false,
+    instruction_file: 'AGENTS.md',
+  },
+  {
     name: 'hermes',
     detect: (home, env) => {
       if (env.HERMES_SESSION_ID || env.HERMES_AGENT || env.HERMES_HOME) {
@@ -530,6 +575,30 @@ export function loadAgentInventory(): AgentInventory | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Whether an agent is installed on this machine according to the saved
+ * inventory (the single source of truth for "installed" since the
+ * detection/inventory split — pln#562 step 1).
+ *
+ * Returns:
+ *  - true / false when the inventory tracks the agent
+ *  - undefined when no inventory exists yet or the agent is not tracked
+ *    (callers must NOT treat undefined as "not installed")
+ *
+ * The inventory never mints identity — this is a consultation helper for
+ * warning paths only.
+ */
+export function isAgentInstalledPerInventory(
+  agentName: string,
+  inventory: AgentInventory | undefined = loadAgentInventory(),
+): boolean | undefined {
+  if (!inventory) return undefined;
+  const normalized = agentName.trim().toLowerCase();
+  const entry = inventory.agents.find((a) => a.name === normalized);
+  if (!entry) return undefined;
+  return entry.installed;
 }
 
 /**

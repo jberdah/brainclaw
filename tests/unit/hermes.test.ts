@@ -24,6 +24,7 @@ import {
   resolveAgentAlias,
 } from '../../src/core/agent-capability.js';
 import { detectAiAgent } from '../../src/core/ai-agent-detection.js';
+import { buildAgentInventory } from '../../src/core/agent-inventory.js';
 import { buildAgentIntegrationDeclaration } from '../../src/core/agent-integrations.js';
 
 function tempDir(prefix: string): string {
@@ -143,26 +144,24 @@ describe('Hermes — MCP config writer', () => {
 
 describe('Hermes — auto-detection', () => {
   it('detects via HERMES_HOME env var', () => {
-    const home = tempDir('bclaw-hermes-detect-env-');
-    try {
-      const detected = detectAiAgent({ HERMES_HOME: '/custom/hermes' }, home);
-      assert.ok(detected);
-      assert.equal(detected!.name, 'hermes');
-      assert.equal(detected!.kind, 'autonomous');
-      assert.match(detected!.detection_source, /HERMES_HOME/);
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+    const detected = detectAiAgent({ HERMES_HOME: '/custom/hermes' });
+    assert.ok(detected);
+    assert.equal(detected!.name, 'hermes');
+    assert.equal(detected!.kind, 'autonomous');
+    assert.match(detected!.detection_source, /HERMES_HOME/);
   });
 
-  it('detects via ~/.hermes directory presence', () => {
+  // pln#562 step 1 — directory presence proves installation (inventory),
+  // never identity: detectAiAgent is env-only.
+  it('~/.hermes directory presence marks hermes installed in the inventory, not detected', () => {
     const home = tempDir('bclaw-hermes-detect-dir-');
     try {
       fs.mkdirSync(path.join(home, '.hermes'));
-      const detected = detectAiAgent({}, home);
-      assert.ok(detected);
-      assert.equal(detected!.name, 'hermes');
-      assert.match(detected!.detection_source, /~\/\.hermes directory/);
+      assert.equal(detectAiAgent({}), undefined, 'no env markers → no detected identity');
+      const inv = buildAgentInventory(home, {}, { spawnableResolver: () => false });
+      const hermes = inv.agents.find((a) => a.name === 'hermes');
+      assert.equal(hermes?.installed, true);
+      assert.match(hermes!.detection_method, /~\/\.hermes directory/);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
