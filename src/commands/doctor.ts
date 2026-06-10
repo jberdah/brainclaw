@@ -1753,6 +1753,12 @@ export function runDoctor(options: DoctorOptions = {}): void {
       pendingCandidatesForStaleness,
       Date.now(),
       runtimeNotesForStaleness,
+      // pln#557 step 2 — flag entities whose related_paths no longer exist.
+      {
+        decisions: state.recent_decisions,
+        constraints: state.active_constraints,
+        projectRoot: options.cwd ?? process.cwd(),
+      },
     );
     if (staleReport.warnings.length > 0) {
       const summary = staleSummary(staleReport);

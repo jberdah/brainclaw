@@ -103,7 +103,35 @@ describe('bclaw_work — bootstrap_recommended hint (pln#513 step 1, seq #50)', 
 
     const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
     assert.equal(r.bootstrap_recommended, false);
+    assert.equal(r.bootstrap_verdict, 'none');
     assert.equal(r.next_action, undefined);
+  });
+
+  // pln#557 step 3 — composite verdict cases.
+  it('returns verdict=refresh on a rich store without PROJECT.md (no from-scratch bootstrap)', async () => {
+    const line = JSON.stringify({ ts: new Date().toISOString(), agent: 'alice', action: 'update', item_type: 'claim' }) + '\n';
+    fs.writeFileSync(path.join(workspace.dir, '.brainclaw', 'events.jsonl'), line.repeat(Math.ceil((80 * 1024) / line.length)), 'utf8');
+
+    const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
+    assert.equal(r.bootstrap_recommended, true);
+    assert.equal(r.bootstrap_verdict, 'refresh');
+    assert.equal(r.next_action, 'bclaw_bootstrap(refresh: true)');
+    const refreshAction = r.next_actions?.find((a) => a.tool === 'bclaw_bootstrap');
+    assert.ok(refreshAction, 'next_actions must carry the refresh affordance');
+    assert.equal((refreshAction?.args as { refresh?: boolean })?.refresh, true);
+  });
+
+  it('returns verdict=refresh on a fossil PROJECT.md (eternal false negative killed)', async () => {
+    const projectMd = path.join(workspace.dir, 'PROJECT.md');
+    fs.writeFileSync(projectMd, '# project\n\nOld content.\n', 'utf8');
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 86_400_000);
+    fs.utimesSync(projectMd, sixtyDaysAgo, sixtyDaysAgo);
+    fs.writeFileSync(path.join(workspace.dir, '.brainclaw', 'events.jsonl'), '{"ts":"now","agent":"alice","action":"update","item_type":"claim"}\n', 'utf8');
+
+    const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
+    assert.equal(r.bootstrap_recommended, true);
+    assert.equal(r.bootstrap_verdict, 'refresh');
+    assert.equal(r.next_action, 'bclaw_bootstrap(refresh: true)');
   });
 });
 
@@ -148,6 +176,32 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
       (c) => c.scope === lockScope && c.status === 'active',
     );
     assert.deepEqual(activeLocks, [], 'coordination lock must be released after open');
+  });
+
+  it('opening the loop attaches a survey signals_baseline from the deterministic scanner (pln#557 step 4)', async () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Demo\n\nA demo project for scanner signals.\n', 'utf8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({ name: 'demo', scripts: { test: 'node --test' } }), 'utf8');
+
+    const result = acquireBootstrapLoop({ actor: 'claude-code' }, workspace.dir);
+    assert.equal(result.action, 'opened');
+
+    const baselineArtifact = result.loop.artifacts.find((a) => a.type === 'signals_baseline');
+    assert.ok(baselineArtifact, 'opened loop must carry a signals_baseline artifact');
+    assert.equal(baselineArtifact?.phase, 'survey');
+    assert.equal(baselineArtifact?.produced_by, 'brainclaw-scanner');
+    const body = JSON.parse(baselineArtifact?.body ?? '{}') as { source: string; summary: string; seeds: unknown[]; seed_count: number };
+    assert.equal(body.source, 'deterministic_scanner');
+    assert.ok(body.summary.length > 0);
+    assert.ok(Array.isArray(body.seeds));
+    assert.ok(Buffer.byteLength(baselineArtifact?.body ?? '', 'utf8') <= 4096, 'baseline body must respect the 4 KiB artifact cap');
+
+    // The gate must NOT auto-traverse: a baseline is not a signals_report.
+    assert.equal(result.loop.current_phase, 'survey');
+    const reports = result.loop.artifacts.filter((a) => a.type === 'signals_report');
+    assert.deepEqual(reports, []);
+
+    const baselineWarning = result.warnings.find((w) => w.includes('signals_baseline'));
+    assert.ok(baselineWarning, 'caller must be told the baseline exists so the champion enriches instead of re-scanning');
   });
 
   it('second ideate(preset=bootstrap) joins the existing loop instead of opening a duplicate', async () => {

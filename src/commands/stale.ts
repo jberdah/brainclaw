@@ -36,8 +36,13 @@ export interface StaleOptions {
   cwd?: string;
 }
 
-/** Resolve the canonical transition target (or removal) per entity kind. */
-const RESOLVE_ACTIONS: Record<StalenessEntity, { kind: 'transition'; entity: EntityName; to: string } | { kind: 'remove'; entity: EntityName }> = {
+/**
+ * Resolve the canonical transition target (or removal) per entity kind.
+ * decision/constraint are intentionally absent: they are only flagged for
+ * dead related_paths (pln#557 step 2), and the fix is updating the paths via
+ * bclaw_update — not a lifecycle transition.
+ */
+const RESOLVE_ACTIONS: Partial<Record<StalenessEntity, { kind: 'transition'; entity: EntityName; to: string } | { kind: 'remove'; entity: EntityName }>> = {
   plan: { kind: 'transition', entity: 'plan', to: 'dropped' },
   handoff: { kind: 'transition', entity: 'handoff', to: 'closed' },
   candidate: { kind: 'transition', entity: 'candidate', to: 'rejected' },
@@ -56,6 +61,11 @@ function buildReport(cwd?: string): StalenessReport {
     pending,
     Date.now(),
     notes,
+    {
+      decisions: state.recent_decisions,
+      constraints: state.active_constraints,
+      projectRoot: cwd ?? process.cwd(),
+    },
   );
 }
 
@@ -91,6 +101,11 @@ export function runStaleResolve(id: string, options: StaleOptions = {}): void {
   }
 
   const action = RESOLVE_ACTIONS[warning.entity];
+  if (!action) {
+    console.error(`Error: ${warning.entity} ${id} has no canonical stale-resolve action.`);
+    console.error(`Fix it directly instead: ${warning.suggested_action}`);
+    process.exit(1);
+  }
   try {
     if (action.kind === 'transition') {
       const result = transitionEntity(action.entity, id, action.to, cwd, 'resolved via brainclaw stale resolve');

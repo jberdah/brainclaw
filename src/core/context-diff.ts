@@ -4,7 +4,7 @@ import { readAuditLog } from './audit.js';
 import { listCandidates } from './candidates.js';
 import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
-import { buildNotificationSummary, readUnseenEvents, type MemoryEvent } from './event-log.js';
+import { buildNotificationSummary, hasEventCursor, readUnseenEvents, seedCursorToEnd, type MemoryEvent } from './event-log.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from './schema.js';
 import { loadState } from './state.js';
 
@@ -22,8 +22,12 @@ export interface ContextDiffItem {
 export interface ContextDiffResult {
   since?: string;
   since_session?: string;
-  /** Reference point: per-agent event-log cursor (default) or explicit timestamp/session. */
-  source?: 'event_cursor' | 'timestamp';
+  /**
+   * Reference point: per-agent event-log cursor (default), explicit
+   * timestamp/session, or the first-contact arrival digest (curated active
+   * state instead of an event replay; the cursor is seeded at log end).
+   */
+  source?: 'event_cursor' | 'timestamp' | 'arrival_digest';
   summary: string;
   counts: {
     constraints: number;
@@ -157,8 +161,19 @@ const EVENT_ACTION_LABEL: Record<string, NonNullable<ContextDiffItem['action']>>
  *
  * NOTE: reading ADVANCES the agent's cursor — events surfaced here are
  * considered seen. Returns undefined when there is nothing new.
+ *
+ * First contact (no cursor for this agent yet): the diff would otherwise
+ * replay the ENTIRE event log from genesis — on a mature store that means
+ * thousands of stale claim/session events summarized into noise, and the
+ * agent's single chance to triage history is consumed by the cursor advance.
+ * Instead we emit a curated arrival digest (active constraints/traps,
+ * in-progress plans, latest open handoffs) and seed the cursor at log end so
+ * subsequent diffs are genuinely incremental.
  */
 export function buildContextDiffFromEvents(agent: string, cwd?: string, options: { includeItems?: boolean } = {}): ContextDiffResult | undefined {
+  if (!hasEventCursor(agent, cwd)) {
+    return buildArrivalDigest(agent, cwd, options);
+  }
   const events = readUnseenEvents(agent, cwd);
   if (events.length === 0) {
     return undefined;
@@ -216,6 +231,63 @@ export function buildContextDiffFromEvents(agent: string, cwd?: string, options:
     changed_items: options.includeItems === false ? undefined : changedItems,
     event_summary: buildNotificationSummary(events),
     unseen_event_count: events.length,
+  };
+}
+
+/** Hard cap on arrival-digest items — the digest informs, it must not drown. */
+const ARRIVAL_DIGEST_MAX_ITEMS = 12;
+const ARRIVAL_DIGEST_MAX_HANDOFFS = 3;
+
+/**
+ * First-contact digest for an agent arriving on a store it has never read.
+ * Curated active state (constraints, traps, in-progress plans, latest open
+ * handoffs) instead of an event-log replay; seeds the agent's cursor at the
+ * end of the log so the next diff is incremental. Returns undefined only when
+ * there is nothing to say (empty store with no event history) — that case is
+ * the bootstrap hint's job, not the diff's.
+ */
+export function buildArrivalDigest(agent: string, cwd?: string, options: { includeItems?: boolean } = {}): ContextDiffResult | undefined {
+  const skippedBytes = seedCursorToEnd(agent, cwd);
+  const state = loadState(cwd);
+
+  const constraints = state.active_constraints.filter((item) => (item.status ?? 'active') === 'active');
+  const traps = state.known_traps.filter((item) => (item.status ?? 'active') === 'active');
+  const plans = state.plan_items.filter((item) => item.status === 'in_progress');
+  const handoffs = state.open_handoffs
+    .filter((item) => (item.status ?? 'open') === 'open')
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, ARRIVAL_DIGEST_MAX_HANDOFFS);
+
+  const counts = {
+    constraints: constraints.length,
+    decisions: 0,
+    traps: traps.length,
+    handoffs: handoffs.length,
+    plans: plans.length,
+    pending_candidates: 0,
+    total: constraints.length + traps.length + plans.length + handoffs.length,
+  };
+
+  if (counts.total === 0 && skippedBytes === 0) {
+    return undefined;
+  }
+
+  const changedItems = [
+    ...constraints.map((item) => toChangedItem('constraint', item)),
+    ...traps.map((item) => toChangedItem('trap', item)),
+    ...plans.map((item) => toChangedItem('plan', item)),
+    ...handoffs.map((item) => toChangedItem('handoff', item)),
+  ].slice(0, ARRIVAL_DIGEST_MAX_ITEMS);
+
+  const skippedKb = Math.round(skippedBytes / 1024);
+  const stateSummary = counts.total > 0 ? buildContextDiffSummary(counts) : 'no active items';
+  const summary = `First contact — arrival digest: ${stateSummary}. Event history skipped (${skippedKb} KB); cursor initialized at log end, future diffs are incremental.`;
+
+  return {
+    source: 'arrival_digest',
+    summary,
+    counts,
+    changed_items: options.includeItems === false ? undefined : changedItems,
   };
 }
 

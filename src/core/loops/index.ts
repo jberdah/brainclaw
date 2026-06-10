@@ -73,6 +73,12 @@ export {
   type SurveySourceResult,
 } from './hooks/survey-source-reader.js';
 export {
+  buildSurveySignalsBaseline,
+  type BuildSurveyBaselineOptions,
+  type SurveyBaselineSeed,
+  type SurveySignalsBaseline,
+} from './hooks/survey-signals-baseline.js';
+export {
   acquireLock,
   hashRequest,
   recordConflict,

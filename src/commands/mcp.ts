@@ -74,7 +74,7 @@ import {
 } from './setup.js';
 import { buildAgentInventory } from '../core/agent-inventory.js';
 import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
-import { probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
+import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
@@ -5123,30 +5123,31 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         };
       }
 
-      // pln#513 step 1 — bootstrap hint. When the project lacks a usable
-      // PROJECT.md (absent or 0 bytes), surface a hint so the agent knows
-      // the canonical entry-point. Cheap probe — one fs.statSync, no
-      // gating flag. The route follows the shared empty-memory rule
+      // pln#513 step 1 / pln#557 step 3 — bootstrap hint. The original probe
+      // was a one-bit PROJECT.md stat(): false positive on a rich store
+      // without PROJECT.md (recommended from-scratch bootstrap over 17k
+      // events), eternal false negative on a fossil PROJECT.md. The composite
+      // assessment (assessBootstrapNeed: presence × mtime-vs-activity ×
+      // store density) adds a distinct 'refresh' verdict that maps to
+      // bclaw_bootstrap(refresh: true) — coordinate with the pln#514 step 1
+      // force-flag. 'bootstrap' keeps the shared empty-memory rule
       // (resolveEmptyMemoryRecommendation): repo with content → extract via
       // bclaw_bootstrap; greenfield → bootstrap loop. Both chainable.
       let bootstrapRecommended: boolean | undefined;
+      let bootstrapVerdict: FacadeResponse['bootstrap_verdict'];
+      let bootstrapRefreshReason: string | undefined;
       let nextAction: string | undefined;
       let emptyMemoryRec: EmptyMemoryRecommendation | undefined;
       try {
-        const fsMod = await import('node:fs');
-        const pathMod = await import('node:path');
-        const projectMdPath = pathMod.join(targetCwd, 'PROJECT.md');
-        let needsBootstrap = false;
-        try {
-          const stat = fsMod.statSync(projectMdPath);
-          if (!stat.isFile() || stat.size === 0) needsBootstrap = true;
-        } catch {
-          needsBootstrap = true; // ENOENT → absent
-        }
-        bootstrapRecommended = needsBootstrap;
-        if (needsBootstrap) {
+        const assessment = assessBootstrapNeed(targetCwd);
+        bootstrapVerdict = assessment.verdict;
+        bootstrapRecommended = assessment.verdict !== 'none';
+        if (assessment.verdict === 'bootstrap') {
           emptyMemoryRec = resolveEmptyMemoryRecommendation(targetCwd);
           nextAction = emptyMemoryRec.mcp_next_action;
+        } else if (assessment.verdict === 'refresh') {
+          bootstrapRefreshReason = assessment.reasons[0];
+          nextAction = 'bclaw_bootstrap(refresh: true)';
         }
       } catch {
         // Best-effort: never block bclaw_work on the probe.
@@ -5155,12 +5156,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       // Self-teaching affordances (pln#542): each response carries the
       // recommended follow-up calls with exact shapes.
       const nextActions: NonNullable<FacadeResponse['next_actions']> = [];
-      if (bootstrapRecommended && emptyMemoryRec) {
+      if (bootstrapVerdict === 'bootstrap' && emptyMemoryRec) {
         if (emptyMemoryRec.route === 'extract') {
           nextActions.push({ tool: 'bclaw_bootstrap', args: {}, when: `project vision is missing and the ${emptyMemoryRec.reason} — extract initial context, then chain ${emptyMemoryRec.chained_mcp_action} if the vision is still missing` });
         } else {
           nextActions.push({ tool: 'bclaw_coordinate', args: { intent: 'ideate', preset: 'bootstrap' }, when: `project vision is missing and the repo is greenfield — open a bootstrap loop before assuming context, then chain ${emptyMemoryRec.chained_mcp_action} once content exists` });
         }
+      } else if (bootstrapVerdict === 'refresh') {
+        nextActions.push({ tool: 'bclaw_bootstrap', args: { refresh: true }, when: bootstrapRefreshReason ?? 'PROJECT.md is missing or fossil relative to a mature store — refresh from existing memory, do not bootstrap from scratch' });
       }
       if (claimId) {
         nextActions.push({ tool: 'bclaw_release_claim', args: { id: claimId, planStatus: 'done' }, when: 'implementation complete and committed' });
@@ -5184,6 +5187,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         warnings,
         duration_ms: Date.now() - startMs,
         bootstrap_recommended: bootstrapRecommended,
+        bootstrap_verdict: bootstrapVerdict,
         next_action: nextAction,
         next_actions: nextActions,
       };
@@ -5194,8 +5198,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         summaryParts.push(`Δ since last look: ${contextResult.context_diff.summary}`);
       }
       if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
-      if (bootstrapRecommended && emptyMemoryRec) {
+      if (bootstrapVerdict === 'bootstrap' && emptyMemoryRec) {
         summaryParts.push(`💡 ${emptyMemoryRec.text}`);
+      } else if (bootstrapVerdict === 'refresh') {
+        summaryParts.push(`💡 ${bootstrapRefreshReason ?? 'PROJECT.md is missing or fossil relative to a mature store'} → bclaw_bootstrap(refresh: true)`);
       }
       if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 
