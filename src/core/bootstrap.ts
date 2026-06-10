@@ -1851,7 +1851,9 @@ export function uninstallBootstrapImport(cwd?: string): BootstrapUninstallResult
       deletedCount++;
     }
     if (stateChanged) {
-      persistState(state, resolvedCwd, { writeProjectMarkdown: false });
+      // deleteMissing: uninstall removes managed artifacts — their files must be
+      // unlinked. Safe: loadState above runs under this same mutate() lock.
+      persistState(state, resolvedCwd, { writeProjectMarkdown: false, deleteMissing: true });
     }
     if (deactivatedCount > 0 || deletedCount > 0) {
       rebuildProjectMd(loadState(resolvedCwd), resolvedCwd);

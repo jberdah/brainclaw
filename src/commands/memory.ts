@@ -1,6 +1,6 @@
 import { loadConfig } from '../core/config.js';
 import { memoryExists } from '../core/io.js';
-import { loadState, persistState } from '../core/state.js';
+import { loadState, persistState, mutateState } from '../core/state.js';
 import { scanText } from '../core/security.js';
 import { validateCliInput } from '../core/input-validation.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
@@ -282,29 +282,29 @@ function runMemoryDelete(id: string, cwd: string): void {
     process.exit(1);
   }
 
-  const state = loadState(cwd);
-  const arrays = [
-    state.recent_decisions,
-    state.active_constraints,
-    state.known_traps,
-    state.open_handoffs,
-  ];
-
-  let deleted: CanonicalMemoryItem | undefined;
-  for (const items of arrays) {
-    const index = items.findIndex((item) => item.id === id || item.short_label === id);
-    if (index >= 0) {
-      [deleted] = items.splice(index, 1);
-      break;
-    }
-  }
-
-  if (!deleted) {
-    console.error(`Error: Memory item '${id}' not found.`);
+  // mutateState (RMW under the store lock + deleteMissing) so the entity file
+  // is actually unlinked — persistState alone no longer deletes absent records.
+  let deleted: CanonicalMemoryItem;
+  try {
+    deleted = mutateState((state) => {
+      const arrays = [
+        state.recent_decisions,
+        state.active_constraints,
+        state.known_traps,
+        state.open_handoffs,
+      ];
+      for (const items of arrays) {
+        const index = items.findIndex((item) => item.id === id || item.short_label === id);
+        if (index >= 0) {
+          return items.splice(index, 1)[0] as CanonicalMemoryItem;
+        }
+      }
+      throw new Error(`Memory item '${id}' not found.`);
+    }, cwd);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-
-  persistState(state, cwd);
   console.log(`✔ Memory item deleted: [${deleted.id}] ${deleted.text}`);
 }
 

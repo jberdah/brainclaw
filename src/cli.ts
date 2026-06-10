@@ -192,12 +192,41 @@ function trailingGlobalOptionError(argv: string[], actionCommand: Command): stri
   return undefined;
 }
 
+/**
+ * Resolve the (possibly nested) subcommand named in argv without parsing.
+ * Used to run the trailing-global-option guard BEFORE Commander parses:
+ * with positional options enabled, Commander would otherwise reject a
+ * trailing --cwd/--project as "unknown option" before any hook runs.
+ */
+function findCommandFromArgv(argv: string[]): Command | undefined {
+  let current: Command = program;
+  let found: Command | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token === '--') break;
+    if (token.startsWith('-')) {
+      if (!found && (token === '--cwd' || token === '--project')) i++;
+      continue;
+    }
+    const sub = current.commands.find((c) => c.name() === token || c.aliases().includes(token));
+    if (!sub) break;
+    found = sub;
+    current = sub;
+  }
+  return found;
+}
+
 function isCodevEnabled(): boolean {
   return process.env.BRAINCLAW_ENABLE_CODEV === '1';
 }
 
 program
   .name('brainclaw')
+  // Stop the program-level parser from consuming options that appear AFTER the
+  // subcommand: `instruction … --project auth` must reach the subcommand's own
+  // --project, not the global routing flag (which is leading-only by contract —
+  // see parseLeadingGlobalOptions + trailingGlobalOptionError).
+  .enablePositionalOptions()
   .description('Shared project memory for humans and coding agents.')
   .version(getInstalledBrainclawVersion())
   .option('--verbose', 'Show info-level log messages on stderr')
@@ -205,12 +234,6 @@ program
   .option('--cwd <path>', 'Override working directory for this invocation')
   .option('--project <name>', 'Run the command against a linked project (cross_project_links or workspace store-chain child). Resolves via resolveProjectCwd; mutually exclusive with --cwd.')
   .hook('preAction', (_thisCommand, actionCommand) => {
-    const trailingError = trailingGlobalOptionError(process.argv.slice(2), actionCommand);
-    if (trailingError) {
-      console.error(`Error: ${trailingError}`);
-      process.exit(1);
-    }
-
     const root = parseLeadingGlobalOptions(process.argv.slice(2));
     initLogLevel({ verbose: root.verbose, debug: root.debug });
 
@@ -2225,6 +2248,21 @@ program
     const globalOpts = program.opts();
     runRunProfile(profileName, { ...options, cwd: globalOpts.cwd });
   });
+
+{
+  // Friendly trailing-global-option error must run before Commander parses:
+  // with positional options enabled, Commander itself would reject a trailing
+  // --cwd/--project as a bare "unknown option" otherwise.
+  const argvTail = process.argv.slice(2);
+  const guardCommand = findCommandFromArgv(argvTail);
+  if (guardCommand) {
+    const trailingError = trailingGlobalOptionError(argvTail, guardCommand);
+    if (trailingError) {
+      console.error(`Error: ${trailingError}`);
+      process.exit(1);
+    }
+  }
+}
 
 program.parseAsync(process.argv).catch((err) => {
   console.error(err);

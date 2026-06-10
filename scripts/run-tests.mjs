@@ -88,10 +88,21 @@ function formatDuration(ms) {
 }
 
 function buildBaseEnv() {
-  return {
+  const env = {
     ...process.env,
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: process.env.BRAINCLAW_SKIP_SETUP_REQUIREMENT ?? '1',
   };
+  // Agent shells export BRAINCLAW_CWD/_PROJECT pointing at the REAL store.
+  // Test helpers spread process.env into every spawned CLI, so without this
+  // strip the whole e2e layer anchors to the developer's live project store:
+  // assertions read empty test dirs, writes LEAK into the real store, and
+  // every command pays real-store lock contention + git commits (observed
+  // 5-13s per spawn → file-level TIMEOUTs). Verified 2026-06-10.
+  delete env.BRAINCLAW_CWD;
+  delete env.BRAINCLAW_PROJECT;
+  delete env.BRAINCLAW_CLAIM_ID;
+  delete env.BRAINCLAW_AGENT;
+  return env;
 }
 
 function buildIsolatedEnv(tmpHome) {
