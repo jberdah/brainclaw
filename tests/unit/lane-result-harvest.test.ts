@@ -60,6 +60,7 @@ describe('harvestLaneResults (pln#526)', () => {
       const first = harvestLaneResults({ worktreePaths: [wt], cwd });
       assert.equal(first.harvested.length, 1);
       assert.equal(fs.existsSync(markerPath(cwd, 'asgn_b')), true, 'marker written after ingest');
+      assert.notEqual(fs.readFileSync(markerPath(cwd, 'asgn_b'), 'utf-8'), new Date(0).toISOString());
 
       const second = harvestLaneResults({ worktreePaths: [wt], cwd });
       assert.equal(second.harvested.length, 0);

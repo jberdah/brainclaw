@@ -12,9 +12,7 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { CandidateSchema, type Candidate, LaneResultSchema, type LaneResult, type AssignmentArtifact, type AssignmentStatus } from '../core/schema.js';
 import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/candidates.js';
 import { createRuntimeEvent } from '../core/events.js';
@@ -22,7 +20,7 @@ import { memoryExists } from '../core/io.js';
 import { loadAssignment, transitionAssignment } from '../core/assignments.js';
 import { releaseClaimWithCascade } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
-import { commitWorktreeOnBehalf } from '../core/worktree.js';
+import { commitWorktreeOnBehalf, worktreesBaseDir } from '../core/worktree.js';
 
 export interface HarvestOptions {
   /**
@@ -45,15 +43,6 @@ export interface HarvestResult {
   skipped: string[];
   /** Error messages for files that could not be read/parsed. */
   errors: string[];
-}
-
-/**
- * Returns the base directory where brainclaw-managed worktrees are stored
- * for the given project root: `~/.brainclaw/worktrees/<sha1-hash>/`.
- */
-function worktreesBaseDir(projectRoot: string): string {
-  const hash = crypto.createHash('sha1').update(projectRoot).digest('hex').slice(0, 12);
-  return path.join(os.homedir(), '.brainclaw', 'worktrees', hash);
 }
 
 /**
@@ -341,7 +330,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
           },
         }, cwd);
         fs.mkdirSync(path.dirname(marker), { recursive: true });
-        fs.writeFileSync(marker, new Date(0).toISOString(), 'utf-8');
+        fs.writeFileSync(marker, new Date().toISOString(), 'utf-8');
       } catch (err) {
         result.errors.push(`Failed to ingest lane result for ${lane.assignment_id}: ${err instanceof Error ? err.message : String(err)}`);
         continue;

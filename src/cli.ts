@@ -165,6 +165,33 @@ function parseLeadingGlobalOptions(argv: string[]): {
   return result;
 }
 
+function trailingGlobalOptionError(argv: string[], actionCommand: Command): string | undefined {
+  let firstCommandIndex = -1;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === '--') break;
+    if (!token.startsWith('-')) {
+      firstCommandIndex = i;
+      break;
+    }
+    if (token === '--cwd' || token === '--project') i++;
+  }
+  if (firstCommandIndex < 0) return undefined;
+
+  for (let i = firstCommandIndex + 1; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === '--') break;
+    const long = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+    if (!['--cwd', '--project', '--verbose', '--debug'].includes(long)) continue;
+    const isLocalOption = actionCommand.options.some((option) => option.long === long);
+    if (!isLocalOption) {
+      const valueHint = token === long && (long === '--cwd' || long === '--project') ? ' <value>' : '';
+      return `Global option ${long} must appear before the subcommand. Use: brainclaw ${long}${valueHint} <command> ...`;
+    }
+  }
+  return undefined;
+}
+
 function isCodevEnabled(): boolean {
   return process.env.BRAINCLAW_ENABLE_CODEV === '1';
 }
@@ -178,6 +205,12 @@ program
   .option('--cwd <path>', 'Override working directory for this invocation')
   .option('--project <name>', 'Run the command against a linked project (cross_project_links or workspace store-chain child). Resolves via resolveProjectCwd; mutually exclusive with --cwd.')
   .hook('preAction', (_thisCommand, actionCommand) => {
+    const trailingError = trailingGlobalOptionError(process.argv.slice(2), actionCommand);
+    if (trailingError) {
+      console.error(`Error: ${trailingError}`);
+      process.exit(1);
+    }
+
     const root = parseLeadingGlobalOptions(process.argv.slice(2));
     initLogLevel({ verbose: root.verbose, debug: root.debug });
 
@@ -1572,8 +1605,8 @@ dispatchCmd
   .option('--spawn', 'Autonomously launch CLI agents with invoke templates')
   .option('--agent <name>', 'Dispatcher agent name')
   .option('--json', 'Output as JSON')
-  .action((options) => {
-    runDispatch({
+  .action(async (options) => {
+    await runDispatch({
       agents: options.agents,
       lanes: options.lanes,
       max: options.max,

@@ -6,6 +6,7 @@ import os from 'node:os';
 import { harvestCandidates } from '../../src/commands/harvest.js';
 import { archiveCandidate, listCandidates, saveCandidate } from '../../src/core/candidates.js';
 import { listRuntimeEvents } from '../../src/core/events.js';
+import { worktreesBaseDir } from '../../src/core/worktree.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import type { Candidate } from '../../src/core/schema.js';
 
@@ -88,6 +89,28 @@ describe('harvest/harvestCandidates', () => {
     assert.ok(mainIds.includes('cnd_new00000001'));
     assert.ok(mainIds.includes('cnd_new00000002'));
     assert.ok(mainIds.includes('cnd_existing001'));
+  });
+
+  it('auto-detects worktrees using the shared core worktree base directory', () => {
+    const base = worktreesBaseDir(workspace.dir);
+    const managedWorktree = path.join(base, 'harvest-autodetect-test');
+    fs.mkdirSync(managedWorktree, { recursive: true });
+    writeWorktreeCandidate(managedWorktree, makeCandidate('cnd_autodetect_01'));
+
+    try {
+      const result = harvestCandidates({ cwd: workspace.dir });
+      assert.equal(result.harvested.length, 1);
+      assert.equal(result.harvested[0].id, 'cnd_autodetect_01');
+    } finally {
+      fs.rmSync(managedWorktree, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizes Windows-style project path case for the worktree base hash', () => {
+    assert.equal(
+      worktreesBaseDir('C:\\Users\\Test\\Project'),
+      worktreesBaseDir('c:\\users\\test\\project'),
+    );
   });
 
   it('emits a candidate_harvested runtime event for each copied candidate', () => {
