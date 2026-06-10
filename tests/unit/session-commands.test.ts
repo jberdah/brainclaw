@@ -443,7 +443,9 @@ describe('session commands', { concurrency: false }, () => {
 
       const pending = listCandidates('pending', workspace.dir);
       assert.equal(pending.length, 1);
-      assert.equal(pending[0].promotion_blocked_reason, 'contradiction_detected');
+      // Advisory contract (pln#542): contradictions are candidate metadata,
+      // never a promotion blocker.
+      assert.equal(pending[0].promotion_blocked_reason, undefined);
       assert.ok((pending[0].contradictions_detected?.length ?? 0) > 0);
     } finally {
       if (previousSession === undefined) {

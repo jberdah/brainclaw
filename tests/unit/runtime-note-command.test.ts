@@ -120,16 +120,20 @@ describe('commands/runtime-note', () => {
     assert.equal(result.autoReflectAttempted, true);
     assert.ok(result.candidateId);
     assert.equal(result.promotedItemId, undefined);
-    assert.equal(result.promotionBlockedReason, 'contradiction_detected');
+    // Advisory contract (pln#542, cnd_abe61d68): contradictions ride along as
+    // metadata and never block — the candidate is pending per the normal
+    // contributor flow, not because of the contradiction.
+    assert.equal(result.promotionBlockedReason, undefined);
     assert.ok(result.contradictionsDetected && result.contradictionsDetected.length > 0);
 
     const pending = listCandidates('pending', workspace.dir);
     assert.equal(pending.length, 1);
-    assert.equal(pending[0].promotion_blocked_reason, 'contradiction_detected');
+    assert.equal(pending[0].promotion_blocked_reason, undefined);
     assert.ok((pending[0].contradictions_detected?.length ?? 0) > 0);
+    assert.ok(pending[0].contradiction_summary);
   });
 
-  it('blocks trusted auto-promotion when contradictions are detected', () => {
+  it('trusted auto-promotion proceeds despite contradictions (advisory, pln#542)', () => {
     setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
     workspace.updateConfig((config) => {
       config.auto_reflect_notes = true;
@@ -162,9 +166,10 @@ describe('commands/runtime-note', () => {
 
     assert.equal(result.autoReflectAttempted, true);
     assert.ok(result.candidateId);
-    assert.equal(result.promotedItemId, undefined);
-    assert.equal(result.promotionBlockedReason, 'contradiction_detected');
-    assert.equal(listCandidates('pending', workspace.dir).length, 1);
-    assert.equal(loadState(workspace.dir).recent_decisions.some((item) => item.id === result.promotedItemId), false);
+    // Advisory contract: the contradiction no longer vetoes trusted promotion;
+    // it is carried as candidate metadata for the curator to weigh.
+    assert.equal(result.promotionBlockedReason, undefined);
+    assert.ok(result.promotedItemId, 'trusted promotion should proceed despite contradictions');
+    assert.equal(loadState(workspace.dir).recent_decisions.some((item) => item.id === result.promotedItemId), true);
   });
 });

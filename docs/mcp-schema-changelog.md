@@ -10,6 +10,17 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — agent-UX read-path surface (pln#542)**
+- `bclaw_work`, `bclaw_context`, `bclaw_find`, `bclaw_get`, `bclaw_search`
+  gain an optional `budget_tokens` argument (relevance-ranked fill).
+- `bclaw_work` compact payload now includes a trimmed `context_diff`
+  (event-cursor sourced, all intents) and facade responses carry
+  `next_actions` affordances.
+- `bclaw_quick_capture` gains an optional caller-asserted `type` argument;
+  contradiction detection is advisory metadata (no longer blocks promotion).
+- No tool was removed or renamed; no required argument changed.
+- MCP public surface fingerprint: `sha256:eaa8865070b10401`
+
 **Changed — JSON Schema generation shift (pln#486, zod 4 migration)**
 - Migration from zod 3.24 → 4.3.6 changes the introspection output that
   feeds `tools/list`. Schemas are semantically equivalent but the emitted
