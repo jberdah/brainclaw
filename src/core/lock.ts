@@ -4,11 +4,19 @@ import path from 'node:path';
 const DEFAULT_TIMEOUT_MS = 5000;
 const LOCK_RETRY_INTERVAL_MS = 50;
 const LOCK_EXPIRY_MS = 10000;
-const heldLocks = new Map<string, number>();
+const LOCK_REFRESH_INTERVAL_MS = Math.max(1000, Math.floor(LOCK_EXPIRY_MS / 3));
+const heldLocks = new Map<string, HeldLock>();
 
 interface LockData {
   pid: number;
   timestamp: number;
+  token?: string;
+}
+
+interface HeldLock {
+  count: number;
+  token: string;
+  refreshTimer?: ReturnType<typeof setInterval>;
 }
 
 function lockFilePath(targetPath: string): string {
@@ -21,6 +29,7 @@ function syncSleep(ms: number): void {
 }
 
 function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -38,41 +47,124 @@ function readLockData(lockPath: string): LockData | null {
   }
 }
 
-function tryCreateLock(lockPath: string): boolean {
-  const data: LockData = { pid: process.pid, timestamp: Date.now() };
+function randomToken(): string {
+  return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function sameLockData(left: LockData | null, right: LockData | null): boolean {
+  if (!left || !right) return false;
+  return left.pid === right.pid
+    && left.timestamp === right.timestamp
+    && (left.token ?? '') === (right.token ?? '');
+}
+
+function lockIsOwnedByCurrentProcess(data: LockData | null, token: string): boolean {
+  return Boolean(data && data.pid === process.pid && data.token === token);
+}
+
+function writeLockData(lockPath: string, data: LockData, flag: string): void {
+  fs.writeFileSync(lockPath, JSON.stringify(data), { encoding: 'utf-8', flag });
+}
+
+function tryCreateLock(lockPath: string): string | null {
+  const token = randomToken();
+  const data: LockData = { pid: process.pid, timestamp: Date.now(), token };
   try {
-    fs.writeFileSync(lockPath, JSON.stringify(data), { encoding: 'utf-8', flag: 'wx' });
-    return true;
+    writeLockData(lockPath, data, 'wx');
+    return token;
   } catch (err: unknown) {
     if (err instanceof Error && 'code' in err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EEXIST' || code === 'EPERM' || code === 'EACCES') {
-        return false;
+        return null;
       }
     }
     throw err;
   }
 }
 
-function tryBreakLock(lockPath: string): boolean {
-  const data = readLockData(lockPath);
-  if (!data) return false;
-  const expired = Date.now() - data.timestamp > LOCK_EXPIRY_MS;
-  const ownerDead = !isProcessAlive(data.pid);
-  if (!expired && !ownerDead) return false;
+function lockFileIsOld(lockPath: string): boolean {
   try {
-    fs.unlinkSync(lockPath);
+    const stat = fs.statSync(lockPath);
+    return Date.now() - stat.mtimeMs > LOCK_EXPIRY_MS;
   } catch {
     return false;
   }
-  return tryCreateLock(lockPath);
+}
+
+function canBreakLock(lockPath: string, data: LockData | null): boolean {
+  if (!data) return lockFileIsOld(lockPath);
+  if (data.pid === process.pid) return false;
+  if (isProcessAlive(data.pid)) return false;
+  return true;
+}
+
+function tryBreakLock(lockPath: string): boolean {
+  const observed = readLockData(lockPath);
+  if (!canBreakLock(lockPath, observed)) return false;
+
+  const current = readLockData(lockPath);
+  if (!sameLockData(observed, current) && (observed || current)) return false;
+  if (!canBreakLock(lockPath, current)) return false;
+
+  const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.renameSync(lockPath, tombstone);
+  } catch {
+    return false;
+  }
+
+  try {
+    const moved = readLockData(tombstone);
+    if ((observed || moved) && !sameLockData(observed, moved)) {
+      try {
+        if (!fs.existsSync(lockPath)) fs.renameSync(tombstone, lockPath);
+      } catch {
+        // If another process already acquired the lock path, leave the
+        // mismatched tombstone for orphan cleanup instead of deleting live data.
+      }
+      return false;
+    }
+
+    const token = tryCreateLock(lockPath);
+    try { fs.unlinkSync(tombstone); } catch { /* best effort */ }
+    if (token) {
+      startHeldLock(lockPath, token);
+      return true;
+    }
+    return false;
+  } catch {
+    try {
+      if (!fs.existsSync(lockPath)) fs.renameSync(tombstone, lockPath);
+    } catch {
+      // Best effort recovery; acquisition will retry.
+    }
+    return false;
+  }
+}
+
+function refreshLock(lockPath: string, token: string): void {
+  const current = readLockData(lockPath);
+  if (!lockIsOwnedByCurrentProcess(current, token)) return;
+  try {
+    writeLockData(lockPath, { ...current!, timestamp: Date.now() }, 'r+');
+  } catch {
+    // A failed refresh is not fatal; contenders still respect pid liveness.
+  }
+}
+
+function startHeldLock(lockPath: string, token: string): void {
+  const refreshTimer = setInterval(() => refreshLock(lockPath, token), LOCK_REFRESH_INTERVAL_MS);
+  refreshTimer.unref?.();
+  heldLocks.set(lockPath, { count: 1, token, refreshTimer });
 }
 
 export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS): boolean {
   const lockPath = lockFilePath(targetPath);
-  const heldCount = heldLocks.get(lockPath);
-  if (heldCount) {
-    heldLocks.set(lockPath, heldCount + 1);
+  const held = heldLocks.get(lockPath);
+  if (held) {
+    held.count += 1;
+    refreshLock(lockPath, held.token);
     return true;
   }
   const deadline = Date.now() + timeoutMs;
@@ -83,12 +175,12 @@ export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS):
   }
 
   while (Date.now() < deadline) {
-    if (tryCreateLock(lockPath)) {
-      heldLocks.set(lockPath, 1);
+    const token = tryCreateLock(lockPath);
+    if (token) {
+      startHeldLock(lockPath, token);
       return true;
     }
     if (tryBreakLock(lockPath)) {
-      heldLocks.set(lockPath, 1);
       return true;
     }
     syncSleep(Math.min(LOCK_RETRY_INTERVAL_MS, deadline - Date.now()));
@@ -99,14 +191,15 @@ export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS):
 
 export function releaseLock(targetPath: string): void {
   const lockPath = lockFilePath(targetPath);
-  const heldCount = heldLocks.get(lockPath);
-  if (heldCount && heldCount > 1) {
-    heldLocks.set(lockPath, heldCount - 1);
+  const held = heldLocks.get(lockPath);
+  if (held && held.count > 1) {
+    held.count -= 1;
     return;
   }
   heldLocks.delete(lockPath);
+  if (held?.refreshTimer) clearInterval(held.refreshTimer);
   try {
-    if (fs.existsSync(lockPath)) {
+    if (lockIsOwnedByCurrentProcess(readLockData(lockPath), held?.token ?? '')) {
       fs.unlinkSync(lockPath);
     }
   } catch {
@@ -138,12 +231,11 @@ export function cleanStaleLocks(dirPath: string): number {
     if (!entry.endsWith('.lock')) continue;
     const lockPath = path.join(dirPath, entry);
     const data = readLockData(lockPath);
-    if (!data) continue;
-    const expired = Date.now() - data.timestamp > LOCK_EXPIRY_MS;
-    const ownerDead = !isProcessAlive(data.pid);
-    if (expired || ownerDead) {
+    if (canBreakLock(lockPath, data)) {
+      const tombstone = `${lockPath}.clean-${process.pid}-${Date.now()}.tmp`;
       try {
-        fs.unlinkSync(lockPath);
+        fs.renameSync(lockPath, tombstone);
+        fs.unlinkSync(tombstone);
         removed++;
       } catch {
         // Another process may have already cleaned it

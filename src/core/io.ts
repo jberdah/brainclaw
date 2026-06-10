@@ -9,6 +9,7 @@ const STORE_LOCK_BASENAME = '.store-mutation';
 const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const DEFAULT_RENAME_RETRY_ATTEMPTS = 6;
 const DEFAULT_RENAME_RETRY_DELAY_MS = 25;
+const TMP_ORPHAN_MIN_AGE_MS = 60_000;
 
 interface AtomicWriteOptions {
   fsImpl?: Pick<typeof fs, 'writeFileSync' | 'renameSync'>;
@@ -245,6 +246,30 @@ function makeTempPath(filepath: string): string {
   return path.join(dir, `.${base}.${unique}.tmp`);
 }
 
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tempOwnerPid(entry: string): number | undefined {
+  if (!entry.endsWith('.tmp')) return undefined;
+  const parts = entry.split('.');
+  const pid = Number(parts.at(-4));
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function shouldRemoveTmp(entry: string, stat: fs.Stats): boolean {
+  const pid = tempOwnerPid(entry);
+  if (!pid) return false;
+  if (Date.now() - stat.mtimeMs < TMP_ORPHAN_MIN_AGE_MS) return false;
+  return !isProcessAlive(pid);
+}
+
 function isRetryableRenameError(error: unknown): boolean {
   if (!(error instanceof Error) || !('code' in error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -298,11 +323,17 @@ export function cleanOrphanFiles(dirPath: string): number {
   try {
     for (const entry of fs.readdirSync(dirPath)) {
       const full = path.join(dirPath, entry);
-      if (entry.endsWith('.tmp') && fs.statSync(full).isFile()) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (entry.endsWith('.tmp') && stat.isFile() && shouldRemoveTmp(entry, stat)) {
         try { fs.unlinkSync(full); removed++; } catch { /* already gone */ }
       }
       // Recurse into subdirectories
-      if (fs.statSync(full).isDirectory()) {
+      if (stat.isDirectory()) {
         removed += cleanOrphanFiles(full);
       }
     }
