@@ -71,14 +71,18 @@ export function evaluateWatchTick(input: WatchTickInput): WatchState {
   if (input.runStatus === 'completed') return 'completed';
   if (input.runStatus === 'failed' || input.runStatus === 'timed_out') return 'failed';
 
-  // Git evidence beats process evidence: a worker that committed everything
-  // and stalled on exit is DONE for the coordinator's purposes.
-  if (input.commitsAhead > 0 && input.dirtyTracked === 0) return 'committed-clean';
-
-  // Fresh filesystem activity vetoes every process-gone verdict below: the
-  // tracked pid may be stale (manual respawn, wrapper recycling) while the
-  // real worker is visibly writing.
+  // Fresh filesystem activity / a live agent child = the worker is still at
+  // work. This vetoes committed-clean (incremental commits leave the tree
+  // momentarily clean BETWEEN steps — first-run false positive, stp_a1fe2b76)
+  // AND the process-gone verdicts below (stale tracked pid after a respawn).
   const fsFresh = input.fsActivityMs !== undefined && input.fsActivityMs < FS_FRESH_MS;
+  const workerActive = input.agentChildAlive === true || fsFresh;
+
+  // Git evidence beats process evidence: a worker that committed everything
+  // and went QUIESCENT is DONE for the coordinator's purposes.
+  if (input.commitsAhead > 0 && input.dirtyTracked === 0 && !workerActive) {
+    return 'committed-clean';
+  }
 
   // Wrapper alive but the real agent child is gone: abrupt death — the wrapper
   // waits forever on inherited pipe handles and never emits a sentinel.

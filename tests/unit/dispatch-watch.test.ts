@@ -41,10 +41,24 @@ describe('dispatch watch — evaluateWatchTick decision core', () => {
   });
 
   it('committed-clean: the claude -p delivered-but-end-stalled pattern (agent-writers d2078e8)', () => {
-    // Everything on the branch, tree clean, process may even still be alive.
+    // Everything on the branch, tree clean, worker quiescent (child gone, fs stale).
     assert.equal(
-      evaluateWatchTick(tick({ commitsAhead: 1, dirtyTracked: 0 })),
+      evaluateWatchTick(tick({ commitsAhead: 1, dirtyTracked: 0, agentChildAlive: false })),
       'committed-clean',
+    );
+  });
+
+  it('clean tree BETWEEN incremental commits with a live worker is still running (stp_a1fe2b76 false positive)', () => {
+    assert.equal(
+      evaluateWatchTick(tick({ commitsAhead: 1, dirtyTracked: 0, agentChildAlive: true })),
+      'running',
+    );
+  });
+
+  it('clean tree between steps with fresh fs activity is still running (unobservable child)', () => {
+    assert.equal(
+      evaluateWatchTick(tick({ commitsAhead: 2, dirtyTracked: 0, agentChildAlive: undefined, fsActivityMs: 30_000 })),
+      'running',
     );
   });
 
@@ -103,9 +117,9 @@ describe('dispatch watch — evaluateWatchTick decision core', () => {
 
   it('git evidence beats administrative interrupted status (expired-while-working, can_948acfd6)', () => {
     // Run relabeled interrupted by the acceptance-TTL sweep while the worker
-    // had actually delivered: commits clean → done, not failed.
+    // had actually delivered and gone quiescent: commits clean → done, not failed.
     assert.equal(
-      evaluateWatchTick(tick({ runStatus: 'interrupted', commitsAhead: 5, dirtyTracked: 0 })),
+      evaluateWatchTick(tick({ runStatus: 'interrupted', commitsAhead: 5, dirtyTracked: 0, agentChildAlive: false })),
       'committed-clean',
     );
   });
