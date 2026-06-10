@@ -50,6 +50,9 @@ Alternative worth Codex's review: a handoff "diet" (externalize `snapshot.diff` 
 the handoff entity itself, which would also fix the 41 MB compacted.jsonl class) —
 the two are composable, not exclusive.
 
-Open for C3 review: blob gc interaction with the two-checkpoint floor; whether
-`runtime_note`/`session` event volume (10k of 17.7k events) justifies a per-class
-retention knob earlier than J5 assumed.
+~~Open for C3 review~~ — **RESOLVED 2026-06-10** in spec §2.10: blob gc extends the
+two-checkpoint floor verbatim (a blob archives only when unreferenced by non-archived
+segments AND by both newest verified checkpoints' closures); `runtime_note`/`session`
+volume needs **no early retention knob** — both classes are payload-free
+(observability) in v2, so 10k events ≈ 2–3 MB of line overhead, no threat to the
+weekly-roll target (J5 unchanged). Residual product call: J6 (handoff diet).

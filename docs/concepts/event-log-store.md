@@ -4,8 +4,10 @@
 > Distills proposal-A, proposal-B, and both cross-critiques. Where the two
 > round-2 VERDICT blocks agree, this spec follows them; where they diverge,
 > one option is chosen and the loser recorded in Appendix A. Status: SPEC,
-> product calls ARBITRATED (Juan, 2026-06-10 — see §6); pending Codex
-> schema review (C1-C4).
+> product calls ARBITRATED (Juan, 2026-06-10 — see §6); C1–C4 resolved by
+> the symmetric schema review of 2026-06-10 (§2.1.1–2.1.4, §2.2, §2.10,
+> §2.11); residue R1–R4 + new product call J6 in §6, pending the Codex
+> second pass.
 
 ## 1. Motivation
 
@@ -320,7 +322,8 @@ Layout:
 
 - A checkpoint is an **out-of-band, self-contained** manifest
   `checkpoints/ckpt-<seq>.json`: full post-images of every live entity at
-  head seq. Never hashes referencing projection files — a checkpoint whose
+  head seq ("self-contained" = manifest + its blob closure once
+  `payload_ref` exists — §2.10). Never hashes referencing projection files — a checkpoint whose
   validity depends on projection integrity is useless in exactly the
   scenarios it exists for.
 - Written under the lock at segment roll (and on `bclaw doctor --compact`):
@@ -348,6 +351,13 @@ Layout:
 - If the watermark predates the oldest non-archived segment, the reader
   gets `{gap: true}` plus a summary built from the latest checkpoint —
   notifications degrade gracefully; state rebuild never depended on them.
+- **Cursor key and self-exclusion.** Cursors are keyed today by agent
+  *name*; the identity-model proposal re-keys them name → actor instance
+  (its migration step 3 — one-time rename, cursors are caches). v2
+  self-exclusion compares the record's `writer` (or actor id), never the
+  display name: three same-name claude-code instances sharing one cursor
+  and consuming each other's notifications was an observed incident
+  (2026-06-10).
 
 ### 2.6 Append protocol, framing, torn tails
 
@@ -439,13 +449,27 @@ Layout:
   unlinked only when a tombstone for its id is applied. "Absent from
   in-memory state" stops being a deletion signal — closing the
   trp_d5595086 bug class structurally. The never-unlink-unparseable guard
-  carries over on the projection side.
+  carries over on the projection side. The **same id-level diff** that
+  synthesizes events is what drives the unlink — one diff, two consumers,
+  cannot disagree (today's `deleteMissing` path and event emission are
+  separate code; v2 fuses them). The coarse `agent: "system"` /
+  `item_type: "state"` ping today's `persistStateUnlocked` appends is
+  replaced by the per-entity diff events.
 - **Heartbeat-class churn is never journaled.** Refresh/liveness field
-  updates (claim `refreshed_at`, run heartbeats, lock metadata) are
-  ephemeral — projection/registry layer only. Only lifecycle *transitions*
-  (claimed, released, completed, failed) are events. Without this rule,
-  20 agents × 30s heartbeats × 2 KB snapshots ≈ >100 MB/day of journal for
-  zero information. **Falsifier (phase 0 deliverable):** from the dogfood
+  updates (claim `expires_at` extensions, run `last_heartbeat_at`,
+  assignment `last_progress`, lock metadata) are ephemeral —
+  projection/registry layer only. Only lifecycle *transitions* (claimed,
+  released, completed, failed) are events. Without this rule, 20 agents ×
+  30s heartbeats × 2 KB snapshots ≈ >100 MB/day of journal for zero
+  information.
+- **Ephemeral-field masking (normative consequence).** Ephemeral fields
+  mutate projections without journal events or `entity_rev` bumps, so a
+  projection can legitimately differ from replayed state at *equal* rev.
+  Therefore: the reconciler never overwrites a projection at equal rev (it
+  only fills gaps forward), `doctor --verify-journal` masks the ephemeral
+  field set per item_type before diffing, and the §2.8 diff synthesizer
+  emits **no event** for ephemeral-only changes. The ephemeral field set
+  is declared once per schema — a single source consumed by all three. **Falsifier (phase 0 deliverable):** from the dogfood
   store's 17k v1 events, compute per-item_type p95 entity size × event
   frequency; instrument event bytes by action class during the dual-mode
   sprint. If any non-heartbeat class exceeds ~50% of journal bytes, or any
@@ -464,9 +488,117 @@ Layout:
   assumed away: the phase-1 dual sprint records lock wait-time
   distribution. **Falsifier:** p95 lock wait > ~200 ms under normal
   multi-agent load falsifies global-seq-under-lock and forces the
-  per-writer-journal redesign (§2.2 boundary).
+  per-writer-journal redesign (§2.2 boundary). Note for the instrumented
+  baseline: today's `persistStateUnlocked` already runs a **git commit**
+  (`commitMemoryChange`) inside the critical section — the pre-existing
+  dominant lock-hold term. The fsync the journal adds is marginal against
+  it; attribute wait-time per phase (append/fsync/projection/git) so the
+  falsifier indicts the right component.
 - Federation imports must chunk: a 10k-event pull takes and releases the
   lock per chunk rather than starving local agents.
+
+### 2.10 Oversized payloads — `payload_ref` and the handoff diet (C3 resolution)
+
+The phase-0 measurement (`event-log-store-phase0-measurements.md`) fired
+the §2.8 falsifier: handoff entities are p50 109,700 B / p95 225,157 B —
+15–45× over the 64 KB threshold at p50 already — while every other
+item_type sits at p95 ≤ 7.5 KB. Per C3's own rule this enters **phase 1**;
+the record format ships with it. Two composable mechanisms, **both
+adopted**:
+
+1. **Handoff diet (primary fix).** The dominant bytes are the inline
+   `snapshot.diff` (same root cause as the 41 MB
+   `handoffs/compacted.jsonl`). Externalize `snapshot.diff` from the
+   handoff document to a content-addressed attachment under
+   `events/blobs/` referenced by hash; the handoff entity returns to the
+   2–8 KB class every other entity lives in. One move fixes the journal
+   record size, checkpoint size, J2's git posture, and the legacy
+   compacted.jsonl pathology. The schema change rides the existing
+   migration registry (§2.1.4). Product call J6 (§6) confirms portability
+   implications.
+2. **`payload_ref` (permanent safety net).** If a serialized payload
+   exceeds 64 KB, the writer stores it at
+   `events/blobs/<sha256[0:2]>/<sha256>` (content-addressed, write-once)
+   and the record carries `payload_ref: { sha256, bytes }` *instead of*
+   `payload`. Readers resolve transparently; a missing or hash-mismatched
+   blob is a doctor **ERROR** for that entity — never silent.
+   - **Blob-before-ref ordering (normative):** the blob is written and
+     fsync'd *before* the journal append that references it — the §2.7
+     barrier extended one link left. A crash between the two leaves an
+     orphan blob (harmless, gc-able), never a dangling ref.
+   - **Checkpoint closure:** checkpoints store oversized post-images as
+     the same `payload_ref` (manifests stay small); the
+     `checkpoint_ref.payload.blobs` list (§2.1.2) enumerates the closure.
+     "Self-contained" (§2.4) is redefined as *manifest + blob closure*;
+     verify-before-archive verifies the manifest hash AND presence + hash
+     of every blob in the closure.
+   - **Blob gc:** park-don't-delete. A blob moves to `archive/blobs/` only
+     when referenced by zero records in non-archived segments AND by
+     neither of the two newest verified checkpoints' closures — the §2.3
+     floor extended verbatim.
+   - **Git (J2 boundary):** `events/blobs/` is gitignored like segments.
+     With the diet in place no live entity ships an oversized payload, so
+     bare-clone restorability from projections + checkpoints holds in
+     practice; doctor flags any checkpoint whose closure references a
+     gitignored blob as not-clone-restorable. This becomes a real product
+     trade-off only if J6 rejects the diet.
+
+Residual falsifier follow-up: `runtime_note`/`session` event *count* (10k
+of 17.7k v1 events) is volume, not bytes — both classes are payload-free
+in v2 (observability), so they contribute line overhead only (~2–3 MB at
+historical rates) and do not threaten the weekly-roll target. No per-class
+retention knob needed ahead of J5.
+
+### 2.11 Federation conflict primitive (C4 resolution)
+
+Cross-checked against `identity-model-proposal.md` (origin-partitioned
+write authority; scalar `entity_rev` + origin tag; `(origin_id, seq)`-headed
+slices). The proposal's claim was attacked; result: **the scalar survives
+for v1, with one documented degradation in conflict *surfacing***.
+
+- **Execution entities** (claims, runs, locks, assignments): single-writer
+  per origin; other origins materialize read-only. Authority partition
+  means no concurrent-write conflict exists; the scalar is trivially
+  sufficient. (The advisory cross-machine claim race is *arbitration*, not
+  journal conflict — deferred to the cloud dispatcher per the proposal.)
+- **Memory entities**: LWW ordered by the total order
+  `(entity_rev, origin_id)` — rev first, origin_id lexicographic as the
+  deterministic tiebreak. **No wall clock anywhere** (the "LWW by what
+  clock?" answer: by revision counter + origin id, never time). Convergent:
+  every origin applying the same record set reaches the same head.
+- **The attack (resolution ≠ detection):** origin A edits entity e
+  rev 7→8→9; origin B, offline, edits e 7→8. B's slice reaches A after A
+  is at rev 9. *Resolution* is correct (9 > 8, deterministic LWW). But
+  *detection* — the proposal's "conflicts surface as candidates, never
+  silent overwrite" — cannot be decided from head comparison: B's rev-8 is
+  concurrent with A's lineage, not an ancestor of it, and a bare scalar
+  head cannot distinguish "stale copy of what I already incorporated" from
+  "divergent edit with a lower rev".
+- **Adopted detection rule:** conflicts are detected against the
+  **journal**, not the head. Import replays the incoming slice through the
+  reducer; a conflict = an incoming record whose `(item_id, entity_rev)`
+  pair already exists locally **with a different origin** — the §2.2
+  dup-detection generalized from `(seq, writer)` to `(rev, origin)`. In
+  the attack above, B's (e, 8) collides with A's locally journaled (e, 8)
+  → candidate surfaced while LWW keeps A's rev 9. The per-entity
+  rev→origin lookup is built from the same local segments the import
+  already reads — local and cheap to the gc floor.
+- **Known miss-window (documented, not denied):** if the local record for
+  the colliding rev has been archived past the gc floor (checkpoints hold
+  heads only, not per-rev history), the import resolves correctly but
+  surfaces nothing — a concurrent lower-rev edit is mis-read as stale.
+  Closing it fully requires a per-origin high-watermark map per entity — a
+  bounded vector clock in disguise. Verdict: convergence never breaks;
+  only surfacing degrades, and only for edits concurrent across a window
+  longer than the gc floor (weeks). The per-origin watermark (size =
+  origin count, typically ≤ 3) is the **named upgrade path** if dogfooding
+  shows missed candidates; it slots into import metadata without touching
+  the envelope, which stays origin-agnostic (origin appears only in
+  exported slice headers, per the proposal's migration step 2).
+- **Cross-requirement flowing back to the identity proposal:**
+  `entity_rev` must never reset per item_id — tombstone → recreate
+  continues the counter (§2.1.1/§2.1.3) — otherwise (rev, origin)
+  collisions become false positives after delete→recreate races.
 
 ## 3. Failure-mode matrix
 
@@ -481,7 +613,7 @@ Layout:
 | 7 | Lockless appender writes into a just-rolled "immutable" segment | No lockless path exists; all appends take the lock and resolve the active segment inside it (§2.2, §2.3) |
 | 8 | Crash mid-checkpoint | Out-of-band manifest; worst case orphan file with no `checkpoint_ref` (harmless); meta written last (§2.4) |
 | 9 | Corrupt checkpoint discovered after segments archived | Verify-by-full-re-parse before archival; sha256 in `checkpoint_ref`; previous-checkpoint fallback; gc floor = second-newest verified checkpoint (§2.4) |
-| 10 | Oversized record exits the O_APPEND atomicity envelope | Write-time cap: warn 64 KB, hard-fail 256 KB (§2.1) |
+| 10 | Oversized record exits the O_APPEND atomicity envelope | Payloads > 64 KB externalized via `payload_ref` (§2.10); envelope line hard-fails at 256 KB (§2.1) |
 | 11 | Partial `write()` (signal, ENOSPC, quota) | Short-write check ⇒ loud mutation failure before projections (§2.6) |
 | 12 | Rotation/sealing during concurrent read | Segments never renamed; active segment is just the newest file; seq watermarks survive any layout change (§2.3, §2.5) |
 | 13 | Cursor predates archived history | `{gap: true}` + checkpoint-built summary; graceful notification degradation (§2.5) |
@@ -492,6 +624,9 @@ Layout:
 | 18 | Store on a network mount | Documented local-FS-only support boundary; doctor warns heuristically (§2.3) |
 | 19 | Wedged lock = no event capture; sandboxed workers can't append | Stated scope boundary: journal is truth of the store, not the system; offline capture falsifies the primitive and triggers the per-writer redesign (§2.2) |
 | 20 | Mid-file malformed line (should be impossible under lock) | Skip + count + doctor alarm (unexplained-corruption class), never silent (§2.6) |
+| 21 | Crash between blob write and referencing append | Blob-before-ref ordering: worst case an orphan blob (harmless, gc-able), never a dangling `payload_ref` (§2.10) |
+| 22 | `payload_ref` blob missing or hash-mismatched at read | Doctor ERROR for that entity, read fails loudly — never silent (§2.10) |
+| 23 | Replay diff flags ephemeral-only field drift as divergence | Ephemeral field set masked per item_type in verify-journal and the reconciler; equal-rev projections never overwritten (§2.8) |
 
 ## 4. Migration plan
 
@@ -512,6 +647,9 @@ phase flip (upgrade-style, park-don't-delete).
   forever for forensics); initialize meta. `persistStateUnlocked` reorders
   to append → fsync → existing file writes → watermark. Notifications
   switch to seq-watermark cursors. State dirs remain authoritative.
+  Phase 1 also lands `payload_ref` + the handoff diet (§2.10) — the
+  phase-0 falsifier fired on handoffs, so the record format ships with
+  both.
   **Rollback:** set `off` — projection files were written on every mutation
   in exactly today's format; park `events/`; zero data transformation in
   either direction.
@@ -566,14 +704,29 @@ is carried here.
 | J4 | MED | **Registry enters in a dedicated Phase 1.5.** Phase 1 = memory entities (low volume, proven reversibility); registry lifecycle transitions migrate once the journal is hardened in real use. Matches the off/dual/primary posture: the dispatch lifecycle is the product's credibility — it is not migrated first. |
 | J5 | LOW | **Defer fine gc/archive thresholds.** The normative two-verified-checkpoint floor stands alone until federation defines its consumer; count/age knobs are trivial additive later. |
 
-### [CODEX — schema/invariant review]
+### [JUAN — new product call raised by C3]
 
 | # | Sev | Question |
 |---|---|---|
-| C1 | HIGH | **Envelope schema review.** Adversarially enumerate the full `EventAction` union against the payload-required rule (which actions carry payloads; holes?); tombstone semantics per item_type; schemas for `checkpoint_ref`, `journal_note`, `seq_repair`, `backfill`, genesis records; dup-seq reducer semantics for `(seq, writer)` collisions. |
-| C2 | HIGH | **Payload schema versioning.** The envelope has `v: 2`, but entity payloads are zod-schema'd documents that will evolve. How does replay handle a checkpoint or old segment whose payloads predate a schema change — version field inside payloads, migration-on-replay, or schema-version in the envelope per record? Must be answered before phase 1 freezes the record format. |
-| C3 | MED | **Snapshot-size falsifier** (phase-0 measurement): p95 size × frequency per item_type from the dogfood store. If a poison combination exists (record > 64 KB or segment rolls faster than ~weekly), `payload_ref` enters phase 1 and the record schema changes — decide before the format ships. |
-| C4 | MED | **Federation conflict primitive** (with federation spec owner): scalar `entity_rev` + origin tag vs. a vector component; `(origin_store_id, seq)` slice transfer rules (segment slices must be header-prefixed). The journal design is agnostic; deciding now would front-run the federation architecture. |
+| J6 | MED | **Handoff diet (§2.10):** externalize `snapshot.diff` from handoff documents to content-addressed blob attachments. Affects handoff export/import and federation transfer (the blob closure must travel with the document). Recommended: **accept** — it also fixes the 41 MB `compacted.jsonl` class and keeps J2's bare-clone restorability intact. |
+
+### [CODEX — schema/invariant review] — RESOLVED 2026-06-10 (symmetric pass)
+
+| # | Sev | Resolution |
+|---|---|---|
+| C1 | HIGH | Resolved in §2.1.1 (action taxonomy, 5 classes, holes closed: required `item_id`, `assignment_progress` heartbeat-class, store-ops per-entity + `store_marker`, archival-vs-delete, rev-never-resets), §2.1.2 (journal-meta schemas incl. genesis + J1 redaction audit note), §2.1.3 (tombstones per item_type), §2.2 (dup-seq reducer, 5 normative cases). |
+| C2 | HIGH | Resolved in §2.1.4: version-in-payload + migration-on-replay reusing the existing `migration.ts` versioned-document registry; migration-retention invariant pinned to the *second-newest* checkpoint; alternatives in Appendix A. |
+| C3 | MED | Falsifier FIRED on handoffs (phase-0 measurements). Resolved in §2.10: handoff diet (primary) + `payload_ref` (safety net), blob-before-ref ordering, checkpoint blob closure, gc floor extension, J2 git posture. Residual product call → J6. |
+| C4 | MED | Resolved in §2.11 against `identity-model-proposal.md`: scalar `(entity_rev, origin_id)` survives — convergence intact; conflict *surfacing* via (rev, origin) journal collision; documented miss-window past the gc floor with the per-origin watermark as named upgrade path. |
+
+### [CODEX residue — needs a second model's schema instincts]
+
+| # | Sev | Question |
+|---|---|---|
+| R1 | MED | **Zod encoding of §2.1.1.** Five classes with mode-gated payload requiredness for registry-lifecycle (optional → required at phase 1.5): discriminated union on what key — `action` (32-way) or a derived `class` field? Schema-level enforcement vs runtime refinement; parse cost on hot read paths. |
+| R2 | MED | **Redaction × cursors × federation (J1 + §2.1.2).** Does seq-watermark survival hold for a cursor positioned *inside* a redacted range? And the re-import hole: a federation peer that pulled a record pre-redaction can re-present it — `(seq, writer)` dedup would *reject* the redacted copy (good) but the peer's checkpoint may still embed the payload. Does the redaction note need to propagate as a federation signal? |
+| R3 | LOW | **Ephemeral field set enumeration (§2.8).** Adversarial sweep of the real zod schemas for fields beyond `last_heartbeat_at` / claim `expires_at` / `last_progress` that mutate without semantic change (counters, denormalized caches?) — the masking set must be complete or verify-journal cries wolf. |
+| R4 | LOW | **C4 miss-window sizing (§2.11).** Gc-floor window (weeks) vs realistic offline-origin durations; should the per-origin watermark ship in federation v1 regardless of dogfood evidence? |
 
 ## Appendix A — Rejected alternatives
 
@@ -630,6 +783,24 @@ is carried here.
 - **Separate journal per entity (vs. one per store).** Global order comes
   free with one journal; per-entity journals reintroduce cross-entity
   ordering as a problem. (Proposal A §0; never contested.)
+- **Per-record envelope schema-version for payloads (C2 alternative).**
+  Redundant: payloads already self-describe via `schema_version` + the
+  migration registry; a second version field in the envelope creates two
+  sources of truth that can disagree.
+- **Migration-by-segment-rewrite (C2 alternative).** Rewriting old
+  segments to the current payload schema violates append-only immutability
+  and J1's audited-rewrite-only rule; replay-time migration is
+  pure-functional and leaves bytes untouched.
+- **Hash in every envelope, inline payloads included (C3 variant).**
+  Inline payloads are already line-framed and zod-validated; mandatory
+  hashing buys federation dedup nothing (dedup keys on `(seq, writer)`)
+  at a per-mutation CPU cost. The hash lives where it is load-bearing:
+  `payload_ref` and `checkpoint_ref`.
+- **A vector-clock component in the envelope (C4 alternative).** Origin-
+  partitioned write authority makes convergence scalar-safe (§2.11); the
+  only thing a vector adds is complete conflict *surfacing* across
+  gc-floor-sized offline windows. Deferred to import metadata (per-origin
+  watermark) — the envelope stays origin-agnostic.
 
 ## Appendix B — Memory citations (union of rounds 1–2)
 
