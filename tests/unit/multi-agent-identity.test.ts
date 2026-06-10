@@ -108,7 +108,9 @@ describe('multi-agent identity on shared host', () => {
     assert.equal(nothing, undefined);
   });
 
-  it('resolveCurrentAgentIdentity auto-registers detected agents', () => {
+  // pln#562 step 2 — read-path resolution never registers; registration is an
+  // explicit act (setup, session start, dispatch).
+  it('resolveCurrentAgentIdentity resolves registered agents but does NOT auto-register detected ones', () => {
     // Register claude-code explicitly
     workspace.registerAgent('claude-code');
 
@@ -117,13 +119,19 @@ describe('multi-agent identity on shared host', () => {
     assert.ok(claude);
     assert.equal(claude.agent_name, 'claude-code');
 
-    // Codex is NOT pre-registered — should auto-register
+    // Codex is NOT pre-registered — detection alone must not mint an identity
     setCodexEnv();
     const codex = resolveCurrentAgentIdentity(workspace.dir);
-    assert.ok(codex, 'codex should be auto-registered');
-    assert.equal(codex.agent_name, 'codex');
-    assert.equal(codex.kind, 'agent');
-    assert.equal(codex.trust_level, 'trusted');
+    assert.equal(codex, undefined, 'read-path resolution must not auto-register codex');
+  });
+
+  it('session start (explicit act) auto-registers the detected agent at contributor', async () => {
+    setCodexEnv();
+    const session = await startSession({ cwd: workspace.dir });
+    assert.equal(session.agent, 'codex');
+    const codex = resolveCurrentAgentIdentity(workspace.dir);
+    assert.ok(codex, 'codex registered by session start');
+    assert.equal(codex.trust_level, 'contributor', 'auto-registration never exceeds contributor');
   });
 
   it('config.current_agent does NOT influence identity resolution', () => {

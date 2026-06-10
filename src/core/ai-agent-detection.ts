@@ -3,7 +3,6 @@ import type { AgentKind } from './schema.js';
 export interface DetectedAiAgent {
   name: string;
   kind: AgentKind;
-  trust_level: 'trusted';
   detection_source: string;
 }
 
@@ -42,7 +41,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: env.BRAINCLAW_AGENT.trim(),
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'BRAINCLAW_AGENT env var',
     };
   }
@@ -59,7 +57,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'claude-code',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: source,
     };
   }
@@ -69,7 +66,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'cursor',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CURSOR_* env var',
     };
   }
@@ -79,7 +75,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'windsurf',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'WINDSURF_* env var',
     };
   }
@@ -89,7 +84,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'cline',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CLINE_* env var',
     };
   }
@@ -106,7 +100,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'github-copilot',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: env.GITHUB_COPILOT_PRODUCT ? 'GITHUB_COPILOT_PRODUCT env var' : 'GITHUB_COPILOT_TOKEN env var',
     };
   }
@@ -123,7 +116,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'codex',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: source,
     };
   }
@@ -133,7 +125,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'opencode',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'OPENCODE_* env var',
     };
   }
@@ -143,7 +134,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'antigravity',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'ANTIGRAVITY_* env var',
     };
   }
@@ -153,7 +143,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'continue',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'CONTINUE_* env var',
     };
   }
@@ -163,7 +152,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'roo',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'ROO_* env var',
     };
   }
@@ -173,7 +161,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'openclaw',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'OPENCLAW_* env var',
     };
   }
@@ -185,7 +172,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'mistral-vibe',
       kind: 'agent',
-      trust_level: 'trusted',
       detection_source: 'VIBE_HOME env var',
     };
   }
@@ -196,7 +182,6 @@ export function detectAiAgent(env: NodeJS.ProcessEnv = process.env): DetectedAiA
     return {
       name: 'hermes',
       kind: 'autonomous',
-      trust_level: 'trusted',
       detection_source: env.HERMES_SESSION_ID || env.HERMES_AGENT
         ? 'HERMES_* env var'
         : 'HERMES_HOME env var',

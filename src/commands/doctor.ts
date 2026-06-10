@@ -5,7 +5,7 @@ import * as childProcess from 'node:child_process';
 import { reconcileAllOpenRuns } from '../core/agentrun-reconciler.js';
 import { runSpawnCheck, renderSpawnCheckReport, type SpawnCheckOptions } from '../core/spawn-check.js';
 import { loadAgentRun } from '../core/agentruns.js';
-import { listAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
+import { listAgentIdentities, listDebrisAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
 import { listCapabilities as listRegistryCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { buildReputationSummary } from '../core/reputation.js';
 import { buildCircuitBreakerSnapshot } from '../core/circuit-breaker.js';
@@ -1133,6 +1133,26 @@ export function runDoctor(options: DoctorOptions = {}): void {
       });
       if (!options.json) {
         console.warn('⚠ No curator registered — run `brainclaw set-trust <agent> --level curator` to designate a project owner.');
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // pln#562 step 2 — surface debris identities (test fixtures, alias leftovers).
+  // Read-only: removal goes through the guarded `register-agent <name> --remove`.
+  try {
+    const debris = listDebrisAgentIdentities(options.cwd);
+    if (debris.length > 0) {
+      const names = debris.map((d) => d.identity.agent_name).join(', ');
+      checks.push({
+        name: 'debris_agent_identities',
+        status: 'warn',
+        message: `${debris.length} debris agent identit${debris.length === 1 ? 'y' : 'ies'} registered (${names}). Remove with \`brainclaw register-agent <name> --remove\`.`,
+      });
+      if (!options.json) {
+        console.warn(`⚠ Debris agent identities: ${names} — remove with \`brainclaw register-agent <name> --remove\`.`);
+        for (const d of debris) {
+          console.warn(`    - ${d.identity.agent_name} (${d.identity.agent_id}): ${d.reason}`);
+        }
       }
     }
   } catch { /* non-fatal */ }

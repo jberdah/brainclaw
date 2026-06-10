@@ -64,7 +64,7 @@ import { runCheckConstraints } from './commands/check-constraints.js';
 import { runCheckPolicy } from './commands/check-policy.js';
 import { runCheckSecurity } from './commands/check-security.js';
 import { runSetupSecurity } from './commands/setup-security.js';
-import { runRegisterAgent } from './commands/register-agent.js';
+import { runRegisterAgent, runRemoveAgent } from './commands/register-agent.js';
 import { runEnableAgent } from './commands/enable-agent.js';
 import { runVersion } from './commands/version.js';
 import { runReleaseNotes } from './commands/release-notes.js';
@@ -1013,8 +1013,14 @@ program
   .option('--generate-fingerprint', 'Generate or rotate a local public identity fingerprint for this agent')
   .option('--set-current', 'Set this identity as the current agent in config')
   .option('--curator', 'Register this agent as a curator (project owner with direct-write access)')
+  .option('--remove', 'Remove this identity instead of registering (guarded: debris identities only unless --force)')
+  .option('--force', 'With --remove: allow removing a non-debris identity')
   .option('--json', 'Output as JSON')
   .action((name, options) => {
+    if (options.remove) {
+      runRemoveAgent(name, { force: options.force, json: options.json });
+      return;
+    }
     runRegisterAgent(name, options);
   });
 
