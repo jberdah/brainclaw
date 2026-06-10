@@ -63,14 +63,25 @@ describe('cli global option parsing', () => {
   });
 
   it('does not treat subcommand-local --project as the root cross-project flag', () => {
-    const result = runCli(['plan', 'Own auth rollout', '--project', 'auth'], dir, homeDir);
+    const result = runCli(['plan', 'list', '--project', 'auth'], dir, homeDir);
 
     assert.equal(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /\[pln_[a-f0-9]+\]/, result.stdout);
     assert.doesNotMatch(result.stderr, /linked project|resolveProjectCwd|not found/i, result.stderr);
+    assert.equal(loadState(dir).plan_items.length, 0);
+  });
 
-    const state = loadState(dir);
-    const plan = state.plan_items.find((item) => item.text === 'Own auth rollout');
-    assert.ok(plan, `Expected plan in state. stdout=${result.stdout}\nstderr=${result.stderr}`);
+  it('rejects trailing global --cwd instead of silently using the current store', () => {
+    const otherDir = tmpDir('bclaw-cli-global-other-');
+    try {
+      initStore(otherDir);
+      const result = runCli(['plan', 'Own auth rollout', '--cwd', otherDir], dir, homeDir);
+
+      assert.notEqual(result.exitCode, 0);
+      assert.match(result.stderr, /Global option --cwd must appear before the subcommand/);
+      assert.equal(loadState(dir).plan_items.length, 0);
+      assert.equal(loadState(otherDir).plan_items.length, 0);
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 });

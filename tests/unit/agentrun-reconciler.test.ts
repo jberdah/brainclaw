@@ -361,6 +361,23 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     assert.match(reloaded.status_reason ?? '', /silent_termination/);
   });
 
+  it('does NOT fail or release claim when no-heartbeat dead-pid run has fresh fs activity', () => {
+    makeClaim({ status: 'active' });
+    const wt = fs.mkdtempSync(path.join(ws.dir, 'reconciler-active-wt-'));
+    const run = makeRun({ pid: 999_999, worktree_path: wt });
+    const nowMs = new Date(run.created_at).getTime() + 31 * 60_000;
+    const activeFile = path.join(wt, 'active.ts');
+    fs.writeFileSync(activeFile, 'still working');
+    fs.utimesSync(activeFile, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+
+    const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, { nowMs });
+
+    assert.equal(result.action, 'no_op');
+    assert.match(result.reason, /fs active/);
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
+    assert.equal(loadClaim('clm_test', ws.dir).status, 'active');
+  });
+
   it('does NOT fail a dead-pid run still inside the stale window (young)', () => {
     const run = makeRun({ pid: 999_999 });
     const result = reconcileDeadPidRunningAgentRunAtRead(run.id, ws.dir, {
@@ -397,6 +414,19 @@ describe('reconciler/reconcileDeadPidRunningAgentRunAtRead', () => {
     const r = results.find((x) => x.run_id === run.id);
     assert.ok(r, 'run should be swept');
     assert.notEqual(r!.action, 'cancelled_dead_pid');
+    assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
+  });
+
+  it('sweep candidate window is independent from the fail window', () => {
+    const run = makeRun({ pid: 999_999 });
+    const results = sweepDeadPidRunningAgentRunsAtRead(ws.dir, {
+      nowMs: new Date(run.created_at).getTime() + 10 * 60_000,
+      deadPidSweepCandidateAgeMs: 5 * 60_000,
+      staleAfterMs: 30 * 60_000,
+    });
+    const r = results.find((x) => x.run_id === run.id);
+    assert.ok(r, 'run should be selected by candidate window');
+    assert.equal(r!.action, 'health_check_unverified');
     assert.equal(loadAgentRun(run.id, ws.dir)!.status, 'running');
   });
 });

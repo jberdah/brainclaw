@@ -139,6 +139,8 @@ export interface ReconcileOptions {
   actor?: string;
   /** Cap for dead-pid read sweeps. */
   limit?: number;
+  /** Minimum age for selecting dead-pid sweep candidates; failure still uses staleAfterMs. */
+  deadPidSweepCandidateAgeMs?: number;
 }
 
 // ── Process liveness ───────────────────────────────────────────────────────
@@ -642,6 +644,13 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
   // window (trp#292 — must converge HERE since the read path never routes
   // through reconcileAgentRun), giving an untrusted-pid worker ample time.
   if (evidence.age_ms >= stale) {
+    if (fsActiveWithin(evidence, heartbeatStale)) {
+      return {
+        run_id: run.id, action: 'no_op',
+        reason: `no heartbeat but fs active ${Math.round((evidence.fs_activity_age_ms ?? 0) / 1000)}s ago - working, not silent`,
+        evidence, previous_status: run.status, current_status: run.status,
+      };
+    }
     return failRun('silent_termination_no_evidence');
   }
 
@@ -655,7 +664,7 @@ export function reconcileDeadPidRunningAgentRunAtRead(runId: string, cwd?: strin
 
 export function sweepDeadPidRunningAgentRunsAtRead(cwd?: string, options: ReconcileOptions = {}): ReconcileResult[] {
   const now = options.nowMs ?? Date.now();
-  const minAgeMs = options.staleAfterMs ?? DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS;
+  const minAgeMs = options.deadPidSweepCandidateAgeMs ?? DEFAULT_DEAD_PID_READ_SWEEP_AGE_MS;
   const cutoff = now - minAgeMs;
   const limit = options.limit ?? DEFAULT_DEAD_PID_READ_SWEEP_LIMIT;
   const candidates = listAgentRuns(cwd, { status: 'running' })

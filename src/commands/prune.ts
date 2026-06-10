@@ -1,9 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadState, saveState } from '../core/state.js';
-import { memoryExists } from '../core/io.js';
+import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
 import { rebuildProjectMd } from '../core/markdown.js';
 import { deleteRuntimeNote, listRuntimeNotes } from '../core/runtime.js';
-import { expireStaleActiveClaims } from '../core/claims.js';
+import { expireStaleActiveClaims, isClaimExpired, listClaims } from '../core/claims.js';
 import { archiveStalePlansAndHandoffs } from '../core/archival.js';
 import { rotateAuditLogIfNeeded } from '../core/audit.js';
 import { analyzeMemory, analyzeAndApply, formatReport } from '../core/memory-compactor.js';
@@ -48,6 +50,11 @@ export function runPrune(options: PruneOptions = {}): void {
 
   // Original prune logic
   const now = new Date().toISOString();
+  if (options.dryRun) {
+    previewPrune(cwd, now, options);
+    return;
+  }
+
   let prunedCount = 0;
   let expiredClaimsCount = 0;
   let expiredNotesCount = 0;
@@ -100,4 +107,75 @@ export function runPrune(options: PruneOptions = {}): void {
   } else {
     console.log(`✔ Pruned ${prunedCount} expired constraints, ${expiredClaimsCount} expired claims${archiveMsg}${rotateMsg}.`);
   }
+}
+
+function previewPrune(cwd: string, now: string, options: PruneOptions): void {
+  const state = loadState(cwd);
+  const expiredConstraints = state.active_constraints.filter((c) => c.status === 'expired' || (c.status === 'active' && c.expires_at && c.expires_at < now));
+  const expiredClaims = listClaims(cwd).filter((claim) => claim.status === 'active' && isClaimExpired(claim));
+  const expiredNotes = options.expired
+    ? listRuntimeNotes(undefined, cwd).filter((note) => note.expires_at && note.expires_at < now)
+    : [];
+  const archivePreview = options.archive ? previewArchive(cwd) : [];
+
+  console.log('Dry run: no files will be changed.');
+  console.log(`Would prune ${expiredConstraints.length} expired constraints.`);
+  for (const constraint of expiredConstraints) {
+    console.log(`  - constraint ${constraint.id}: ${constraint.text.slice(0, 80)}`);
+  }
+  console.log(`Would release ${expiredClaims.length} expired claims.`);
+  for (const claim of expiredClaims) {
+    console.log(`  - claim ${claim.id}: ${claim.scope}`);
+  }
+  if (options.expired) {
+    console.log(`Would delete ${expiredNotes.length} expired runtime notes.`);
+    for (const note of expiredNotes) {
+      console.log(`  - runtime note ${note.id}: ${note.agent}`);
+    }
+  }
+  if (options.archive) {
+    const total = archivePreview.reduce((sum, item) => sum + item.ids.length, 0);
+    console.log(`Would archive ${total} stale plans/handoffs.`);
+    for (const item of archivePreview) {
+      for (const id of item.ids) {
+        console.log(`  - ${item.entity} ${id}`);
+      }
+    }
+  }
+}
+
+function previewArchive(cwd: string): Array<{ entity: string; ids: string[] }> {
+  const maxAgeMs = 30 * 24 * 60 * 60 * 1000;
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  return [
+    {
+      entity: 'plans',
+      ids: listArchiveEligibleIds(cwd, 'plans', cutoff, (item) => item.status === 'done' || item.status === 'dropped'),
+    },
+    {
+      entity: 'handoffs',
+      ids: listArchiveEligibleIds(cwd, 'handoffs', cutoff, (item) => item.status === 'closed'),
+    },
+  ].filter((entry) => entry.ids.length > 0);
+}
+
+function listArchiveEligibleIds(
+  cwd: string,
+  entity: string,
+  cutoffDate: string,
+  isEligible: (item: Record<string, unknown>) => boolean,
+): string[] {
+  const dir = resolveEntityDir(entity, cwd, 'read');
+  if (!fs.existsSync(dir)) return [];
+  const ids: string[] = [];
+  for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.json') && entry !== 'archive.json')) {
+    try {
+      const item = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')) as Record<string, unknown>;
+      const date = (item.completed_at ?? item.updated_at ?? item.created_at) as string | undefined;
+      if (!isEligible(item)) continue;
+      if (date && date > cutoffDate) continue;
+      ids.push(typeof item.id === 'string' ? item.id : path.basename(file, '.json'));
+    } catch { /* ignore malformed files in preview */ }
+  }
+  return ids;
 }

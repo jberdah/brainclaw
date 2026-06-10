@@ -156,7 +156,14 @@ function canonicalizeScopePath(target: string): string {
  * project even when two projects share the same repo name.
  */
 export function worktreesBaseDir(mainWorktreePath: string): string {
-  const hash = crypto.createHash('sha1').update(mainWorktreePath).digest('hex').slice(0, 12);
+  let stablePath = path.resolve(mainWorktreePath);
+  try {
+    stablePath = fs.realpathSync.native(stablePath);
+  } catch { /* path may not exist yet; path.resolve is still deterministic */ }
+  if (process.platform === 'win32' || /^[a-zA-Z]:[\\/]/.test(mainWorktreePath)) {
+    stablePath = stablePath.toLowerCase();
+  }
+  const hash = crypto.createHash('sha1').update(stablePath).digest('hex').slice(0, 12);
   return path.join(os.homedir(), '.brainclaw', 'worktrees', hash);
 }
 
