@@ -37,18 +37,20 @@ jobs:
       - name: Run doctor check
         id: doctor
         run: |
-          set +e
-          node dist/cli.js doctor --json > doctor_output.json 2>&1
+          node dist/cli.js doctor --json > doctor_output.json 2>doctor_stderr.txt
           EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           cat doctor_output.json
-          set -e
+          if [ -s doctor_stderr.txt ]; then
+            echo "--- doctor stderr ---"
+            cat doctor_stderr.txt
+          fi
+          exit $EXIT_CODE
 
       - name: Parse doctor results
         id: results
         run: |
-          OK=$(node -e "const d = require('./doctor_output.json'); console.log(d.ok ? 'true' : 'false')" 2>/dev/null || echo "false")
-          METRICS=$(node -e "const d = require('./doctor_output.json'); const m = d.metrics; console.log(\`pending=\${m.pending_candidates}, active_plans=\${m.active_plan_items}, overdue=\${m.pending_overdue}\`)" 2>/dev/null || echo "metrics unavailable")
+          OK=$(node -e "const d = require('./doctor_output.json'); console.log(d.ok ? 'true' : 'false')")
+          METRICS=$(node -e "const d = require('./doctor_output.json'); const m = d.metrics; console.log(\`pending=\${m.pending_candidates}, active_plans=\${m.active_plan_items}, overdue=\${m.pending_overdue}\`)")
           echo "ok=$OK" >> $GITHUB_OUTPUT
           echo "metrics=$METRICS" >> $GITHUB_OUTPUT
 
