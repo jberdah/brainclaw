@@ -541,7 +541,10 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     runtimeNotes,
     pendingCandidates: listCandidates('pending', contextCwd),
   });
-  const memoryDensity = classifyMemoryDensity(selected.length);
+  // Density reflects what the store HAS, not what the char budget keeps:
+  // classify pre-budget so a tight budget_tokens on a rich store never
+  // misreads as 'low' and triggers a bootstrap re-scan (pln#542 interaction).
+  const memoryDensity = classifyMemoryDensity(ranked.length);
   const bootstrapEnabled = options.bootstrap !== false;
   const testMode = process.env.BRAINCLAW_TEST_MODE === '1';
   let bootstrapAvailable = false;

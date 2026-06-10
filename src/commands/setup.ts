@@ -24,9 +24,8 @@ import {
   collectWorkspaceGitignoreEntries,
   BRAINCLAW_EXCLUSIVE_DIRECTORIES,
 } from '../core/agent-files.js';
-import { MEMORY_DIR, memoryExists, writeFileAtomic, ensureMemoryDir } from '../core/io.js';
-import { loadConfig, saveConfig, defaultConfig } from '../core/config.js';
-import { readSetupState, resolveHomeDir, type SetupState, writeSetupState } from '../core/setup-state.js';
+import { MEMORY_DIR, memoryExists, writeFileAtomic } from '../core/io.js';
+import { ensureUserStore, readSetupState, resolveHomeDir, type SetupState, writeSetupState } from '../core/setup-state.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 
 export { readSetupState } from '../core/setup-state.js';
@@ -238,32 +237,11 @@ export function initUserStore(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (!home) return [];
-  const written: string[] = [];
-
-  // Ensure ~/.brainclaw/ directory and subdirs exist
-  const userStorePath = path.join(home, '.brainclaw');
-  ensureMemoryDir(home);
-
-  // Check if config.yaml already exists (idempotent)
-  const configPath = path.join(userStorePath, 'config.yaml');
+  const configPath = path.join(home, '.brainclaw', 'config.yaml');
   if (fs.existsSync(configPath)) {
     return [];
   }
-
-  try {
-    // Write a minimal config.yaml for the user store
-    const defaultCfg = defaultConfig('user-global');
-    saveConfig(defaultCfg, home);
-
-    // Append store_type: user to the config.yaml (pattern already used in tests)
-    fs.appendFileSync(configPath, 'store_type: user\n');
-    written.push(configPath);
-  } catch (err) {
-    // Non-fatal: if user store init fails, continue with agent setup
-    console.warn(`Warning: failed to initialize user store at ${configPath}:`, err instanceof Error ? err.message : String(err));
-  }
-
-  return written;
+  return ensureUserStore(env) ? [configPath] : [];
 }
 
 export function runGlobalInstall(
@@ -587,10 +565,15 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
 
   // Step 3: Repo selection
   let repoChoice: string;
+  let nonInteractiveDefault = false;
   if (options.repos) {
     repoChoice = options.repos;
   } else if (options.yes || !process.stdin.isTTY) {
-    repoChoice = 'all';
+    // Blast-radius guard: never initialise every repo under the roots just
+    // because nobody could be asked. Non-interactive runs default to the
+    // current repo; widening to all requires an explicit --repos all.
+    repoChoice = 'current';
+    nonInteractiveDefault = true;
   } else {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -603,6 +586,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   const selectedRepos = parseRepoSelection(repoChoice, repos);
   if (selectedRepos.length === 0) {
     console.log('No repositories selected. Aborting.');
+    if (nonInteractiveDefault) {
+      console.log('Non-interactive setup defaults to the current directory\'s repo. Pass --repos all to initialise every repo under the roots.');
+    }
     return;
   }
   console.log(`\nSelected ${selectedRepos.length} repository(s).`);

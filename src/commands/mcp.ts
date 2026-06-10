@@ -222,8 +222,9 @@ export const MCP_READ_TOOLS = [
         refresh: { type: 'boolean', description: 'Force a fresh bootstrap scan.' },
         audience: { type: 'string', description: 'Optional interview audience filter: cli, ide_chat, or any.' },
         interview: { type: 'boolean', description: 'Render interview text instead of the summary text.' },
-        apply: { type: 'boolean', description: 'Apply the current import proposal into canonical memory.' },
-        uninstall: { type: 'boolean', description: 'Uninstall the last bootstrap-managed import.' },
+        apply: { type: 'boolean', description: 'Apply the current import proposal into canonical memory. Requires yes: true.' },
+        uninstall: { type: 'boolean', description: 'Uninstall the last bootstrap-managed import. Requires yes: true.' },
+        yes: { type: 'boolean', description: 'Explicit confirmation for apply/uninstall (mirrors the CLI --yes gate). Without it the call returns confirmation_required and makes no changes.' },
         interviewAnswers: {
           type: 'array',
           description: 'Optional structured interview answers. Each answer may include question_id, response_text, response_items, response_boolean, and explicit suggestions.',
