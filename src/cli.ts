@@ -1138,6 +1138,8 @@ program
   .description('Harvest a worker LANE-RESULT.json from its worktree into the project (pass an assignment id, or --all)')
   .option('--all', 'Harvest every lane result found across worktrees')
   .option('--integrate', 'Worktree-as-contract (pln#534): commit the worktree diff on behalf of a sandboxed worker, lifecycle the assignment, and release the claim')
+  .option('--orphaned', 'Recover a dead worker that left NO lane-result (pln#554): typecheck + commit the worktree on behalf, lifecycle, release. Never deletes or resets anything')
+  .option('--base <ref>', 'Base ref for --orphaned commits-ahead comparison (default: master)')
   .option('--dry-run', 'Preview without writing events/markers')
   .option('--worktree <path>', 'Explicit worktree path to scan (repeatable)', collect, [])
   .option('--json', 'Output as JSON')

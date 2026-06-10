@@ -13,7 +13,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { CandidateSchema, type Candidate, LaneResultSchema, type LaneResult, type AssignmentArtifact, type AssignmentStatus } from '../core/schema.js';
+import { gitEvidence } from '../core/dispatch-status.js';
 import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/candidates.js';
 import { createRuntimeEvent } from '../core/events.js';
 import { memoryExists } from '../core/io.js';
@@ -616,6 +618,219 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
   return result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// pln#554 step 3 — `harvest --orphaned`: recover a dead worker that left NO
+// LANE-RESULT. Codifies the manual recovery executed twice on 2026-06-10
+// (42 and 41 files, zero loss): inspect the worktree, typecheck if possible,
+// commit on-behalf with the standard marker, lifecycle when the FSM allows,
+// release the claim. NEVER deletes or resets anything.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ORPHANED_COMMIT_MARKER =
+  '[brainclaw committed on behalf — worker died before delivering; coordinator harvest --orphaned]';
+
+export type OrphanedTypecheckStatus = 'passed' | 'failed' | 'skipped_no_node_modules' | 'not_run';
+
+export interface OrphanedHarvestOptions {
+  /** Assignment whose worktree should be recovered (resolves worktree via assignment/claim). */
+  assignmentId?: string;
+  /** Explicit worktree path (wins over assignment resolution). */
+  worktreePath?: string;
+  /** Base ref for the commits-ahead comparison. Default 'master'. */
+  baseRef?: string;
+  /** When true, inspect + report only — no typecheck, commit, or lifecycle. */
+  dryRun?: boolean;
+  cwd?: string;
+  /** Actor name for events/lifecycle. Defaults to 'coordinator'. */
+  agent?: string;
+}
+
+export interface OrphanedHarvestReport {
+  assignment_id?: string;
+  worktree_path?: string;
+  commits_ahead: number;
+  dirty_tracked: number;
+  untracked: number;
+  /** Worktree clean + no commits ahead — state left untouched. */
+  nothing_to_recover: boolean;
+  typecheck: OrphanedTypecheckStatus;
+  typecheck_output?: string;
+  committed_on_behalf: boolean;
+  commit_sha?: string;
+  files_changed: string[];
+  assignment_completed: boolean;
+  claim_released: boolean;
+  errors: string[];
+  recommended_next_action: string;
+}
+
+function countUntracked(worktreePath: string): number {
+  const r = spawnSync('git', ['-C', worktreePath, 'status', '--short'], { encoding: 'utf-8', timeout: 15000 });
+  if (r.status !== 0) return 0;
+  return (r.stdout ?? '').split('\n').filter((l) => l.startsWith('??')).length;
+}
+
+/** `npx tsc --noEmit` in the worktree; skips gracefully when node_modules is absent. */
+function typecheckWorktree(worktreePath: string): { status: OrphanedTypecheckStatus; output?: string } {
+  if (!fs.existsSync(path.join(worktreePath, 'node_modules'))) {
+    return {
+      status: 'skipped_no_node_modules',
+      output: 'node_modules absent in worktree — link it from the main repo (Windows junction / symlink) to typecheck locally; the coordinator validates centrally after harvest.',
+    };
+  }
+  // Fixed command string (no user input) — shell needed for npx on Windows.
+  const r = spawnSync('npx tsc --noEmit', { cwd: worktreePath, shell: true, encoding: 'utf-8', timeout: 300_000 });
+  if (r.status === 0) return { status: 'passed' };
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim();
+  return { status: 'failed', output: out.slice(0, 2000) };
+}
+
+/**
+ * Recover an orphaned lane: a worker died without writing LANE-RESULT.json.
+ *
+ * Evidence-first and strictly non-destructive:
+ *  - LANE-RESULT present → not orphaned; refuse and point at the normal harvest;
+ *  - tracked changes → typecheck (best effort), then commit on-behalf with
+ *    ORPHANED_COMMIT_MARKER;
+ *  - clean tree + no commits ahead → 'nothing to recover', state untouched;
+ *  - then lifecycle the assignment when the FSM allows and release the claim.
+ */
+export function harvestOrphaned(options: OrphanedHarvestOptions): OrphanedHarvestReport {
+  const cwd = options.cwd ?? process.cwd();
+  const actor = options.agent ?? 'coordinator';
+  const baseRef = options.baseRef ?? 'master';
+  const report: OrphanedHarvestReport = {
+    assignment_id: options.assignmentId,
+    worktree_path: undefined,
+    commits_ahead: 0,
+    dirty_tracked: 0,
+    untracked: 0,
+    nothing_to_recover: false,
+    typecheck: 'not_run',
+    committed_on_behalf: false,
+    files_changed: [],
+    assignment_completed: false,
+    claim_released: false,
+    errors: [],
+    recommended_next_action: '',
+  };
+
+  let worktree = options.worktreePath;
+  if (!worktree && options.assignmentId) {
+    worktree = resolveAssignmentWorktreePaths(options.assignmentId, cwd)[0];
+  }
+  if (!worktree || !fs.existsSync(worktree)) {
+    report.errors.push('No worktree resolved — pass --worktree <path> explicitly, or patch claim.worktree_path.');
+    report.recommended_next_action = 'Resolve the worktree path first; nothing was touched.';
+    return report;
+  }
+  report.worktree_path = worktree;
+
+  if (fs.existsSync(getLaneResultPath(worktree))) {
+    report.errors.push('LANE-RESULT.json present — this lane is NOT orphaned. Use `brainclaw harvest <assignment_id> [--integrate]` instead.');
+    report.recommended_next_action = 'Run the normal lane harvest; nothing was touched.';
+    return report;
+  }
+
+  const evidence = gitEvidence(worktree, baseRef);
+  if (!evidence) {
+    report.errors.push(`Could not read git evidence from ${worktree} (base ref '${baseRef}') — is it a git worktree and does the base ref exist?`);
+    report.recommended_next_action = 'Fix the base ref (--base) or inspect the worktree manually; nothing was touched.';
+    return report;
+  }
+  report.commits_ahead = evidence.commitsAhead;
+  report.dirty_tracked = evidence.dirtyTracked;
+  report.untracked = countUntracked(worktree);
+
+  if (evidence.dirtyTracked === 0 && evidence.commitsAhead === 0) {
+    report.nothing_to_recover = true;
+    report.recommended_next_action = report.untracked > 0
+      ? `Nothing to recover (no tracked changes, no commits ahead). ${report.untracked} untracked file(s) present — inspect them manually before any cleanup. State left untouched.`
+      : 'Nothing to recover — worktree clean with no commits ahead. State left untouched.';
+    return report;
+  }
+
+  // Tracked changes → typecheck (best effort), then commit on-behalf.
+  if (evidence.dirtyTracked > 0) {
+    if (options.dryRun) {
+      report.recommended_next_action = `(dry-run) would typecheck + commit ${evidence.dirtyTracked} tracked change(s) on behalf.`;
+    } else {
+      const tc = typecheckWorktree(worktree);
+      report.typecheck = tc.status;
+      report.typecheck_output = tc.output;
+
+      const message = `chore(lane): recover orphaned worker output${options.assignmentId ? ` for ${options.assignmentId}` : ''}\n\n${ORPHANED_COMMIT_MARKER}`;
+      const commit = commitWorktreeOnBehalf(worktree, message, {
+        authorName: 'brainclaw (orphaned recovery)',
+        authorEmail: 'brainclaw@on-behalf.local',
+      });
+      report.committed_on_behalf = commit.committed;
+      report.commit_sha = commit.sha;
+      report.files_changed = commit.files_changed;
+      if (!commit.committed) report.errors.push(`commit on behalf failed: ${commit.reason}`);
+    }
+  } else if (options.dryRun) {
+    // commits ahead with a clean tree — the worker delivered before dying.
+    report.recommended_next_action = `(dry-run) nothing to commit (${evidence.commitsAhead} commit(s) already on the branch); would lifecycle the assignment + release the claim.`;
+  }
+
+  // Lifecycle + claim release (only with an assignment to converge, never dry-run).
+  if (!options.dryRun && options.assignmentId) {
+    const assignment = loadAssignment(options.assignmentId, cwd);
+    if (assignment) {
+      const artifacts: AssignmentArtifact[] = [
+        ...(report.commit_sha ? [{ type: 'commit', ref: report.commit_sha, description: 'orphaned-recovery commit (on behalf)' }] : []),
+        ...report.files_changed.slice(0, 50).map((f) => ({ type: 'file', ref: f })),
+      ];
+      report.assignment_completed = forceCompleteAssignment(
+        options.assignmentId, artifacts,
+        'pln#554 harvest --orphaned: worker died before delivering; work recovered from worktree',
+        actor, cwd,
+      );
+      try {
+        const rel = releaseClaimWithCascade(assignment.claim_id, { planStatus: 'done', cwd });
+        report.claim_released = rel.claim.status === 'released';
+      } catch (err) {
+        report.errors.push(`claim release failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      report.errors.push(`No assignment record for ${options.assignmentId} — recovered the worktree but skipped lifecycle/claim release.`);
+    }
+  }
+
+  if (!options.dryRun) {
+    try {
+      createRuntimeEvent({
+        agent: actor,
+        event_type: 'lane_integrated',
+        text: `Orphaned lane recovered${options.assignmentId ? ` for ${options.assignmentId}` : ''}: ${report.files_changed.length} file(s) committed on behalf (typecheck=${report.typecheck})`,
+        tags: ['harvest', 'orphaned', 'recovery'],
+        assignment_id: options.assignmentId,
+        metadata: {
+          assignment_id: options.assignmentId ?? null,
+          worktree_path: worktree,
+          commit_sha: report.commit_sha ?? null,
+          files_changed: report.files_changed,
+          typecheck: report.typecheck,
+          commits_ahead: report.commits_ahead,
+          assignment_completed: report.assignment_completed,
+          claim_released: report.claim_released,
+        },
+      }, cwd);
+    } catch { /* event is best-effort */ }
+
+    const tcWarn = report.typecheck === 'failed'
+      ? ' WARNING: typecheck FAILED — fix the branch before merging (output captured in the report).'
+      : report.typecheck === 'skipped_no_node_modules'
+        ? ' Typecheck was skipped (no node_modules) — validate centrally.'
+        : '';
+    report.recommended_next_action =
+      `Run targeted tests for the recovered files, then merge the lane branch.${tcWarn}`;
+  }
+
+  return report;
+}
+
 // --- CLI entry point: `brainclaw harvest <assignment_id>` ---
 
 export interface RunHarvestLaneOptions {
@@ -627,6 +842,10 @@ export interface RunHarvestLaneOptions {
   cwd?: string;
   /** pln#534: also commit-on-behalf + lifecycle + release (worktree-as-contract). */
   integrate?: boolean;
+  /** pln#554: recover a dead worker that left NO lane-result. */
+  orphaned?: boolean;
+  /** Base ref for --orphaned commits-ahead comparison. Default 'master'. */
+  base?: string;
 }
 
 export function runHarvestLane(assignmentId: string | undefined, options: RunHarvestLaneOptions = {}): void {
@@ -636,9 +855,47 @@ export function runHarvestLane(assignmentId: string | undefined, options: RunHar
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
-  if (!assignmentId && !options.all) {
+  if (!assignmentId && !options.all && !(options.orphaned && options.worktree?.length)) {
     console.error('Error: provide an <assignment_id>, or pass --all to harvest every lane result.');
     process.exit(1);
+  }
+
+  // pln#554 — `--orphaned`: the worker died WITHOUT a lane-result. Recover its
+  // worktree (typecheck + commit on behalf), lifecycle, and release. Never
+  // deletes or resets anything.
+  if (options.orphaned) {
+    const report = harvestOrphaned({
+      assignmentId,
+      worktreePath: options.worktree?.[0],
+      baseRef: options.base,
+      dryRun: options.dryRun,
+      cwd,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+      process.exitCode = report.errors.length > 0 ? 1 : 0;
+      return;
+    }
+    const dry = options.dryRun ? ' (dry-run)' : '';
+    console.log(`Orphaned-lane recovery${dry} for ${assignmentId ?? report.worktree_path ?? '(unresolved)'}:`);
+    if (report.worktree_path) console.log(`  worktree: ${report.worktree_path}`);
+    console.log(`  evidence: commits_ahead=${report.commits_ahead} dirty_tracked=${report.dirty_tracked} untracked=${report.untracked}`);
+    if (report.nothing_to_recover) {
+      console.log('  → nothing to recover; state left untouched.');
+    } else {
+      if (report.typecheck !== 'not_run') {
+        console.log(`  typecheck: ${report.typecheck}`);
+        if (report.typecheck_output) console.log(`    ${report.typecheck_output.split('\n').slice(0, 12).join('\n    ')}`);
+      }
+      if (report.committed_on_behalf) {
+        console.log(`  ✔ committed on behalf: ${report.commit_sha?.slice(0, 10)} (${report.files_changed.length} file(s))`);
+      }
+      console.log(`  assignment_completed=${report.assignment_completed} claim_released=${report.claim_released}`);
+    }
+    for (const err of report.errors) console.error(`  ✗ ${err}`);
+    if (report.recommended_next_action) console.log(`  → ${report.recommended_next_action}`);
+    process.exitCode = report.errors.length > 0 ? 1 : 0;
+    return;
   }
 
   // pln#534 — `--integrate` upgrades harvest from report-only to converge-the-
