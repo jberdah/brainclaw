@@ -104,8 +104,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:333be7c3cda7e166`
-  (updated 2026-06-09: added the `preflight` boolean to the bclaw_coordinate
+- MCP public surface fingerprint: `sha256:eaa8865070b10401`
+  (updated 2026-06-10: agent-UX read-path surface — `budget_tokens` on the
+  read tools, `context_diff`/`next_actions` in facade payloads,
+  caller-asserted `type` on quick_capture; see the Unreleased entry, pln#542.
+  Previous: `sha256:333be7c3cda7e166`,
+  updated 2026-06-09: added the `preflight` boolean to the bclaw_coordinate
   inputSchema — pln#533, the pre-flight spawn validation for open_loop reviews
   (run one trivial validation spawn per reviewer before opening the loop so an
   environment death surfaces with a clear reason instead of a generic timeout).
