@@ -172,6 +172,8 @@ export interface McpConnectionOptions {
   cwd: string;
   send: (message: Record<string, unknown>) => void;
   executeTool?: McpToolExecutor;
+  /** Start in setup mode: project memory absent at cwd, serve the minimal catalog. */
+  uninitialized?: boolean;
 }
 
 export interface ParsedMcpMessage {
@@ -186,6 +188,7 @@ export interface McpInitializeResult {
   protocolVersion: McpProtocolVersion;
   serverInfo: { name: string; version: string };
   capabilities: { tools: { listChanged: boolean } };
+  instructions?: string;
 }
 
 export interface McpToolErrorShape {
@@ -1481,6 +1484,26 @@ export const DEFAULT_PUBLISHED_TOOLS = PUBLISHED_TOOLS
   })
   .map(({ tool }) => tool);
 
+/**
+ * Minimal catalog served while the project memory at cwd is absent.
+ * Instead of refusing to boot (the historical exit(1)), the server starts
+ * in "setup mode" so an agent landing on a fresh repo can initialize it
+ * via bclaw_setup without a CLI shell-out + session-reload discontinuity.
+ */
+export const UNINITIALIZED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'bclaw_setup',
+  'bclaw_init_project',
+  'bclaw_doctor',
+]);
+
+export const UNINITIALIZED_PUBLISHED_TOOLS = PUBLISHED_TOOLS.filter(
+  (tool) => UNINITIALIZED_TOOL_NAMES.has(tool.name),
+);
+
+export function buildUninitializedStateMessage(cwd: string): string {
+  return `Project memory not initialized at ${cwd}. The brainclaw MCP server is running in setup mode: only bclaw_setup, bclaw_init_project and bclaw_doctor are available. Call bclaw_setup to initialize this repo — the full tool catalog activates automatically afterwards.`;
+}
+
 class McpProtocolError extends Error {
   code: number;
   id: JsonRpcId;
@@ -1883,11 +1906,20 @@ export function parseMcpLine(line: string): ParsedMcpMessage {
   };
 }
 
-export function createInitializeResult(protocolVersion: McpProtocolVersion): McpInitializeResult {
+export function createInitializeResult(
+  protocolVersion: McpProtocolVersion,
+  options?: { uninitialized?: boolean; cwd?: string },
+): McpInitializeResult {
+  const uninitialized = options?.uninitialized === true;
   return {
     protocolVersion,
     serverInfo: { name: 'brainclaw', version: SCHEMA_VERSION },
-    capabilities: { tools: { listChanged: false } },
+    // listChanged is only advertised in setup mode, where the catalog flips
+    // to the full set once the project memory is initialized.
+    capabilities: { tools: { listChanged: uninitialized } },
+    ...(uninitialized
+      ? { instructions: buildUninitializedStateMessage(options?.cwd ?? process.cwd()) }
+      : {}),
   };
 }
 
@@ -2022,6 +2054,8 @@ export class McpServerConnection {
   state: McpConnectionState = 'pre_init';
   protocolVersion?: McpProtocolVersion;
   connectionSessionId?: string;
+  /** True while the project memory at cwd is absent — serves the minimal setup catalog. */
+  uninitializedMode: boolean;
 
   /** Version of brainclaw code loaded in this process at boot time. */
   private readonly bootVersion: string;
@@ -2035,6 +2069,7 @@ export class McpServerConnection {
   constructor(options: McpConnectionOptions) {
     this.cwd = options.cwd;
     this.send = options.send;
+    this.uninitializedMode = options.uninitialized ?? false;
     this.bootVersion = getInstalledBrainclawVersion();
     this.taskRunner = new McpTaskRunner({
       executeTool: options.executeTool ?? createWorkerToolExecutor(),
@@ -2051,16 +2086,43 @@ export class McpServerConnection {
             ...outcome.response.content,
           ];
         }
+        const catalogUnlocked = this.reconcileUninitializedMode();
+        if (catalogUnlocked && outcome.response.content.length > 0) {
+          outcome.response.content = [
+            ...outcome.response.content,
+            { type: 'text', text: '✔ Project memory initialized — the full brainclaw tool catalog is now active. If your client does not refresh tools automatically, reload the MCP server session.' },
+          ];
+        }
         // Track usage: append response size to usage.jsonl
         if (outcome.toolName) {
           this.trackUsage(outcome.toolName, outcome.response);
         }
         this.sendResult(requestId, outcome.response);
+        if (catalogUnlocked) {
+          this.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+        }
       },
       onInternalError: (requestId, error) => {
         this.sendError(requestId, -32603, error instanceof Error ? error.message : 'Internal error');
       },
     });
+  }
+
+  /**
+   * Lazy reconcile: if the server booted in setup mode but the project
+   * memory now exists (initialized via bclaw_setup, bclaw_init_project,
+   * or an out-of-band CLI init), unlock the full catalog.
+   * Returns true exactly once — on the transition.
+   */
+  private reconcileUninitializedMode(): boolean {
+    if (!this.uninitializedMode) {
+      return false;
+    }
+    if (!memoryExists(this.cwd)) {
+      return false;
+    }
+    this.uninitializedMode = false;
+    return true;
   }
 
   /**
@@ -2153,7 +2215,11 @@ export class McpServerConnection {
         const protocolVersion = resolveRequestedProtocolVersion(params, id ?? null);
         this.protocolVersion = protocolVersion;
         this.state = 'awaiting_initialized';
-        this.sendResult(id ?? null, createInitializeResult(protocolVersion));
+        this.reconcileUninitializedMode();
+        this.sendResult(id ?? null, createInitializeResult(protocolVersion, {
+          uninitialized: this.uninitializedMode,
+          cwd: this.cwd,
+        }));
         return;
       }
 
@@ -2180,6 +2246,15 @@ export class McpServerConnection {
 
       if (method === 'tools/list') {
         if (!isNotification) {
+          this.reconcileUninitializedMode();
+          if (this.uninitializedMode) {
+            this.sendResult(id ?? null, {
+              tools: UNINITIALIZED_PUBLISHED_TOOLS,
+              uninitialized: true,
+              state: buildUninitializedStateMessage(this.cwd),
+            });
+            return;
+          }
           const params = message.params === undefined ? {} : requireObjectParams(message.params, id ?? null);
           const catalog = typeof params.catalog === 'string' ? params.catalog : undefined;
           const include = typeof params.include === 'string' ? params.include : undefined;
@@ -2208,6 +2283,19 @@ export class McpServerConnection {
           return;
         }
         const args = params.arguments === undefined ? {} : requireObjectParams(params.arguments, id ?? null);
+        this.reconcileUninitializedMode();
+        if (this.uninitializedMode && !UNINITIALIZED_TOOL_NAMES.has(name)) {
+          this.sendResult(id ?? null, toolResponse({
+            content: [{ type: 'text', text: buildUninitializedStateMessage(this.cwd) }],
+            structuredContent: {
+              error: 'uninitialized',
+              cwd: this.cwd,
+              available_tools: [...UNINITIALIZED_TOOL_NAMES],
+              next_action: 'Call bclaw_setup to initialize this repo.',
+            },
+          }, true));
+          return;
+        }
         this.taskRunner.enqueue(id ?? null, {
           name,
           args,
@@ -2377,9 +2465,12 @@ export class StdioTransport {
 export function runMcp(): void {
   const cwd = resolveEffectiveCwd();
 
-  if (!memoryExists(cwd)) {
-    console.error('Project memory not initialized. Run `brainclaw init` first.');
-    process.exit(1);
+  // No project memory yet: start in setup mode instead of refusing to boot,
+  // so agents can initialize the repo via bclaw_setup without a CLI
+  // shell-out + session reload.
+  const uninitialized = !memoryExists(cwd);
+  if (uninitialized) {
+    console.error(buildUninitializedStateMessage(cwd));
   }
 
   const missingWorkerPath = resolveMcpWorkerEntryPath();
@@ -2408,6 +2499,7 @@ export function runMcp(): void {
     cwd,
     send: adaptiveSend,
     executeTool: createWorkerToolExecutor(),
+    uninitialized,
   });
 
   transport.onMessage = (line: string) => connection.handleLine(line);
@@ -2732,7 +2824,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         if (detected) {
           summary.push(`✔ Agent detected: ${detected.name}`);
         }
-        summary.push('✔ Reload your agent session to activate brainclaw MCP tools.');
+        summary.push('✔ Full brainclaw MCP catalog activates automatically; reload your agent session only if new tools do not appear.');
 
         // Check if bootstrap is available and generate preview
         const probe = probeForQuickSetup(cwd);
