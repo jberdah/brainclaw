@@ -5,11 +5,13 @@
  * Users choose to dismiss, resolve, or archive via explicit commands.
  */
 
-import type { Candidate, PlanItem, RuntimeNote, Trap } from './schema.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Candidate, Constraint, Decision, PlanItem, RuntimeNote, Trap } from './schema.js';
 import type { Handoff } from './schema.js';
 import { resolvedSource } from './candidates.js';
 
-export type StalenessEntity = 'plan' | 'trap' | 'handoff' | 'candidate' | 'runtime_note';
+export type StalenessEntity = 'plan' | 'trap' | 'handoff' | 'candidate' | 'runtime_note' | 'decision' | 'constraint';
 
 export interface StalenessWarning {
   /** Entity ID */
@@ -32,6 +34,8 @@ export interface StalenessReport {
   handoff_count: number;
   candidate_count: number;
   runtime_note_count: number;
+  /** Entities whose related_paths point at files that no longer exist. */
+  dead_reference_count?: number;
 }
 
 /** Thresholds in days. Adjust via config in the future. */
@@ -179,6 +183,83 @@ export function detectUnverifiedMemory(traps: Trap[], nowMs = Date.now()): Stale
   return warnings;
 }
 
+/** Glob chars / URL schemes — entries we cannot meaningfully existsSync. */
+const NON_CHECKABLE_PATH = /[*?[\]]|:\/\//;
+
+export interface DeadReferenceCandidate {
+  id: string;
+  entity: 'decision' | 'constraint' | 'trap';
+  text: string;
+  created_at: string;
+  related_paths?: string[];
+  short_label?: string;
+}
+
+export interface DeadReferenceScan {
+  decisions?: Decision[];
+  constraints?: Constraint[];
+  traps?: Trap[];
+  /** Repo root that relative related_paths resolve against. */
+  projectRoot: string;
+}
+
+/**
+ * Detect memory entities whose `related_paths` point at files that no longer
+ * exist — memory that stayed "confident" through a refactor and is now wrong.
+ * Staleness today is purely temporal; this is the structural complement
+ * (pln#557 step 2, bridge to pln_79a995b6 memory-lifecycle confirm/decay).
+ *
+ * Only plain paths are probed: glob patterns and URLs are skipped, and a
+ * single missing path among several is enough to flag (the warning lists
+ * exactly which ones are gone).
+ */
+export function detectDeadReferences(
+  items: DeadReferenceCandidate[],
+  projectRoot: string,
+  nowMs = Date.now(),
+): StalenessWarning[] {
+  const warnings: StalenessWarning[] = [];
+  for (const item of items) {
+    if (!item.related_paths || item.related_paths.length === 0) continue;
+    const missing: string[] = [];
+    for (const ref of item.related_paths) {
+      const trimmed = ref.trim();
+      if (!trimmed || NON_CHECKABLE_PATH.test(trimmed)) continue;
+      const resolved = path.isAbsolute(trimmed) ? trimmed : path.join(projectRoot, trimmed);
+      try {
+        if (!fs.existsSync(resolved)) missing.push(trimmed);
+      } catch { /* unreadable path — treat as non-checkable, not dead */ }
+    }
+    if (missing.length === 0) continue;
+    warnings.push({
+      id: item.id,
+      entity: item.entity,
+      text: truncate(item.text),
+      age_days: ageDays(item.created_at, nowMs),
+      reason: `References missing path${missing.length > 1 ? 's' : ''}: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ` (+${missing.length - 3} more)` : ''} — likely stale after a refactor`,
+      suggested_action: `bclaw_update(entity: "${item.entity}", id: "${item.short_label ?? item.id}", { related_paths: [<current paths>] })  # or archive if obsolete`,
+    });
+  }
+  return warnings;
+}
+
+/** Map active entities into the dead-reference detector's input shape. */
+export function collectDeadReferenceCandidates(scan: DeadReferenceScan): DeadReferenceCandidate[] {
+  const items: DeadReferenceCandidate[] = [];
+  for (const d of scan.decisions ?? []) {
+    items.push({ id: d.id, entity: 'decision', text: d.text, created_at: d.created_at, related_paths: d.related_paths, short_label: d.short_label });
+  }
+  for (const c of scan.constraints ?? []) {
+    if ((c.status ?? 'active') !== 'active') continue;
+    items.push({ id: c.id, entity: 'constraint', text: c.text, created_at: c.created_at, related_paths: c.related_paths, short_label: c.short_label });
+  }
+  for (const t of scan.traps ?? []) {
+    if (t.status !== 'active') continue;
+    items.push({ id: t.id, entity: 'trap', text: t.text, created_at: t.created_at, related_paths: t.related_paths, short_label: t.short_label });
+  }
+  return items;
+}
+
 /**
  * Detect open handoffs that have not been acted on for a long time.
  */
@@ -310,6 +391,7 @@ export function detectStaleness(
   candidates: Candidate[],
   nowMs = Date.now(),
   runtimeNotes: RuntimeNote[] = [],
+  deadRefScan?: DeadReferenceScan,
 ): StalenessReport {
   const nowIso = new Date(nowMs).toISOString();
 
@@ -319,8 +401,18 @@ export function detectStaleness(
   const handoffWarnings = detectStaleHandoffs(handoffs, nowMs);
   const candidateWarnings = detectStaleCandidates(candidates, nowMs);
   const noteWarnings = detectStaleRuntimeNotes(runtimeNotes, nowMs);
+  // pln#557 step 2 — structural staleness: dead related_paths. The trap list
+  // for the scan defaults to the traps already passed in.
+  const deadRefWarnings = deadRefScan
+    ? detectDeadReferences(
+        collectDeadReferenceCandidates({ traps, ...deadRefScan }),
+        deadRefScan.projectRoot,
+        nowMs,
+      )
+    : [];
 
   const warnings = [
+    ...deadRefWarnings,
     ...planWarnings,
     ...trapWarnings,
     ...unverifiedWarnings,
@@ -336,6 +428,7 @@ export function detectStaleness(
     handoff_count: handoffWarnings.length,
     candidate_count: candidateWarnings.length,
     runtime_note_count: noteWarnings.length,
+    ...(deadRefScan ? { dead_reference_count: deadRefWarnings.length } : {}),
   };
 }
 
@@ -349,5 +442,6 @@ export function staleSummary(report: StalenessReport): string {
   if (report.handoff_count > 0) parts.push(`${report.handoff_count} open handoff${report.handoff_count > 1 ? 's' : ''}`);
   if (report.candidate_count > 0) parts.push(`${report.candidate_count} pending candidate${report.candidate_count > 1 ? 's' : ''}`);
   if (report.runtime_note_count > 0) parts.push(`${report.runtime_note_count} stale runtime note${report.runtime_note_count > 1 ? 's' : ''}`);
+  if ((report.dead_reference_count ?? 0) > 0) parts.push(`${report.dead_reference_count} item${report.dead_reference_count! > 1 ? 's' : ''} with dead file references`);
   return parts.join(', ');
 }

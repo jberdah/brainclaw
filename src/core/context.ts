@@ -691,6 +691,14 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       pendingCandidatesForStaleness,
       Date.now(),
       runtimeNotesForStaleness,
+      // pln#557 step 2 — dead related_paths detection. Surfaces "confident
+      // but wrong" memory (paths deleted by a refactor) in stale_warnings,
+      // which both the steady-state context and the arrival digest carry.
+      {
+        decisions: state.recent_decisions,
+        constraints: state.active_constraints,
+        projectRoot: contextCwd,
+      },
     );
     if (staleReport.warnings.length > 0) {
       staleWarnings = staleReport.warnings.slice(0, 5);
