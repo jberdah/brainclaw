@@ -1847,8 +1847,10 @@ function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameFi
     // pln#562 step 3 — pinned connection principal. When the server resolved
     // an authenticated principal, caller args are verified against it:
     // matching/absent args → principal; mismatching args → curator-only
-    // explicit override, otherwise the spoofable args are IGNORED and the
-    // mutation is attributed to the principal.
+    // explicit override, otherwise the mismatch is REJECTED loudly. Silently
+    // re-attributing a spoofed/mistaken identity to the principal would hide
+    // caller bugs — fail-loud is the contract (mcp-protocol.test 'rejects
+    // unregistered identities and mismatched id/name pairs').
     const principal = resolveConnectionPrincipal(cwd, sessionId);
     if (principal) {
       // Re-load per call (cheap) so trust changes propagate mid-connection;
@@ -1872,7 +1874,12 @@ function resolveMutationIdentity(args: Record<string, unknown>, fields: { nameFi
             }),
           };
         }
-        return { identity: principalDoc };
+        return {
+          error: {
+            kind: 'identity_error',
+            message: `Caller-supplied identity (agent=${explicitName ?? '<none>'}, agentId=${explicitId ?? '<none>'}) does not match the pinned connection principal '${principal.agent_name}' (${principal.agent_id}). Omit the identity args, or have a curator perform the override.`,
+          },
+        };
       }
     }
 
