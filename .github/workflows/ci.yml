@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Mojibake guard
+        run: node scripts/check-mojibake.mjs
+
       - name: Type check
         run: npx tsc --noEmit
 

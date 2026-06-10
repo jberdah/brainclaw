@@ -522,7 +522,7 @@ function renderOpenHandoffs(state: State, limit: number): string | undefined {
   if (handoffs.length === 0) return undefined;
 
   return [
-    '## brainclaw â€” open handoffs',
+    '## brainclaw — open handoffs',
     '',
     ...handoffs.map((h: Handoff) => {
       const plan = h.plan_id ? ` (${h.plan_id})` : '';
