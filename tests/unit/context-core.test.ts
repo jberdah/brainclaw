@@ -672,6 +672,38 @@ describe('core/context', () => {
     assert.equal(result.derived_signals, undefined);
   });
 
+  it('classifies memory density pre-budget so a tight char budget never reads as low', () => {
+    const decisions = Array.from({ length: 8 }, (_, i) => ({
+      id: `dec_density_${i}`,
+      text: `Rich store decision number ${i} with enough text to consume the character budget`,
+      created_at: iso(10 + i),
+      author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id,
+      project_id: 'prj_ctx_test',
+      host_id: 'host-a',
+      session_id: 'sess_ctx_density',
+      tags: ['auth'],
+    }));
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: decisions,
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const result = buildContext({
+      maxChars: 10,
+      cwd: workspace.dir,
+    });
+
+    assert.ok(result.selected.length < 8, 'char budget should have trimmed the selection');
+    assert.equal(result.memory_density, 'high');
+    assert.equal(result.derived_signals, undefined);
+  });
+
   it('exposes agent tooling when AGENTS rules are present', () => {
     fs.writeFileSync(path.join(workspace.dir, 'AGENTS.md'), '# Agent Rules\n\n- Prefer focused diffs\n', 'utf-8');
 
