@@ -415,8 +415,10 @@ function findClosestStoreBelow(target: string, ceiling: string): string | undefi
  */
 function isAtOrBelow(dir: string, ancestor: string): boolean {
   const rel = path.relative(ancestor, dir);
-  // If relative path starts with '..', dir is above ancestor
-  return !rel.startsWith('..');
+  // '..' prefix → dir is above ancestor. An absolute result means a different
+  // Windows drive (path.relative returns the absolute `to` path then), which is
+  // also outside the boundary — without this check `D:\evil` would pass.
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 function resolveAbsoluteTargetPath(cwd: string, target: string): string | undefined {
