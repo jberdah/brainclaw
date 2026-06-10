@@ -188,6 +188,38 @@ function saveCursor(reader: EventLogReader, cursor: AgentCursor, cwd?: string): 
 }
 
 /**
+ * True when this reader already has a cursor — session-keyed, or the legacy
+ * name-keyed cursor a session reader would migrate from. Absence means first
+ * contact: the reader has never consumed this store's event log.
+ */
+export function hasEventCursor(reader: string | EventLogReader, cwd?: string): boolean {
+  const effectiveReader = normalizeReader(reader);
+  if (fs.existsSync(cursorPath(cursorKey(effectiveReader), cwd))) return true;
+  if (effectiveReader.session_id?.trim()) {
+    return fs.existsSync(cursorPath(effectiveReader.agent, cwd));
+  }
+  return false;
+}
+
+/**
+ * Seed the reader's cursor at the current end of the event log WITHOUT
+ * reading it. First-contact path: a fresh agent on a mature store must not
+ * replay the whole history (its one chance to triage would be consumed by
+ * noise) — the arrival digest informs instead, and the diff becomes
+ * incremental from here. Returns the byte offset that was sealed.
+ */
+export function seedCursorToEnd(reader: string | EventLogReader, cwd?: string): number {
+  const effectiveReader = normalizeReader(reader);
+  const logPath = eventLogPath(cwd);
+  let size = 0;
+  try {
+    size = fs.statSync(logPath).size;
+  } catch { /* missing log → offset 0 */ }
+  saveCursor(effectiveReader, { offset: size, last_read: nowISO() }, cwd);
+  return size;
+}
+
+/**
  * Read events unseen by this reader since their last read.
  * Updates the cursor after reading.
  *
