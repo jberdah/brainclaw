@@ -329,7 +329,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   } else {
     console.log(`Tip: run 'brainclaw init' again later to refresh the detected agent's integration files on this project.`);
   }
-  console.log(`Tip: run 'brainclaw context --json' to load the shared memory into your agent session.`);
+  console.log(`Tip: in an agent session, call the bclaw_work MCP tool (intent: "consult") to load the shared memory; from a terminal, 'brainclaw context --json' does the same.`);
 }
 
 function installPostMergeHookIfMissing(cwd: string): void {
