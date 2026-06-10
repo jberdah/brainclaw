@@ -13,7 +13,7 @@
  */
 
 import path from 'node:path';
-import { loadState, persistState } from './state.js';
+import { loadState, mutateState } from './state.js';
 import {
   archiveCandidate,
   listCandidates,
@@ -741,8 +741,9 @@ export function transitionEntity(
   if (!spec.statusField) {
     throw new Error(`${name} has no lifecycle (statusField is undefined)`);
   }
+  const statusField = spec.statusField;
   const current = getEntity(name, id, cwd) as Record<string, unknown>;
-  const from = current[spec.statusField] as string | undefined;
+  const from = current[statusField] as string | undefined;
   if (!from) {
     throw new Error(`${name} '${id}' has no '${spec.statusField}' field set`);
   }
@@ -761,14 +762,14 @@ export function transitionEntity(
     case 'decision':
     case 'constraint':
     case 'trap': {
-      const state = loadState(cwd);
-      const bucket = name === 'decision' ? state.recent_decisions
-        : name === 'constraint' ? state.active_constraints
-        : state.known_traps;
-      const item = bucket.find((x) => x.id === id);
-      if (!item) throw new EntityNotFoundError(name, id);
-      (item as Record<string, unknown>)[spec.statusField] = to;
-      persistState(state, cwd);
+      mutateState((state) => {
+        const bucket = name === 'decision' ? state.recent_decisions
+          : name === 'constraint' ? state.active_constraints
+          : state.known_traps;
+        const item = bucket.find((x) => x.id === id);
+        if (!item) throw new EntityNotFoundError(name, id);
+        (item as Record<string, unknown>)[statusField] = to;
+      }, cwd);
       return { entity: name, id, from, to, side_effects: sideEffects };
     }
     case 'candidate': {
@@ -805,8 +806,7 @@ export function transitionEntity(
 
 /**
  * Stamp provenance on a state-resident record (plan, decision, constraint, trap)
- * immediately after create. Writes one extra persistState call; acceptable for
- * v1 since create is infrequent compared to reads.
+ * immediately after create.
  */
 function stampProvenanceOnStateItem(
   name: 'plan' | 'decision' | 'constraint' | 'trap',
@@ -814,15 +814,15 @@ function stampProvenanceOnStateItem(
   provenance: Provenance,
   cwd: string,
 ): void {
-  const state = loadState(cwd);
-  const bucket = name === 'plan' ? state.plan_items
-    : name === 'decision' ? state.recent_decisions
-    : name === 'constraint' ? state.active_constraints
-    : state.known_traps;
-  const item = (bucket as Array<Record<string, unknown>>).find((x) => x.id === id);
-  if (!item) return;
-  item.provenance = provenance;
-  persistState(state, cwd);
+  mutateState((state) => {
+    const bucket = name === 'plan' ? state.plan_items
+      : name === 'decision' ? state.recent_decisions
+      : name === 'constraint' ? state.active_constraints
+      : state.known_traps;
+    const item = (bucket as Array<Record<string, unknown>>).find((x) => x.id === id);
+    if (!item) return;
+    item.provenance = provenance;
+  }, cwd);
 }
 
 function requireString(data: Record<string, unknown>, field: string): string {

@@ -138,6 +138,7 @@ function syncDirectory<T extends { id: string }>(
   items: T[],
   documentType: VersionedDocumentType,
   schema: ZodType<T, unknown>,
+  deleteMissing: boolean,
 ) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -150,6 +151,8 @@ function syncDirectory<T extends { id: string }>(
     const filepath = path.join(dirPath, `${item.id}.json`);
     saveVersionedJsonFile(documentType, filepath, item);
   }
+
+  if (!deleteMissing) return;
 
   // Remove files that are no longer in the state (e.g. if deleted/pruned).
   // CRITICAL: we must distinguish "file dropped from state intentionally" from
@@ -186,10 +189,11 @@ interface PersistStateOptions {
   eventAction?: 'update' | 'upgrade' | 'rollback';
   eventSummary?: string;
   commitMessage?: string;
+  deleteMissing?: boolean;
 }
 
 function persistStateUnlocked(state: State, cwd: string, options: PersistStateOptions = {}): void {
-  writeStateDirectories(state, cwd);
+  writeStateDirectories(state, cwd, options.deleteMissing ?? false);
   if (options.writeProjectMarkdown ?? true) {
     rebuildProjectMd(state, cwd);
   }
@@ -240,7 +244,7 @@ function cleanupLegacyDir<T extends { id: string }>(
   }
 }
 
-function writeStateDirectories(state: State, cwd?: string): void {
+function writeStateDirectories(state: State, cwd?: string, deleteMissing = false): void {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
 
@@ -259,9 +263,11 @@ function writeStateDirectories(state: State, cwd?: string): void {
 
   for (const { name, items, docType, schema } of entities) {
     const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
-    syncDirectory(writeDir, items, docType, schema);
+    syncDirectory(writeDir, items, docType, schema, deleteMissing);
     const currentIds = new Set(items.map(item => item.id));
-    cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema);
+    if (deleteMissing) {
+      cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema);
+    }
   }
 }
 
@@ -281,7 +287,7 @@ export function mutateState<T>(
   return mutate({ cwd: effectiveCwd }, () => {
     const state = loadState(effectiveCwd);
     const result = mutateFn(state);
-    persistStateUnlocked(state, effectiveCwd, options);
+    persistStateUnlocked(state, effectiveCwd, { ...options, deleteMissing: true });
     return result;
   });
 }

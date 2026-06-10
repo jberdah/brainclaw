@@ -174,13 +174,10 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
   const dedupHandoffs = options.dedupHandoffs ?? true;
   const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
 
-  // Extensions (pln#436): file-direct sweeps, independent of mutateState
-  // since claims and runtime_notes live in their own stores.
-  const claimsArchived = purgeReleasedClaims ? archiveReleasedClaims(cwd, minAgeDays, dryRun) : 0;
-  const sessionNotesArchived = purgeSessionNotes ? archiveSessionNotes(cwd, minAgeDays, dryRun) : 0;
-  const handoffsDeduped = dedupHandoffs ? dedupAutoHandoffs(cwd, dryRun) : 0;
-
   if (dryRun) {
+    const claimsArchived = purgeReleasedClaims ? archiveReleasedClaims(cwd, minAgeDays, true) : 0;
+    const sessionNotesArchived = purgeSessionNotes ? archiveSessionNotes(cwd, minAgeDays, true) : 0;
+    const handoffsDeduped = dedupHandoffs ? dedupAutoHandoffs(cwd, true) : 0;
     const state = loadState(cwd);
     const eligible = collectEligible(state, cutoff);
     const selected = eligible.slice(0, maxItems);
@@ -196,6 +193,11 @@ export function compact(options: CompactionOptions = {}): CompactionResult {
     };
   }
   return mutateState((state) => {
+    // Direct file-store GC participates in the same store-wide mutation lock as
+    // state compaction so a stale snapshot cannot race against these deletes.
+    const claimsArchived = purgeReleasedClaims ? archiveReleasedClaims(cwd, minAgeDays, false) : 0;
+    const sessionNotesArchived = purgeSessionNotes ? archiveSessionNotes(cwd, minAgeDays, false) : 0;
+    const handoffsDeduped = dedupHandoffs ? dedupAutoHandoffs(cwd, false) : 0;
     const eligible = collectEligible(state, cutoff);
     const selected = eligible.slice(0, maxItems);
     if (selected.length === 0) {

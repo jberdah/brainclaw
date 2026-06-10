@@ -1,5 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getNextShortLabel, generateIdWithLabel } from '../../src/core/ids.js';
 import { generateCandidateIdWithLabel, resolveIdOrAlias, saveCandidate } from '../../src/core/candidates.js';
 import { createTestWorkspace } from '../helpers/workspace.js';
@@ -60,6 +62,25 @@ describe('core/ids — getNextShortLabel', () => {
     }
     const next = getNextShortLabel('trp', workspace.dir);
     assert.equal(next, 'trp#6');
+  });
+
+  it('throws on corrupt counter files instead of silently resetting labels', () => {
+    const counterPath = path.join(workspace.dir, '.brainclaw', '.id-counter.json');
+    fs.writeFileSync(counterPath, '{not json', 'utf-8');
+
+    assert.throws(
+      () => getNextShortLabel('dec', workspace.dir),
+      /Could not read short-label counter/,
+    );
+    assert.equal(fs.readFileSync(counterPath, 'utf-8'), '{not json');
+  });
+
+  it('honors preferredDirName for counter storage', () => {
+    const label = getNextShortLabel('dec', workspace.dir, '.custom-brainclaw');
+
+    assert.equal(label, 'dec#1');
+    assert.equal(fs.existsSync(path.join(workspace.dir, '.custom-brainclaw', '.id-counter.json')), true);
+    assert.equal(fs.existsSync(path.join(workspace.dir, '.brainclaw', '.id-counter.json')), false);
   });
 });
 

@@ -29,6 +29,14 @@ function claimsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('claims', cwd ?? process.cwd(), mode);
 }
 
+function claimDirs(cwd?: string): string[] {
+  const effectiveCwd = cwd ?? process.cwd();
+  return Array.from(new Set([
+    claimsDir(effectiveCwd, 'write'),
+    claimsDir(effectiveCwd, 'read'),
+  ]));
+}
+
 export function ensureClaimsDir(cwd?: string): void {
   const dir = claimsDir(cwd, 'write');
   if (!fs.existsSync(dir)) {
@@ -36,27 +44,47 @@ export function ensureClaimsDir(cwd?: string): void {
   }
 }
 
-function claimStore(cwd?: string): JsonStore<Claim> {
+function claimStoreForDir(dirPath: string): JsonStore<Claim> {
   return new JsonStore<Claim>({
-    dirPath: claimsDir(cwd, 'read'),
+    dirPath,
     documentType: 'claim',
     getId: (claim) => claim.id,
     sort: (a, b) => a.created_at.localeCompare(b.created_at),
   });
 }
 
+function writeClaimStore(cwd?: string): JsonStore<Claim> {
+  return claimStoreForDir(claimsDir(cwd, 'write'));
+}
+
+function loadClaimFromAnyDir(id: string, cwd?: string): Claim {
+  for (const dirPath of claimDirs(cwd)) {
+    const store = claimStoreForDir(dirPath);
+    if (store.exists(id)) return store.load(id);
+  }
+  throw new Error(`claim '${id}' not found`);
+}
+
+function saveClaimUnlocked(claim: Claim, cwd?: string): void {
+  ensureClaimsDir(cwd);
+  writeClaimStore(cwd).save(ClaimSchema.parse(claim));
+  const writeDir = claimsDir(cwd, 'write');
+  for (const dirPath of claimDirs(cwd)) {
+    if (dirPath === writeDir) continue;
+    const legacyPath = path.join(dirPath, `${claim.id}.json`);
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+    } catch {
+      // Best effort: listClaims() reads both dirs, so a missed cleanup remains visible.
+    }
+  }
+  // Auto-refresh live companions after claim changes (non-fatal)
+  try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
+}
+
 export function saveClaim(claim: Claim, cwd?: string): void {
   mutate({ cwd }, () => {
-    ensureClaimsDir(cwd);
-    const writeStore = new JsonStore<Claim>({
-      dirPath: claimsDir(cwd, 'write'),
-      documentType: 'claim',
-      getId: (c) => c.id,
-      sort: (a, b) => a.created_at.localeCompare(b.created_at),
-    });
-    writeStore.save(ClaimSchema.parse(claim));
-    // Auto-refresh live companions after claim changes (non-fatal)
-    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
+    saveClaimUnlocked(claim, cwd);
   });
 }
 
@@ -110,25 +138,33 @@ export function acquireClaimScope(input: AcquireClaimScopeInput, cwd?: string): 
       model: input.model,
     };
 
-    saveClaim(claim, cwd);
+    saveClaimUnlocked(claim, cwd);
     return { acquired: true, claim };
   });
 }
 
 export function loadClaim(id: string, cwd?: string): Claim {
-  return claimStore(cwd).load(id);
+  return loadClaimFromAnyDir(id, cwd);
 }
 
 export function listClaims(cwd?: string): Claim[] {
-  return claimStore(cwd).list();
+  const byId = new Map<string, Claim>();
+  for (const dirPath of claimDirs(cwd)) {
+    for (const claim of claimStoreForDir(dirPath).list()) {
+      if (!byId.has(claim.id)) byId.set(claim.id, claim);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 export function releaseClaim(id: string, cwd?: string): Claim {
-  const claim = loadClaim(id, cwd);
-  claim.status = 'released';
-  claim.released_at = nowISO();
-  saveClaim(claim, cwd);
-  return claim;
+  return mutate({ cwd }, () => {
+    const claim = loadClaim(id, cwd);
+    claim.status = 'released';
+    claim.released_at = nowISO();
+    saveClaimUnlocked(claim, cwd);
+    return claim;
+  });
 }
 
 export interface ReleaseClaimCascadeOptions {
@@ -163,103 +199,112 @@ export function releaseClaimWithCascade(
 ): ReleaseClaimCascadeResult {
   const { planStatus, cwd } = options;
 
-  // Release the claim (idempotent: already-released claims are returned as-is)
-  const claim = loadClaim(id, cwd);
-  if (claim.status === 'released') {
-    return { claim, planTransitioned: false };
-  }
-  claim.status = 'released';
-  claim.released_at = nowISO();
-  saveClaim(claim, cwd);
+  const result = mutate({ cwd }, () => {
+    // Release the claim (idempotent: already-released claims are returned as-is)
+    const claim = loadClaim(id, cwd);
+    if (claim.status === 'released') {
+      return { claim, planTransitioned: false } as ReleaseClaimCascadeResult;
+    }
+    claim.status = 'released';
+    claim.released_at = nowISO();
+    saveClaimUnlocked(claim, cwd);
+
+    // No cascade requested or no linked plan
+    if (!planStatus || !claim.plan_id) {
+      return { claim, planTransitioned: false } as ReleaseClaimCascadeResult;
+    }
+
+    const state = loadState(cwd);
+    const plan = state.plan_items.find((item) => item.id === claim.plan_id);
+    if (!plan) {
+      return { claim, planTransitioned: false } as ReleaseClaimCascadeResult;
+    }
+
+    const ts = nowISO();
+
+    if (planStatus === 'blocked') {
+      // Always propagate blocked status to plan
+      plan.status = 'blocked' as PlanStatus;
+      plan.updated_at = ts;
+      persistState(state, cwd);
+      return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'blocked' } as ReleaseClaimCascadeResult;
+    }
+
+    if (planStatus === 'done') {
+      // Count OTHER active claims on the same plan (current claim already released above)
+      const otherActive = listClaims(cwd).filter(
+        (c) => c.status === 'active' && c.plan_id === claim.plan_id && c.id !== id,
+      );
+
+      if (otherActive.length > 0) {
+        const planWarning = `Plan has ${otherActive.length} other active claim(s); staying in_progress`;
+        return {
+          claim,
+          planTransitioned: false,
+          planWarning,
+          planId: plan.id,
+          newPlanStatus: plan.status,
+          otherActiveClaimsCount: otherActive.length,
+        } as ReleaseClaimCascadeResult;
+      }
+
+      // Last active claim released → auto-transition plan to done
+      plan.status = 'done' as PlanStatus;
+      if (!plan.completed_at) plan.completed_at = ts;
+      plan.updated_at = ts;
+      persistState(state, cwd);
+
+      return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'done' } as ReleaseClaimCascadeResult;
+    }
+
+    // planStatus='todo', 'in_progress', or other — no cascade
+    return { claim, planTransitioned: false } as ReleaseClaimCascadeResult;
+  });
 
   appendAuditEntry(
     {
-      actor: claim.agent,
-      actor_id: claim.agent_id,
+      actor: result.claim.agent,
+      actor_id: result.claim.agent_id,
       action: 'release_claim',
       item_id: id,
       item_type: 'claim',
-      scope: claim.scope,
-      session_id: claim.session_id,
-      host_id: claim.host_id,
+      scope: result.claim.scope,
+      session_id: result.claim.session_id,
+      host_id: result.claim.host_id,
     },
     cwd,
   );
 
-  // No cascade requested or no linked plan
-  if (!planStatus || !claim.plan_id) {
-    return { claim, planTransitioned: false };
-  }
-
-  const state = loadState(cwd);
-  const plan = state.plan_items.find((item) => item.id === claim.plan_id);
-  if (!plan) {
-    return { claim, planTransitioned: false };
-  }
-
-  const ts = nowISO();
-
-  if (planStatus === 'blocked') {
-    // Always propagate blocked status to plan
-    plan.status = 'blocked' as PlanStatus;
-    plan.updated_at = ts;
-    persistState(state, cwd);
-    return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'blocked' };
-  }
-
-  if (planStatus === 'done') {
-    // Count OTHER active claims on the same plan (current claim already released above)
-    const otherActive = listClaims(cwd).filter(
-      (c) => c.status === 'active' && c.plan_id === claim.plan_id && c.id !== id,
-    );
-
-    if (otherActive.length > 0) {
-      const planWarning = `Plan has ${otherActive.length} other active claim(s); staying in_progress`;
-      appendAuditEntry(
-        {
-          actor: claim.agent,
-          action: 'update',
-          item_id: plan.id,
-          item_type: 'plan',
-          after: { cascade_blocked: true, reason: planWarning },
-        },
-        cwd,
-      );
-      return {
-        claim,
-        planTransitioned: false,
-        planWarning,
-        planId: plan.id,
-        newPlanStatus: plan.status,
-        otherActiveClaimsCount: otherActive.length,
-      };
-    }
-
-    // Last active claim released → auto-transition plan to done
-    plan.status = 'done' as PlanStatus;
-    if (!plan.completed_at) plan.completed_at = ts;
-    plan.updated_at = ts;
-    persistState(state, cwd);
-
-    createRuntimeEvent(
+  if (result.planWarning && result.planId) {
+    appendAuditEntry(
       {
-        agent: claim.agent,
-        agent_id: claim.agent_id,
-        event_type: 'plan_cascade_to_done',
-        claim_id: id,
-        plan_id: plan.id,
-        session_id: claim.session_id,
-        host_id: claim.host_id,
-        text: `Plan ${plan.id} auto-transitioned to done — last active claim released by ${claim.agent}`,
+        actor: result.claim.agent,
+        action: 'update',
+        item_id: result.planId,
+        item_type: 'plan',
+        after: { cascade_blocked: true, reason: result.planWarning },
       },
       cwd,
     );
-
-    return { claim, planTransitioned: true, planId: plan.id, newPlanStatus: 'done' };
   }
 
-  // planStatus='todo', 'in_progress', or other — no cascade
-  return { claim, planTransitioned: false };
+  if (result.newPlanStatus === 'done' && result.planId) {
+    createRuntimeEvent(
+      {
+        agent: result.claim.agent,
+        agent_id: result.claim.agent_id,
+        event_type: 'plan_cascade_to_done',
+        claim_id: id,
+        plan_id: result.planId,
+        session_id: result.claim.session_id,
+        host_id: result.claim.host_id,
+        text: `Plan ${result.planId} auto-transitioned to done — last active claim released by ${result.claim.agent}`,
+      },
+      cwd,
+    );
+  }
+
+  return result;
 }
 
 export function generateClaimId(): string {
@@ -274,19 +319,20 @@ export function isClaimExpired(claim: Claim): boolean {
 
 /** Mark active claims past their expires_at as released. Returns count of expired claims. */
 export function expireStaleActiveClaims(cwd?: string): number {
-  const store = claimStore(cwd);
-  const all = store.list();
-  let count = 0;
-  const now = nowISO();
-  for (const claim of all) {
-    if (claim.status === 'active' && isClaimExpired(claim)) {
-      claim.status = 'released';
-      claim.released_at = now;
-      store.save(claim);
-      count++;
+  return mutate({ cwd }, () => {
+    const all = listClaims(cwd);
+    let count = 0;
+    const now = nowISO();
+    for (const claim of all) {
+      if (claim.status === 'active' && isClaimExpired(claim)) {
+        claim.status = 'released';
+        claim.released_at = now;
+        saveClaimUnlocked(claim, cwd);
+        count++;
+      }
     }
-  }
-  return count;
+    return count;
+  });
 }
 
 /** Default stale threshold: 24 hours. */
@@ -498,34 +544,35 @@ export function releaseStaleClaimsFromOtherAgents(
 ): StaleClaimResult {
   const config = loadConfig(cwd);
   const thresholdHours = config.claims?.auto_release_after_hours ?? DEFAULT_STALE_HOURS;
-  const store = claimStore(cwd);
-  const all = store.list();
-  const now = nowISO();
-  const released: Claim[] = [];
-  const warned: Claim[] = [];
+  return mutate({ cwd }, () => {
+    const all = listClaims(cwd);
+    const now = nowISO();
+    const released: Claim[] = [];
+    const warned: Claim[] = [];
 
-  for (const claim of all) {
-    if (claim.status !== 'active') continue;
+    for (const claim of all) {
+      if (claim.status !== 'active') continue;
 
-    // Session-aware skip: if the caller names its current session, only that
-    // session's claims are off-limits. Otherwise fall back to the legacy
-    // "skip same agent" rule.
-    if (currentSessionId) {
-      if (claim.session_id === currentSessionId) continue;
-    } else if (claim.agent === currentAgent) {
-      continue;
+      // Session-aware skip: if the caller names its current session, only that
+      // session's claims are off-limits. Otherwise fall back to the legacy
+      // "skip same agent" rule.
+      if (currentSessionId) {
+        if (claim.session_id === currentSessionId) continue;
+      } else if (claim.agent === currentAgent) {
+        continue;
+      }
+
+      const { status } = assessClaimLiveness(claim, { thresholdHours, cwd });
+      if (status === 'live' || status === 'young') continue;
+
+      claim.status = 'released';
+      claim.released_at = now;
+      saveClaimUnlocked(claim, cwd);
+      released.push(claim);
     }
 
-    const { status } = assessClaimLiveness(claim, { thresholdHours, cwd });
-    if (status === 'live' || status === 'young') continue;
-
-    claim.status = 'released';
-    claim.released_at = now;
-    store.save(claim);
-    released.push(claim);
-  }
-
-  return { released, warned };
+    return { released, warned };
+  });
 }
 
 // ── Coordinator-owned claim ─────────────────────────────────
@@ -622,26 +669,53 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
     worktreeWarning = `Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 
-  saveClaim({
-    id: claimId,
-    agent: options.agent,
-    scope: options.scope,
-    description: options.description,
-    plan_id: options.planId,
-    created_at: nowISO(),
-    status: 'active',
-    worktree_path: worktreePath,
-  }, options.cwd);
+  const result = mutate({ cwd: options.cwd }, () => {
+    const racedScopeClaim = listClaims(options.cwd).find(
+      (claim) => claim.status === 'active' && claim.scope === options.scope,
+    );
+    if (racedScopeClaim) {
+      if (racedScopeClaim.agent === options.agent) {
+        return {
+          claimId: racedScopeClaim.id,
+          worktreePath: racedScopeClaim.worktree_path,
+          worktreeWarning,
+          reusedExisting: true,
+        } as CoordinatorClaimResult;
+      }
+      return {
+        claimId: racedScopeClaim.id,
+        worktreePath: racedScopeClaim.worktree_path,
+        reusedExisting: true,
+        scopeConflict: true,
+        conflictAgent: racedScopeClaim.agent,
+      } as CoordinatorClaimResult;
+    }
 
-  appendAuditEntry({
-    actor: options.dispatcherAgent,
-    action: 'claim',
-    item_id: claimId,
-    item_type: 'claim',
-    scope: options.scope,
-  }, options.cwd);
+    saveClaimUnlocked({
+      id: claimId,
+      agent: options.agent,
+      scope: options.scope,
+      description: options.description,
+      plan_id: options.planId,
+      created_at: nowISO(),
+      status: 'active',
+      worktree_path: worktreePath,
+    }, options.cwd);
 
-  return { claimId, worktreePath, worktreeWarning, reusedExisting: false };
+    return { claimId, worktreePath, worktreeWarning, reusedExisting: false } as CoordinatorClaimResult;
+  });
+
+  if (!result.reusedExisting && !result.scopeConflict) {
+    appendAuditEntry({
+      actor: options.dispatcherAgent,
+      action: 'claim',
+      item_id: result.claimId,
+      item_type: 'claim',
+      scope: options.scope,
+    }, options.cwd);
+  }
+
+  return result;
 }
 
 // ── Claim lifecycle helpers for multi-instance dispatch ────
@@ -651,16 +725,20 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
  * Called by the dispatcher after sending the inbox message.
  */
 export function attachAssignmentMessageToClaim(claimId: string, messageId: string, cwd?: string): void {
-  const claim = loadClaim(claimId, cwd);
-  claim.assignment_message_id = messageId;
-  saveClaim(claim, cwd);
+  mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    claim.assignment_message_id = messageId;
+    saveClaimUnlocked(claim, cwd);
+  });
 }
 
 /** Link a claim to its Assignment entity (Agent SDK runtime protocol). */
 export function linkClaimToAssignment(claimId: string, assignmentId: string, cwd?: string): void {
-  const claim = loadClaim(claimId, cwd);
-  claim.assignment_id = assignmentId;
-  saveClaim(claim, cwd);
+  mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    claim.assignment_id = assignmentId;
+    saveClaimUnlocked(claim, cwd);
+  });
 }
 
 /**
@@ -703,7 +781,7 @@ export function adoptClaimSession(
     }
     claim.session_id = sessionId;
     claim.adopted_at = nowISO();
-    saveClaim(claim, cwd);
+    saveClaimUnlocked(claim, cwd);
     return { adopted: true, reason: 'ok' };
   });
 }
