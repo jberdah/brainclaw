@@ -103,7 +103,35 @@ describe('bclaw_work — bootstrap_recommended hint (pln#513 step 1, seq #50)', 
 
     const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
     assert.equal(r.bootstrap_recommended, false);
+    assert.equal(r.bootstrap_verdict, 'none');
     assert.equal(r.next_action, undefined);
+  });
+
+  // pln#557 step 3 — composite verdict cases.
+  it('returns verdict=refresh on a rich store without PROJECT.md (no from-scratch bootstrap)', async () => {
+    const line = JSON.stringify({ ts: new Date().toISOString(), agent: 'alice', action: 'update', item_type: 'claim' }) + '\n';
+    fs.writeFileSync(path.join(workspace.dir, '.brainclaw', 'events.jsonl'), line.repeat(Math.ceil((80 * 1024) / line.length)), 'utf8');
+
+    const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
+    assert.equal(r.bootstrap_recommended, true);
+    assert.equal(r.bootstrap_verdict, 'refresh');
+    assert.equal(r.next_action, 'bclaw_bootstrap(refresh: true)');
+    const refreshAction = r.next_actions?.find((a) => a.tool === 'bclaw_bootstrap');
+    assert.ok(refreshAction, 'next_actions must carry the refresh affordance');
+    assert.equal((refreshAction?.args as { refresh?: boolean })?.refresh, true);
+  });
+
+  it('returns verdict=refresh on a fossil PROJECT.md (eternal false negative killed)', async () => {
+    const projectMd = path.join(workspace.dir, 'PROJECT.md');
+    fs.writeFileSync(projectMd, '# project\n\nOld content.\n', 'utf8');
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 86_400_000);
+    fs.utimesSync(projectMd, sixtyDaysAgo, sixtyDaysAgo);
+    fs.writeFileSync(path.join(workspace.dir, '.brainclaw', 'events.jsonl'), '{"ts":"now","agent":"alice","action":"update","item_type":"claim"}\n', 'utf8');
+
+    const r = await callTool(workspace, 'bclaw_work', { intent: 'consult' });
+    assert.equal(r.bootstrap_recommended, true);
+    assert.equal(r.bootstrap_verdict, 'refresh');
+    assert.equal(r.next_action, 'bclaw_bootstrap(refresh: true)');
   });
 });
 

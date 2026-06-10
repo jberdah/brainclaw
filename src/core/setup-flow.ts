@@ -12,7 +12,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryExists } from './io.js';
+import { spawnSync } from 'node:child_process';
+import { memoryDir, memoryExists } from './io.js';
 import { detectAiAgent } from './ai-agent-detection.js';
 import { resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { analyzeRepository } from './repo-analysis.js';
@@ -104,6 +105,114 @@ export function resolveEmptyMemoryRecommendation(cwd: string = process.cwd()): E
     chained_mcp_action: 'bclaw_bootstrap()',
     text: "Memory is empty and the repo is greenfield → open a bootstrap loop to ideate the project vision: bclaw_coordinate(intent='ideate', preset='bootstrap') (CLI: brainclaw bootstrap-loop). Once content exists, chain bclaw_bootstrap to extract it.",
   };
+}
+
+// --- Composite bootstrap-need assessment (pln#557 step 3) -------------------
+
+export type BootstrapVerdict = 'bootstrap' | 'refresh' | 'none';
+
+export interface BootstrapNeedAssessment {
+  verdict: BootstrapVerdict;
+  /** Human-readable signals behind the verdict. */
+  reasons: string[];
+  project_md_present: boolean;
+  store_density: 'empty' | 'low' | 'rich';
+}
+
+/** Event log this large reads as a mature store, not a from-scratch case. */
+const RICH_EVENT_LOG_BYTES = 64 * 1024;
+/** This many memory items reads as a mature store. */
+const RICH_STATE_ITEMS = 25;
+/** PROJECT.md this much older than the latest repo/store activity is fossil. */
+const FOSSIL_GAP_MS = 30 * 86_400_000;
+
+function lastCommitEpochMs(cwd: string): number | undefined {
+  try {
+    const probe = spawnSync('git', ['log', '-1', '--format=%ct'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 2000,
+      windowsHide: true,
+    });
+    if (probe.status !== 0) return undefined;
+    const epoch = Number.parseInt(probe.stdout.trim(), 10);
+    return Number.isFinite(epoch) ? epoch * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Composite replacement for the one-bit PROJECT.md stat() that backed
+ * `bootstrap_recommended` (pln#513). The single bit had two failure modes on
+ * a mature ("amorcé") project:
+ *   - false positive: rich store, missing PROJECT.md → recommended a
+ *     from-scratch bootstrap over 17k events of accumulated memory;
+ *   - eternal false negative: PROJECT.md exists but fossilized — never
+ *     flagged again no matter how far the repo drifted.
+ *
+ * Signals combined: PROJECT.md presence × its mtime vs recent activity
+ * (last commit, last memory write) × store density (event-log size,
+ * memory item count). 'refresh' maps to `bclaw_bootstrap(refresh: true)` —
+ * coordinate with the pln#514 step 1 force-flag on the bootstrap-loop side.
+ */
+export function assessBootstrapNeed(cwd: string = process.cwd()): BootstrapNeedAssessment {
+  const reasons: string[] = [];
+
+  // Signal 1 — PROJECT.md presence.
+  const projectMdPath = path.join(cwd, 'PROJECT.md');
+  let projectMdPresent = false;
+  let projectMdMtimeMs: number | undefined;
+  try {
+    const stat = fs.statSync(projectMdPath);
+    if (stat.isFile() && stat.size > 0) {
+      projectMdPresent = true;
+      projectMdMtimeMs = stat.mtimeMs;
+    }
+  } catch { /* absent */ }
+
+  // Signal 2 — store density.
+  let eventLogBytes = 0;
+  let eventLogMtimeMs: number | undefined;
+  try {
+    const stat = fs.statSync(path.join(memoryDir(cwd), 'events.jsonl'));
+    eventLogBytes = stat.size;
+    eventLogMtimeMs = stat.mtimeMs;
+  } catch { /* no event log */ }
+  let stateItems = 0;
+  try {
+    const state = loadState(cwd);
+    stateItems = state.active_constraints.length + state.recent_decisions.length
+      + state.known_traps.length + state.open_handoffs.length + state.plan_items.length;
+  } catch { /* unreadable state → 0 */ }
+  const storeDensity: BootstrapNeedAssessment['store_density'] =
+    eventLogBytes >= RICH_EVENT_LOG_BYTES || stateItems >= RICH_STATE_ITEMS
+      ? 'rich'
+      : eventLogBytes === 0 && stateItems === 0
+        ? 'empty'
+        : 'low';
+
+  if (!projectMdPresent) {
+    if (storeDensity === 'rich') {
+      // The store already knows this project — regenerate PROJECT.md from it
+      // (scanner + memory), do NOT restart discovery from scratch.
+      reasons.push(`PROJECT.md missing but the store is rich (${stateItems} items, ${Math.round(eventLogBytes / 1024)} KB events) — regenerate from existing memory instead of bootstrapping from scratch`);
+      return { verdict: 'refresh', reasons, project_md_present: false, store_density: storeDensity };
+    }
+    reasons.push('PROJECT.md missing and the store is sparse — initial bootstrap applies');
+    return { verdict: 'bootstrap', reasons, project_md_present: false, store_density: storeDensity };
+  }
+
+  // Signal 3 — fossil check: PROJECT.md much older than the latest activity.
+  const lastActivityMs = Math.max(lastCommitEpochMs(cwd) ?? 0, eventLogMtimeMs ?? 0);
+  if (projectMdMtimeMs !== undefined && lastActivityMs > 0 && lastActivityMs - projectMdMtimeMs > FOSSIL_GAP_MS) {
+    const gapDays = Math.round((lastActivityMs - projectMdMtimeMs) / 86_400_000);
+    reasons.push(`PROJECT.md is ${gapDays} days older than the latest repo/store activity — likely fossil, refresh it`);
+    return { verdict: 'refresh', reasons, project_md_present: true, store_density: storeDensity };
+  }
+
+  reasons.push('PROJECT.md present and current relative to recent activity');
+  return { verdict: 'none', reasons, project_md_present: true, store_density: storeDensity };
 }
 
 /**

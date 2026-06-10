@@ -186,6 +186,18 @@ export const FacadeResponseSchema = z.object({
    */
   bootstrap_recommended: z.boolean().optional(),
   /**
+   * pln#557 step 3 — composite verdict behind `bootstrap_recommended`:
+   *   'bootstrap' → no PROJECT.md AND sparse store: from-scratch entry-point
+   *     (extract route or bootstrap loop per the shared empty-memory rule);
+   *   'refresh'   → PROJECT.md missing on a RICH store, or fossil relative
+   *     to recent commit/store activity: regenerate via
+   *     bclaw_bootstrap(refresh: true), never from-scratch;
+   *   'none'      → PROJECT.md present and current.
+   * `bootstrap_recommended` stays the boolean projection (verdict !== 'none')
+   * for backward compatibility.
+   */
+  bootstrap_verdict: z.enum(['bootstrap', 'refresh', 'none']).optional(),
+  /**
    * pln#513 step 1 — literal MCP call to surface as the bootstrap entry-point
    * when `bootstrap_recommended` is true. Carries the canonical-grammar text
    * (`bclaw_coordinate(intent='ideate', preset='bootstrap')`) verbatim so the
