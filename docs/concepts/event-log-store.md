@@ -552,9 +552,12 @@ retention knob needed ahead of J5.
 ### 2.11 Federation conflict primitive (C4 resolution)
 
 Cross-checked against `identity-model-proposal.md` (origin-partitioned
-write authority; scalar `entity_rev` + origin tag; `(origin_id, seq)`-headed
-slices). The proposal's claim was attacked; result: **the scalar survives
-for v1, with one documented degradation in conflict *surfacing***.
+write authority; scalar `entity_rev` + origin tag;
+`(origin_id, origin_epoch, seq)`-headed slices — the epoch handles
+restore-from-backup, see the proposal). Both symmetric reviews attacked the
+same concurrent-edit hole independently and produced two complementary
+detection mechanisms; this section reconciles them (coordinator synthesis
+2026-06-11, flagged for Codex adjudication in §6 R-C4).
 
 - **Execution entities** (claims, runs, locks, assignments): single-writer
   per origin; other origins materialize read-only. Authority partition
@@ -574,24 +577,32 @@ for v1, with one documented degradation in conflict *surfacing***.
   concurrent with A's lineage, not an ancestor of it, and a bare scalar
   head cannot distinguish "stale copy of what I already incorporated" from
   "divergent edit with a lower rev".
-- **Adopted detection rule:** conflicts are detected against the
-  **journal**, not the head. Import replays the incoming slice through the
-  reducer; a conflict = an incoming record whose `(item_id, entity_rev)`
-  pair already exists locally **with a different origin** — the §2.2
-  dup-detection generalized from `(seq, writer)` to `(rev, origin)`. In
-  the attack above, B's (e, 8) collides with A's locally journaled (e, 8)
-  → candidate surfaced while LWW keeps A's rev 9. The per-entity
-  rev→origin lookup is built from the same local segments the import
-  already reads — local and cheap to the gc floor.
-- **Known miss-window (documented, not denied):** if the local record for
-  the colliding rev has been archived past the gc floor (checkpoints hold
-  heads only, not per-rev history), the import resolves correctly but
-  surfaces nothing — a concurrent lower-rev edit is mis-read as stale.
-  Closing it fully requires a per-origin high-watermark map per entity — a
-  bounded vector clock in disguise. Verdict: convergence never breaks;
-  only surfacing degrades, and only for edits concurrent across a window
-  longer than the gc floor (weeks). The per-origin watermark (size =
-  origin count, typically ≤ 3) is the **named upgrade path** if dogfooding
+- **Adopted detection rules (two, complementary — reconciled with the
+  identity proposal's hardened model):**
+  1. **PRIMARY — `base_rev` fast-forward check** (from the identity
+     proposal, post-review): every *exported* memory-entity record carries
+     `base_rev`, the rev the write was based on. Receiver rule: incoming is
+     a clean fast-forward iff `incoming.base_rev >= current.rev`; otherwise
+     the write was concurrent → LWW materializes the winner AND a conflict
+     candidate carries both post-images. One integer per exported record,
+     decided from the record alone — **independent of local history
+     retention**, so it survives gc/compaction and works on a fresh
+     materialize.
+  2. **DEFENSE-IN-DEPTH — `(rev, origin)` journal collision at replay**:
+     import replays the incoming slice through the reducer; an incoming
+     record whose `(item_id, entity_rev)` already exists locally **with a
+     different origin** is a conflict (the §2.2 dup-detection generalized
+     from `(seq, writer)`). Catches legacy/foreign slices lacking
+     `base_rev` and cross-checks rule 1, at zero envelope cost — but only
+     reaches back to the gc floor.
+  In the attack above, both rules fire: B's record has `base_rev 7 <
+  current rev 9` (rule 1) and B's (e, 8) collides with A's journaled
+  (e, 8) (rule 2) → candidate surfaced while LWW keeps A's rev 9.
+- **Residual miss-window, now narrow:** only a record that *lacks*
+  `base_rev` (legacy exporter) AND whose colliding rev is archived past
+  the gc floor escapes surfacing — convergence still never breaks.
+  The per-origin high-watermark map (a bounded vector clock, size =
+  origin count, typically ≤ 3) remains the **named upgrade path** if dogfooding
   shows missed candidates; it slots into import metadata without touching
   the envelope, which stays origin-agnostic (origin appears only in
   exported slice headers, per the proposal's migration step 2).
@@ -727,6 +738,7 @@ is carried here.
 | R2 | MED | **Redaction × cursors × federation (J1 + §2.1.2).** Does seq-watermark survival hold for a cursor positioned *inside* a redacted range? And the re-import hole: a federation peer that pulled a record pre-redaction can re-present it — `(seq, writer)` dedup would *reject* the redacted copy (good) but the peer's checkpoint may still embed the payload. Does the redaction note need to propagate as a federation signal? |
 | R3 | LOW | **Ephemeral field set enumeration (§2.8).** Adversarial sweep of the real zod schemas for fields beyond `last_heartbeat_at` / claim `expires_at` / `last_progress` that mutate without semantic change (counters, denormalized caches?) — the masking set must be complete or verify-journal cries wolf. |
 | R4 | LOW | **C4 miss-window sizing (§2.11).** Gc-floor window (weeks) vs realistic offline-origin durations; should the per-origin watermark ship in federation v1 regardless of dogfood evidence? |
+| R-C4 | MED | **Dual conflict-detection adjudication (§2.11, reconciliation 2026-06-11).** The two symmetric reviews independently produced `base_rev` fast-forward (identity proposal) and `(rev, origin)` journal collision (this spec); the coordinator kept BOTH (primary + defense-in-depth). Adjudicate: is the redundancy worth the dual maintenance, or should one become normative? Note `base_rev` is the only one that survives gc and fresh materializes. |
 
 ## Appendix A — Rejected alternatives
 
