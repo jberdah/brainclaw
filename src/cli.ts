@@ -81,6 +81,7 @@ import { runExport, runRefresh } from './commands/export.js';
 import { runHooks } from './commands/hooks.js';
 import { runWatch } from './commands/watch.js';
 import { runDispatchAnalysis, runDispatch, runDispatchReview } from './commands/dispatch.js';
+import { runDispatchWatch } from './commands/dispatch-watch.js';
 import { runInboxList, runInboxAck, runInboxArchive, runInboxSend, runInboxThread } from './commands/inbox.js';
 import { runMetrics } from './commands/metrics.js';
 import { runRollback } from './commands/rollback.js';
@@ -1638,6 +1639,22 @@ dispatchCmd
       dry: options.dry,
       spawn: options.spawn,
       agent: options.agent,
+      json: options.json,
+    });
+  });
+
+dispatchCmd
+  .command('watch <target>')
+  .description('Block until a dispatched worker reaches a terminal state (asgn_/clm_/run_ id) — sentinels, lane-result, committed-clean and worker-process-gone heuristics')
+  .option('--interval <seconds>', 'Poll interval in seconds (default 60)', parseInt)
+  .option('--timeout <minutes>', 'Give up after N minutes (default 90, exit code 2)', parseInt)
+  .option('--base <ref>', 'Base ref for commits-ahead evidence (default master)')
+  .option('--json', 'One JSON object per poll line')
+  .action(async (target, options) => {
+    await runDispatchWatch(target, {
+      intervalSeconds: options.interval,
+      timeoutMinutes: options.timeout,
+      base: options.base,
       json: options.json,
     });
   });
