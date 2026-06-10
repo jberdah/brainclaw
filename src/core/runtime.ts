@@ -173,3 +173,42 @@ export function generateRuntimeNoteId(): string {
   const rand = crypto.randomBytes(4).toString('hex');
   return `rtn_${rand}`;
 }
+
+export interface RuntimeNoteIdMigrationResult {
+  migrated: Array<{ from: string; to: string }>;
+  errors: string[];
+}
+
+/**
+ * can_b8d53d18 — soft migration for runtime notes created with the legacy
+ * `run_` prefix (the generateId fallback collided with agent_run ids).
+ * Rewrites each note's id to `rtn_<same suffix>` and renames its file.
+ * Old ids referenced in historical events stay historical; lookups are
+ * list-scan based so nothing else needs to change.
+ */
+export function migrateRuntimeNoteIdPrefixes(cwd?: string): RuntimeNoteIdMigrationResult {
+  const result: RuntimeNoteIdMigrationResult = { migrated: [], errors: [] };
+  const legacy = listRuntimeNotes({ visibility: 'all', includeAllHosts: true }, cwd)
+    .filter((note) => note.id.startsWith('run_'));
+  if (legacy.length === 0) return result;
+
+  const existingIds = new Set(listRuntimeNotes({ visibility: 'all', includeAllHosts: true }, cwd).map((n) => n.id));
+  mutate({ cwd }, () => {
+    for (const note of legacy) {
+      try {
+        let newId = `rtn_${note.id.slice('run_'.length)}`;
+        while (existingIds.has(newId)) newId = generateRuntimeNoteId();
+        const oldPath = runtimeNotePath(note, cwd);
+        const migrated: RuntimeNote = { ...note, id: newId };
+        const newPath = runtimeNotePath(migrated, cwd);
+        saveVersionedJsonFile('runtime_note', newPath, RuntimeNoteSchema.parse(migrated));
+        if (fs.existsSync(oldPath) && oldPath !== newPath) fs.unlinkSync(oldPath);
+        existingIds.add(newId);
+        result.migrated.push({ from: note.id, to: newId });
+      } catch (err) {
+        result.errors.push(`${note.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  });
+  return result;
+}

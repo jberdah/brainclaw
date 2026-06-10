@@ -13,6 +13,29 @@ function gitPath(p: string): string {
 }
 
 /**
+ * can_45316d5c — sanitize a scope-derived slug into a valid git branch
+ * component (`git check-ref-format` rules). Scopes like `.github/workflows`
+ * produced `feat/.github-workflows`, which git rejects (component starting
+ * with a dot), failing the whole worktree creation.
+ *
+ * Rules covered: no leading dots/dashes, no trailing dots, no `..`, no
+ * `@{`, no control/space/`~^:?*[\\` characters, no trailing `.lock`.
+ */
+export function sanitizeBranchComponent(raw: string, fallback = 'scope'): string {
+  let slug = raw
+    .replace(/[\s~^:?*[\]\\]/g, '-')   // chars forbidden by check-ref-format
+    .replace(/@\{/g, '-')               // reflog syntax
+    .replace(/\.\.+/g, '.')             // no double dots
+    .replace(/[^a-zA-Z0-9._-]/g, '-')   // conservative whitelist for the rest
+    .replace(/-+/g, '-')                // collapse dashes
+    .replace(/^[.-]+/, '')              // no leading dot/dash
+    .replace(/[.-]+$/, '');             // no trailing dot/dash
+  if (/\.lock$/i.test(slug)) slug = slug.slice(0, -'.lock'.length);
+  if (!slug) slug = fallback;
+  return slug.slice(0, 48);
+}
+
+/**
  * Stack marker → shared directories mapping.
  * Maven/Gradle/Cargo intentionally excluded — their dep caches live
  * machine-globally (~/.m2, ~/.gradle/caches, ~/.cargo/registry).
@@ -286,7 +309,7 @@ export function commitWorktreeOnBehalf(
   if (!add.ok) {
     return { committed: false, files_changed: [], reason: `git add failed: ${add.stderr.trim()}` };
   }
-  runGit(['reset', '-q', '--', 'LANE-RESULT.json', '.brainclaw'], worktreePath);
+  runGit(['reset', '-q', '--', 'LANE-RESULT.json', '.brainclaw', '.brainclaw-heartbeat-*'], worktreePath);
 
   // The files actually staged for this commit (post-exclusion) — also the
   // truthful files_changed report.
@@ -367,6 +390,7 @@ export function resetWorktreeToRef(worktreePath: string, ref: string): { ok: boo
         const norm = p.replace(/\\/g, '/');
         return norm !== '.brainclaw-worktree.json'
           && !norm.startsWith('.brainclaw/')
+          && !norm.startsWith('.brainclaw-heartbeat-')
           && !norm.startsWith('.git/');
       });
     if (residue.length > 0) {
@@ -509,17 +533,46 @@ export function createWorktree(
   const branchExists = branchCheck.ok;
   const baseRef = options.baseRef ?? 'HEAD';
 
-  if (branchExists && options.resetExistingBranch) {
+  if (branchExists) {
     const attachedWorktreePath = findWorktreePathForBranch(listWorktrees(mainWorktreePath), branchName);
     if (attachedWorktreePath) {
       throw new Error(
-        `Cannot reset branch ${branchName}: it is checked out in worktree ${attachedWorktreePath}. Remove or merge that worktree first.`,
+        `Cannot reuse branch ${branchName}: it is checked out in worktree ${attachedWorktreePath}. Remove or merge that worktree first.`,
       );
     }
 
-    const reset = runGit(['branch', '--force', branchName, baseRef], mainWorktreePath);
-    if (!reset.ok) {
-      throw new Error(`git branch --force failed for ${branchName}: ${reset.stderr.trim()}`);
+    if (options.resetExistingBranch) {
+      const reset = runGit(['branch', '--force', branchName, baseRef], mainWorktreePath);
+      if (!reset.ok) {
+        throw new Error(`git branch --force failed for ${branchName}: ${reset.stderr.trim()}`);
+      }
+    } else {
+      // can_2e282880 (worktree-as-contract at creation): a reused branch is a
+      // CONTRACT that the worker starts from the dispatch base, not from
+      // whatever stale base the branch happened to sit on (observed live: a
+      // June dispatch reused a feat/<scope> branch based on April master).
+      //   - branch has NO commits ahead of the base → silently re-point it to
+      //     the base (it carries nothing worth keeping);
+      //   - branch HAS commits not on the base → REFUSE and name them: they
+      //     are unharvested work — merging/harvesting first is the only safe
+      //     move, a silent reset would destroy it and a silent reuse would
+      //     run the worker on a stale base.
+      const ahead = runGit(['rev-list', '--count', `${baseRef}..${branchName}`], mainWorktreePath);
+      const aheadCount = ahead.ok ? parseInt(ahead.stdout.trim(), 10) : NaN;
+      if (!Number.isFinite(aheadCount)) {
+        throw new Error(`Cannot assess divergence of existing branch ${branchName} vs ${baseRef}: ${ahead.stderr.trim()}`);
+      }
+      if (aheadCount > 0) {
+        const commits = runGit(['log', '--oneline', '-n', '5', `${baseRef}..${branchName}`], mainWorktreePath);
+        throw new Error(
+          `Refusing to reuse branch ${branchName}: it has ${aheadCount} commit(s) not on ${baseRef} (unharvested work). ` +
+          `Harvest/merge or delete the branch first. Divergent commits:\n${commits.stdout.trim()}`,
+        );
+      }
+      const reset = runGit(['branch', '--force', branchName, baseRef], mainWorktreePath);
+      if (!reset.ok) {
+        throw new Error(`git branch --force failed for ${branchName}: ${reset.stderr.trim()}`);
+      }
     }
   }
 
@@ -934,7 +987,10 @@ export function worktreeHasOnlyBirthNoise(statusZStdout: string): boolean {
   const paths = parsePorcelainZ(statusZStdout);
   return paths.every((p) => {
     const norm = p.replace(/\\/g, '/');
-    return WORKTREE_BIRTH_NOISE.has(norm) || isSystemDirtyPath(norm);
+    return WORKTREE_BIRTH_NOISE.has(norm)
+      || norm.startsWith('.brainclaw-heartbeat-') // worker liveness sentinel (sprint 1.5)
+      || norm === 'LANE-RESULT.json'              // worker outcome report — harvested, never committed
+      || isSystemDirtyPath(norm);
   });
 }
 

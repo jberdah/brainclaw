@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -25,7 +26,7 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
     encoding: 'utf-8',
     timeout: 30000,
     env: {
-      ...process.env,
+      ...sanitizedProcessEnv(),
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

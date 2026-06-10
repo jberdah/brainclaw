@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { emptyState, saveState, loadState } from '../../src/core/state.js';
+import { sanitizedProcessEnv } from '../helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -27,7 +28,7 @@ function runCli(args: string[], cwd: string, homeDir: string): { stdout: string;
     encoding: 'utf-8',
     timeout: 30000,
     env: {
-      ...process.env,
+      ...sanitizedProcessEnv(),
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

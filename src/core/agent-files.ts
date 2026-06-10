@@ -1334,8 +1334,17 @@ function buildMatchedCommandHookEntry(matcher: string, command: string): JsonObj
  * form — bare node.exe, cli.js arg dropped — contained no other marker).
  */
 function isBrainclawHookCommand(command: string): boolean {
-  return /brainclaw|bclaw|check-events/.test(command);
+  // Review follow-up L2 (lop_e2d566765b8b4ce3): match brainclaw/bclaw only in
+  // COMMAND position (start / path separator / shell delimiter, optional binary
+  // extension) and check-events only as a standalone shell word — the old
+  // substring regex ate any user hook that merely MENTIONED these words.
+  if (command.includes('.bclaw-session')) return true;
+  if (/(^|\s)check-events(\s|$)/.test(command)) return true;
+  return /(^|[\s/\\"'`;&|(])(brainclaw|bclaw)(\.(cmd|exe|js|mjs|ps1))?([\s"')`;&|]|$)/.test(command);
 }
+
+/** Test-only export — hook recognition is the L2 contract worth pinning. */
+export const __agentFilesTesting = { isBrainclawHookCommand } as const;
 
 /**
  * Remove every brainclaw-emitted hook from `entries`, then append exactly one

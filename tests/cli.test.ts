@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { getInstalledBrainclawVersion } from '../src/core/brainclaw-version.js';
-import { AGENT_ENV_KEYS, cleanupTestEnv } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, cleanupTestEnv, sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -58,7 +58,7 @@ function run(
   // Use a separate fake home so ensureUserStore() doesn't create .brainclaw/ in cwd
   const fakeHome = createFakeHome();
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
     BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

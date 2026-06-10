@@ -25,7 +25,8 @@ import { loadAgentRun, listAgentRuns } from './agentruns.js';
 import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
 import { isProcessAlive } from './agentrun-reconciler.js';
-import { latestActivityMs } from './runtime-signals.js';
+import { findRuntimeNoteById } from './runtime.js';
+import { latestActivityMs, decodeOemAwareBuffer } from './runtime-signals.js';
 import { LaneResultSchema } from './schema.js';
 import type { Assignment, AgentRun, Claim } from './schema.js';
 import type { LoopThread } from './loops/types.js';
@@ -128,7 +129,9 @@ function readLogTail(filePath: string, lines: number): LogFileSnapshot {
     if (lines <= 0) {
       return { path: filePath, exists: true, size_bytes: stat.size };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    // can_c39f0961: Windows-native tools write OEM cp850 — decode-aware read
+    // instead of blind utf-8 so the tail is human-readable.
+    const content = decodeOemAwareBuffer(fs.readFileSync(filePath));
     const all = content.split(/\r?\n/);
     // Strip trailing empty line from final \n
     if (all.length > 0 && all[all.length - 1] === '') all.pop();
@@ -351,7 +354,12 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   const assignmentId = resolved.assignment_id;
 
   const assignment = assignmentId ? loadAssignment(assignmentId, cwd) : undefined;
-  const claim = assignment?.claim_id ? loadClaim(assignment.claim_id, cwd) : undefined;
+  // loadClaim THROWS on a missing id — a GC'd/never-created claim must not
+  // crash the whole diagnostic (sprint 1.5).
+  let claim: Claim | undefined;
+  if (assignment?.claim_id) {
+    try { claim = loadClaim(assignment.claim_id, cwd); } catch { /* claim gone — diagnose without it */ }
+  }
 
   // Prefer the pre-resolved agent_run (when target_id was a run_…); otherwise
   // look up by assignment_id and pick the most recent attempt.
@@ -380,7 +388,11 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
   // pln#527 — filesystem-activity age: max mtime across the captured logs + the
   // run's worktree files (skipping junctions). The truer liveness signal when
   // the heartbeat / last_event_at is stale during a long single operation.
-  const worktreeForFs = agentRun?.worktree_path ?? claim?.worktree_path;
+  // can_948acfd6: also fall back to assignment.worktree_path — without it a
+  // LANE-RESULT.json sitting in the assignment's worktree was invisible when
+  // neither the run nor the claim carried the path, and the verdict degraded
+  // to 'read stderr for failure detail' despite a completed lane result.
+  const worktreeForFs = agentRun?.worktree_path ?? claim?.worktree_path ?? assignment?.worktree_path;
   let lastFsActivityMs: number | undefined;
   if (assignmentId) {
     const lastFs = latestActivityMs(projectRoot, assignmentId, worktreeForFs);
@@ -412,7 +424,22 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     lane_result: laneResult,
   };
 
-  const diagnosis = computeDiagnosis(assignment, agentRun, runtime, { stallMs, nowMs });
+  let diagnosis = computeDiagnosis(assignment, agentRun, runtime, { stallMs, nowMs });
+
+  // can_b8d53d18 — a `run_` target that resolves to nothing may be a LEGACY
+  // runtime_note id (pre-rtn_ prefix collision). Say so precisely instead of
+  // the generic "verify the target_id" message.
+  if (resolved.resolved_from === 'unresolved' && options.target_id.startsWith('run_')) {
+    try {
+      if (findRuntimeNoteById(options.target_id, {}, cwd)) {
+        diagnosis = {
+          health: 'unknown',
+          summary: `${options.target_id} is a runtime_note (legacy run_ id prefix), not an agent_run — nothing to dispatch-diagnose`,
+          recommended_next_action: 'Read it with bclaw_get(entity="runtime_note"). Run `brainclaw repair` to migrate legacy run_ note ids to rtn_.',
+        };
+      }
+    } catch { /* diagnosis stays generic */ }
+  }
 
   return {
     target_id: options.target_id,

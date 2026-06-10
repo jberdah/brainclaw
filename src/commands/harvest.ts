@@ -18,7 +18,7 @@ import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/c
 import { createRuntimeEvent } from '../core/events.js';
 import { memoryExists } from '../core/io.js';
 import { loadAssignment, transitionAssignment } from '../core/assignments.js';
-import { releaseClaimWithCascade } from '../core/claims.js';
+import { releaseClaimWithCascade, loadClaim } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir } from '../core/worktree.js';
 
@@ -56,6 +56,37 @@ function autoDetectWorktreePaths(cwd: string): string[] {
   return fs.readdirSync(base, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(base, entry.name));
+}
+
+/**
+ * sprint 1.5 — deterministic worktree resolution for one assignment. The
+ * auto-detect scan depends on the project-hash directory layout and missed a
+ * LANE-RESULT.json that demonstrably existed (asgn_ab11b801): the assignment's
+ * own worktree_path (and its claim's) are authoritative — scan them FIRST.
+ * Works regardless of assignment status (incl. expired — evidence arriving
+ * late must still be harvestable).
+ */
+function resolveAssignmentWorktreePaths(assignmentId: string, cwd: string): string[] {
+  const paths: string[] = [];
+  const assignment = loadAssignment(assignmentId, cwd);
+  if (assignment?.worktree_path) paths.push(assignment.worktree_path);
+  if (assignment?.claim_id) {
+    try {
+      const claim = loadClaim(assignment.claim_id, cwd);
+      if (claim.worktree_path) paths.push(claim.worktree_path);
+    } catch { /* claim gone — assignment path may still resolve */ }
+  }
+  return [...new Set(paths)].filter((p) => {
+    try { return fs.existsSync(p); } catch { return false; }
+  });
+}
+
+/** Scan list for a lane harvest: explicit paths win; otherwise the assignment's
+ * own worktrees first, then the auto-detected pool (deduped). */
+function resolveLaneScanPaths(options: { assignmentId?: string; worktreePaths?: string[] }, cwd: string): string[] {
+  if (options.worktreePaths && options.worktreePaths.length > 0) return options.worktreePaths;
+  const assignmentPaths = options.assignmentId ? resolveAssignmentWorktreePaths(options.assignmentId, cwd) : [];
+  return [...new Set([...assignmentPaths, ...autoDetectWorktreePaths(cwd)])];
 }
 
 /**
@@ -288,9 +319,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
   const agent = options.agent ?? 'coordinator';
   const result: LaneHarvestResult = { harvested: [], skipped: [], errors: [] };
 
-  const worktreePaths = (options.worktreePaths && options.worktreePaths.length > 0)
-    ? options.worktreePaths
-    : autoDetectWorktreePaths(cwd);
+  const worktreePaths = resolveLaneScanPaths(options, cwd);
 
   for (const worktreePath of worktreePaths) {
     const file = getLaneResultPath(worktreePath);
@@ -379,6 +408,16 @@ function forceCompleteAssignment(
   const current = loadAssignment(assignmentId, cwd);
   if (!current) return false;
   if (current.status === 'completed') return true;
+  // can_948acfd6 — expired→completed: a LANE-RESULT arriving after an
+  // administrative expiry is the truth; converge instead of FSM-blocking.
+  if (current.status === 'expired') {
+    try {
+      transitionAssignment(assignmentId, 'completed', {
+        actor, artifacts, status_reason: `${statusReason} (late evidence after administrative expiry)`,
+      }, cwd);
+    } catch { /* concurrent transition */ }
+    return loadAssignment(assignmentId, cwd)?.status === 'completed';
+  }
   const startIdx = ASSIGNMENT_COMPLETE_CHAIN.indexOf(current.status as AssignmentStatus);
   if (startIdx === -1) return false; // off the happy path (failed/blocked/…): leave it.
 
@@ -453,9 +492,7 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
   const actor = options.agent ?? 'coordinator';
   const result: LaneIntegrateResult = { integrated: [], skipped: [], errors: [] };
 
-  const worktreePaths = (options.worktreePaths && options.worktreePaths.length > 0)
-    ? options.worktreePaths
-    : autoDetectWorktreePaths(cwd);
+  const worktreePaths = resolveLaneScanPaths(options, cwd);
 
   for (const worktreePath of worktreePaths) {
     const file = getLaneResultPath(worktreePath);
@@ -620,7 +657,15 @@ export function runHarvestLane(assignmentId: string | undefined, options: RunHar
     }
     const dry = options.dryRun ? ' (dry-run)' : '';
     if (integ.integrated.length === 0 && integ.errors.length === 0) {
-      console.log(assignmentId ? `No LANE-RESULT.json to integrate for ${assignmentId}.` : 'No lane results to integrate.');
+      if (assignmentId) {
+        const checked = resolveLaneScanPaths({ assignmentId, worktreePaths: options.worktree }, cwd);
+        console.log(`No LANE-RESULT.json to integrate for ${assignmentId}.`);
+        console.log(checked.length > 0
+          ? `  Checked worktree(s): ${checked.slice(0, 5).join(', ')}${checked.length > 5 ? ` (+${checked.length - 5} more)` : ''}`
+          : '  No worktree resolved for this assignment — pass --worktree <path> explicitly, or patch claim.worktree_path.');
+      } else {
+        console.log('No lane results to integrate.');
+      }
       return;
     }
     for (const e of integ.integrated) {
@@ -652,7 +697,15 @@ export function runHarvestLane(assignmentId: string | undefined, options: RunHar
 
   const dryTag = options.dryRun ? ' (dry-run)' : '';
   if (result.harvested.length === 0 && result.skipped.length === 0 && result.errors.length === 0) {
-    console.log(assignmentId ? `No LANE-RESULT.json found for ${assignmentId}.` : 'No lane results found in any worktree.');
+    if (assignmentId) {
+      const checked = resolveLaneScanPaths({ assignmentId, worktreePaths: options.worktree }, cwd);
+      console.log(`No LANE-RESULT.json found for ${assignmentId}.`);
+      console.log(checked.length > 0
+        ? `  Checked worktree(s): ${checked.slice(0, 5).join(', ')}${checked.length > 5 ? ` (+${checked.length - 5} more)` : ''}`
+        : '  No worktree resolved for this assignment — pass --worktree <path> explicitly, or patch claim.worktree_path.');
+    } else {
+      console.log('No lane results found in any worktree.');
+    }
     return;
   }
 

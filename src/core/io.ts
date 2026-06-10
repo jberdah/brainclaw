@@ -109,7 +109,9 @@ export function memoryPath(filename: string, cwd?: string, preferredDirName?: st
 }
 
 export function storeLockPath(cwd?: string, preferredDirName?: string): string {
-  const root = cwd ?? process.cwd();
+  // O3 (lop_e2d566765b8b4ce3): canonicalize so two spellings of the same store
+  // (relative vs absolute) produce one lock target / re-entrancy key.
+  const root = path.resolve(cwd ?? process.cwd());
   const dirName = preferredDirName ?? MEMORY_DIR;
   // Keep the store-wide lock alongside the store root so it survives
   // upgrade park/swap renames. Writers and upgrade/rollback all share

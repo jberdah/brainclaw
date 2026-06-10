@@ -3,6 +3,7 @@ import path from 'node:path';
 import { memoryDir } from './io.js';
 import { resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
+import { mutate } from './mutation-pipeline.js';
 
 /** Default age threshold: items older than 30 days are eligible for archival. */
 const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -23,18 +24,23 @@ export function archiveStalePlansAndHandoffs(
   cwd?: string,
   maxAgeMs: number = DEFAULT_MAX_AGE_MS,
 ): ArchivalResult[] {
-  const results: ArchivalResult[] = [];
-  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  // Review follow-up O4 (lop_e2d566765b8b4ce3): the append+unlink pairs must
+  // run inside the store mutation lock — outside it, a concurrent stale-snapshot
+  // persistState could RECREATE the just-archived files (resurrection).
+  return mutate({ cwd }, () => {
+    const results: ArchivalResult[] = [];
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
 
-  results.push(archiveEntity('plans', cutoff, (item) => {
-    return item.status === 'done' || item.status === 'dropped';
-  }, cwd));
+    results.push(archiveEntity('plans', cutoff, (item) => {
+      return item.status === 'done' || item.status === 'dropped';
+    }, cwd));
 
-  results.push(archiveEntity('handoffs', cutoff, (item) => {
-    return item.status === 'closed';
-  }, cwd));
+    results.push(archiveEntity('handoffs', cutoff, (item) => {
+      return item.status === 'closed';
+    }, cwd));
 
-  return results.filter(r => r.archived > 0);
+    return results.filter(r => r.archived > 0);
+  });
 }
 
 function archiveEntity(

@@ -7,7 +7,7 @@ import { mutate } from './mutation-pipeline.js';
 import { nowISO } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { loadConfig } from './config.js';
-import { createWorktree, resetWorktreeToRef } from './worktree.js';
+import { createWorktree, resetWorktreeToRef, removeWorktree, sanitizeBranchComponent } from './worktree.js';
 import { appendAuditEntry } from './audit.js';
 import { refreshLiveCompanions } from '../commands/export.js';
 import { loadSessionById } from './identity.js';
@@ -65,7 +65,7 @@ function loadClaimFromAnyDir(id: string, cwd?: string): Claim {
   throw new Error(`claim '${id}' not found`);
 }
 
-function saveClaimUnlocked(claim: Claim, cwd?: string): void {
+function saveClaimUnlocked(claim: Claim, cwd?: string, options?: { refreshCompanions?: boolean }): void {
   ensureClaimsDir(cwd);
   writeClaimStore(cwd).save(ClaimSchema.parse(claim));
   const writeDir = claimsDir(cwd, 'write');
@@ -78,8 +78,13 @@ function saveClaimUnlocked(claim: Claim, cwd?: string): void {
       // Best effort: listClaims() reads both dirs, so a missed cleanup remains visible.
     }
   }
-  // Auto-refresh live companions after claim changes (non-fatal)
-  try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
+  // Auto-refresh live companions after claim changes (non-fatal). Sweep loops
+  // pass refreshCompanions:false and refresh ONCE after the loop — review
+  // follow-up O5: a per-save refresh inside the critical section compounded an
+  // O(store) cost on every iteration.
+  if (options?.refreshCompanions !== false) {
+    try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
+  }
 }
 
 export function saveClaim(claim: Claim, cwd?: string): void {
@@ -327,9 +332,12 @@ export function expireStaleActiveClaims(cwd?: string): number {
       if (claim.status === 'active' && isClaimExpired(claim)) {
         claim.status = 'released';
         claim.released_at = now;
-        saveClaimUnlocked(claim, cwd);
+        saveClaimUnlocked(claim, cwd, { refreshCompanions: false });
         count++;
       }
+    }
+    if (count > 0) {
+      try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
     }
     return count;
   });
@@ -567,10 +575,13 @@ export function releaseStaleClaimsFromOtherAgents(
 
       claim.status = 'released';
       claim.released_at = now;
-      saveClaimUnlocked(claim, cwd);
+      saveClaimUnlocked(claim, cwd, { refreshCompanions: false });
       released.push(claim);
     }
 
+    if (released.length > 0) {
+      try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
+    }
     return { released, warned };
   });
 }
@@ -651,8 +662,11 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
   let worktreePath: string | undefined;
   let worktreeWarning: string | undefined;
 
-  // Create isolated worktree (matching bclaw_claim MCP handler behavior)
-  const branchSlug = options.scope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+  // Create isolated worktree (matching bclaw_claim MCP handler behavior).
+  // can_45316d5c: the slug must be a valid git ref component — scopes like
+  // `.github/workflows` previously produced `feat/.github-…` (leading dot),
+  // which git rejects and the whole spawn failed.
+  const branchSlug = sanitizeBranchComponent(options.scope);
   const worktreeBranch = `feat/${branchSlug}`;
   try {
     worktreePath = createWorktree(options.cwd, worktreeBranch, {
@@ -705,6 +719,17 @@ export function createCoordinatorClaim(options: CoordinatorClaimOptions): Coordi
     return { claimId, worktreePath, worktreeWarning, reusedExisting: false } as CoordinatorClaimResult;
   });
 
+  // Review follow-up O1 (lop_e2d566765b8b4ce3): when the in-lock re-check finds
+  // a raced claim, the worktree created moments earlier (outside the lock) is
+  // orphaned — nobody would ever remove it. Decision: delete it (it is seconds
+  // old and contains only birth artifacts; a reuse-pool is not worth the
+  // bookkeeping). Best-effort and outside the critical section.
+  if (result.reusedExisting && worktreePath && worktreePath !== result.worktreePath) {
+    try {
+      removeWorktree(options.cwd, worktreePath, { force: true });
+    } catch { /* best-effort GC — a leftover dir is caught by worktree clean */ }
+  }
+
   if (!result.reusedExisting && !result.scopeConflict) {
     appendAuditEntry({
       actor: options.dispatcherAgent,
@@ -729,6 +754,20 @@ export function attachAssignmentMessageToClaim(claimId: string, messageId: strin
     const claim = loadClaim(claimId, cwd);
     claim.assignment_message_id = messageId;
     saveClaimUnlocked(claim, cwd);
+  });
+}
+
+/**
+ * sprint 1.5 — patch a claim's worktree_path so a coordinator can register a
+ * manually created worktree (or correct a stale path) without hand-editing the
+ * store. Surfaced through bclaw_update(entity="claim", patch={worktree_path}).
+ */
+export function patchClaimWorktreePath(claimId: string, worktreePath: string | undefined, cwd?: string): Claim {
+  return mutate({ cwd }, () => {
+    const claim = loadClaim(claimId, cwd);
+    claim.worktree_path = worktreePath;
+    saveClaimUnlocked(claim, cwd);
+    return claim;
   });
 }
 

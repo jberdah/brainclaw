@@ -4,9 +4,18 @@
  * Runs opportunistically (no daemon): integrated into dispatch().
  * Future: integrate into session_start() and expose as CLI `brainclaw sweep`.
  *
+ * can_948acfd6 (sprint 1.5): the sweep consults IMPLICIT worker evidence
+ * before declaring an administrative death. Three live workers were expired
+ * by the acceptance-TTL in a single sprint because they could not call
+ * bclaw_assignment_update (sandboxed / no MCP) — yet their ack sentinel,
+ * heartbeat, filesystem activity and commits were all observable. This is the
+ * acceptance-sweep counterpart of the pln#527 no-heartbeat veto.
+ *
  * @module
  */
+import { spawnSync } from 'node:child_process';
 import { listAssignments, transitionAssignment } from './assignments.js';
+import { signalExists, readHeartbeat, latestActivityMs } from './runtime-signals.js';
 import type { Assignment } from './schema.js';
 
 // ── Types ────────────────────────────────────────────────────
@@ -14,6 +23,92 @@ import type { Assignment } from './schema.js';
 export interface SweeperResult {
   timed_out: Array<{ assignment_id: string; agent: string; age_ms: number }>;
   expired: Array<{ assignment_id: string; agent: string; age_ms: number }>;
+  /** Assignments advanced (offered→accepted / accepted→started) on implicit evidence instead of being expired. */
+  implicitly_advanced: Array<{ assignment_id: string; agent: string; to: 'accepted' | 'started'; evidence: string }>;
+}
+
+// ── Implicit worker evidence ─────────────────────────────────
+
+interface ImplicitEvidence {
+  /** Any life-sign at all (ack counts — proves the spawn shell ran). */
+  any: boolean;
+  /** Evidence fresh enough to count as current activity (age <= ttl). */
+  fresh: boolean;
+  description: string;
+}
+
+function lastCommitAgeMs(worktreePath: string | undefined, nowMs: number): number | undefined {
+  if (!worktreePath) return undefined;
+  try {
+    const res = spawnSync('git', ['log', '-1', '--format=%ct'], {
+      cwd: worktreePath, encoding: 'utf-8', windowsHide: true, timeout: 10_000,
+    });
+    if (res.status !== 0) return undefined;
+    const epochSec = parseInt((res.stdout ?? '').trim(), 10);
+    if (!Number.isFinite(epochSec)) return undefined;
+    return nowMs - epochSec * 1000;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Collect implicit life-signs for an assignment: ack sentinel, heartbeat
+ * (project-root OR worktree-local), filesystem activity (logs + worktree),
+ * and a post-dispatch commit on the worktree branch.
+ *
+ * `sinceMs` anchors the commit check (a commit older than the offer is not
+ * evidence of THIS assignment's worker). `freshTtlMs` bounds what counts as
+ * "currently active" for the accepted/started branches.
+ */
+function collectImplicitEvidence(
+  assignment: Assignment,
+  cwd: string | undefined,
+  nowMs: number,
+  sinceMs: number,
+  freshTtlMs: number,
+): ImplicitEvidence {
+  const root = cwd ?? process.cwd();
+  const parts: string[] = [];
+  let freshest: number | undefined;
+  const bump = (ageMs: number | undefined): void => {
+    if (ageMs === undefined) return;
+    if (freshest === undefined || ageMs < freshest) freshest = ageMs;
+  };
+
+  try {
+    if (signalExists(root, assignment.id, 'ack')) parts.push('ack sentinel');
+  } catch { /* defensive */ }
+
+  try {
+    const hb = readHeartbeat(root, assignment.id, assignment.worktree_path);
+    if (hb.exists && hb.mtimeMs !== undefined) {
+      const age = nowMs - hb.mtimeMs;
+      parts.push(`heartbeat ${Math.round(age / 1000)}s old`);
+      bump(age);
+    }
+  } catch { /* defensive */ }
+
+  try {
+    const lastFs = latestActivityMs(root, assignment.id, assignment.worktree_path);
+    if (lastFs !== undefined) {
+      const age = nowMs - lastFs;
+      parts.push(`fs activity ${Math.round(age / 1000)}s old`);
+      bump(age);
+    }
+  } catch { /* defensive */ }
+
+  const commitAge = lastCommitAgeMs(assignment.worktree_path, nowMs);
+  if (commitAge !== undefined && nowMs - commitAge >= sinceMs) {
+    parts.push(`post-dispatch commit ${Math.round(commitAge / 1000)}s old`);
+    bump(commitAge);
+  }
+
+  return {
+    any: parts.length > 0,
+    fresh: freshest !== undefined && freshest <= freshTtlMs,
+    description: parts.join(' + ') || 'none',
+  };
 }
 
 // ── Sweeper ──────────────────────────────────────────────────
@@ -22,7 +117,12 @@ export interface SweeperResult {
  * Scan all active assignments and timeout those past their TTL.
  *
  * - `started` assignments with no heartbeat within `heartbeat_ttl_ms` → `timed_out`
+ *   UNLESS file evidence (heartbeat sentinel / fs activity / commit) is fresh.
+ * - `accepted` assignments not started within `acceptance_ttl_ms` → `timed_out`
+ *   UNLESS fresh evidence ⇒ implicit `started`.
  * - `offered` assignments not accepted within `acceptance_ttl_ms` → `expired`
+ *   UNLESS any evidence ⇒ implicit `accepted` (ack/heartbeat/fs/commit are
+ *   acceptance, just delivered by a worker that cannot reach MCP).
  *
  * @param cwd - Project root
  * @param options.nowMs - Override current time for testing
@@ -34,7 +134,7 @@ export function sweepAssignments(
 ): SweeperResult {
   const now = options?.nowMs ?? Date.now();
   const actor = options?.actor ?? 'sweeper';
-  const result: SweeperResult = { timed_out: [], expired: [] };
+  const result: SweeperResult = { timed_out: [], expired: [], implicitly_advanced: [] };
 
   const all = listAssignments(cwd);
 
@@ -45,9 +145,15 @@ export function sweepAssignments(
       if (!lastBeat) continue;
       const ageMs = now - new Date(lastBeat).getTime();
       if (ageMs > assignment.heartbeat_ttl_ms) {
+        // can_948acfd6: a worker without MCP cannot bump last_heartbeat_at —
+        // its file evidence is the heartbeat. Fresh file activity vetoes the
+        // administrative timeout.
+        const sinceMs = new Date(assignment.started_at ?? assignment.created_at).getTime();
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.heartbeat_ttl_ms);
+        if (evidence.fresh) continue;
         try {
           transitionAssignment(assignment.id, 'timed_out', {
-            status_reason: `No heartbeat for ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.heartbeat_ttl_ms / 60_000)}min)`,
+            status_reason: `No heartbeat for ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.heartbeat_ttl_ms / 60_000)}min); implicit evidence: ${evidence.description}`,
             actor,
           }, cwd);
           result.timed_out.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });
@@ -62,9 +168,22 @@ export function sweepAssignments(
       const ageMs = now - new Date(acceptedAt).getTime();
       // Use acceptance_ttl for accepted→timed_out (same window: agent should start quickly after accepting)
       if (ageMs > assignment.acceptance_ttl_ms) {
+        const sinceMs = new Date(acceptedAt).getTime();
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.acceptance_ttl_ms);
+        if (evidence.fresh) {
+          // Working without MCP — record the implicit start so the FSM matches reality.
+          try {
+            transitionAssignment(assignment.id, 'started', {
+              status_reason: `Implicit start inferred by sweeper: ${evidence.description}`,
+              actor,
+            }, cwd);
+            result.implicitly_advanced.push({ assignment_id: assignment.id, agent: assignment.agent, to: 'started', evidence: evidence.description });
+          } catch { /* skip */ }
+          continue;
+        }
         try {
           transitionAssignment(assignment.id, 'timed_out', {
-            status_reason: `Accepted but not started within ${Math.round(ageMs / 60_000)} minutes`,
+            status_reason: `Accepted but not started within ${Math.round(ageMs / 60_000)} minutes; implicit evidence: ${evidence.description}`,
             actor,
           }, cwd);
           result.timed_out.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });
@@ -78,9 +197,25 @@ export function sweepAssignments(
       if (!offeredAt) continue;
       const ageMs = now - new Date(offeredAt).getTime();
       if (ageMs > assignment.acceptance_ttl_ms) {
+        // can_948acfd6: ANY worker evidence (ack sentinel touched pre-exec,
+        // heartbeat written, files edited, commit landed) is an implicit
+        // acceptance — the worker just couldn't say so via MCP. Expiring it
+        // is the false-administrative-death observed three times in sprint 1.
+        const sinceMs = new Date(offeredAt).getTime();
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.acceptance_ttl_ms);
+        if (evidence.any) {
+          try {
+            transitionAssignment(assignment.id, 'accepted', {
+              status_reason: `Implicit acceptance inferred by sweeper: ${evidence.description}`,
+              actor,
+            }, cwd);
+            result.implicitly_advanced.push({ assignment_id: assignment.id, agent: assignment.agent, to: 'accepted', evidence: evidence.description });
+          } catch { /* skip */ }
+          continue;
+        }
         try {
           transitionAssignment(assignment.id, 'expired', {
-            status_reason: `Not accepted within ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.acceptance_ttl_ms / 60_000)}min)`,
+            status_reason: `Not accepted within ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.acceptance_ttl_ms / 60_000)}min); no implicit evidence`,
             actor,
           }, cwd);
           result.expired.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });

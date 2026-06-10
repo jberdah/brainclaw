@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
+import { createTestWorkspace, type TestWorkspace, sanitizedProcessEnv } from '../helpers/workspace.js';
 import { registerAgentIdentity, listAgentIdentities } from '../../src/core/agent-registry.js';
 import { runInit } from '../../src/commands/init.js';
 
@@ -67,7 +67,7 @@ describe('init first-agent curator', () => {
           cwd: tmpDir,
           encoding: 'utf-8',
           env: {
-            ...process.env,
+            ...sanitizedProcessEnv(),
             BRAINCLAW_AGENT: 'antigravity',
             BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
           },

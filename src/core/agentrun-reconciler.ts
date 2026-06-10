@@ -250,7 +250,10 @@ export function collectEvidence(run: AgentRun, cwd?: string, options?: { nowMs?:
   try {
     completed_signal = signalExists(signalRoot, run.assignment_id, 'completed');
     failed_signal = signalExists(signalRoot, run.assignment_id, 'failed');
-    const hb = readHeartbeat(signalRoot, run.assignment_id);
+    // sprint 1.5: also read the worktree-local heartbeat — the only location a
+    // sandboxed worker can write (the project-root signal dir is outside its
+    // writable roots).
+    const hb = readHeartbeat(signalRoot, run.assignment_id, run.worktree_path);
     heartbeat_exists = hb.exists;
     if (hb.exists && hb.mtimeMs !== undefined) heartbeat_age_ms = now - hb.mtimeMs;
   } catch { /* defensive */ }

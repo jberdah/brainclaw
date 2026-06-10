@@ -15,6 +15,7 @@ import { defaultConfig, loadConfig, saveConfig } from '../src/core/config.js';
 import { ensureMemoryDir } from '../src/core/io.js';
 import { loadState, saveState } from '../src/core/state.js';
 import type { State, PlanItem } from '../src/core/schema.js';
+import { sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -35,7 +36,7 @@ function makeProject(prefix: string, projectName: string): string {
 function runCli(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cli-xp-home-'));
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
     BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

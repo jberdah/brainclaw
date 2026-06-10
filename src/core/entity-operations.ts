@@ -26,7 +26,7 @@ import {
   resolveCrossProjectLinks,
   type ResolvedCrossProjectLink,
 } from './cross-project.js';
-import { listClaims } from './claims.js';
+import { listClaims, loadClaim, saveClaim } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
@@ -609,6 +609,19 @@ export function updateEntity(
       if (!assignment) throw new EntityNotFoundError(name, id);
       const patched = { ...assignment, ...patch } as typeof assignment;
       saveAssignment(patched, cwd);
+      return { entity: name, id };
+    }
+    case 'claim': {
+      // sprint 1.5 — description + worktree_path (manual-worktree registration).
+      // Status changes still go through bclaw_transition / release flows.
+      let claim;
+      try {
+        claim = loadClaim(id, cwd);
+      } catch {
+        throw new EntityNotFoundError(name, id);
+      }
+      const patched = { ...claim, ...patch } as typeof claim;
+      saveClaim(patched, cwd);
       return { entity: name, id };
     }
     case 'candidate': {

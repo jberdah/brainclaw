@@ -2927,7 +2927,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             'runtime_note',
             {
               schema_version: 2,
-              id: generateId('rtn'),
+              id: generateId('runtime_note'),
               agent: opIdentity.agent,
               agent_id: opIdentity.agent_id,
               project_id: opIdentity.project_id ?? '',
@@ -3777,21 +3777,47 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         lines.push(`  Sequence: ${analysis.sequence.name}`);
         lines.push(`  Ready: ${analysis.ready.length} | Active: ${analysis.active.length} | Blocked: ${analysis.blocked.length} | Done: ${analysis.done.length}`);
 
+        // can_681a6c52 — truthful per-delivery status. The old output printed
+        // '[inbox]' for every entry and ALWAYS dumped a 'Run these commands'
+        // block, even when the auto-spawn had already SUCCEEDED — an obedient
+        // coordinator would then double-spawn the worker.
+        const spawnedPlanIds = new Set(
+          dispatchResult.messages_sent
+            .filter((m) => m.execution_status === 'delivered_and_started')
+            .map((m) => m.plan_id),
+        );
         if (dispatchResult.messages_sent.length > 0) {
           lines.push('');
           lines.push(args.dryRun ? '  Would assign:' : '  Assigned:');
           for (const msg of dispatchResult.messages_sent) {
             const lane = msg.lane ? ` (lane: ${msg.lane})` : '';
-            lines.push(`    ${msg.agent}: ${msg.plan_id}${lane} [inbox]`);
+            const exec = msg.execution_status ? ` [${msg.execution_status}]` : ' [inbox]';
+            const pid = msg.pid ? ` pid=${msg.pid}` : '';
+            const run = msg.run_id ? ` run=${msg.run_id}` : '';
+            lines.push(`    ${msg.agent}: ${msg.plan_id}${lane}${exec}${pid}${run}`);
           }
         }
 
-        // Surface bash commands prominently — this is what the coordinator should run
-        if (dispatchResult.commands.length > 0) {
+        const spawned = dispatchResult.messages_sent.filter((m) => m.execution_status === 'delivered_and_started');
+        if (spawned.length > 0) {
           lines.push('');
-          lines.push('Run these commands to launch the assigned agents:');
+          lines.push('Auto-spawn succeeded — do NOT run the launch commands for these (double-spawn risk). Verify instead:');
+          for (const msg of spawned) {
+            const target = msg.assignment_id ?? msg.run_id ?? msg.claim_id;
+            lines.push(`  bclaw_dispatch_status(target_id: "${target}")  # ${msg.agent} on ${msg.plan_id}`);
+          }
+        }
+
+        // Only surface manual launch commands for deliveries that were NOT
+        // auto-spawned (manual fallback, spawn refusal, inbox-only).
+        const manualCommands = dispatchResult.commands.filter(
+          (cmd) => !cmd.plan_id || !spawnedPlanIds.has(cmd.plan_id),
+        );
+        if (manualCommands.length > 0) {
           lines.push('');
-          for (const cmd of dispatchResult.commands) {
+          lines.push('Run these commands to launch the agents that were NOT auto-spawned:');
+          lines.push('');
+          for (const cmd of manualCommands) {
             const lane = cmd.lane ? ` [lane: ${cmd.lane}]` : '';
             lines.push(`# ${cmd.agent}${lane}`);
             lines.push(cmd.command);
@@ -3804,6 +3830,16 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           lines.push('  Skipped:');
           for (const skip of dispatchResult.skipped) {
             lines.push(`    - ${skip.plan_id}: ${skip.reason}`);
+          }
+        }
+
+        // can_45316d5c — worktree warnings / spawn refusals were hidden behind
+        // dispatch_status; surface them in the cycle output itself.
+        if (dispatchResult.warnings.length > 0) {
+          lines.push('');
+          lines.push('  Warnings:');
+          for (const warning of dispatchResult.warnings) {
+            lines.push(`    ⚠ ${warning}`);
           }
         }
 
