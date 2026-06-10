@@ -48,7 +48,7 @@ import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
 import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { listAvailableProjects, switchProject } from './switch.js';
-import { resolveEffectiveCwd, resolveProjectRef, resolveStoreChain } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveStoreChain } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
@@ -111,10 +111,14 @@ export function handleMcpReadToolCall(
   // workspace store-chain children. Throws on unknown project — surfaces
   // visibly as a tool error rather than silently falling back to the
   // current project, which would mislead the caller.
+  // Precedence rule: once routing succeeds, per-handler "project as filter"
+  // logic is skipped (routing already scopes to the right store) — pln#359.
   const projectArg = args.project as string | undefined;
   const targetProjectArg = name === 'bclaw_switch' ? undefined : projectArg;
+  let projectRoutingApplied = false;
   if (targetProjectArg) {
     cwd = resolveProjectCwd(targetProjectArg, cwd);
+    projectRoutingApplied = true;
   }
 
   if (name === 'bclaw_get_context') {
@@ -609,7 +613,10 @@ export function handleMcpReadToolCall(
       const assignee = String(args.assignee).toLowerCase();
       plans = plans.filter((plan) => plan.assignee?.toLowerCase() === assignee);
     }
-    if (args.project) {
+    if (args.project && !projectRoutingApplied) {
+      // Only filter by plan.project metadata when routing was NOT applied.
+      // When routing succeeded, cwd is already scoped to the target project store,
+      // so filtering by plan.project label would incorrectly narrow results.
       const project = String(args.project).toLowerCase();
       plans = plans.filter((plan) => plan.project?.toLowerCase() === project);
     }
