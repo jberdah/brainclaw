@@ -52,6 +52,35 @@ export const AGENT_ENV_KEYS = [
   'OPENCLAW_SESSION_ID', 'OPENCLAW_AGENT',
 ] as const;
 
+/**
+ * A copy of process.env that is safe to spread into a spawned CLI-under-test.
+ * Agent shells export BRAINCLAW_CWD / BRAINCLAW_AGENT / BRAINCLAW_CLAIM_ID,
+ * which anchor the spawned CLI on the developer's REAL store instead of the
+ * test workspace (the e2e false-failure + store-leak class root-caused in
+ * lop_e2d566765b8b4ce3). Strips every BRAINCLAW_* key plus the agent-detection
+ * keys. Spread this instead of `...process.env` in e2e run() helpers; tests
+ * that need specific BRAINCLAW_* values set them explicitly after the spread.
+ */
+export function sanitizedProcessEnv(): NodeJS.ProcessEnv {
+  // Harness-owned flags that MUST propagate to the CLI-under-test (the test
+  // runner sets them intentionally; they carry no store-location state).
+  const keep = new Set([
+    'BRAINCLAW_TEST_MODE',
+    'BRAINCLAW_SKIP_SETUP_REQUIREMENT',
+    'BRAINCLAW_SKIP_REPO_ANALYSIS',
+    'BRAINCLAW_SKIP_AGENT_BOOTSTRAP',
+    'BRAINCLAW_NO_SPAWN',
+  ]);
+  const env: NodeJS.ProcessEnv = {};
+  const agentKeys = new Set<string>(AGENT_ENV_KEYS);
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('BRAINCLAW_') && !keep.has(key)) continue;
+    if (agentKeys.has(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 export function cleanupTestEnv(options: CleanupTestEnvOptions): void {
   if (options.envBackup) {
     for (const [key, value] of Object.entries(options.envBackup)) {
@@ -90,11 +119,22 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   saved.HOMEDRIVE = process.env.HOMEDRIVE;
   saved.HOMEPATH = process.env.HOMEPATH;
   saved.BRAINCLAW_STORE_BOUNDARY = process.env.BRAINCLAW_STORE_BOUNDARY;
+  // Agent shells also export BRAINCLAW_CWD/_PROJECT/_CLAIM_ID; in-process
+  // handlers (resolveEffectiveCwd) anchor on them, so a test run from an agent
+  // shell silently operates on the developer's REAL store — observed live on
+  // 2026-06-10: a direct `node --test` of bclaw-coordinate leaked 60 runs,
+  // 53 assignments, 29 claims and 94 inbox files into the real project store.
+  saved.BRAINCLAW_CWD = process.env.BRAINCLAW_CWD;
+  saved.BRAINCLAW_PROJECT = process.env.BRAINCLAW_PROJECT;
+  saved.BRAINCLAW_CLAIM_ID = process.env.BRAINCLAW_CLAIM_ID;
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
   delete process.env.HOMEDRIVE;
   delete process.env.HOMEPATH;
   delete process.env.BRAINCLAW_STORE_BOUNDARY;
+  delete process.env.BRAINCLAW_CWD;
+  delete process.env.BRAINCLAW_PROJECT;
+  delete process.env.BRAINCLAW_CLAIM_ID;
   return {
     fakeHome,
     restore: () => cleanupTestEnv({ fakeHome, envBackup: saved }),

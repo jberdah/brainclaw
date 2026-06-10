@@ -8,7 +8,7 @@ import YAML from 'yaml';
 import { SCHEMA_VERSION } from '../src/commands/mcp.js';
 import { saveClaim } from '../src/core/claims.js';
 import { saveState } from '../src/core/state.js';
-import { AGENT_ENV_KEYS } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -20,7 +20,7 @@ function tmpDir(): string {
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
     BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
@@ -96,7 +96,7 @@ function enableReputation(dir: string): void {
 function startMcp(cwd: string, envOverrides: Record<string, string> = {}): ChildProcessWithoutNullStreams {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
     BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

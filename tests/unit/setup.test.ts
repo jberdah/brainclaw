@@ -12,6 +12,7 @@ import {
   scanGitRepos,
 } from '../../src/commands/setup.js';
 import type { AgentInventory } from '../../src/core/agent-inventory.js';
+import { sanitizedProcessEnv } from '../helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -37,7 +38,7 @@ function run(
     encoding: 'utf-8',
     timeout: CLI_TIMEOUT_MS,
     env: {
-      ...process.env,
+      ...sanitizedProcessEnv(),
       BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
       BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '1',
       BRAINCLAW_TEST_MODE: '1',

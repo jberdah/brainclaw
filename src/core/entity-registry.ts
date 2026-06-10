@@ -129,7 +129,9 @@ const claim: EntitySpec = {
   name: 'claim',
   shortLabelPrefix: 'clm',
   schema: ClaimSchema,
-  updatable: ['description'],
+  // worktree_path: sprint 1.5 — coordinators register manual worktrees (or fix
+  // stale paths) so harvest/dispatch_status can resolve LANE-RESULT locations.
+  updatable: ['description', 'worktree_path'],
   statusField: 'status',
   transitions: {
     active: ['released', 'stale'],

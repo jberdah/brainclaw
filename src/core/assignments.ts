@@ -131,7 +131,12 @@ const VALID_TRANSITIONS = new Map<string, Set<string>>([
   ['timed_out', new Set(['retrying', 'rerouted', 'cancelled'])],
   ['retrying',  new Set(['offered', 'rerouted', 'cancelled'])],
   ['blocked',   new Set(['rerouted', 'started', 'failed', 'cancelled'])],
-  // Terminal: completed, cancelled, expired, rerouted (no outgoing transitions)
+  // can_948acfd6: evidence can arrive AFTER an administrative expiry — the
+  // worker was alive all along but never acked (sandboxed, no MCP), and its
+  // commit / LANE-RESULT surfaced later. Allow the late convergence so
+  // harvest/reconcile can record the truth instead of being FSM-blocked.
+  ['expired',   new Set(['completed'])],
+  // Terminal: completed, cancelled, rerouted (no outgoing transitions)
 ]);
 
 export interface TransitionValidation {

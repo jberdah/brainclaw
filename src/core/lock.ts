@@ -23,6 +23,18 @@ function lockFilePath(targetPath: string): string {
   return targetPath + '.lock';
 }
 
+/**
+ * Review follow-up O3 (lop_e2d566765b8b4ce3): the re-entrancy map key must be
+ * canonical, or two spellings of the same store path (relative vs absolute,
+ * Windows drive-letter case) miss each other in `heldLocks` and the nested
+ * acquire self-deadlocks for the full timeout. Resolve + case-fold (win32) for
+ * the KEY only — the filesystem path used for I/O keeps its original spelling.
+ */
+function lockKey(lockPath: string): string {
+  const resolved = path.resolve(lockPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 function syncSleep(ms: number): void {
   if (ms <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -99,6 +111,16 @@ function canBreakLock(lockPath: string, data: LockData | null): boolean {
   return true;
 }
 
+/**
+ * Review follow-up O2 (lop_e2d566765b8b4ce3) — accepted residual risk: a
+ * microsecond TOCTOU remains between the second read and the rename, where a
+ * third process can break+reacquire and the renamer steals a live lock. The
+ * restore branch covers it unless a FOURTH process acquires inside that gap.
+ * Decision (sprint 1.5): not closing it. The full fix is an O_EXCL token
+ * handshake protocol — a coordinated change to every lock consumer — and the
+ * residual window requires 4 racing processes inside microseconds on a lock
+ * whose owner is already dead. Strictly better than the old unlink-based break.
+ */
 function tryBreakLock(lockPath: string): boolean {
   const observed = readLockData(lockPath);
   if (!canBreakLock(lockPath, observed)) return false;
@@ -169,12 +191,12 @@ function refreshLock(lockPath: string, token: string): void {
 function startHeldLock(lockPath: string, token: string): void {
   const refreshTimer = setInterval(() => refreshLock(lockPath, token), LOCK_REFRESH_INTERVAL_MS);
   refreshTimer.unref?.();
-  heldLocks.set(lockPath, { count: 1, token, refreshTimer });
+  heldLocks.set(lockKey(lockPath), { count: 1, token, refreshTimer });
 }
 
 export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS): boolean {
   const lockPath = lockFilePath(targetPath);
-  const held = heldLocks.get(lockPath);
+  const held = heldLocks.get(lockKey(lockPath));
   if (held) {
     held.count += 1;
     refreshLock(lockPath, held.token);
@@ -204,12 +226,12 @@ export function acquireLock(targetPath: string, timeoutMs = DEFAULT_TIMEOUT_MS):
 
 export function releaseLock(targetPath: string): void {
   const lockPath = lockFilePath(targetPath);
-  const held = heldLocks.get(lockPath);
+  const held = heldLocks.get(lockKey(lockPath));
   if (held && held.count > 1) {
     held.count -= 1;
     return;
   }
-  heldLocks.delete(lockPath);
+  heldLocks.delete(lockKey(lockPath));
   if (held?.refreshTimer) clearInterval(held.refreshTimer);
   try {
     if (lockIsOwnedByCurrentProcess(readLockData(lockPath), held?.token ?? '')) {

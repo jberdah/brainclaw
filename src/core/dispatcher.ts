@@ -44,7 +44,7 @@ import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
-import { getRuntimeSignalPath } from './runtime-signals.js';
+import { getRuntimeSignalPath, getWorktreeHeartbeatPath } from './runtime-signals.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
@@ -133,6 +133,8 @@ export interface DispatchedItem {
   execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
   /** PID of spawned agent process (when execution_status is delivered_and_started) */
   pid?: number;
+  /** AgentRun id created for this delivery (when run tracking succeeded). */
+  run_id?: string;
 }
 
 export interface DispatchResult {
@@ -141,6 +143,8 @@ export interface DispatchResult {
   commands: Array<{
     agent: string;
     lane?: string;
+    /** Plan this command belongs to — lets output filter out auto-spawned entries (can_681a6c52). */
+    plan_id?: string;
     command: string;
     shell: string;
   }>;
@@ -329,8 +333,16 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
  * heartbeat. This is the worker-side half of the liveness contract whose
  * engine-side floor is the wrapper + reconciler (steps 4 + 1).
  */
-export function buildLivenessSection(cwd: string, assignmentId: string): string {
-  const hbPath = getRuntimeSignalPath(cwd, assignmentId, 'heartbeat');
+export function buildLivenessSection(cwd: string, assignmentId: string, worktreePath?: string): string {
+  // sprint 1.5 (dogfooding): the project-root signal path is NOT writable from
+  // inside worker sandboxes (Claude Code restricts writes to its working dirs;
+  // codex workspace-write roots exclude the project root) — the brief was
+  // demanding a heartbeat the worker could not write. When the worker has a
+  // worktree, point step 0 at a worktree-local heartbeat instead; every reader
+  // (reconciler, sweeper, dispatch_status fs-activity) checks both locations.
+  const hbPath = worktreePath
+    ? getWorktreeHeartbeatPath(worktreePath, assignmentId)
+    : getRuntimeSignalPath(cwd, assignmentId, 'heartbeat');
   const isWin = process.platform === 'win32';
   const writeCmd = isWin
     ? `echo work_loop_reached ${assignmentId} > "${hbPath}"`
@@ -346,7 +358,8 @@ export function buildLivenessSection(cwd: string, assignmentId: string): string 
     '```sh',
     writeCmd,
     '```',
-    `Heartbeat file (absolute, writable): ${hbPath}`,
+    `Heartbeat file (absolute, writable from your sandbox): ${hbPath}`,
+    ...(worktreePath ? ['If that write is denied, use any file edit in your worktree as your liveness signal and continue — do NOT stall on the heartbeat.'] : []),
     '',
   ].join('\n');
 }
@@ -495,7 +508,7 @@ export function generateBrief(
   // the worker writes work_loop_reached before anything else. Only when an
   // assignment id is known (the heartbeat is keyed by it).
   if (options?.assignmentId) {
-    parts.push(buildLivenessSection(cwd, options.assignmentId));
+    parts.push(buildLivenessSection(cwd, options.assignmentId, options.worktreePath));
   }
 
   // Steps if any
@@ -621,6 +634,12 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   if (options.claimId) parts.push(`Claim: ${options.claimId} (pre-claimed by coordinator)`);
   if (options.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
   parts.push('');
+
+  // sprint 1.5 — task-based briefs get the same step-0 liveness contract as
+  // plan-based briefs (worktree-local heartbeat, writable from any sandbox).
+  if (options.assignmentId && options.worktreePath) {
+    parts.push(buildLivenessSection(options.worktreePath, options.assignmentId, options.worktreePath));
+  }
 
   if (briefMode === 'full') {
     parts.push(buildProtocolSection({
@@ -927,7 +946,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       const invokeCmd = buildInvokeCommand(targetAgent, brief, { model: resolveModel(targetAgent, { override: options.model }) });
       if (invokeCmd) {
         const cmdPrefix = buildEnvPrefix(claimId);
-        result.commands.push({ agent: targetAgent, lane: readyItem.lane, command: `${cmdPrefix}${invokeCmd.bashCommand}`, shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh') });
+        result.commands.push({ agent: targetAgent, lane: readyItem.lane, plan_id: readyItem.plan.id, command: `${cmdPrefix}${invokeCmd.bashCommand}`, shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh') });
       }
       const deliveryEntry: DispatchedItem = { agent: targetAgent, plan_id: readyItem.plan.id, message_id: '(dry-run)', lane: readyItem.lane, channel: 'inbox', claim_id: claimId };
       result.delivery_plan.push(deliveryEntry);
@@ -988,6 +1007,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
       result.commands.push({
         agent: targetAgent,
         lane: readyItem.lane,
+        plan_id: readyItem.plan.id,
         command: `${cmdPrefix}${invokeCmd.bashCommand}`,
         shell: process.platform === 'win32' ? 'cmd' : (invokeCmd.shell ? 'bash' : 'sh'),
       });
@@ -1121,6 +1141,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
               status_reason: 'CLI spawn launched by dispatcher',
               tags: ['dispatch-run', ...(entry.lane ? [`lane:${entry.lane}`] : [])],
             }, cwd);
+            entry.run_id = run.id;
             transitionAgentRun(run.id, 'failed', {
               actor: options.dispatcherAgent,
               actor_id: options.dispatcherAgentId,
@@ -1168,6 +1189,7 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
             status_reason: execResult.error,
             tags: ['dispatch-run', ...(entry.lane ? [`lane:${entry.lane}`] : [])],
           }, cwd);
+          entry.run_id = run.id;
 
           if (execResult.execution_status === 'delivered_and_started') {
             transitionAgentRun(run.id, 'launching', {

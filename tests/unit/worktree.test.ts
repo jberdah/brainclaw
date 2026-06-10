@@ -156,7 +156,7 @@ describe('createWorktree reset guard', () => {
 
       assert.throws(
         () => createWorktree(repo, 'feat/live', { resetExistingBranch: true, baseRef: 'HEAD' }),
-        /Cannot reset branch feat\/live: it is checked out in worktree/,
+        /Cannot (reset|reuse) branch feat\/live: it is checked out in worktree/,
       );
     } finally {
       spawnSync('git', ['worktree', 'remove', '--force', externalWorktree], { cwd: repo, encoding: 'utf-8' });

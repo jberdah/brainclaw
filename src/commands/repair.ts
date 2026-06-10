@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists, memoryDir } from '../core/io.js';
+import { migrateRuntimeNoteIdPrefixes } from '../core/runtime.js';
 import { runDoctor, type RepairCandidate } from './doctor.js';
 
 export interface RepairOptions {
@@ -95,6 +96,25 @@ function executeCandidate(candidate: RepairCandidate, cwd: string): RepairOutcom
         }
         fs.renameSync(sourceAbs, destAbs);
         return { action: candidate.action, target: candidate.target, status: 'applied' };
+      }
+      case 'migrate_runtime_note_ids': {
+        // can_b8d53d18 — lossless rename of legacy run_-prefixed runtime note
+        // ids to rtn_ (file rename + id rewrite, no deletion of note content).
+        const migration = migrateRuntimeNoteIdPrefixes(cwd);
+        if (migration.errors.length > 0) {
+          return {
+            action: candidate.action,
+            target: candidate.target,
+            status: migration.migrated.length > 0 ? 'applied' : 'failed',
+            reason: `migrated ${migration.migrated.length}, errors: ${migration.errors.join('; ')}`,
+          };
+        }
+        return {
+          action: candidate.action,
+          target: candidate.target,
+          status: 'applied',
+          reason: `migrated ${migration.migrated.length} runtime note id(s) to rtn_`,
+        };
       }
       case 'quarantine_inbox_message': {
         // Unsafe: move malformed message to a quarantine directory so a human

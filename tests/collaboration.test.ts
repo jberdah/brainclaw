@@ -11,7 +11,7 @@ import { emptyState, saveState } from '../src/core/state.js';
 import { defaultConfig, saveConfig } from '../src/core/config.js';
 import { buildProjectIdentity, saveProjectIdentity } from '../src/core/project-registry.js';
 import { generateMarkdown } from '../src/core/markdown.js';
-import { AGENT_ENV_KEYS, cleanupTestEnv } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, cleanupTestEnv, sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -61,7 +61,7 @@ function extractId(stdout: string): string {
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = createFakeHome();
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_REPO_ANALYSIS: '1',
     BRAINCLAW_SKIP_AGENT_BOOTSTRAP: '0',
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',

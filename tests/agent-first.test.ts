@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
-import { AGENT_ENV_KEYS, cleanupTestEnv } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, cleanupTestEnv, sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -47,7 +47,7 @@ function tmpDir(): string {
 function run(args: string[], cwd: string, envOverrides: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = createFakeHome();
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     USERNAME: 'testuser',
     USER: 'testuser',
     BRAINCLAW_STORE_BOUNDARY: cwd,

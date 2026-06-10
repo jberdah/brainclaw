@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import YAML from 'yaml';
-import { AGENT_ENV_KEYS } from './helpers/workspace.js';
+import { AGENT_ENV_KEYS, sanitizedProcessEnv } from './helpers/workspace.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -23,7 +23,7 @@ function tmpDir(): string {
 function run(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-fakehome-'));
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizedProcessEnv(),
     BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
     USERNAME: 'testuser',
     USER: 'testuser',

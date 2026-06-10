@@ -1936,6 +1936,32 @@ export function runDoctor(options: DoctorOptions = {}): void {
     console.log(`Local traps: ${localTraps.length} visible on this host`);
   }
 
+  // can_b8d53d18 — runtime notes created with the legacy `run_` prefix collide
+  // with agent_run ids in prefix-based routing (dispatch_status). Surface them
+  // and offer the soft id migration via `brainclaw repair`.
+  const legacyPrefixNotes = listRuntimeNotes({ visibility: 'all', includeAllHosts: true }, options.cwd)
+    .filter((n) => n.id.startsWith('run_'));
+  if (legacyPrefixNotes.length > 0) {
+    checks.push({
+      name: 'runtime_note_id_prefix',
+      status: 'warn',
+      message: `${legacyPrefixNotes.length} runtime note(s) carry the legacy run_ id prefix (collides with agent_run ids)`,
+      details: legacyPrefixNotes.map((n) => n.id),
+    });
+    repairCandidates.push({
+      action: 'migrate_runtime_note_ids',
+      target: 'coordination/runtime',
+      description: `Rename ${legacyPrefixNotes.length} runtime note id(s) from run_* to rtn_* (file rename + id rewrite, lossless)`,
+      safe: true,
+      related_check: 'runtime_note_id_prefix',
+    });
+    if (!options.json) {
+      console.warn(`⚠ ${legacyPrefixNotes.length} runtime note(s) use the legacy run_ id prefix — run \`brainclaw repair\` to migrate them to rtn_.`);
+    }
+  } else {
+    checks.push({ name: 'runtime_note_id_prefix', status: 'ok', message: 'No runtime notes with legacy run_ id prefix' });
+  }
+
   const marker = readContextMarker(options.cwd);
   const visibleMemoryVersion = getVisibleMemoryVersion({ cwd: options.cwd });
   if (marker?.memory_version && marker.memory_version !== visibleMemoryVersion) {

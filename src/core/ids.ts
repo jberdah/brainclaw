@@ -20,6 +20,11 @@ const PREFIXES: Record<string, string> = {
   runs: 'run',
   actions: 'act',
   runtime_events: 'evt',
+  // can_b8d53d18: without an explicit entry, 'runtime_note' fell through to the
+  // slice(0,3) fallback = 'run', colliding with agent_run ids and breaking
+  // prefix-based routing (dispatch_status). Canonical prefix is 'rtn'.
+  runtime_note: 'rtn',
+  runtime_notes: 'rtn',
 };
 
 const ID_COUNTER_FILE = '.id-counter.json';

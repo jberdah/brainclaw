@@ -52,6 +52,19 @@ export function getRuntimeLogPath(root: string, assignmentId: string, stream: 's
   return path.join(runtimeDir(root), 'log', `${assignmentId}.${stream}.log`);
 }
 
+/**
+ * Worktree-local heartbeat path (sprint 1.5). The project-root signal path is
+ * NOT writable from inside many worker sandboxes (Claude Code restricts writes
+ * to its working directories; codex workspace-write roots exclude the project) —
+ * observed live: the generated brief demanded a heartbeat the worker could not
+ * write. The worktree root is the one location every dispatched worker can
+ * write, so briefs point step-0 here, and every heartbeat reader checks BOTH
+ * locations.
+ */
+export function getWorktreeHeartbeatPath(worktreePath: string, assignmentId: string): string {
+  return path.join(worktreePath, `.brainclaw-heartbeat-${assignmentId}`);
+}
+
 /** Ensure the ack / signal / log directories exist (best-effort, recursive). */
 export function ensureRuntimeDirs(root: string): void {
   const base = runtimeDir(root);
@@ -78,13 +91,7 @@ export interface HeartbeatInfo {
   nonce?: string;
 }
 
-/**
- * Read the heartbeat sentinel. The body is expected to be
- * `work_loop_reached{run_id,nonce}` JSON, but a bare `touch` (empty file) still
- * counts as a heartbeat — the mtime alone is a valid life-sign.
- */
-export function readHeartbeat(root: string, assignmentId: string): HeartbeatInfo {
-  const p = getRuntimeSignalPath(root, assignmentId, 'heartbeat');
+function readHeartbeatFile(p: string): HeartbeatInfo {
   try {
     const stat = fs.statSync(p);
     const info: HeartbeatInfo = { exists: true, mtimeMs: stat.mtimeMs };
@@ -102,12 +109,69 @@ export function readHeartbeat(root: string, assignmentId: string): HeartbeatInfo
   }
 }
 
+/**
+ * Read the heartbeat sentinel. The body is expected to be
+ * `work_loop_reached{run_id,nonce}` JSON, but a bare `touch` (empty file) still
+ * counts as a heartbeat — the mtime alone is a valid life-sign.
+ *
+ * Checks the project-root signal path AND (when `worktreePath` is given) the
+ * worktree-local heartbeat — sandboxed workers can only write the latter. When
+ * both exist, the freshest mtime wins.
+ */
+export function readHeartbeat(root: string, assignmentId: string, worktreePath?: string): HeartbeatInfo {
+  const projectInfo = readHeartbeatFile(getRuntimeSignalPath(root, assignmentId, 'heartbeat'));
+  const worktreeInfo = worktreePath
+    ? readHeartbeatFile(getWorktreeHeartbeatPath(worktreePath, assignmentId))
+    : { exists: false } as HeartbeatInfo;
+  if (!projectInfo.exists) return worktreeInfo;
+  if (!worktreeInfo.exists) return projectInfo;
+  return (worktreeInfo.mtimeMs ?? 0) > (projectInfo.mtimeMs ?? 0) ? worktreeInfo : projectInfo;
+}
+
+/**
+ * can_c39f0961 — CP850 high-byte table (0x80–0xFF). Windows-native console
+ * tools write redirected stdout/stderr in the OEM codepage (cp850 on western
+ * locales), which read as UTF-8 produces U+FFFD mojibake in captured logs.
+ * WHATWG TextDecoder does not cover ibm850, so a 128-entry table keeps the
+ * fallback decode dependency-free.
+ */
+const CP850_HIGH =
+  'ÇüéâäàåçêëèïîìÄÅ' +
+  'ÉæÆôöòûùÿÖÜø£Ø×ƒ' +
+  'áíóúñÑªº¿®¬½¼¡«»' +
+  '░▒▓│┤ÁÂÀ©╣║╗╝¢¥┐' +
+  '└┴┬├─┼ãÃ╚╔╩╦╠═╬¤' +
+  'ðÐÊËÈıÍÎÏ┘┌█▄¦Ì▀' +
+  'ÓßÔÒõÕµþÞÚÛÙýÝ¯´' +
+  '­±‗¾¶§÷¸°¨·¹³²■ ';
+
+/**
+ * Decode a captured-log buffer: UTF-8 first, falling back to cp850 when the
+ * UTF-8 decode shows replacement characters (the OEM-output signature).
+ */
+export function decodeOemAwareBuffer(buf: Buffer): string {
+  const utf8 = buf.toString('utf-8');
+  if (!utf8.includes('�')) return utf8;
+  let out = '';
+  for (const byte of buf) {
+    out += byte < 0x80 ? String.fromCharCode(byte) : CP850_HIGH[byte - 0x80];
+  }
+  return out;
+}
+
 /** Read the tail of a captured stream log (for failed_silent diagnostics). */
 export function readLogTail(root: string, assignmentId: string, stream: 'stdout' | 'stderr', maxBytes = 2000): string {
   try {
     const p = getRuntimeLogPath(root, assignmentId, stream);
-    const content = fs.readFileSync(p, 'utf-8');
-    return content.length > maxBytes ? content.slice(content.length - maxBytes) : content;
+    const buf = fs.readFileSync(p);
+    let slice = buf.length > maxBytes ? buf.subarray(buf.length - maxBytes) : buf;
+    // A byte-offset tail can start mid-UTF-8-sequence; dropping leading
+    // continuation bytes avoids a false U+FFFD that would trigger the cp850
+    // fallback on genuine UTF-8 content.
+    while (slice.length > 0 && slice[0] >= 0x80 && slice[0] <= 0xbf) {
+      slice = slice.subarray(1);
+    }
+    return decodeOemAwareBuffer(slice);
   } catch {
     return '';
   }
