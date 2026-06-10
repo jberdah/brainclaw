@@ -1861,11 +1861,13 @@ export function handleMcpReadToolCall(
     }
     const tailLogLines = typeof args.tail_log_lines === 'number' ? args.tail_log_lines : undefined;
     const stallThresholdMs = typeof args.stall_threshold_ms === 'number' ? args.stall_threshold_ms : undefined;
+    const baseRef = typeof args.base_ref === 'string' && args.base_ref ? args.base_ref : undefined;
     const status = getDispatchStatus({
       target_id: targetId,
       cwd,
       tail_log_lines: tailLogLines,
       stall_threshold_ms: stallThresholdMs,
+      base_ref: baseRef,
     });
 
     // Text view: short, single-screen summary so an agent can decide what to do
@@ -1885,6 +1887,7 @@ export function handleMcpReadToolCall(
       `Runtime: pid=${status.runtime.pid ?? '-'} alive=${status.runtime.pid_alive ?? 'unknown'} ack=${status.runtime.ack_file.exists}`,
       `  stdout: ${status.runtime.log_files.stdout?.exists ? `${status.runtime.log_files.stdout.size_bytes}B` : 'absent'}`,
       `  stderr: ${status.runtime.log_files.stderr?.exists ? `${status.runtime.log_files.stderr.size_bytes}B` : 'absent'}`,
+      `  git: commits_ahead=${status.runtime.commits_ahead ?? 'n/a'} dirty_tracked=${status.runtime.dirty_tracked ?? 'n/a'}`,
     ];
 
     return {

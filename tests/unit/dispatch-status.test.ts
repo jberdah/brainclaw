@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { getDispatchStatus } from '../../src/core/dispatch-status.js';
 import { saveAssignment } from '../../src/core/assignments.js';
@@ -371,5 +372,135 @@ describe('getDispatchStatus — LANE-RESULT.json as #1 verdict signal (pln#532)'
     assert.equal(status.runtime.lane_result, undefined);
     assert.notEqual(status.diagnosis.health, 'terminal');
     fs.rmSync(worktree, { recursive: true, force: true });
+  });
+});
+
+describe('getDispatchStatus — worktree git evidence (pln#554 step 2)', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    process.env.BRAINCLAW_TEST_MODE = '1';
+    workspace = createTestWorkspace({ prefix: 'bclaw-disp-git-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+    delete process.env.BRAINCLAW_TEST_MODE;
+  });
+
+  /** A real git repo with a 'basepoint' branch marking the dispatch base. */
+  function initGitWorktree(): { dir: string; git: (args: string[]) => string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-git-ev-'));
+    const git = (args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf-8' });
+    execFileSync('git', ['init', '-q', dir], { encoding: 'utf-8' });
+    git(['config', 'user.email', 'test@test.local']);
+    git(['config', 'user.name', 'test']);
+    fs.writeFileSync(path.join(dir, 'base.txt'), 'base\n');
+    git(['add', 'base.txt']);
+    git(['commit', '-q', '-m', 'base']);
+    git(['branch', 'basepoint']);
+    return { dir, git };
+  }
+
+  function seedWithGitWorktree(suffix: string, worktree: string, runOverrides: Partial<AgentRun> = {}): void {
+    seedClaim(workspace, `clm_${suffix}`, { worktree_path: worktree });
+    seedAssignment(workspace, `asgn_${suffix}`, { claim_id: `clm_${suffix}` });
+    seedAgentRun(workspace, `run_${suffix}`, {
+      assignment_id: `asgn_${suffix}`,
+      claim_id: `clm_${suffix}`,
+      worktree_path: worktree,
+      status: 'running',
+      last_event_at: nowISO(),
+      ...runOverrides,
+    });
+  }
+
+  it('verdict "worker delivered; harvest it" when commits ahead + clean tree, even with a dead pid (never kill-and-reroute)', () => {
+    const { dir, git } = initGitWorktree();
+    fs.writeFileSync(path.join(dir, 'work.txt'), 'delivered\n');
+    git(['add', 'work.txt']);
+    git(['commit', '-q', '-m', 'work']);
+    seedWithGitWorktree('ge1', dir, { pid: 9_999_999 }); // dead pid: silent_death without git evidence
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge1', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.equal(status.runtime.commits_ahead, 1);
+    assert.equal(status.runtime.dirty_tracked, 0);
+    assert.equal(status.diagnosis.health, 'terminal');
+    assert.match(status.diagnosis.summary, /worker delivered/);
+    assert.match(status.diagnosis.recommended_next_action, /harvest/i);
+    assert.match(status.diagnosis.recommended_next_action, /Do NOT kill or reroute/, 'must explicitly forbid kill/reroute');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('commits ahead + dirty tracked tree is NOT delivered — falls through to process evidence', () => {
+    const { dir, git } = initGitWorktree();
+    fs.writeFileSync(path.join(dir, 'work.txt'), 'wip\n');
+    git(['add', 'work.txt']);
+    git(['commit', '-q', '-m', 'work']);
+    fs.writeFileSync(path.join(dir, 'base.txt'), 'modified tracked file\n'); // dirty tracked
+    seedWithGitWorktree('ge2', dir, { pid: 9_999_999 });
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge2', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.equal(status.runtime.commits_ahead, 1);
+    assert.equal(status.runtime.dirty_tracked, 1);
+    assert.equal(status.diagnosis.health, 'silent_death');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('untracked files do not count as dirty_tracked', () => {
+    const { dir, git } = initGitWorktree();
+    fs.writeFileSync(path.join(dir, 'work.txt'), 'delivered\n');
+    git(['add', 'work.txt']);
+    git(['commit', '-q', '-m', 'work']);
+    fs.writeFileSync(path.join(dir, 'untracked-debris.log'), 'noise\n');
+    seedWithGitWorktree('ge3', dir, { pid: process.pid });
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge3', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.equal(status.runtime.dirty_tracked, 0);
+    assert.equal(status.diagnosis.health, 'terminal');
+    assert.match(status.diagnosis.summary, /worker delivered/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('LANE-RESULT.json still outranks git evidence', () => {
+    const { dir, git } = initGitWorktree();
+    fs.writeFileSync(path.join(dir, 'work.txt'), 'delivered\n');
+    git(['add', 'work.txt']);
+    git(['commit', '-q', '-m', 'work']);
+    fs.writeFileSync(path.join(dir, 'LANE-RESULT.json'), JSON.stringify({
+      assignment_id: 'asgn_ge4',
+      status: 'blocked',
+      summary: 'Blocked on a schema conflict.',
+    }));
+    seedWithGitWorktree('ge4', dir, { pid: process.pid });
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge4', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.match(status.diagnosis.summary, /LANE-RESULT\.json/);
+    assert.equal(status.runtime.lane_result?.status, 'blocked');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('no worktree → git evidence undefined, diagnosis unaffected', () => {
+    seedClaim(workspace, 'clm_ge5');
+    seedAssignment(workspace, 'asgn_ge5', { claim_id: 'clm_ge5' });
+    seedAgentRun(workspace, 'run_ge5', {
+      assignment_id: 'asgn_ge5', claim_id: 'clm_ge5', status: 'running', pid: process.pid, last_event_at: nowISO(),
+    });
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge5', cwd: workspace.dir });
+    assert.equal(status.runtime.commits_ahead, undefined);
+    assert.equal(status.runtime.dirty_tracked, undefined);
+    assert.equal(status.diagnosis.health, 'healthy');
+  });
+
+  it('zero commits ahead with a clean tree is NOT delivered (nothing to harvest)', () => {
+    const { dir } = initGitWorktree();
+    seedWithGitWorktree('ge6', dir, { pid: process.pid });
+
+    const status = getDispatchStatus({ target_id: 'asgn_ge6', cwd: workspace.dir, base_ref: 'basepoint' });
+    assert.equal(status.runtime.commits_ahead, 0);
+    assert.equal(status.runtime.dirty_tracked, 0);
+    assert.notEqual(status.diagnosis.summary.includes('worker delivered'), true);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

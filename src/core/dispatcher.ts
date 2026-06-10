@@ -43,7 +43,7 @@ import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
+import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, dispatchCanCommit, isSandboxedSpawn, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { getRuntimeSignalPath, getWorktreeHeartbeatPath } from './runtime-signals.js';
 import { attemptExecution, checkActiveInstance } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
@@ -333,20 +333,33 @@ export function analyzeSequence(cwd: string): DispatchAnalysis | null {
  * heartbeat. This is the worker-side half of the liveness contract whose
  * engine-side floor is the wrapper + reconciler (steps 4 + 1).
  */
-export function buildLivenessSection(cwd: string, assignmentId: string, worktreePath?: string): string {
+export function buildLivenessSection(
+  cwd: string,
+  assignmentId: string,
+  worktreePath?: string,
+  opts?: { sandboxed?: boolean },
+): string {
   // sprint 1.5 (dogfooding): the project-root signal path is NOT writable from
   // inside worker sandboxes (Claude Code restricts writes to its working dirs;
   // codex workspace-write roots exclude the project root) — the brief was
   // demanding a heartbeat the worker could not write. When the worker has a
   // worktree, point step 0 at a worktree-local heartbeat instead; every reader
   // (reconciler, sweeper, dispatch_status fs-activity) checks both locations.
+  //
+  // pln#554 step 4 — sandbox-aware: codex workspace-write refuses even absolute
+  // paths in some configurations (cnd_asgn_7336aa79_heartbeat_sandbox /
+  // can_asgn_b0169fd8_heartbeat). When the execution adapter KNOWS the worker is
+  // sandboxed, point the write command at a worktree-RELATIVE path (the sandbox
+  // cwd is the worktree root) — same file, sandbox-proof spelling.
+  const sandboxRelative = opts?.sandboxed === true && !!worktreePath;
   const hbPath = worktreePath
     ? getWorktreeHeartbeatPath(worktreePath, assignmentId)
     : getRuntimeSignalPath(cwd, assignmentId, 'heartbeat');
+  const targetPath = sandboxRelative ? `.brainclaw-heartbeat-${assignmentId}` : hbPath;
   const isWin = process.platform === 'win32';
   const writeCmd = isWin
-    ? `echo work_loop_reached ${assignmentId} > "${hbPath}"`
-    : `printf 'work_loop_reached ${assignmentId} %s' "$(date +%s)" > "${hbPath}"`;
+    ? `echo work_loop_reached ${assignmentId} > "${targetPath}"`
+    : `printf 'work_loop_reached ${assignmentId} %s' "$(date +%s)" > "${targetPath}"`;
   return [
     '## Liveness — DO THIS FIRST (step 0)',
     'Before ANY other action, prove you reached your work loop by writing a heartbeat,',
@@ -358,8 +371,29 @@ export function buildLivenessSection(cwd: string, assignmentId: string, worktree
     '```sh',
     writeCmd,
     '```',
-    `Heartbeat file (absolute, writable from your sandbox): ${hbPath}`,
+    sandboxRelative
+      ? `Heartbeat file (worktree-RELATIVE — run it from the worktree root, your sandbox cwd; sandboxes refuse the absolute coordination path): ${targetPath}`
+      : `Heartbeat file (absolute, writable from your sandbox): ${hbPath}`,
     ...(worktreePath ? ['If that write is denied, use any file edit in your worktree as your liveness signal and continue — do NOT stall on the heartbeat.'] : []),
+    '',
+  ].join('\n');
+}
+
+/**
+ * pln#554 step 4 — working defaults baked into every generated brief, distilled
+ * from the 2026-06-10 session: (a) incremental commits so a worker death costs
+ * one step max (the orphaned recoveries that night lost zero work ONLY because
+ * the diff was still on disk); (b) a split validation bar so parallel workers
+ * don't pile full test suites onto a memory-pressured machine.
+ */
+export function buildWorkingDefaultsSection(opts: { canCommit: boolean }): string {
+  const commitRule = opts.canCommit
+    ? '- **Incremental commits**: commit after EACH completed step (conventional message). Never hold more than one step uncommitted — a worker death then costs at most one step, and the coordinator can harvest everything already on the branch.'
+    : '- **Incremental delivery**: your sandbox cannot `git commit` — finish steps in order and keep every file saved as you complete each step; the coordinator commits the worktree on your behalf at harvest. Never leave a step half-edited.';
+  return [
+    '## Working defaults',
+    commitRule,
+    '- **Validation bar**: run `tsc --noEmit` (or the project typecheck) + the targeted unit tests for the files you touched ONLY. Do NOT run the full default test suite — the coordinator runs the full gate after harvest (prevents test-suite pileups when several workers run in parallel).',
     '',
   ].join('\n');
 }
@@ -504,12 +538,20 @@ export function generateBrief(
   if (plan.estimated_effort) parts.push(`Estimated effort: ${plan.estimated_effort} minutes`);
   parts.push('');
 
+  // Capability profile drives the sandbox-aware liveness path + the working
+  // defaults' commit rule (pln#554 step 4) and the transport addendum below.
+  const briefProfile = options?.agent ? getCapabilityProfile(options.agent) : undefined;
+  const briefSandboxed = briefProfile ? isSandboxedSpawn(briefProfile) : false;
+
   // pln#520 step 5 — liveness heartbeat instruction, first actionable block so
   // the worker writes work_loop_reached before anything else. Only when an
   // assignment id is known (the heartbeat is keyed by it).
   if (options?.assignmentId) {
-    parts.push(buildLivenessSection(cwd, options.assignmentId, options.worktreePath));
+    parts.push(buildLivenessSection(cwd, options.assignmentId, options.worktreePath, { sandboxed: briefSandboxed }));
   }
+
+  // pln#554 step 4 — working defaults (incremental commits + validation bar).
+  parts.push(buildWorkingDefaultsSection({ canCommit: briefProfile ? dispatchCanCommit(briefProfile) : true }));
 
   // Steps if any
   if (plan.steps?.length) {
@@ -578,7 +620,6 @@ export function generateBrief(
   // so the reconciler-independent path is preserved; this addendum disambiguates
   // the transport rather than stripping the section — the full compact reversal
   // is a separate human-owned call on the May-vs-June MCP-availability conflict.)
-  const briefProfile = options?.agent ? getCapabilityProfile(options.agent) : undefined;
   if (briefProfile && !dispatchHasMcp(briefProfile)) {
     parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
     parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');
@@ -635,11 +676,17 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   if (options.worktreePath) parts.push(`Worktree: ${options.worktreePath}`);
   parts.push('');
 
+  const taskBriefProfile = options.agent ? getCapabilityProfile(options.agent) : undefined;
+  const taskSandboxed = taskBriefProfile ? isSandboxedSpawn(taskBriefProfile) : false;
+
   // sprint 1.5 — task-based briefs get the same step-0 liveness contract as
   // plan-based briefs (worktree-local heartbeat, writable from any sandbox).
   if (options.assignmentId && options.worktreePath) {
-    parts.push(buildLivenessSection(options.worktreePath, options.assignmentId, options.worktreePath));
+    parts.push(buildLivenessSection(options.worktreePath, options.assignmentId, options.worktreePath, { sandboxed: taskSandboxed }));
   }
+
+  // pln#554 step 4 — working defaults (incremental commits + validation bar).
+  parts.push(buildWorkingDefaultsSection({ canCommit: taskBriefProfile ? dispatchCanCommit(taskBriefProfile) : true }));
 
   if (briefMode === 'full') {
     parts.push(buildProtocolSection({
@@ -650,7 +697,6 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
   }
 
   // pln#528 — transport-aware addendum for sandboxed agents (see generateBrief).
-  const taskBriefProfile = options.agent ? getCapabilityProfile(options.agent) : undefined;
   if (taskBriefProfile && !dispatchHasMcp(taskBriefProfile)) {
     parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
     parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');

@@ -20,7 +20,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { loadAssignment, listAssignments } from './assignments.js';
+import { logger } from './logger.js';
 import { loadAgentRun, listAgentRuns } from './agentruns.js';
 import { loadClaim } from './claims.js';
 import { getLoop, listLoops } from './loops/store.js';
@@ -78,6 +80,18 @@ export interface DispatchRuntimeSnapshot {
    * it could not self-update the agent_run (sandboxed). undefined when absent.
    */
   lane_result?: { status: string; summary: string };
+  /**
+   * pln#554 — worktree git evidence: commits on the lane branch ahead of the
+   * base ref (`git rev-list --count <base>..HEAD`). undefined when there is no
+   * worktree or git could not be queried.
+   */
+  commits_ahead?: number;
+  /**
+   * pln#554 — modified TRACKED files in the worktree (`git status --short`
+   * minus untracked). commits_ahead>0 with dirty_tracked==0 means the worker
+   * delivered everything to the branch. undefined when unobservable.
+   */
+  dirty_tracked?: number;
 }
 
 export interface DispatchDiagnosis {
@@ -114,12 +128,42 @@ export interface DispatchStatusOptions {
   tail_log_lines?: number;
   /** Age in ms past which an idle running run is considered stalled. Default 5min. */
   stall_threshold_ms?: number;
+  /** Base ref for the worktree git-evidence comparison. Default 'master'. */
+  base_ref?: string;
   /** Override wall clock for deterministic tests. */
   nowMs?: number;
 }
 
 const DEFAULT_TAIL = 20;
 const DEFAULT_STALL_MS = 5 * 60_000;
+const DEFAULT_BASE_REF = 'master';
+
+/**
+ * pln#554 — worktree git evidence, the signal that beats process/administrative
+ * status: a worker that committed everything to its lane branch has DELIVERED,
+ * whatever its pid/heartbeat/assignment.status say. Shared by dispatch-status
+ * and `brainclaw dispatch watch`. Returns undefined when there is no worktree
+ * or git could not be queried (never conclude "no commits" from a failed read).
+ */
+export function gitEvidence(
+  worktreePath: string | undefined,
+  baseRef: string,
+): { commitsAhead: number; dirtyTracked: number } | undefined {
+  if (!worktreePath) return undefined;
+  try {
+    const ahead = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${baseRef}..HEAD`], {
+      encoding: 'utf-8', timeout: 15000,
+    }).trim();
+    const status = execFileSync('git', ['-C', worktreePath, 'status', '--short'], {
+      encoding: 'utf-8', timeout: 15000,
+    });
+    const dirty = status.split('\n').filter((l) => l.trim() && !l.startsWith('??')).length;
+    return { commitsAhead: Number.parseInt(ahead, 10) || 0, dirtyTracked: dirty };
+  } catch (err) {
+    logger.debug('dispatch status: git evidence unavailable:', err);
+    return undefined;
+  }
+}
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -260,6 +304,19 @@ function computeDiagnosis(
       recommended_next_action: ok
         ? 'Worker finished. `brainclaw harvest <assignment_id>` to ingest the result, then commit/integrate its worktree diff and converge the lane.'
         : `Worker reported "${lr.status}". Read the LANE-RESULT summary + stderr; address the blocker or reroute.`,
+    };
+  }
+
+  // pln#554 — git evidence is the #2 signal, ABOVE process sentinels and
+  // administrative status: commits ahead of base with a clean tracked tree
+  // means the worker delivered everything to the branch, even if its pid is
+  // dead, its heartbeat stale, or the run was relabeled interrupted by a TTL
+  // sweep (can_948acfd6). The verdict is "harvest it" — never "kill and reroute".
+  if ((runtime.commits_ahead ?? 0) > 0 && runtime.dirty_tracked === 0) {
+    return {
+      health: 'terminal',
+      summary: `worker delivered: ${runtime.commits_ahead} commit(s) ahead of base with a clean tracked tree — everything is on the lane branch${agentRun && !TERMINAL_RUN_STATUSES.has(agentRun.status) ? ` (agent_run still ${agentRun.status}; exit formalities missing — harvest reconciles it)` : ''}`,
+      recommended_next_action: 'Worker delivered; harvest it: `brainclaw harvest <assignment_id>` to ingest and merge the lane branch. Do NOT kill or reroute.',
     };
   }
 
@@ -409,6 +466,9 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     } catch { /* no / invalid LANE-RESULT.json */ }
   }
 
+  // pln#554 — worktree git evidence (commits ahead of base + dirty tracked files).
+  const evidence = gitEvidence(worktreeForFs, options.base_ref ?? DEFAULT_BASE_REF);
+
   const runtime: DispatchRuntimeSnapshot = {
     pid: agentRun?.pid,
     pid_alive: isProcessAlive(agentRun?.pid),
@@ -422,6 +482,8 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     },
     last_fs_activity_ms: lastFsActivityMs,
     lane_result: laneResult,
+    commits_ahead: evidence?.commitsAhead,
+    dirty_tracked: evidence?.dirtyTracked,
   };
 
   let diagnosis = computeDiagnosis(assignment, agentRun, runtime, { stallMs, nowMs });

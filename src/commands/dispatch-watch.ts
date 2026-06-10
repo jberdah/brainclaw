@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { getDispatchStatus, type DispatchStatus } from '../core/dispatch-status.js';
-import { logger } from '../core/logger.js';
 
 /**
  * `brainclaw dispatch watch <asgn_|clm_|run_>` — blocking coordinator-side
@@ -123,23 +122,6 @@ export function probeAgentChildAlive(wrapperPid: number | undefined): boolean | 
   }
 }
 
-function gitEvidence(worktreePath: string | undefined, baseRef: string): { commitsAhead: number; dirtyTracked: number } {
-  if (!worktreePath) return { commitsAhead: 0, dirtyTracked: 0 };
-  try {
-    const ahead = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${baseRef}..HEAD`], {
-      encoding: 'utf-8', timeout: 15000,
-    }).trim();
-    const status = execFileSync('git', ['-C', worktreePath, 'status', '--short'], {
-      encoding: 'utf-8', timeout: 15000,
-    });
-    const dirty = status.split('\n').filter((l) => l.trim() && !l.startsWith('??')).length;
-    return { commitsAhead: Number.parseInt(ahead, 10) || 0, dirtyTracked: dirty };
-  } catch (err) {
-    logger.debug('dispatch watch: git evidence unavailable:', err);
-    return { commitsAhead: 0, dirtyTracked: 0 };
-  }
-}
-
 export interface DispatchWatchOptions {
   intervalSeconds?: number;
   timeoutMinutes?: number;
@@ -183,7 +165,7 @@ export async function runDispatchWatch(targetId: string, options: DispatchWatchO
     poll += 1;
     let status: DispatchStatus;
     try {
-      status = getDispatchStatus({ target_id: targetId, cwd: options.cwd, tail_log_lines: 0 });
+      status = getDispatchStatus({ target_id: targetId, cwd: options.cwd, tail_log_lines: 0, base_ref: baseRef });
     } catch (err) {
       console.error(`Error: could not resolve '${targetId}': ${err instanceof Error ? err.message : String(err)}`);
       process.exitCode = 5;
@@ -191,8 +173,9 @@ export async function runDispatchWatch(targetId: string, options: DispatchWatchO
     }
     lastStatus = status;
 
-    const worktree = status.agent_run?.worktree_path ?? status.claim?.worktree_path ?? status.assignment?.worktree_path;
-    const { commitsAhead, dirtyTracked } = gitEvidence(worktree, baseRef);
+    // Git evidence is computed by getDispatchStatus (shared helper, pln#554 step 2).
+    const commitsAhead = status.runtime.commits_ahead ?? 0;
+    const dirtyTracked = status.runtime.dirty_tracked ?? 0;
     const state = evaluateWatchTick({
       health: status.diagnosis.health,
       runStatus: status.agent_run?.status,
