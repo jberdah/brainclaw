@@ -1275,6 +1275,7 @@ export const BootstrapProfileDocumentSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   derived_at: z.string(),
   repo_fingerprint: z.string().optional(),
+  source_fingerprint: z.string().optional(),
   summary: z.string(),
   sources_scanned: z.array(z.string()).default([]),
   git_available: z.boolean().default(false),

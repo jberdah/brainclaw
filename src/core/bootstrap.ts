@@ -143,9 +143,9 @@ export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapRe
   const existing = loadBootstrapProfile(cwd);
   const existingPlan = loadBootstrapImportPlan(cwd);
   const lastApplication = loadBootstrapApplication(cwd);
-  const existingFingerprint = currentRepoFingerprint(cwd);
+  const sourceFingerprint = currentSourceFingerprint(cwd, target);
 
-  if (!options.refresh && existing && existingPlan && isProfileReusable(existing, target, existingFingerprint)) {
+  if (!options.refresh && existing && existingPlan && isProfileReusable(existing, target, sourceFingerprint)) {
     const seeds = listBootstrapSeeds(cwd);
     const importPlan = interviewAnswers.length > 0
       ? buildBootstrapImportPlan({
@@ -173,7 +173,7 @@ export function runBootstrapProfile(options: BootstrapOptions = {}): BootstrapRe
     };
   }
 
-  const artifacts = buildBootstrapArtifacts({ cwd, target, repoFingerprint: existingFingerprint });
+  const artifacts = buildBootstrapArtifacts({ cwd, target, sourceFingerprint });
   persistBootstrapArtifacts(artifacts, cwd);
   const importPlan = interviewAnswers.length > 0
     ? buildBootstrapImportPlan({
@@ -218,7 +218,7 @@ export function hasReusableBootstrapProfile(target?: string, cwd?: string): bool
   if (!profile) {
     return false;
   }
-  return isProfileReusable(profile, normalizeTarget(target), currentRepoFingerprint(cwd ?? process.cwd()));
+  return isProfileReusable(profile, normalizeTarget(target), currentSourceFingerprint(cwd ?? process.cwd(), target));
 }
 
 export function selectDerivedSignals(
@@ -351,7 +351,7 @@ export function renderBootstrapInterview(
 function buildBootstrapArtifacts(input: {
   cwd: string;
   target?: string;
-  repoFingerprint?: string;
+  sourceFingerprint?: string;
 }): BuildBootstrapArtifactsResult {
   const sourcesScanned: string[] = [];
   const seeds: MemorySeedDocument[] = [];
@@ -470,7 +470,8 @@ function buildBootstrapArtifacts(input: {
     profile: BootstrapProfileDocumentSchema.parse({
       schema_version: DERIVED_SCHEMA_VERSION,
       derived_at: nowISO(),
-      repo_fingerprint: gitProbe.repoFingerprint ?? input.repoFingerprint,
+      repo_fingerprint: gitProbe.repoFingerprint,
+      source_fingerprint: input.sourceFingerprint ?? currentSourceFingerprint(input.cwd, input.target),
       summary,
       sources_scanned: [...new Set(sourcesScanned)],
       git_available: gitProbe.available,
@@ -1006,24 +1007,67 @@ function bootstrapApplicationPath(cwd?: string): string {
 function isProfileReusable(
   profile: BootstrapProfileDocument,
   target: string | undefined,
-  currentFingerprint?: string,
+  currentFingerprint: string,
 ): boolean {
   if ((profile.target ?? undefined) !== target) {
     return false;
   }
-  if (profile.repo_fingerprint && currentFingerprint) {
-    return profile.repo_fingerprint === currentFingerprint;
+  // Content fingerprint of the harvested sources, not git HEAD: a commit
+  // that touches no harvested doc/manifest must not trigger a full re-scan
+  // (which previously ran spawnSync git ×N + fs walks on every commit for
+  // low-density stores). Profiles persisted before source_fingerprint
+  // existed re-scan once and migrate.
+  if (profile.source_fingerprint !== currentFingerprint) {
+    return false;
+  }
+  // TTL backstop: git-history-derived seeds (hotspots) drift without any
+  // harvested file changing, so cap profile reuse in time.
+  const derivedAt = Date.parse(profile.derived_at);
+  if (!Number.isFinite(derivedAt) || Date.now() - derivedAt > BOOTSTRAP_PROFILE_TTL_MS) {
+    return false;
   }
   return true;
 }
 
-function currentRepoFingerprint(cwd: string): string | undefined {
-  const result = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd,
-    encoding: 'utf-8',
-    timeout: 5000,
-  });
-  return result.status === 0 ? result.stdout.trim() : undefined;
+const BOOTSTRAP_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
+
+const SOURCE_FINGERPRINT_EXTRA_FILES = [
+  'package.json',
+  MAKEFILE_NAME,
+];
+
+function currentSourceFingerprint(cwd: string, target?: string): string {
+  const scanRoot = resolveBootstrapScanRoot(cwd, normalizeTarget(target));
+  const candidates = new Set<string>();
+  const readmePath = findFirstExisting(scanRoot, README_CANDIDATES);
+  if (readmePath) {
+    candidates.add(readmePath);
+  }
+  for (const relativePath of discoverNativeInstructionFiles(scanRoot)) {
+    candidates.add(path.join(scanRoot, relativePath));
+  }
+  for (const relativePath of [
+    ...SOURCE_FINGERPRINT_EXTRA_FILES,
+    ...CI_FILES,
+    ...CONTRIBUTING_FILES,
+    ...CHANGELOG_FILES,
+    ...DOCKER_FILES,
+    ...ENV_EXAMPLE_FILES,
+  ]) {
+    candidates.add(path.join(scanRoot, relativePath));
+  }
+
+  const entries: string[] = [];
+  for (const filepath of candidates) {
+    try {
+      const stat = fs.statSync(filepath);
+      if (stat.isFile()) {
+        entries.push(`${path.relative(scanRoot, filepath).replace(/\\/g, '/')}|${stat.size}|${Math.trunc(stat.mtimeMs)}`);
+      }
+    } catch { /* missing file — not part of the fingerprint */ }
+  }
+  entries.sort();
+  return `src1:${crypto.createHash('sha1').update(entries.join('\n')).digest('hex')}`;
 }
 
 function createSeed(input: {

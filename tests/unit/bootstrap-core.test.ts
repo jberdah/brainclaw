@@ -145,6 +145,55 @@ describe('core/bootstrap', () => {
     assert.ok(refreshed.seeds.every((seed) => !firstIds.includes(seed.id)));
   });
 
+  it('keeps reusing the profile after commits that do not touch harvested sources', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Commit Churn\n\n## Run\n\n- npm start\n', 'utf-8');
+    spawnSync('git', ['init'], { cwd: workspace.dir, encoding: 'utf-8' });
+    spawnSync('git', ['add', 'README.md'], { cwd: workspace.dir, encoding: 'utf-8' });
+    spawnSync('git', ['-c', 'user.name=brainclaw', '-c', 'user.email=brainclaw@example.com', 'commit', '-m', 'init'], {
+      cwd: workspace.dir,
+      encoding: 'utf-8',
+    });
+
+    const first = runBootstrapProfile({ cwd: workspace.dir });
+    assert.equal(first.reusedProfile, false);
+
+    // A commit that touches no harvested doc/manifest must not invalidate the profile
+    fs.mkdirSync(path.join(workspace.dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspace.dir, 'src', 'feature.ts'), 'export const feature = true;\n', 'utf-8');
+    spawnSync('git', ['add', 'src/feature.ts'], { cwd: workspace.dir, encoding: 'utf-8' });
+    spawnSync('git', ['-c', 'user.name=brainclaw', '-c', 'user.email=brainclaw@example.com', 'commit', '-m', 'unrelated change'], {
+      cwd: workspace.dir,
+      encoding: 'utf-8',
+    });
+
+    const second = runBootstrapProfile({ cwd: workspace.dir });
+    assert.equal(second.reusedProfile, true);
+  });
+
+  it('re-scans without refresh when a harvested source file changes', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Source Change\n\n## Run\n\n- npm start\n', 'utf-8');
+    const first = runBootstrapProfile({ cwd: workspace.dir });
+    assert.equal(first.reusedProfile, false);
+
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Source Change Edited\n\n## Build\n\n- npm run build\n- extra line\n', 'utf-8');
+    const second = runBootstrapProfile({ cwd: workspace.dir });
+    assert.equal(second.reusedProfile, false);
+  });
+
+  it('re-scans when the persisted profile exceeds its TTL', () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# TTL Check\n\n## Run\n\n- npm start\n', 'utf-8');
+    runBootstrapProfile({ cwd: workspace.dir });
+
+    const profilePath = path.join(workspace.dir, '.brainclaw', 'discovery', 'bootstrap', 'profile.json');
+    assert.ok(fs.existsSync(profilePath));
+    const document = JSON.parse(fs.readFileSync(profilePath, 'utf-8')) as { derived_at: string };
+    document.derived_at = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    fs.writeFileSync(profilePath, `${JSON.stringify(document, null, 2)}\n`, 'utf-8');
+
+    const second = runBootstrapProfile({ cwd: workspace.dir });
+    assert.equal(second.reusedProfile, false);
+  });
+
   it('uses git when available to capture fingerprint and hotspots', () => {
     fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Git Repo\n', 'utf-8');
     fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({ scripts: { test: 'npm test' } }, null, 2), 'utf-8');
