@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { memoryExists, resolveEntityDir } from '../core/io.js';
 import { mutate } from '../core/mutation-pipeline.js';
 import { rebuildProjectMd } from '../core/markdown.js';
@@ -71,7 +71,9 @@ export function runPrune(options: PruneOptions = {}): void {
 
     state.active_constraints = state.active_constraints.filter(c => c.status !== 'expired');
     prunedCount = originalLength - state.active_constraints.length;
-    saveState(state, cwd);
+    // deleteMissing: this RMW is atomic (loadState above runs under the same
+    // mutate() lock), so removing pruned files here cannot clobber concurrent writes.
+    persistState(state, cwd, { writeProjectMarkdown: false, deleteMissing: true });
     expiredClaimsCount = expireStaleActiveClaims(cwd);
 
     if (options.expired) {

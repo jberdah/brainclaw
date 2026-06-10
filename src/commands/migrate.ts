@@ -1,4 +1,4 @@
-import { loadState, persistState } from '../core/state.js';
+import { loadState, mutateState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { resolveTargetStore } from '../core/store-resolution.js';
 import { appendAuditEntry } from '../core/audit.js';
@@ -62,31 +62,43 @@ function promoteMachineItems(cwd: string, dryRun: boolean): void {
     process.exit(1);
   }
 
-  const userState = loadState(userCwd);
+  const movedIds = {
+    constraints: new Set(machineConstraints.map((c) => c.id)),
+    decisions: new Set(machineDecisions.map((d) => d.id)),
+    traps: new Set(machineTraps.map((t) => t.id)),
+  };
 
-  // Move constraints
+  // Write target FIRST (a crash here leaves a duplicate, never silent loss),
+  // each side as an atomic locked RMW so concurrent writes are not clobbered.
+  mutateState((userState) => {
+    for (const c of machineConstraints) {
+      if (!userState.active_constraints.some((x) => x.id === c.id)) userState.active_constraints.push(c);
+    }
+    for (const d of machineDecisions) {
+      if (!userState.recent_decisions.some((x) => x.id === d.id)) userState.recent_decisions.push(d);
+    }
+    for (const t of machineTraps) {
+      if (!userState.known_traps.some((x) => x.id === t.id)) userState.known_traps.push(t);
+    }
+  }, userCwd);
+
+  // Then delete from source — mutateState persists with deleteMissing so the
+  // promoted entity files are actually unlinked from the project store.
+  mutateState((sourceState) => {
+    sourceState.active_constraints = sourceState.active_constraints.filter((x) => !movedIds.constraints.has(x.id));
+    sourceState.recent_decisions = sourceState.recent_decisions.filter((x) => !movedIds.decisions.has(x.id));
+    sourceState.known_traps = sourceState.known_traps.filter((x) => !movedIds.traps.has(x.id));
+  }, cwd);
+
   for (const c of machineConstraints) {
-    userState.active_constraints.push(c);
-    state.active_constraints = state.active_constraints.filter((x) => x.id !== c.id);
     appendAuditEntry({ actor: agent, action: 'update', item_id: c.id, item_type: 'constraint', reason: 'promote to user store (machine scope)' }, cwd);
   }
-
-  // Move decisions
   for (const d of machineDecisions) {
-    userState.recent_decisions.push(d);
-    state.recent_decisions = state.recent_decisions.filter((x) => x.id !== d.id);
     appendAuditEntry({ actor: agent, action: 'update', item_id: d.id, item_type: 'decision', reason: 'promote to user store (machine scope)' }, cwd);
   }
-
-  // Move traps
   for (const t of machineTraps) {
-    userState.known_traps.push(t);
-    state.known_traps = state.known_traps.filter((x) => x.id !== t.id);
     appendAuditEntry({ actor: agent, action: 'update', item_id: t.id, item_type: 'trap', reason: 'promote to user store (machine scope)' }, cwd);
   }
-
-  persistState(userState, userCwd);
-  persistState(state, cwd);
 
   console.log(`\n✔ Promoted ${total} item(s) to user store (${userCwd})`);
 }

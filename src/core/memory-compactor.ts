@@ -18,7 +18,7 @@ import path from 'node:path';
 import type { State, Constraint, Decision, Trap } from './schema.js';
 import { normalise, similarity } from './duplicates.js';
 import { resolveEntityDir } from './io.js';
-import { loadState, saveState } from './state.js';
+import { loadState, persistState } from './state.js';
 import { mutate } from './mutation-pipeline.js';
 import { logger } from './logger.js';
 
@@ -198,7 +198,9 @@ export function analyzeAndApply(options: CompactorOptions = {}): { report: Compa
     mergedClusters = applied.mergedClusters;
     staleArchived = applied.staleArchived;
 
-    saveState(state, cwd);
+    // deleteMissing: archived items must have their live files unlinked; the RMW
+    // is atomic (loadState above runs under this mutate() lock).
+    persistState(state, cwd, { writeProjectMarkdown: false, deleteMissing: true });
   });
 
   return { report, result: { archivedCount, mergedClusters, staleArchived } };
@@ -224,7 +226,7 @@ export function applyCompaction(
     archivedCount = applied.archivedCount;
     mergedClusters = applied.mergedClusters;
     staleArchived = applied.staleArchived;
-    saveState(state, cwd);
+    persistState(state, cwd, { writeProjectMarkdown: false, deleteMissing: true });
   });
 
   return { archivedCount, mergedClusters, staleArchived };
