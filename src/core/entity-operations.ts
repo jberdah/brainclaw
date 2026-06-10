@@ -249,7 +249,11 @@ export function listEntities(
   return { entity: name, total: filtered.length, items: paged };
 }
 
-export interface BoundedListResult<T = unknown> extends ListResult<T> {
+export interface BoundedListResult<T = unknown> {
+  /** Entity label — an EntityName for canonical lists, any label for other bounded payloads (search results, …). */
+  entity: string;
+  total: number;
+  items: T[];
   /** Items actually returned (≤ total; may be < page size when size-bounded). */
   returned: number;
   /** True when more items exist beyond what was returned (pagination or size-bounding). */
@@ -275,7 +279,7 @@ export const DEFAULT_FIND_CHAR_BUDGET = 40000;
  * guessing or falling back to the terminal.
  */
 export function boundListResult<T = unknown>(
-  result: ListResult<T>,
+  result: { entity: string; total: number; items: T[] },
   offset: number,
   charBudget = DEFAULT_FIND_CHAR_BUDGET,
 ): BoundedListResult<T> {

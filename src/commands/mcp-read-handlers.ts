@@ -51,6 +51,7 @@ import { listAvailableProjects, switchProject } from './switch.js';
 import { resolveEffectiveCwd, resolveStoreChain } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
+import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
 import type { ActionRequiredKind, ActionRequiredStatus, AssignmentStatus, BootstrapInterviewAnswer, PlanStatus, PlanType, RuntimeEventType, SequenceStatus } from '../core/schema.js';
 import {
@@ -85,6 +86,33 @@ function normalizeBootstrapInterviewAudienceArg(value: unknown): 'cli' | 'ide_ch
     return value;
   }
   return 'any';
+}
+
+/**
+ * trp#449 class (pln#542): bound an arbitrary object payload by repeatedly
+ * halving its largest array field until the serialized size fits the budget.
+ * Returns the bounded payload plus a per-field omitted count so the caller
+ * can advertise what was dropped.
+ */
+function boundObjectArrays(payload: Record<string, unknown>, charBudget: number): { payload: Record<string, unknown>; omitted: Record<string, number> } {
+  const omitted: Record<string, number> = {};
+  let current = { ...payload };
+  while (JSON.stringify(current).length > charBudget) {
+    let largestKey: string | undefined;
+    let largestLen = 1;
+    for (const [key, value] of Object.entries(current)) {
+      if (Array.isArray(value) && value.length > largestLen) {
+        largestKey = key;
+        largestLen = value.length;
+      }
+    }
+    if (!largestKey) break;
+    const arr = current[largestKey] as unknown[];
+    const newLen = Math.max(1, Math.floor(arr.length / 2));
+    omitted[largestKey] = (omitted[largestKey] ?? 0) + (arr.length - newLen);
+    current = { ...current, [largestKey]: arr.slice(0, newLen) };
+  }
+  return { payload: current, omitted };
 }
 
 function getReviewAssignee(tags: string[]): string | undefined {
@@ -122,6 +150,9 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_get_context') {
+    // pln#542: budget_tokens caps the relevance-ranked fill (~4 chars/token).
+    // Explicit maxChars wins when both are given.
+    const budgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
     const result = buildContext({
       target: args.path as string | undefined,
       project: targetProjectArg,
@@ -131,7 +162,7 @@ export function handleMcpReadToolCall(
       profile: args.profile as 'dev' | 'dense' | 'openclaw' | 'ops' | 'research' | 'compact' | 'copilot' | 'quick' | undefined,
       includePending: args.includePending as boolean | undefined,
       maxItems: args.maxItems as number | undefined,
-      maxChars: args.maxChars as number | undefined,
+      maxChars: (args.maxChars as number | undefined) ?? (budgetTokens ? budgetTokens * 4 : undefined),
       digest: args.digest as boolean | undefined,
       sinceSession: args.since_session as string | undefined,
       bootstrap: args.bootstrap as boolean | undefined,
@@ -175,10 +206,21 @@ export function handleMcpReadToolCall(
       enrichedContent = content + suggestions.join('\n');
     }
 
-    // Check for unseen events from other agents
-    const agentName = (args.agent as string) ?? resolveCurrentAgentName(cwd);
-    const unseenEvents = readUnseenEvents(agentName, cwd);
-    const notifications = buildNotificationSummary(unseenEvents);
+    // Unseen-event notifications. When buildContext already computed the
+    // event-cursor diff (the converged novelty mechanism, pln#542), reuse its
+    // histogram — the cursor was advanced by that read, so a second
+    // readUnseenEvents would observe nothing.
+    let notifications: Record<string, number> | undefined;
+    let unseenEventCount: number | undefined;
+    if (result.context_diff?.source === 'event_cursor') {
+      notifications = result.context_diff.event_summary;
+      unseenEventCount = result.context_diff.unseen_event_count;
+    } else {
+      const agentName = (args.agent as string) ?? resolveCurrentAgentName(cwd);
+      const unseenEvents = readUnseenEvents(agentName, cwd);
+      notifications = buildNotificationSummary(unseenEvents);
+      unseenEventCount = unseenEvents.length;
+    }
 
     return {
       content: [{ type: 'text', text: enrichedContent || 'No relevant memory found.' }],
@@ -194,7 +236,7 @@ export function handleMcpReadToolCall(
           name: tool.name,
           type: tool.type,
         })),
-        ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEvents.length } : {}),
+        ...(notifications ? { pending_notifications: notifications, unseen_event_count: unseenEventCount } : {}),
       },
     };
   }
@@ -242,13 +284,35 @@ export function handleMcpReadToolCall(
       }
     }
 
-    if (handoff.snapshot?.diff) {
-      lines.push('', 'Uncommitted Git Diff:', handoff.snapshot.diff);
+    // trp#449 class (pln#542): the embedded git diff is unbounded — cap it so
+    // a large handoff snapshot never overflows the MCP token budget.
+    // budget_tokens tightens the cap (~4 chars/token).
+    const handoffBudgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+    const diffCharBudget = handoffBudgetTokens ? Math.min(handoffBudgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+    let boundedHandoff = handoff;
+    let diffTruncated = false;
+    if (handoff.snapshot?.diff && handoff.snapshot.diff.length > diffCharBudget) {
+      diffTruncated = true;
+      boundedHandoff = {
+        ...handoff,
+        snapshot: {
+          ...handoff.snapshot,
+          diff: `${handoff.snapshot.diff.slice(0, diffCharBudget)}\n… [diff truncated to ${diffCharBudget} chars — read the worktree branch for the full diff]`,
+        },
+      };
+    }
+
+    if (boundedHandoff.snapshot?.diff) {
+      lines.push('', 'Uncommitted Git Diff:', boundedHandoff.snapshot.diff);
     }
 
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { handoff, schema_version: SCHEMA_VERSION },
+      structuredContent: {
+        handoff: boundedHandoff,
+        ...(diffTruncated ? { diff_truncated: true } : {}),
+        schema_version: SCHEMA_VERSION,
+      },
     };
   }
 
@@ -536,9 +600,22 @@ export function handleMcpReadToolCall(
         lines.push(`- ${other.name}: ${other.claim_count} claim(s) on ${other.scopes.join(', ')}`);
       }
     }
+    // trp#449 class (pln#542): the board aggregates many unbounded arrays —
+    // bound the structured payload by size. budget_tokens tightens the cap.
+    const boardBudgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+    const boardCharBudget = boardBudgetTokens ? Math.min(boardBudgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+    const { payload: boundedBoard, omitted } = boundObjectArrays(board as unknown as Record<string, unknown>, boardCharBudget);
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
-      structuredContent: { ...board },
+      structuredContent: {
+        ...boundedBoard,
+        ...(Object.keys(omitted).length > 0
+          ? {
+              omitted_for_size: omitted,
+              hint: `Payload size-bounded: ${Object.entries(omitted).map(([k, n]) => `${n} ${k}`).join(', ')} omitted. Use bclaw_find(entity=…) with filters to read the full lists.`,
+            }
+          : {}),
+      },
     };
   }
 
@@ -558,10 +635,29 @@ export function handleMcpReadToolCall(
     });
     const total = allResults.length;
     const page = allResults.slice(offset, offset + limit);
-    const lines = page.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
+    // trp#449 class — bound the page by size (pln#542). budget_tokens tightens
+    // the cap (~4 chars/token); the default mirrors bclaw_find's budget.
+    const budgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+    const charBudget = budgetTokens ? Math.min(budgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+    const bounded = boundListResult({ entity: 'search_result', total, items: page }, offset, charBudget);
+    const lines = bounded.items.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
+    const nextActions = bounded.has_more
+      ? [{ tool: 'bclaw_search', args: { query, offset: bounded.next_offset, limit }, when: 'to fetch the next page' }]
+      : [];
     return {
-      content: [{ type: 'text', text: page.length > 0 ? lines.join('\n') : 'No results found.' }],
-      structuredContent: { total, offset, limit, results: page },
+      content: [{ type: 'text', text: bounded.items.length > 0 ? lines.join('\n') : 'No results found.' }],
+      structuredContent: {
+        total,
+        offset,
+        limit,
+        results: bounded.items,
+        returned: bounded.returned,
+        has_more: bounded.has_more,
+        ...(bounded.next_offset !== undefined ? { next_offset: bounded.next_offset } : {}),
+        ...(bounded.omitted_for_size ? { omitted_for_size: bounded.omitted_for_size } : {}),
+        ...(bounded.hint ? { hint: bounded.hint } : {}),
+        next_actions: nextActions,
+      },
     };
   }
 

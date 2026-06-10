@@ -21,6 +21,7 @@ import {
   getEntity,
   listEntities,
   boundListResult,
+  DEFAULT_FIND_CHAR_BUDGET,
   removeEntity,
   transitionEntity,
   updateEntity,
@@ -195,7 +196,7 @@ export interface McpToolErrorShape {
 
 export type McpToolExecutor = (payload: McpToolExecutionPayload, signal: AbortSignal) => Promise<McpToolExecutionOutcome>;
 
-type QuickCaptureTarget = 'decision' | 'trap' | 'note';
+type QuickCaptureTarget = 'decision' | 'trap' | 'constraint' | 'note';
 
 interface QuickCaptureClassification {
   target: QuickCaptureTarget;
@@ -275,6 +276,7 @@ export const MCP_READ_TOOLS = [
         compactTemplate: { type: 'boolean', description: 'Use compact template (memory kind, format=template).' },
         includeAgentTooling: { type: 'boolean', description: 'Include agent tooling signals (execution kind).' },
         project: { type: 'string', description: 'Optional: name of a linked project to read context from. Defaults to the current project. Accepts cross_project_links and workspace store-chain children.' },
+        budget_tokens: { type: 'number', description: 'Approximate token budget for the payload (~4 chars/token). memory kind: relevance-ranked item fill; board kind: arrays bounded by size.' },
       },
       required: ['kind'],
     },
@@ -292,6 +294,7 @@ export const MCP_READ_TOOLS = [
         since: { type: 'string', description: 'Filter items created after this ISO date.' },
         limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
         offset: { type: 'number', description: 'Number of results to skip (for pagination).' },
+        budget_tokens: { type: 'number', description: 'Optional token budget for the result page (~4 chars/token). The page is size-bounded; has_more/next_offset advertise the rest.' },
       },
       required: ['query'],
     },
@@ -687,12 +690,13 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_quick_capture',
-    description: 'Capture free-form text and classify it locally into a decision, trap, or fallback runtime note. Uses keyword heuristics only, never an LLM.',
+    description: 'Capture free-form text as a decision, trap, constraint, or runtime note. Declare `type` yourself (you know what you are capturing — caller assertion wins); keyword heuristics are only a fallback when type is absent. Contradictions with existing memory are attached as advisory metadata on the candidate, never block promotion.',
     annotations: { tier: 'standard', category: 'memory' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'Free-form capture text.' },
+        type: { type: 'string', enum: ['decision', 'trap', 'constraint', 'note'], description: 'Caller-asserted classification. Strongly recommended — the calling agent knows the nature of the capture better than keyword heuristics (cnd_abe61d68: 18 false contradiction positives on a review summary).' },
         context: { type: 'string', description: 'Optional file/path/scope context to associate with the capture.' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
@@ -1079,6 +1083,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         compact: { type: 'boolean', description: 'Return a compact payload (default true). Set to false to include the full context result. Compact mode avoids exceeding MCP token limits on projects with large memory.', default: true },
+        budget_tokens: { type: 'number', description: 'Approximate token budget for the context payload. Relevance-ranked fill: highest-scoring items kept until the budget is reached (~4 chars/token).' },
       },
       required: ['intent'],
     },
@@ -1125,8 +1130,12 @@ const MCP_WRITE_TOOLS = [
       properties: {
         intent: {
           type: 'string',
-          enum: ['open', 'get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close'],
-          description: 'Loop lifecycle intent. See docs/concepts/loop-engine.md for semantics. ANTI-PATTERN: do NOT call `intent="open"` directly to start a review or ideation loop — it creates the loop structure WITHOUT dispatching the first turn, so the reviewer/participant never receives the work. Use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` (or `intent="ideate"`) instead — that opens the loop AND dispatches the first turn in one call. `bclaw_loop` is for driving turns inside a loop that was already opened via the coordinate facade (intents: turn, complete_turn, advance, close, etc.).',
+          // 'open' is intentionally NOT exposed standalone (pln#542): it
+          // created a loop structure without dispatching the first turn, so
+          // nothing ever ran. Loops are opened via
+          // bclaw_coordinate(intent='review', open_loop=true) or intent='ideate'.
+          enum: ['get', 'list', 'turn', 'complete_turn', 'advance', 'add_artifact', 'pause', 'resume', 'close'],
+          description: 'Loop lifecycle intent for driving turns inside a loop that was already opened via the coordinate facade. To START a loop, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` or `intent="ideate"` — that opens the loop AND dispatches the first turn. See docs/concepts/loop-engine.md.',
         },
         loop_id: { type: 'string', description: 'Target loop id (lop_…). Required for every intent except open and list.' },
         kind: { type: 'string', enum: ['review', 'ideation', 'implementation', 'research', 'debug'], description: 'Loop kind for open / list filter.' },
@@ -1249,6 +1258,7 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | sequence | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
         filter: { type: 'object', description: 'Filter keys: status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). entity=agent_run also accepts assignment_id, claim_id, message_id.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
+        budget_tokens: { type: 'number', description: 'Optional token budget for the page payload (~4 chars/token). Tightens the default size cap; pagination metadata (has_more/next_offset) still applies.' },
       },
       required: ['entity'],
     },
@@ -1263,6 +1273,7 @@ const MCP_WRITE_TOOLS = [
         entity: { type: 'string', description: 'Entity name.' },
         id: { type: 'string', description: 'Entity id (e.g. dec_ab12cd) or short_label (e.g. dec#42).' },
         project: { type: 'string', description: 'Optional: name of a linked project to fetch from. Defaults to the current project. See `brainclaw link list` for accepted names.' },
+        budget_tokens: { type: 'number', description: 'Optional token budget (~4 chars/token). Bounds unbounded fields (e.g. handoff snapshot diffs).' },
       },
       required: ['entity', 'id'],
     },
@@ -3003,7 +3014,18 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
 
       const identity = resolved.identity!;
-      const classification = classifyQuickCapture(text);
+      // Caller-asserted classification wins (pln#542): the calling agent
+      // declares decision/trap/constraint/note; keyword heuristics are the
+      // fallback when no type is given.
+      const assertedType = typeof args.type === 'string' ? args.type.trim().toLowerCase() : undefined;
+      let classification: QuickCaptureClassification;
+      if (assertedType === 'decision' || assertedType === 'trap' || assertedType === 'constraint' || assertedType === 'note') {
+        classification = { target: assertedType, reason: 'caller_asserted', decisionScore: 0, trapScore: 0 };
+      } else if (assertedType !== undefined) {
+        return { response: createToolErrorResponse('validation_error', `type must be one of: decision, trap, constraint, note (got '${assertedType}')`) };
+      } else {
+        classification = classifyQuickCapture(text);
+      }
       if (classification.target === 'note') {
         const result = createRuntimeNote(formatQuickCaptureNoteText(text, context), {
           agent: identity.agent_name,
@@ -3025,6 +3047,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               note_id: result.noteId,
               session_id: result.sessionId,
               context,
+              next_actions: [
+                { tool: 'bclaw_quick_capture', args: { text: '<same text>', type: 'decision' }, when: 'this was actually a durable decision/trap/constraint — re-capture with an asserted type' },
+              ],
             },
           }),
           nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.sessionId,
@@ -3044,6 +3069,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const statusText = capture.writeThrough
         ? `✔ Quick capture promoted as ${classification.target} [${capture.promotedItemId}]`
         : `✔ Quick capture saved as ${classification.target} candidate [${capture.candidateId}]`;
+      const captureNextActions = capture.writeThrough
+        ? [
+            { tool: 'bclaw_get', args: { entity: classification.target, id: capture.promotedItemId }, when: 'to verify the promoted item' },
+          ]
+        : [
+            { tool: 'bclaw_get', args: { entity: 'candidate', id: capture.candidateId }, when: 'to review the pending candidate (contradiction metadata is advisory)' },
+          ];
       return {
         response: toolResponse({
           content: [{ type: 'text', text: statusText }],
@@ -3055,7 +3087,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             candidate_id: capture.candidateId,
             promoted_item_id: capture.promotedItemId,
             write_through: capture.writeThrough,
-            promotion_blocked_reason: capture.promotionBlockedReason,
+            // Advisory only (cnd_abe61d68): contradictions are metadata on
+            // the candidate, never a promotion blocker.
             contradiction_summary: capture.contradictionSummary,
             contradictions_detected: capture.contradictionsDetected?.map((item) => ({
               severity: item.severity,
@@ -3063,6 +3096,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               conflicts_with: item.conflicts_with,
             })),
             context,
+            next_actions: captureNextActions,
           },
         }),
       };
@@ -4721,11 +4755,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         warnings.push(`Agent '${sessionResult.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${sessionResult.agent}\` to set capabilities and trust level.`);
       }
 
-      // Step 2: build context for requested scope. When intent='resume',
-      // auto-surface the memory delta since the previous session for the
-      // same agent — matches session-start.ts:85 pattern. Phase 4
-      // Sprint 1 Lane A step 5 (pln#390). Without this the resume intent
-      // was functionally identical to consult, defeating its purpose.
+      // Step 2: build context for requested scope. The "what's new" diff is
+      // surfaced for ALL intents (pln#390 regression fix): intent='resume'
+      // anchors it on the agent's previous session; every other intent gets
+      // the per-agent event-log-cursor diff computed inside buildContext
+      // (pln#542 — converged novelty mechanism, covers status transitions).
       let contextResult: ReturnType<typeof buildContext> | undefined;
       try {
         let sinceSession: string | undefined;
@@ -4739,6 +4773,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           agent: sessionResult.agent,
           cwd: targetCwd,
           sinceSession,
+          // ~4 chars/token: relevance-ranked fill up to the caller's budget.
+          maxChars: workReq.budget_tokens ? workReq.budget_tokens * 4 : undefined,
         });
       } catch { /* non-fatal — context failure should not block work */ }
 
@@ -4806,11 +4842,31 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }),
         );
 
+        // pln#390 regression fix: the compact projection used to silently
+        // drop context_diff, defeating the diff-first contract. Keep a
+        // trimmed view (summary + counts + top-5 items, text capped).
+        const trimmedDiff = contextResult.context_diff
+          ? {
+              since: contextResult.context_diff.since,
+              since_session: contextResult.context_diff.since_session,
+              source: contextResult.context_diff.source,
+              summary: contextResult.context_diff.summary,
+              counts: contextResult.context_diff.counts,
+              changed_items: (contextResult.context_diff.changed_items ?? [])
+                .slice(0, 5)
+                .map((item) => ({ ...item, text: item.text.slice(0, 120) })),
+              ...(contextResult.context_diff.unseen_event_count !== undefined
+                ? { unseen_event_count: contextResult.context_diff.unseen_event_count }
+                : {}),
+            }
+          : undefined;
+
         resultPayload = {
           context_schema: contextResult.context_schema,
           profile: contextResult.profile,
           memory_version: contextResult.memory_version,
           memory_density: contextResult.memory_density,
+          context_diff: trimmedDiff ?? null,
           plan_summary: planItems,
           stale_warnings: staleTop3,
           workflow_hints: (contextResult.workflow_hints ?? []).slice(0, 3),
@@ -4847,6 +4903,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // Best-effort: never block bclaw_work on the probe.
       }
 
+      // Self-teaching affordances (pln#542): each response carries the
+      // recommended follow-up calls with exact shapes.
+      const nextActions: NonNullable<FacadeResponse['next_actions']> = [];
+      if (bootstrapRecommended) {
+        nextActions.push({ tool: 'bclaw_coordinate', args: { intent: 'ideate', preset: 'bootstrap' }, when: 'PROJECT.md is missing — open a bootstrap loop before assuming context' });
+      }
+      if (claimId) {
+        nextActions.push({ tool: 'bclaw_release_claim', args: { id: claimId, planStatus: 'done' }, when: 'implementation complete and committed' });
+      } else if (workReq.intent === 'consult' || workReq.intent === 'resume') {
+        nextActions.push({ tool: 'bclaw_work', args: { intent: 'execute', scope: workReq.scope ?? '<scope>' }, when: 'ready to edit — claims the scope' });
+      }
+      const diffTotal = contextResult?.context_diff?.counts.total ?? 0;
+      if (useCompact && diffTotal > 0) {
+        nextActions.push({ tool: 'bclaw_context', args: { kind: 'memory' }, when: 'to read the full changed items behind context_diff' });
+      }
+      nextActions.push({ tool: 'bclaw_quick_capture', args: { text: '<finding>', type: '<decision|trap|constraint|note>' }, when: 'capture decisions/traps as you work' });
+
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: workReq.intent,
@@ -4859,10 +4932,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         duration_ms: Date.now() - startMs,
         bootstrap_recommended: bootstrapRecommended,
         next_action: nextAction,
+        next_actions: nextActions,
       };
 
       const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];
       if (claimId) summaryParts.push(`claim=${claimId} (${claimStatus})`);
+      if (contextResult?.context_diff && diffTotal > 0) {
+        summaryParts.push(`Δ since last look: ${contextResult.context_diff.summary}`);
+      }
       if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
       if (bootstrapRecommended) {
         summaryParts.push(`💡 PROJECT.md missing — call ${nextAction} to open a bootstrap loop`);
@@ -6322,6 +6399,18 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_loop') {
+      // pln#542: intent='open' is no longer exposed standalone over MCP — it
+      // creates a loop without dispatching the first turn (the documented
+      // anti-pattern, now removed instead of documented). Internal callers
+      // (bclaw_coordinate, CLI bootstrap) use core openLoop directly.
+      if (args?.intent === 'open') {
+        return {
+          response: createToolErrorResponse(
+            'intent_not_exposed',
+            "bclaw_loop(intent='open') is not exposed standalone: it creates a loop structure without dispatching any turn, so the work never starts. Use bclaw_coordinate(intent='review', open_loop=true, targetAgents=[…]) or bclaw_coordinate(intent='ideate') — they open the loop AND dispatch the first turn.",
+          ),
+        };
+      }
       const { handleBclawLoop } = await import('./loops-handlers.js');
       const targetCwd = resolveProjectCwd(args?.project as string | undefined, cwd);
       const result = handleBclawLoop({ args: args as unknown, cwd: targetCwd });
@@ -6427,9 +6516,19 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // this caps SIZE) so a verbose result set never overflows the MCP token
         // cap and silently pushes the agent to the CLI (trp#449). Advertises
         // has_more / next_offset / hint for explicit pagination.
+        // pln#542: budget_tokens lets the caller shrink the size cap further
+        // (~4 chars/token); it can only tighten, never exceed the default.
         const offset = Math.max(0, Number(filter.offset) || 0);
-        const bounded = boundListResult(result, offset);
+        const budgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+        const charBudget = budgetTokens ? Math.min(budgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+        const bounded = boundListResult(result, offset, charBudget);
         const warnings = collectLoadValidationWarnings(entity, targetCwd);
+        const nextActions: Array<Record<string, unknown>> = [
+          { tool: 'bclaw_get', args: { entity, id: '<id from items>' }, when: 'to read one item in full' },
+        ];
+        if (bounded.has_more) {
+          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset } }, when: 'to fetch the next page' });
+        }
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
         // Prior to this fix we spread `...result` at top-level of the
@@ -6440,7 +6539,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}` }],
-            structuredContent: { ...bounded, warnings },
+            structuredContent: { ...bounded, warnings, next_actions: nextActions },
           }),
         };
       } catch (error: unknown) {
@@ -6469,10 +6568,26 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
         const item = getEntity(entity, id, targetCwd);
+        // trp#449 class (pln#542): handoff snapshots embed an unbounded git
+        // diff — cap it (budget_tokens tightens, ~4 chars/token).
+        let boundedItem = item;
+        let diffTruncated = false;
+        const getBudgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
+        const getCharBudget = getBudgetTokens ? Math.min(getBudgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
+        if (entity === 'handoff' && item && typeof item === 'object') {
+          const snapshot = (item as { snapshot?: { diff?: string } }).snapshot;
+          if (snapshot?.diff && snapshot.diff.length > getCharBudget) {
+            diffTruncated = true;
+            boundedItem = {
+              ...(item as Record<string, unknown>),
+              snapshot: { ...snapshot, diff: `${snapshot.diff.slice(0, getCharBudget)}\n… [diff truncated to ${getCharBudget} chars]` },
+            };
+          }
+        }
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ fetched ${entity} ${id}` }],
-            structuredContent: { entity, item },
+            structuredContent: { entity, item: boundedItem, ...(diffTruncated ? { diff_truncated: true } : {}) },
           }),
         };
       } catch (error: unknown) {
