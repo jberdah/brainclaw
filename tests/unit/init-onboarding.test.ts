@@ -51,15 +51,15 @@ describe('init onboarding preflight', () => {
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
-  it('prints onboarding gaps for an empty workspace', () => {
+  it('routes an empty (greenfield) workspace to the bootstrap loop, not the brownfield preflight', () => {
     const result = runInit(dir, homeDir);
 
     assert.equal(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /Onboarding preflight:/);
-    assert.match(result.stdout, /Workspace kind: empty/);
-    assert.match(result.stdout, /Open gaps:/);
-    assert.match(result.stdout, /brainclaw bootstrap --interview --audience cli/);
-    assert.match(result.stdout, /--audience ide_chat/);
+    // Shared empty-memory rule: greenfield → ideate route; the brownfield
+    // preflight scan is skipped (nothing to harvest).
+    assert.match(result.stdout, /Onboarding: /);
+    assert.match(result.stdout, /bootstrap-loop|preset='bootstrap'|preset="bootstrap"/);
+    assert.doesNotMatch(result.stdout, /Onboarding preflight:/);
   });
 
   it('prints detected native instruction files for an existing workspace', () => {

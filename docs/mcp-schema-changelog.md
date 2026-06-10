@@ -104,8 +104,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:eaa8865070b10401`
-  (updated 2026-06-10: agent-UX read-path surface — `budget_tokens` on the
+- MCP public surface fingerprint: `sha256:8f86d3998f8a24e3`
+  (updated 2026-06-11: uninitialized setup mode — the server now boots with
+  a minimal catalog on a missing project store instead of exit(1), and the
+  empty-memory decision rule is surfaced in setup/work hints; pln#556.
+  Previous: `sha256:eaa8865070b10401`,
+  updated 2026-06-10: agent-UX read-path surface — `budget_tokens` on the
   read tools, `context_diff`/`next_actions` in facade payloads,
   caller-asserted `type` on quick_capture; see the Unreleased entry, pln#542.
   Previous: `sha256:333be7c3cda7e166`,
