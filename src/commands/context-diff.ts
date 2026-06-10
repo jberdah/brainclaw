@@ -29,7 +29,7 @@ export function runContextDiff(options: ContextDiffOptions = {}): void {
       console.error(`Error: session '${options.session}' not found in session snapshots or audit log.`);
       process.exit(1);
     }
-    console.error('Error: provide --since <ISO date> or --session <id>, or run `brainclaw context` first to seed a marker.');
+    console.error('Error: provide --since <ISO date> or --session <id>. (The per-agent "what\'s new" diff is surfaced automatically by `brainclaw context` / bclaw_work.)');
     process.exit(1);
   }
 

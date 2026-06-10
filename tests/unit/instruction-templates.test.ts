@@ -143,8 +143,10 @@ describe('instruction-templates', () => {
       for (const tool of toolNames) {
         assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
       }
-      assert.ok(result.content.includes('Item shape: `{ planId, stepId?, rank'));
-      assert.ok(result.content.includes('bclaw_dispatch(intent=analysis)'));
+      // pln#542 instruction-surface shrink: verbose shapes moved out of the
+      // file — responses are self-teaching via next_actions instead.
+      assert.ok(result.content.includes('next_actions'), 'available tools must point at the self-teaching next_actions channel');
+      assert.ok(result.content.includes('bclaw_dispatch(intent=execute)'));
       assert.ok(!result.content.includes('57 tools are available via MCP'));
     });
 

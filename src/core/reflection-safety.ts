@@ -1,5 +1,5 @@
 import { loadState } from './state.js';
-import { detectNewItemContradictions, hasBlockingContradictions, summarizeContradictions, type ContradictionReport } from './contradictions.js';
+import { detectNewItemContradictions, summarizeContradictions, type ContradictionReport } from './contradictions.js';
 import type { CandidateType } from './schema.js';
 
 export interface ReflectionSafetyResult {
@@ -32,14 +32,12 @@ export function evaluateReflectionSafety(input: {
     return {};
   }
 
-  const contradictionSummary = summarizeContradictions(contradictions);
-  const promotionBlockedReason = input.automation && hasBlockingContradictions(contradictions)
-    ? 'contradiction_detected'
-    : undefined;
-
+  // Advisory only (pln#542, cnd_abe61d68 incident: 18 keyword false positives
+  // on a review summary blocked promotion). Contradictions ride along as
+  // metadata on the candidate for the human/curator to weigh — they never
+  // set promotion_blocked_reason anymore.
   return {
     contradictions_detected: contradictions,
-    contradiction_summary: contradictionSummary,
-    promotion_blocked_reason: promotionBlockedReason,
+    contradiction_summary: summarizeContradictions(contradictions),
   };
 }

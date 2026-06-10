@@ -2,35 +2,42 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readAuditLog } from './audit.js';
 import { listCandidates } from './candidates.js';
-import { readContextMarker } from './freshness.js';
-import { memoryDir, resolveEntityDir } from './io.js';
-import { logger } from './logger.js';
+import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
+import { buildNotificationSummary, readUnseenEvents, type MemoryEvent } from './event-log.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from './schema.js';
 import { loadState } from './state.js';
 
-type DiffSection = 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate';
+type DiffSection = 'constraint' | 'decision' | 'trap' | 'handoff' | 'candidate' | 'plan';
 
 export interface ContextDiffItem {
   section: DiffSection;
   id: string;
   text: string;
   created_at: string;
+  /** What happened since the caller last looked (event-cursor source only). */
+  action?: 'created' | 'updated' | 'deleted' | 'accepted' | 'rejected';
 }
 
 export interface ContextDiffResult {
   since?: string;
   since_session?: string;
+  /** Reference point: per-agent event-log cursor (default) or explicit timestamp/session. */
+  source?: 'event_cursor' | 'timestamp';
   summary: string;
   counts: {
     constraints: number;
     decisions: number;
     traps: number;
     handoffs: number;
+    plans: number;
     pending_candidates: number;
     total: number;
   };
   changed_items?: ContextDiffItem[];
+  /** action:item_type histogram over ALL unseen events (incl. claims/sessions) — event-cursor source only. */
+  event_summary?: Record<string, number>;
+  unseen_event_count?: number;
 }
 
 export interface BuildContextDiffOptions {
@@ -62,11 +69,10 @@ export function resolveContextDiffSince(options: Pick<BuildContextDiffOptions, '
     return { since_session: options.session };
   }
 
-  const marker = readContextMarker(options.cwd);
-  if (marker?.read_at) {
-    return { since: marker.read_at };
-  }
-
+  // No global marker fallback: the "what's new" default lives on the
+  // per-agent event-log cursors (buildContextDiffFromEvents). The store-global
+  // .last-context marker cross-contaminated agents — one agent's read reset
+  // everyone's diff baseline.
   return {};
 }
 
@@ -110,6 +116,7 @@ export function buildContextDiff(options: BuildContextDiffOptions = {}): Context
     decisions: decisions.length,
     traps: traps.length,
     handoffs: handoffs.length,
+    plans: 0,
     pending_candidates: pendingCandidates.length,
     total: constraints.length + decisions.length + traps.length + handoffs.length + pendingCandidates.length,
   };
@@ -117,29 +124,99 @@ export function buildContextDiff(options: BuildContextDiffOptions = {}): Context
   return {
     since: resolved.since,
     since_session: resolved.since_session,
+    source: 'timestamp',
     summary: buildContextDiffSummary(counts),
     counts,
     changed_items: changedItems,
   };
 }
 
-export function readLastContextTimestamp(cwd?: string): string | undefined {
-  const marker = readContextMarker(cwd);
-  if (marker?.read_at) {
-    return marker.read_at;
+const EVENT_SECTION_BY_ITEM_TYPE: Record<string, DiffSection> = {
+  constraint: 'constraint',
+  decision: 'decision',
+  trap: 'trap',
+  handoff: 'handoff',
+  candidate: 'candidate',
+  plan: 'plan',
+};
+
+const EVENT_ACTION_LABEL: Record<string, NonNullable<ContextDiffItem['action']>> = {
+  create: 'created',
+  update: 'updated',
+  delete: 'deleted',
+  accept: 'accepted',
+  reject: 'rejected',
+};
+
+/**
+ * Build a per-agent "what's new" diff from the event-log cursors
+ * (src/core/event-log.ts). This is the converged novelty mechanism: it
+ * replaces the store-global .last-context marker for the default diff path
+ * and natively covers status transitions (logged as `update` events by
+ * bclaw_transition / bclaw_update via the audit→event bridge).
+ *
+ * NOTE: reading ADVANCES the agent's cursor — events surfaced here are
+ * considered seen. Returns undefined when there is nothing new.
+ */
+export function buildContextDiffFromEvents(agent: string, cwd?: string, options: { includeItems?: boolean } = {}): ContextDiffResult | undefined {
+  const events = readUnseenEvents(agent, cwd);
+  if (events.length === 0) {
+    return undefined;
   }
 
-  const markerPath = path.join(memoryDir(cwd), '.last-context');
-  if (fs.existsSync(markerPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(markerPath, 'utf-8')) as { read_at?: string };
-      return parsed.read_at;
-    } catch (error) {
-      logger.debug('Failed to parse context marker fallback:', error);
+  // Latest relevant event per item (an item created then updated counts once).
+  const latestByItem = new Map<string, MemoryEvent>();
+  for (const event of events) {
+    if (!event.item_id) continue;
+    if (!EVENT_SECTION_BY_ITEM_TYPE[event.item_type] || !EVENT_ACTION_LABEL[event.action]) continue;
+    latestByItem.set(event.item_id, event);
+  }
+
+  const state = loadState(cwd);
+  const pendingCandidates = listCandidates('pending', cwd);
+  const textById = new Map<string, { text: string; created_at: string }>();
+  for (const collection of [state.active_constraints, state.recent_decisions, state.known_traps, state.open_handoffs, state.plan_items, pendingCandidates]) {
+    for (const item of collection as Array<{ id: string; text: string; created_at: string }>) {
+      textById.set(item.id, { text: item.text, created_at: item.created_at });
     }
   }
 
-  return undefined;
+  const counts = { constraints: 0, decisions: 0, traps: 0, handoffs: 0, plans: 0, pending_candidates: 0, total: 0 };
+  const sectionToCountKey: Record<DiffSection, keyof typeof counts> = {
+    constraint: 'constraints',
+    decision: 'decisions',
+    trap: 'traps',
+    handoff: 'handoffs',
+    plan: 'plans',
+    candidate: 'pending_candidates',
+  };
+
+  const changedItems: ContextDiffItem[] = [];
+  for (const [itemId, event] of latestByItem) {
+    const section = EVENT_SECTION_BY_ITEM_TYPE[event.item_type];
+    const current = textById.get(itemId);
+    counts[sectionToCountKey[section]] += 1;
+    counts.total += 1;
+    changedItems.push({
+      section,
+      id: itemId,
+      text: current?.text ?? event.summary ?? `(${EVENT_ACTION_LABEL[event.action]} — no longer in state)`,
+      created_at: event.ts,
+      action: EVENT_ACTION_LABEL[event.action],
+    });
+  }
+  changedItems.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  const oldest = events[0]?.ts;
+  return {
+    since: oldest,
+    source: 'event_cursor',
+    summary: buildContextDiffSummary(counts),
+    counts,
+    changed_items: options.includeItems === false ? undefined : changedItems,
+    event_summary: buildNotificationSummary(events),
+    unseen_event_count: events.length,
+  };
 }
 
 export function buildContextDiffSummary(counts: ContextDiffResult['counts']): string {
@@ -152,6 +229,7 @@ export function buildContextDiffSummary(counts: ContextDiffResult['counts']): st
   if (counts.decisions > 0) parts.push(`${counts.decisions} decision${counts.decisions > 1 ? 's' : ''}`);
   if (counts.traps > 0) parts.push(`${counts.traps} trap${counts.traps > 1 ? 's' : ''}`);
   if (counts.handoffs > 0) parts.push(`${counts.handoffs} handoff${counts.handoffs > 1 ? 's' : ''}`);
+  if (counts.plans > 0) parts.push(`${counts.plans} plan${counts.plans > 1 ? 's' : ''}`);
   if (counts.pending_candidates > 0) parts.push(`${counts.pending_candidates} pending candidate${counts.pending_candidates > 1 ? 's' : ''}`);
   return parts.join(', ');
 }

@@ -7,7 +7,7 @@ import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice
 import { loadConfig } from './config.js';
 import { loadCurrentSession, loadAllSessions } from './identity.js';
 import { resolveCrossProjectLinks, loadCrossProjectState } from './cross-project.js';
-import { buildContextDiff, type ContextDiffResult } from './context-diff.js';
+import { buildContextDiff, buildContextDiffFromEvents, type ContextDiffResult } from './context-diff.js';
 import { resolveContextStoreCwd, resolveStoreChain, type StoreRef } from './store-resolution.js';
 import { findAgentIdentityByName, resolveCurrentAgentIdentity } from './agent-registry.js';
 import { hasReusableBootstrapProfile, runBootstrapProfile, selectDerivedSignals, type DerivedContextSignal } from './bootstrap.js';
@@ -715,13 +715,19 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     execution_context: executionContext,
     agent_tooling: agentTooling,
     scoped_activity: scopedActivity,
+    // "What's new" — explicit session reference keeps the timestamp diff;
+    // otherwise the per-agent event-log cursor is the converged default
+    // (covers status transitions, no store-global marker). Note: the cursor
+    // read marks the surfaced events as seen for this agent.
     context_diff: options.sinceSession
       ? buildContextDiff({
           session: options.sinceSession,
           cwd: contextCwd,
           includeItems: true,
         })
-      : undefined,
+      : agent
+        ? buildContextDiffFromEvents(agent, contextCwd, { includeItems: true })
+        : undefined,
     resolved_instructions: resolvedInstructions,
     resume_summary: resumeSummary,
     open_work: openWork,
@@ -1139,6 +1145,7 @@ export function renderContextPromptTemplate(result: ContextResult, compact: bool
       lines.push(`    decisions: ${result.context_diff.counts.decisions}`);
       lines.push(`    traps: ${result.context_diff.counts.traps}`);
       lines.push(`    handoffs: ${result.context_diff.counts.handoffs}`);
+      lines.push(`    plans: ${result.context_diff.counts.plans}`);
       lines.push(`    pending_candidates: ${result.context_diff.counts.pending_candidates}`);
       lines.push(`    total: ${result.context_diff.counts.total}`);
     }

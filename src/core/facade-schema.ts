@@ -19,6 +19,13 @@ export const WorkRequestSchema = z.object({
   contextTarget: z.string().optional(),
   project: z.string().optional(),
   compact: z.boolean().optional().default(true),
+  /**
+   * Approximate token budget for the context payload (agent-ux, pln#542).
+   * Relevance-ranked fill: the highest-scoring items are kept until the
+   * budget is reached (~4 chars/token heuristic). Applies to both compact
+   * and full payloads.
+   */
+  budget_tokens: z.number().int().positive().optional(),
 });
 
 export const CoordinateRequestSchema = z.object({
@@ -140,6 +147,21 @@ export const VerifyWithSchema = z.object({
 });
 export type VerifyWith = z.infer<typeof VerifyWithSchema>;
 
+/**
+ * Self-teaching affordance (agent-ux, pln#542): each response carries the
+ * recommended next call(s) with exact shapes, generalizing the verify_with
+ * pattern. Protocol teaching lives in responses, not the instruction file.
+ */
+export const NextActionSchema = z.object({
+  /** Tool to call next, e.g. "bclaw_release_claim". */
+  tool: z.string(),
+  /** Exact argument shape for the call (literal values where known, <placeholders> otherwise). */
+  args: z.record(z.string(), z.unknown()).optional(),
+  /** When this action applies, e.g. "when implementation is complete". */
+  when: z.string().optional(),
+});
+export type NextAction = z.infer<typeof NextActionSchema>;
+
 export const FacadeResponseSchema = z.object({
   status: z.enum(['ok', 'error', 'partial']),
   intent: z.string(),
@@ -170,6 +192,12 @@ export const FacadeResponseSchema = z.object({
    * CLI doesn't have to reconstruct it.
    */
   next_action: z.string().optional(),
+  /**
+   * agent-ux (pln#542): recommended follow-up calls with exact shapes —
+   * the generalized affordance channel. `next_action` (singular, string)
+   * remains for the bootstrap hint; new consumers should read this array.
+   */
+  next_actions: z.array(NextActionSchema).optional(),
 });
 
 export type WorkIntent = z.infer<typeof WorkIntentSchema>;
