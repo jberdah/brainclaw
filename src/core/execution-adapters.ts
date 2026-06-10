@@ -122,6 +122,25 @@ export interface ExecutionAdapter {
   collectArtifacts?(runId: string): Promise<unknown> | unknown;
 }
 
+/**
+ * Git author identity for a dispatched worker (pln#562 step 5). The email is
+ * a deterministic non-routable address so `git log --author` can filter by
+ * agent. Committer mirrors author so neither field lies about provenance.
+ */
+export function buildGitAttributionEnv(agent: string | undefined): Record<string, string> {
+  const name = agent?.trim();
+  if (!name) return {};
+  const slug = name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  const display = `${name} (via brainclaw)`;
+  const email = `${slug}@agents.brainclaw.dev`;
+  return {
+    GIT_AUTHOR_NAME: display,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: display,
+    GIT_COMMITTER_EMAIL: email,
+  };
+}
+
 function buildManualEnvPrefix(claimId?: string): string {
   // pln#496 step stp_a9afe59d: the cross-platform / cross-shell logic
   // now lives in execution-profile.ts:buildClaimEnvPrefix. Keep this
@@ -164,6 +183,10 @@ export class CliExecutionAdapter implements ExecutionAdapter {
 
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
+      // pln#562 step 5 — truthful attribution: every commit a dispatched
+      // worker makes is authored as the AGENT, not as the human whose
+      // git config happens to be on the machine. invoke.env may override.
+      ...buildGitAttributionEnv(options.agent),
       ...(invoke.env ?? {}),
       ...(options.claimId ? { BRAINCLAW_CLAIM_ID: options.claimId } : {}),
     };

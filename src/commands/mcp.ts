@@ -45,6 +45,7 @@ import {
   AgentTrustError,
   findAgentIdentityById,
   findAgentIdentityByName,
+  hasMinimumTrustLevel,
   normalizeAgentName,
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
@@ -3569,10 +3570,28 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      const cascadeResult = releaseClaimWithCascade(claimId, {
-        planStatus: args.planStatus as string | undefined,
-        cwd,
-      });
+      // pln#562 step 5 — release is ownership-checked like acquisition and
+      // adoption. The resolved principal must own the claim; trusted+ callers
+      // (coordinators) may release others' claims, with an audit entry.
+      const releaseIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, cwd, connectionSessionId);
+      const releaseAuth = 'identity' in releaseIdentity && releaseIdentity.identity
+        ? {
+            agent: releaseIdentity.identity.agent_name,
+            agent_id: releaseIdentity.identity.agent_id,
+            session_id: connectionSessionId,
+            override: hasMinimumTrustLevel(releaseIdentity.identity.trust_level ?? 'contributor', 'trusted'),
+          }
+        : undefined;
+      let cascadeResult;
+      try {
+        cascadeResult = releaseClaimWithCascade(claimId, {
+          planStatus: args.planStatus as string | undefined,
+          cwd,
+          auth: releaseAuth,
+        });
+      } catch (err: unknown) {
+        return { response: createToolErrorResponse('trust_error', err instanceof Error ? err.message : String(err)) };
+      }
       const { planTransitioned, planWarning, planId: cascadePlanId, newPlanStatus: cascadeNewStatus } = cascadeResult;
       const summaryText = [
         `✔ Released claim [${claimId}]`,

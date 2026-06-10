@@ -138,8 +138,43 @@ function codexHome(env: NodeJS.ProcessEnv = process.env): string {
   return explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), '.codex');
 }
 
-function agentKeyPath(agentId: string, env: NodeJS.ProcessEnv = process.env): string {
+/**
+ * ed25519 identity keys (pln#562 step 5).
+ *
+ * RESERVED for the federated identity model — these keys are not consumed by
+ * any verification path today; the identity proposal (origin signing)
+ * activates them. Do NOT delete them as debris.
+ *
+ * Private keys live under the NEUTRAL brainclaw home (~/.brainclaw/keys/),
+ * not under ~/.codex/: agent identity belongs to brainclaw, and parking
+ * private key material inside another vendor's config directory both
+ * misattributes it and exposes it to that vendor's tooling/sync.
+ */
+function agentKeyPath(agentId: string): string {
+  return path.join(os.homedir(), MEMORY_DIR, 'keys', `${agentId}.ed25519.pem`);
+}
+
+/** Pre-step-5 location (inside CODEX_HOME) — read for one-time migration. */
+function legacyAgentKeyPath(agentId: string, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(codexHome(env), 'brainclaw', 'keys', `${agentId}.ed25519.pem`);
+}
+
+/**
+ * Move a key file from the legacy ~/.codex location to the neutral path.
+ * Best-effort: a failed unlink leaves a duplicate, never a missing key.
+ */
+function migrateLegacyAgentKey(agentId: string, env: NodeJS.ProcessEnv = process.env): void {
+  const legacy = legacyAgentKeyPath(agentId, env);
+  const target = agentKeyPath(agentId);
+  if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
+  try {
+    ensureParentDir(target);
+    fs.copyFileSync(legacy, target);
+    try { fs.unlinkSync(legacy); } catch { /* duplicate is safe */ }
+    logger.debug(`Migrated agent identity key ${agentId} from ${legacy} to ${target}`);
+  } catch (err) {
+    logger.debug('Failed to migrate legacy agent key:', err);
+  }
 }
 
 function ensureParentDir(filepath: string): void {
@@ -154,7 +189,8 @@ function fingerprintPublicKey(publicKey: string): string {
 }
 
 function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env, forceRegenerate: boolean = false): AgentIdentityDocument['identity_key'] {
-  const filepath = agentKeyPath(agentId, env);
+  migrateLegacyAgentKey(agentId, env);
+  const filepath = agentKeyPath(agentId);
   const createdAt = nowISO();
 
   let publicKeyPem: string;
