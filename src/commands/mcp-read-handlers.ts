@@ -99,12 +99,19 @@ export function handleMcpReadToolCall(
 ): McpToolResponse {
   let cwd = context.cwd ?? resolveEffectiveCwd();
 
-  // If a project param is provided, resolve it to an actual cwd override
+  // If a project param is provided, resolve it to an actual cwd override.
+  // Precedence rule: once routing succeeds, per-handler "project as filter" logic
+  // is skipped (routing already scopes to the right store).
+  // Unknown project refs surface as an error — no silent fallback (pln#359).
   const projectArg = args.project as string | undefined;
+  let projectRoutingApplied = false;
   if (projectArg) {
     const resolvedProject = resolveProjectRef(projectArg, cwd);
     if (resolvedProject) {
       cwd = resolvedProject;
+      projectRoutingApplied = true;
+    } else {
+      return createToolErrorResponse('not_found', `Project not found: '${projectArg}'`);
     }
   }
 
@@ -585,7 +592,10 @@ export function handleMcpReadToolCall(
       const assignee = String(args.assignee).toLowerCase();
       plans = plans.filter((plan) => plan.assignee?.toLowerCase() === assignee);
     }
-    if (args.project) {
+    if (args.project && !projectRoutingApplied) {
+      // Only filter by plan.project metadata when routing was NOT applied.
+      // When routing succeeded, cwd is already scoped to the target project store,
+      // so filtering by plan.project label would incorrectly narrow results.
       const project = String(args.project).toLowerCase();
       plans = plans.filter((plan) => plan.project?.toLowerCase() === project);
     }

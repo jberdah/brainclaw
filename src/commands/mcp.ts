@@ -93,7 +93,13 @@ export interface McpToolExecutionPayload {
 
 export interface McpToolExecutionOutcome {
   response: McpToolResponse;
-  nextConnectionSessionId?: string;
+  /**
+   * Updated connection session ID to persist across tool calls.
+   * - `string`    → set / refresh to this value
+   * - `null`      → explicitly clear (session ended)
+   * - `undefined` → no change; keep the current value (default for most tools)
+   */
+  nextConnectionSessionId?: string | null;
   /** Tool name — used for usage tracking. */
   toolName?: string;
 }
@@ -1720,7 +1726,10 @@ export class McpServerConnection {
     this.taskRunner = new McpTaskRunner({
       executeTool: options.executeTool ?? createWorkerToolExecutor(),
       onResult: (requestId, outcome) => {
-        this.connectionSessionId = outcome.nextConnectionSessionId;
+        if (outcome.nextConnectionSessionId !== undefined) {
+          // null = explicit clear (session ended); string = refresh; undefined = no-op
+          this.connectionSessionId = outcome.nextConnectionSessionId ?? undefined;
+        }
         // Inject version mismatch advisory if stale
         const advisory = this.checkVersionMismatch();
         if (advisory && outcome.response.content.length > 0) {
@@ -2035,13 +2044,16 @@ export class StdioTransport {
 
   private drainNewline(): void {
     while (true) {
-      const str = this.buffer.toString('utf-8');
-      const newlineIndex = str.indexOf('\n');
+      // Search for '\n' (0x0a) at the byte level so a multibyte UTF-8 sequence
+      // that spans two chunks is never split mid-character.  Avoids O(n²)
+      // string→buffer reconversion on every iteration.
+      const newlineIndex = this.buffer.indexOf(0x0a);
       if (newlineIndex === -1) return;
 
-      const line = str.slice(0, newlineIndex).replace(/\r$/, '');
-      this.buffer = Buffer.from(str.slice(newlineIndex + 1), 'utf-8');
+      const lineBuffer = this.buffer.subarray(0, newlineIndex);
+      this.buffer = this.buffer.subarray(newlineIndex + 1);
 
+      const line = lineBuffer.toString('utf-8').replace(/\r$/, '');
       if (line.trim()) {
         this.onMessage(line);
       }
@@ -2084,7 +2096,12 @@ function createWorkerToolExecutor(): McpToolExecutor {
   return (payload, signal) => new Promise<McpToolExecutionOutcome>((resolve, reject) => {
     const worker = new Worker(new URL('./mcp-worker.js', import.meta.url), {
       workerData: payload,
+      // Capture worker stdout so console.log in tool handlers cannot corrupt
+      // the parent's JSON-RPC stream.  Drain captured output to stderr.
+      stdout: true,
     });
+    // Redirect any worker stdout to the server's stderr (safe for diagnostics)
+    worker.stdout?.pipe(process.stderr);
     let settled = false;
 
     const cleanup = (): void => {
@@ -2180,7 +2197,10 @@ function getCrossProjectArg(args: Record<string, unknown>, ...keys: string[]): s
 }
 
 function blockCrossProjectExecution(entity: 'claim' | 'plan' | 'session', args: Record<string, unknown>): McpToolResponse | undefined {
-  const targetProject = getCrossProjectArg(args, 'targetProject', 'target_project', 'crossProject', 'cross_project');
+  // Include 'project' so that canonical write verbs that accept a project routing
+  // arg (e.g. bclaw_claim project=...) are subject to the same signaling-only
+  // boundary as the explicit cross-project keys.
+  const targetProject = getCrossProjectArg(args, 'targetProject', 'target_project', 'crossProject', 'cross_project', 'project');
   if (!targetProject) {
     return undefined;
   }
@@ -2518,7 +2538,6 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
             context,
           },
         }),
-        nextConnectionSessionId: undefined,
       };
     }
 
@@ -3079,7 +3098,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
           ...(result.handoff ? { handoff: result.handoff } : {}),
           ...(result.reflection_prompt ? { reflection_prompt: result.reflection_prompt } : {}),
         }),
-        nextConnectionSessionId: undefined,
+        nextConnectionSessionId: null,
       };
     }
 

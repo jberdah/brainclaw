@@ -223,13 +223,24 @@ export function resolveProjectRef(
     ?? resolveWorkspaceRoot(cwd, storeChainOptions);
   if (!wsRoot) return undefined;
 
-  // Try as absolute path
+  // The trust boundary for raw path refs is the provided cwd.  Callers in
+  // MCP context set cwd to the workspace root, so child projects resolve
+  // naturally.  Walking further up (to a user-level store at home) would
+  // allow path-injection to sibling or home stores — that is the vulnerability
+  // we are closing.  Name-based lookup below is unrestricted since it matches
+  // by project_name / project_id, not by arbitrary path.
+  const trustBoundary = path.resolve(cwd);
+
+  // Try as absolute path — only allowed if within the cwd boundary.
   if (path.isAbsolute(ref)) {
+    if (!isAtOrBelow(ref, trustBoundary)) return undefined;
     return fs.existsSync(path.join(ref, MEMORY_DIR, 'config.yaml')) ? ref : undefined;
   }
 
-  // Try as relative path from workspace root
-  const asPath = path.resolve(wsRoot, ref);
+  // Try as relative path resolved from the cwd boundary.
+  // Guards against ../ traversal (e.g. "../sibling-project").
+  const asPath = path.resolve(trustBoundary, ref);
+  if (!isAtOrBelow(asPath, trustBoundary)) return undefined;
   if (fs.existsSync(path.join(asPath, MEMORY_DIR, 'config.yaml'))) {
     return asPath;
   }
