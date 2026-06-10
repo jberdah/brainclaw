@@ -178,6 +178,32 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
     assert.deepEqual(activeLocks, [], 'coordination lock must be released after open');
   });
 
+  it('opening the loop attaches a survey signals_baseline from the deterministic scanner (pln#557 step 4)', async () => {
+    fs.writeFileSync(path.join(workspace.dir, 'README.md'), '# Demo\n\nA demo project for scanner signals.\n', 'utf8');
+    fs.writeFileSync(path.join(workspace.dir, 'package.json'), JSON.stringify({ name: 'demo', scripts: { test: 'node --test' } }), 'utf8');
+
+    const result = acquireBootstrapLoop({ actor: 'claude-code' }, workspace.dir);
+    assert.equal(result.action, 'opened');
+
+    const baselineArtifact = result.loop.artifacts.find((a) => a.type === 'signals_baseline');
+    assert.ok(baselineArtifact, 'opened loop must carry a signals_baseline artifact');
+    assert.equal(baselineArtifact?.phase, 'survey');
+    assert.equal(baselineArtifact?.produced_by, 'brainclaw-scanner');
+    const body = JSON.parse(baselineArtifact?.body ?? '{}') as { source: string; summary: string; seeds: unknown[]; seed_count: number };
+    assert.equal(body.source, 'deterministic_scanner');
+    assert.ok(body.summary.length > 0);
+    assert.ok(Array.isArray(body.seeds));
+    assert.ok(Buffer.byteLength(baselineArtifact?.body ?? '', 'utf8') <= 4096, 'baseline body must respect the 4 KiB artifact cap');
+
+    // The gate must NOT auto-traverse: a baseline is not a signals_report.
+    assert.equal(result.loop.current_phase, 'survey');
+    const reports = result.loop.artifacts.filter((a) => a.type === 'signals_report');
+    assert.deepEqual(reports, []);
+
+    const baselineWarning = result.warnings.find((w) => w.includes('signals_baseline'));
+    assert.ok(baselineWarning, 'caller must be told the baseline exists so the champion enriches instead of re-scanning');
+  });
+
   it('second ideate(preset=bootstrap) joins the existing loop instead of opening a duplicate', async () => {
     const first = await callTool(workspace, 'bclaw_coordinate', {
       intent: 'ideate',

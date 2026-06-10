@@ -38,6 +38,13 @@ export const BOOTSTRAP_PRESET: LoopPreset = {
     // is unchanged — see types.ts). Empirical motivation: TranslaVox cold-start
     // missed the actual GCP Speech+Translate pipeline because survey scanned only
     // topology + manifests (can_0160d6c4).
+    //
+    // pln#557 step 4 — the deterministic scanner (runBootstrapProfile) now
+    // seeds this phase: acquireBootstrapLoop attaches a `signals_baseline`
+    // artifact (toolchain, topology, native rules, top seeds) at open time.
+    // The champion enriches that baseline into its signals_report — survey
+    // quality stops depending on per-agent re-discovery, and bclaw_bootstrap
+    // becomes an internal helper of the loop rather than a competing door.
     {
       name: 'survey',
       context_filter: ['project_vision', 'decisions', 'plans', 'feedback'],

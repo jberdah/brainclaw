@@ -19,8 +19,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { acquireClaimScope, listClaims, releaseClaim } from '../claims.js';
+import { buildSurveySignalsBaseline } from './hooks/survey-signals-baseline.js';
 import { BOOTSTRAP_PRESET } from './presets/bootstrap.js';
 import { listLoops, openLoop } from './store.js';
+import { add_artifact } from './verbs.js';
 import type { LoopThread } from './types.js';
 
 // ---- public types -----------------------------------------------------------
@@ -217,7 +219,7 @@ export function acquireBootstrapLoop(
   const lockClaimId = acquireResult.claim!.id;
 
   try {
-    const loop = openLoop(
+    let loop = openLoop(
       {
         kind: 'ideation',
         title: opts.title ?? 'Bootstrap PROJECT.md',
@@ -236,6 +238,34 @@ export function acquireBootstrapLoop(
       },
       cwd,
     );
+
+    // pln#557 step 4 — seed the survey phase with the deterministic-scanner
+    // baseline so survey quality is reproducible across champions instead of
+    // depending on per-agent re-discovery (TranslaVox miss, can_0160d6c4).
+    // Attached as `signals_baseline` (freeform body), NOT `signals_report`,
+    // so the survey advance-gate is not auto-traversed: the champion enriches
+    // the baseline into its own signals_report. Best-effort — a scanner
+    // failure must never block opening the loop.
+    try {
+      const baseline = buildSurveySignalsBaseline(cwd ?? process.cwd());
+      loop = add_artifact(
+        {
+          id: loop.id,
+          actor: opts.created_by ?? opts.agent_id ?? opts.actor,
+          artifact: {
+            phase: 'survey',
+            type: 'signals_baseline',
+            body: JSON.stringify(baseline),
+            produced_by: 'brainclaw-scanner',
+          },
+        },
+        cwd,
+      );
+      warnings.push(
+        'survey baseline attached (artifact type signals_baseline, produced by the deterministic scanner) — enrich it into your signals_report instead of re-scanning the repo from scratch.',
+      );
+    } catch { /* best-effort */ }
+
     return { action: 'opened', loop, warnings };
   } finally {
     try {
