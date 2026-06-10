@@ -592,6 +592,7 @@ describe('commands/mcp read tools', () => {
 
     const applied = handleMcpReadToolCall('bclaw_bootstrap', {
       apply: true,
+      yes: true,
       interviewAnswers: [
         {
           question_id: projectIntent!.id,
@@ -614,6 +615,20 @@ describe('commands/mcp read tools', () => {
     assert.ok(applied.content[0].text.includes('Bootstrap import applied:'));
     assert.ok(appliedStructured.created_count >= 2);
     assert.ok((appliedStructured.receipt?.managed_artifacts.length ?? 0) >= 2);
+  });
+
+  it('refuses bootstrap apply/uninstall without explicit yes confirmation', () => {
+    const applyRefused = handleMcpReadToolCall('bclaw_bootstrap', { apply: true }, { cwd: workspace.dir });
+    const applyStructured = applyRefused.structuredContent as { confirmation_required?: boolean; action?: string; created_count?: number };
+    assert.equal(applyStructured.confirmation_required, true);
+    assert.equal(applyStructured.action, 'apply');
+    assert.equal(applyStructured.created_count, undefined);
+    assert.match(applyRefused.content[0].text, /yes: true/);
+
+    const uninstallRefused = handleMcpReadToolCall('bclaw_bootstrap', { uninstall: true }, { cwd: workspace.dir });
+    const uninstallStructured = uninstallRefused.structuredContent as { confirmation_required?: boolean; action?: string };
+    assert.equal(uninstallStructured.confirmation_required, true);
+    assert.equal(uninstallStructured.action, 'uninstall');
   });
 
   it('returns execution context and agent tooling through the dedicated MCP read tool', () => {

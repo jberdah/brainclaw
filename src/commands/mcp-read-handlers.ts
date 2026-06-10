@@ -321,6 +321,23 @@ export function handleMcpReadToolCall(
     if (args.apply && args.uninstall) {
       throw new Error('bclaw_bootstrap does not allow apply and uninstall at the same time.');
     }
+    // Mirror the CLI confirmAction gate: apply/uninstall mutate canonical
+    // memory, so they refuse without an explicit yes:true instead of relying
+    // on the host honouring the headlessApproval annotation.
+    if ((args.apply || args.uninstall) && args.yes !== true) {
+      const action = args.uninstall ? 'uninstall' : 'apply';
+      return {
+        content: [{
+          type: 'text',
+          text: `bclaw_bootstrap ${action} modifies canonical memory and requires explicit confirmation. Confirm with the user, then re-call with yes: true. No changes were made.`,
+        }],
+        structuredContent: {
+          confirmation_required: true,
+          action,
+          schema_version: SCHEMA_VERSION,
+        },
+      };
+    }
     if (args.uninstall) {
       const result = uninstallBootstrapImport(cwd);
       const text = !result.receipt
