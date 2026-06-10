@@ -107,7 +107,10 @@ function tryBreakLock(lockPath: string): boolean {
   if (!sameLockData(observed, current) && (observed || current)) return false;
   if (!canBreakLock(lockPath, current)) return false;
 
-  const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  // Dot-separated suffix with pid 4th-from-end so cleanOrphanFiles/tempOwnerPid
+  // can reclaim tombstones from crashed breakers (dash-separated names were
+  // unparseable and accumulated forever).
+  const tombstone = `${lockPath}.stale.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     fs.renameSync(lockPath, tombstone);
   } catch {
@@ -147,7 +150,17 @@ function refreshLock(lockPath: string, token: string): void {
   const current = readLockData(lockPath);
   if (!lockIsOwnedByCurrentProcess(current, token)) return;
   try {
-    writeLockData(lockPath, { ...current!, timestamp: Date.now() }, 'r+');
+    // 'r+' writes in place without truncating. Pad with trailing spaces (valid
+    // JSON whitespace) so a payload shorter than the on-disk file can never
+    // leave trailing garbage that would corrupt the lock for readers.
+    let payload = JSON.stringify({ ...current!, timestamp: Date.now() });
+    try {
+      const existingSize = fs.statSync(lockPath).size;
+      if (Buffer.byteLength(payload, 'utf-8') < existingSize) {
+        payload = payload.padEnd(payload.length + (existingSize - Buffer.byteLength(payload, 'utf-8')), ' ');
+      }
+    } catch { /* stat failed — write unpadded */ }
+    fs.writeFileSync(lockPath, payload, { encoding: 'utf-8', flag: 'r+' });
   } catch {
     // A failed refresh is not fatal; contenders still respect pid liveness.
   }
@@ -232,7 +245,7 @@ export function cleanStaleLocks(dirPath: string): number {
     const lockPath = path.join(dirPath, entry);
     const data = readLockData(lockPath);
     if (canBreakLock(lockPath, data)) {
-      const tombstone = `${lockPath}.clean-${process.pid}-${Date.now()}.tmp`;
+      const tombstone = `${lockPath}.clean.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
       try {
         fs.renameSync(lockPath, tombstone);
         fs.unlinkSync(tombstone);
