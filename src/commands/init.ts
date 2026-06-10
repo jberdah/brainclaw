@@ -16,6 +16,7 @@ import { BRAINCLAW_EXCLUSIVE_DIRECTORIES, describeAutoConfigWrite, ensureAgentFi
 import { detectAiAgent, detectWslEnvironment } from '../core/ai-agent-detection.js';
 import { buildAiSurfaceInventory, renderAiSurfaceUsageHints } from '../core/ai-surface-inventory.js';
 import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
+import { resolveEmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from '../core/schema.js';
@@ -304,24 +305,34 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   installPostMergeHookIfMissing(cwd);
 
   if (!testMode) {
-    const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
+    // Shared empty-memory rule (see docs/concepts/workspace-bootstrapping.md):
+    // repo with content → bclaw_bootstrap extraction; greenfield → bootstrap
+    // loop. The brownfield preflight scan is skipped on greenfield — there is
+    // nothing to harvest yet.
+    const emptyMemoryRec = resolveEmptyMemoryRecommendation(cwd);
     console.log('');
-    console.log('Onboarding preflight:');
-    for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
-      console.log(`  ${line}`);
-    }
-    if (onboardingPreflight.importPlan.suggestion_count > 0) {
-      console.log('');
-      console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
-      console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
-    }
-    if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
-      console.log('');
-      console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
-      console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
-    } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
-      console.log('');
-      console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+    if (emptyMemoryRec.route === 'ideate') {
+      console.log(`Onboarding: ${emptyMemoryRec.text}`);
+    } else {
+      const onboardingPreflight = runBootstrapProfile({ cwd, refresh: true });
+      console.log('Onboarding preflight:');
+      console.log(`  ${emptyMemoryRec.text}`);
+      for (const line of renderBootstrapSummary(onboardingPreflight).split('\n')) {
+        console.log(`  ${line}`);
+      }
+      if (onboardingPreflight.importPlan.suggestion_count > 0) {
+        console.log('');
+        console.log(`Next step: run 'brainclaw bootstrap --apply' to import ${onboardingPreflight.importPlan.suggestion_count} suggested item(s) into canonical memory.`);
+        console.log(`Rollback: run 'brainclaw bootstrap --uninstall' to deactivate the last bootstrap-managed import.`);
+      }
+      if ((onboardingPreflight.importPlan.interview?.question_count ?? 0) > 0) {
+        console.log('');
+        console.log(`Interview: run 'brainclaw bootstrap --interview --audience cli' for terminal agents or '--audience ide_chat' for IDE chat agents.`);
+        console.log(`Apply confirmed answers: write a JSON answers file and run 'brainclaw bootstrap --answers-file <path> --apply'.`);
+      } else if ((onboardingPreflight.profile.gaps?.length ?? 0) > 0) {
+        console.log('');
+        console.log(`Next step: review the onboarding gaps, then use 'brainclaw bootstrap --json' as the basis for an interview/import flow.`);
+      }
     }
   }
 

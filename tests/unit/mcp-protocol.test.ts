@@ -14,6 +14,10 @@ import {
   type McpToolExecutionPayload,
 } from '../../src/commands/mcp.js';
 import { setAgentTrustLevel } from '../../src/core/agent-registry.js';
+import { UNINITIALIZED_PUBLISHED_TOOLS, UNINITIALIZED_TOOL_NAMES } from '../../src/commands/mcp.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createTestWorkspace } from '../helpers/workspace.js';
 
 function tick(): Promise<void> {
@@ -201,6 +205,120 @@ describe('commands/mcp protocol core', () => {
       params: { arguments: {} },
     }));
     assert.equal((sent[sent.length - 1]?.error as { code: number }).code, -32602);
+  });
+
+  it('starts in setup mode on an uninitialized cwd and unlocks the full catalog after init', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-mcp-uninit-'));
+    const sent: Array<Record<string, unknown>> = [];
+    const executed: string[] = [];
+    try {
+      const connection = new McpServerConnection({
+        cwd: dir,
+        uninitialized: true,
+        send: (message) => sent.push(message),
+        executeTool: async (payload) => {
+          executed.push(payload.name);
+          if (payload.name === 'bclaw_setup') {
+            // Simulate a successful quick init: project memory now exists.
+            fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
+          }
+          return {
+            response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
+          };
+        },
+      });
+
+      connection.handleLine(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-11-25' },
+      }));
+      const initResult = sent[0]?.result as { capabilities: { tools: { listChanged: boolean } }; instructions?: string };
+      assert.equal(initResult.capabilities.tools.listChanged, true);
+      assert.match(initResult.instructions ?? '', /setup mode/);
+
+      connection.handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+
+      // tools/list serves only the minimal setup catalog
+      connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }));
+      const listResult = sent[1]?.result as { tools: Array<{ name: string }>; uninitialized?: boolean; state?: string };
+      assert.equal(listResult.uninitialized, true);
+      assert.deepEqual(
+        listResult.tools.map((t) => t.name).sort(),
+        [...UNINITIALIZED_TOOL_NAMES].sort(),
+      );
+      assert.equal(listResult.tools.length, UNINITIALIZED_PUBLISHED_TOOLS.length);
+
+      // tools/call outside the setup catalog is rejected with a clear tool error
+      connection.handleLine(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'bclaw_work', arguments: { intent: 'consult' } },
+      }));
+      await tick();
+      const blocked = sent[2]?.result as { isError: boolean; structuredContent?: { error?: string } };
+      assert.equal(blocked.isError, true);
+      assert.equal(blocked.structuredContent?.error, 'uninitialized');
+      assert.deepEqual(executed, []);
+
+      // bclaw_setup is allowed; after it initializes the store, the catalog unlocks
+      connection.handleLine(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: { name: 'bclaw_setup', arguments: {} },
+      }));
+      await tick();
+      assert.deepEqual(executed, ['bclaw_setup']);
+      const setupResult = sent[3]?.result as { content: Array<{ type: string; text: string }> };
+      assert.match(setupResult.content.map((c) => c.text).join('\n'), /full brainclaw tool catalog is now active/);
+      assert.equal(connection.uninitializedMode, false);
+      assert.deepEqual(sent[4], { jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+
+      // Full catalog is now served
+      connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list' }));
+      const fullList = sent[5]?.result as { tools: Array<{ name: string }>; uninitialized?: boolean };
+      assert.equal(fullList.uninitialized, undefined);
+      assert.ok(fullList.tools.length > UNINITIALIZED_PUBLISHED_TOOLS.length);
+      assert.ok(fullList.tools.some((t) => t.name === 'bclaw_work'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('lazily unlocks setup mode when the store was initialized out-of-band', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-mcp-uninit-oob-'));
+    const sent: Array<Record<string, unknown>> = [];
+    try {
+      const connection = new McpServerConnection({
+        cwd: dir,
+        uninitialized: true,
+        send: (message) => sent.push(message),
+        executeTool: async () => ({
+          response: { content: [{ type: 'text', text: 'ok' }], isError: false, schema_version: SCHEMA_VERSION },
+        }),
+      });
+      connection.handleLine(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-11-25' },
+      }));
+      connection.handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+
+      // CLI init happens outside the MCP session
+      fs.mkdirSync(path.join(dir, '.brainclaw'), { recursive: true });
+
+      connection.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }));
+      const listResult = sent[1]?.result as { tools: Array<{ name: string }>; uninitialized?: boolean };
+      assert.equal(listResult.uninitialized, undefined);
+      assert.ok(listResult.tools.some((t) => t.name === 'bclaw_work'));
+      assert.equal(connection.uninitializedMode, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('maps tool command failures to MCP tool errors without breaking the session', async () => {

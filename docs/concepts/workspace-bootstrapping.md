@@ -25,6 +25,26 @@ It establishes the first shared memory foundation for the workspace:
 - writes to the detected agent's native instruction file (Cursor, Claude Code, Windsurf, etc.)
 - creates `AGENTS.md` and `.github/copilot-instructions.md`
 
+## Empty memory: one rule
+
+"Bootstrap" historically named three different systems (init scaffolding, the
+`bclaw_bootstrap` brownfield extractor, and the bootstrap ideation loop). When
+the memory store is empty, every surface — the `bclaw_work` hint, the
+`bclaw_setup` quick-init preview, and the `brainclaw init` preflight — now
+emits the same decision rule (`resolveEmptyMemoryRecommendation`):
+
+- **Repo with existing content** → run `bclaw_bootstrap` (CLI: `brainclaw bootstrap`)
+  to extract initial context from docs, manifests, native agent files, and git
+  history.
+- **Greenfield repo** (nothing to extract) → open a bootstrap loop to ideate
+  the project vision: `bclaw_coordinate(intent='ideate', preset='bootstrap')`
+  (CLI: `brainclaw bootstrap-loop`).
+
+The two routes are chainable in either order: extract first, then open a loop
+for whatever vision the docs could not provide — or ideate first, then extract
+once content exists. On greenfield, the brownfield preflight scan is skipped
+entirely (there is nothing to harvest yet).
+
 ## Good integration pattern
 
 1. check whether the workspace is initialized
