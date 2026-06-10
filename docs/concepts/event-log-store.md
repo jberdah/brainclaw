@@ -4,7 +4,8 @@
 > Distills proposal-A, proposal-B, and both cross-critiques. Where the two
 > round-2 VERDICT blocks agree, this spec follows them; where they diverge,
 > one option is chosen and the loser recorded in Appendix A. Status: SPEC,
-> pending Codex schema review and the Juan product calls listed in §6.
+> product calls ARBITRATED (Juan, 2026-06-10 — see §6); pending Codex
+> schema review (C1-C4).
 
 ## 1. Motivation
 
@@ -389,15 +390,15 @@ phase flip (upgrade-style, park-don't-delete).
 Severity-ranked. Every open question from round 2 not resolved by this spec
 is carried here.
 
-### [JUAN — product calls]
+### [JUAN — product calls] — RESOLVED 2026-06-10
 
-| # | Sev | Question |
+| # | Sev | Decision |
 |---|---|---|
-| J1 | HIGH | **Redaction vs. immutable history.** Snapshot payloads persist every entity's full content in sealed, never-deleted segments — no normative way to excise a leaked secret or personal datum. Given the EU/GDPR positioning: ship a `doctor redact` segment-rewrite procedure in v1 (immutability becomes "immutable except via audited doctor redact" — seq watermarks survive it, byte offsets wouldn't have), or document the gap? |
-| J2 | HIGH | **Journal-in-git policy.** Recommendation: **gitignore segments and meta inside the store repo; the store's git-diffable identity is the projections (optionally + checkpoints, which are single-file snapshots a human can adjudicate in a merge).** Committing segments bloats history with 10 MB blobs, and branched store histories (two worktrees, restored backup) appending colliding seqs to the same segment have no sane git merge. Touches the interpretation of the "git-diffable identity" constraint — Juan's call. |
-| J3 | MED | **Stale reads for claims.** Under lock contention, readers serve stale-annotated projections (§2.8). Acceptable for claim-class entities, or must claims read through the journal? Liveness-vs-consistency; staleness on claims can cause double-work at 20-agent scale. |
-| J4 | MED | **Registry entry phase.** Do assignments/agent_runs/claims (lifecycle transitions only, post heartbeat-exclusion) enter the journal in Phase 1 or a Phase 1.5? Highest churn = biggest win, biggest blast radius; pure sequencing/risk-appetite call. |
-| J5 | LOW | **gc/archive thresholds** beyond the normative two-verified-checkpoint floor: count-based, age-based, or defer until federation defines its consumer? |
+| J1 | HIGH | **`doctor redact` ships in v1.** Immutability is "immutable except via audited `doctor redact`": tooled segment rewrite, audit-trailed, seq watermarks survive it. Rationale: the EU/GDPR positioning cannot answer "impossible" to an erasure request. (Write-time secret-detection may complement later; it does not replace redaction.) |
+| J2 | HIGH | **Projections + checkpoints in git; segments and meta gitignored.** The store's git-diffable identity = the per-entity projections (diff/merge as today) plus checkpoints (single-file snapshots a human can adjudicate in a merge, making a bare git clone restorable without segments). No segment blobs in history; the branched-seq merge problem never enters git. |
+| J3 | MED | **Read-through for claim-class entities.** Claims and active assignments read the journal tail even under contention — consistency before liveness for the coordination primitive (no double-work is the product promise). Tail-read cost is paid only on this hot-critical path; memory-class entities keep stale-annotated reads (§2.8). |
+| J4 | MED | **Registry enters in a dedicated Phase 1.5.** Phase 1 = memory entities (low volume, proven reversibility); registry lifecycle transitions migrate once the journal is hardened in real use. Matches the off/dual/primary posture: the dispatch lifecycle is the product's credibility — it is not migrated first. |
+| J5 | LOW | **Defer fine gc/archive thresholds.** The normative two-verified-checkpoint floor stands alone until federation defines its consumer; count/age knobs are trivial additive later. |
 
 ### [CODEX — schema/invariant review]
 
