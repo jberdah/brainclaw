@@ -9,6 +9,11 @@ interface CompactResult {
   profile: string;
   memory_version: string;
   memory_density: string;
+  context_diff: {
+    summary: string;
+    counts: Record<string, number>;
+    changed_items?: Array<{ section: string; id: string; text: string }>;
+  } | null;
   plan_summary: Array<{ id: string; short_label: string; status: string; plan_id?: string }>;
   stale_warnings: Array<{ id: string; entity: string; text: string; age_days: number }>;
   workflow_hints: string[];
@@ -152,6 +157,24 @@ describe('bclaw_work compact mode', () => {
     if (result !== null) {
       assert.ok(Array.isArray(result.plan_summary), 'plan_summary should be an array');
       assert.ok(result.plan_summary.length <= 5, 'plan_summary should be capped at 5');
+    }
+  });
+
+  it('compact projection no longer drops context_diff (pln#390 regression)', async () => {
+    for (const intent of ['consult', 'resume', 'review'] as const) {
+      const response = await callWork(workspace, { intent, compact: true });
+      assert.equal(response.status, 'ok');
+      const result = response.result as CompactResult | null;
+      if (result !== null) {
+        assert.ok(
+          'context_diff' in result,
+          `compact result for intent=${intent} must carry the context_diff key`,
+        );
+        if (result.context_diff) {
+          assert.ok(typeof result.context_diff.summary === 'string');
+          assert.ok((result.context_diff.changed_items ?? []).length <= 5, 'changed_items trimmed to top 5');
+        }
+      }
     }
   });
 

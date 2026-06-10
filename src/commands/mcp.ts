@@ -195,7 +195,7 @@ export interface McpToolErrorShape {
 
 export type McpToolExecutor = (payload: McpToolExecutionPayload, signal: AbortSignal) => Promise<McpToolExecutionOutcome>;
 
-type QuickCaptureTarget = 'decision' | 'trap' | 'note';
+type QuickCaptureTarget = 'decision' | 'trap' | 'constraint' | 'note';
 
 interface QuickCaptureClassification {
   target: QuickCaptureTarget;
@@ -1079,6 +1079,7 @@ const MCP_WRITE_TOOLS = [
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         compact: { type: 'boolean', description: 'Return a compact payload (default true). Set to false to include the full context result. Compact mode avoids exceeding MCP token limits on projects with large memory.', default: true },
+        budget_tokens: { type: 'number', description: 'Approximate token budget for the context payload. Relevance-ranked fill: highest-scoring items kept until the budget is reached (~4 chars/token).' },
       },
       required: ['intent'],
     },
@@ -4721,11 +4722,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         warnings.push(`Agent '${sessionResult.agent}' was auto-registered (first use). Run \`brainclaw register-agent ${sessionResult.agent}\` to set capabilities and trust level.`);
       }
 
-      // Step 2: build context for requested scope. When intent='resume',
-      // auto-surface the memory delta since the previous session for the
-      // same agent — matches session-start.ts:85 pattern. Phase 4
-      // Sprint 1 Lane A step 5 (pln#390). Without this the resume intent
-      // was functionally identical to consult, defeating its purpose.
+      // Step 2: build context for requested scope. The "what's new" diff is
+      // surfaced for ALL intents (pln#390 regression fix): intent='resume'
+      // anchors it on the agent's previous session; every other intent gets
+      // the per-agent event-log-cursor diff computed inside buildContext
+      // (pln#542 — converged novelty mechanism, covers status transitions).
       let contextResult: ReturnType<typeof buildContext> | undefined;
       try {
         let sinceSession: string | undefined;
@@ -4739,6 +4740,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           agent: sessionResult.agent,
           cwd: targetCwd,
           sinceSession,
+          // ~4 chars/token: relevance-ranked fill up to the caller's budget.
+          maxChars: workReq.budget_tokens ? workReq.budget_tokens * 4 : undefined,
         });
       } catch { /* non-fatal — context failure should not block work */ }
 
@@ -4806,11 +4809,31 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           }),
         );
 
+        // pln#390 regression fix: the compact projection used to silently
+        // drop context_diff, defeating the diff-first contract. Keep a
+        // trimmed view (summary + counts + top-5 items, text capped).
+        const trimmedDiff = contextResult.context_diff
+          ? {
+              since: contextResult.context_diff.since,
+              since_session: contextResult.context_diff.since_session,
+              source: contextResult.context_diff.source,
+              summary: contextResult.context_diff.summary,
+              counts: contextResult.context_diff.counts,
+              changed_items: (contextResult.context_diff.changed_items ?? [])
+                .slice(0, 5)
+                .map((item) => ({ ...item, text: item.text.slice(0, 120) })),
+              ...(contextResult.context_diff.unseen_event_count !== undefined
+                ? { unseen_event_count: contextResult.context_diff.unseen_event_count }
+                : {}),
+            }
+          : undefined;
+
         resultPayload = {
           context_schema: contextResult.context_schema,
           profile: contextResult.profile,
           memory_version: contextResult.memory_version,
           memory_density: contextResult.memory_density,
+          context_diff: trimmedDiff ?? null,
           plan_summary: planItems,
           stale_warnings: staleTop3,
           workflow_hints: (contextResult.workflow_hints ?? []).slice(0, 3),
@@ -4847,6 +4870,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // Best-effort: never block bclaw_work on the probe.
       }
 
+      // Self-teaching affordances (pln#542): each response carries the
+      // recommended follow-up calls with exact shapes.
+      const nextActions: NonNullable<FacadeResponse['next_actions']> = [];
+      if (bootstrapRecommended) {
+        nextActions.push({ tool: 'bclaw_coordinate', args: { intent: 'ideate', preset: 'bootstrap' }, when: 'PROJECT.md is missing — open a bootstrap loop before assuming context' });
+      }
+      if (claimId) {
+        nextActions.push({ tool: 'bclaw_release_claim', args: { id: claimId, planStatus: 'done' }, when: 'implementation complete and committed' });
+      } else if (workReq.intent === 'consult' || workReq.intent === 'resume') {
+        nextActions.push({ tool: 'bclaw_work', args: { intent: 'execute', scope: workReq.scope ?? '<scope>' }, when: 'ready to edit — claims the scope' });
+      }
+      const diffTotal = contextResult?.context_diff?.counts.total ?? 0;
+      if (useCompact && diffTotal > 0) {
+        nextActions.push({ tool: 'bclaw_context', args: { kind: 'memory' }, when: 'to read the full changed items behind context_diff' });
+      }
+      nextActions.push({ tool: 'bclaw_quick_capture', args: { text: '<finding>', type: '<decision|trap|constraint|note>' }, when: 'capture decisions/traps as you work' });
+
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: workReq.intent,
@@ -4859,10 +4899,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         duration_ms: Date.now() - startMs,
         bootstrap_recommended: bootstrapRecommended,
         next_action: nextAction,
+        next_actions: nextActions,
       };
 
       const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];
       if (claimId) summaryParts.push(`claim=${claimId} (${claimStatus})`);
+      if (contextResult?.context_diff && diffTotal > 0) {
+        summaryParts.push(`Δ since last look: ${contextResult.context_diff.summary}`);
+      }
       if (useCompact) summaryParts.push('mode=compact (use bclaw_context for full payload)');
       if (bootstrapRecommended) {
         summaryParts.push(`💡 PROJECT.md missing — call ${nextAction} to open a bootstrap loop`);
