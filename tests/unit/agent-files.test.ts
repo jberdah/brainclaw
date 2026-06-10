@@ -930,7 +930,7 @@ describe('core/agent-files — auto-config writers', () => {
 
       const filePath = path.join(homeDir, '.continue', 'permissions.yaml');
       const raw = fs.readFileSync(filePath, 'utf-8');
-      assert.ok(raw.startsWith('# Managed by brainclaw'), 'should have managed-by header');
+      assert.ok(raw.startsWith('# brainclaw manages the per-tool allow flags'), 'should have managed-subtree header');
 
       const parsed = yaml.parse(raw) as { tools?: Record<string, { allow?: boolean }> };
       assert.ok(parsed.tools, 'parsed YAML should have a tools key');
