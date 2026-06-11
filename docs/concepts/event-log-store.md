@@ -83,22 +83,39 @@ Normative rules:
 #### 2.1.1 Action taxonomy → payload requirement (C1 resolution)
 
 The v2 `action` field extends today's `EventAction` union
-(`src/core/event-log.ts`, 32 members) with four journal-meta actions
-(`checkpoint_ref`, `journal_note`, `seq_repair`, `backfill`) and classifies
-every action into exactly one of five classes. The zod schema is a
-discriminated union over these classes; `EventItemType` gains `journal`
-(journal-meta records) and, at registry unification (§4 phase 3), `loop`.
+(`src/core/event-log.ts`, 34 members) with five journal-meta actions
+(`checkpoint_ref`, `journal_note`, `seq_repair`, `backfill`,
+`federation_apply`) and three progress-split verbs (`run_progress`,
+`assignment_amended`, `run_amended` — see the heartbeat/durable split
+below), and classifies every action into exactly one of five classes.
+`EventItemType` gains `journal` (journal-meta records) and, at registry
+unification (§4 phase 3), `loop`.
+
+**Encoding (R1 resolution, 2026-06-12):** the class is **never
+serialized** — `action` remains the only discriminant on the wire. Code
+carries one `ACTION_CLASS_BY_ACTION` table typed
+`satisfies Record<EventAction, ActionClass>` so adding a 35th action
+without classifying it is a compile error, and the zod schema is a
+discriminated union keyed on `action` (zod ≥ 4 accepts enum values per
+branch — 4.4.3 is the installed runtime dep). The phase-gated payload
+requiredness of registry-lifecycle (OPTIONAL until phase 1.5) is a
+runtime refinement selected by journal mode
+(`off | dual | primary | registryPrimary`), not a frozen schema variant —
+the wire format never changes across the cutover, only the validator
+strictness. A serialized `class` field was rejected: a derived persisted
+field is drift waiting to happen (same failure family as trp#180).
 
 | Class | Actions | `payload` | `item_id` | `entity_rev` |
 |---|---|---|---|---|
 | entity-state | `create`, `update`, `accept`, `reject`, `claim`, `release_claim`, `rollback`, `upgrade`, `backfill` | REQUIRED — versioned post-image (§2.1.4) or `payload_ref` (§2.10) | REQUIRED | REQUIRED, bumped |
 | tombstone | `delete` | FORBIDDEN | REQUIRED | REQUIRED, bumped |
-| journal-meta | `checkpoint_ref`, `journal_note`, `seq_repair` | REQUIRED — meta-schema per action (§2.1.2), never an entity post-image | FORBIDDEN (`item_type: "journal"`) | absent |
-| observability | `session_start`, `session_end`, `assignment_offered`*, `assignment_progress` | FORBIDDEN | optional | absent |
-| registry-lifecycle | `assignment_created/accepted/started/completed/cancelled/failed/blocked/timed_out/expired/retrying/rerouted`, all `run_*` | OPTIONAL until registry families go journal-primary (J4 phase 1.5); REQUIRED post-image from then on | REQUIRED | absent until phase 1.5, then REQUIRED, bumped |
+| journal-meta | `checkpoint_ref`, `journal_note`, `seq_repair`, `federation_apply` | REQUIRED — meta-schema per action (§2.1.2), never an entity post-image | FORBIDDEN (`item_type: "journal"`) | absent |
+| observability | `session_start`, `session_end`, `assignment_offered`*, `assignment_progress`†, `run_progress`† | FORBIDDEN | optional | absent |
+| registry-lifecycle | `assignment_created/accepted/started/completed/cancelled/failed/blocked/timed_out/expired/retrying/rerouted`, `assignment_amended`†, `run_amended`†, all other `run_*` (`run_running` = the transition into running, emitted once†) | OPTIONAL until registry families go journal-primary (J4 phase 1.5); REQUIRED post-image from then on | REQUIRED | absent until phase 1.5, then REQUIRED, bumped |
 
 \* `assignment_offered` is a status transition of the assignment doc and
 moves to registry-lifecycle at phase 1.5; until then it is notification-only.
+† See the heartbeat/durable-progress split below.
 
 Holes found by the adversarial enumeration, resolved as follows:
 
@@ -106,10 +123,31 @@ Holes found by the adversarial enumeration, resolved as follows:
   for entity-state, tombstone, and registry-lifecycle records — a
   payload-carrying or rev-bumping record without an addressable entity is
   unreplayable and rejected at write time.
-- **`assignment_progress` is heartbeat-class** (§2.8): it never bumps
-  `entity_rev`, never carries a payload, and is excluded from replay. The
-  underlying doc fields it reflects (`last_progress`, heartbeat timestamps)
-  are ephemeral-class. It stays in the union as a notification verb only.
+- **Heartbeat vs durable progress (pre-P0 codex review, 2026-06-12).**
+  Today's code conflates the two on a single verb:
+  `recordAssignmentProgress` persists `status_reason` and **appends to
+  `artifacts`** (durable, accumulating state) on the same path that bumps
+  `last_heartbeat_at`, then emits `assignment_progress`
+  (`assignments.ts:296-301`); `recordAgentRunProgress` likewise mutates
+  `session_id`/`status_reason`/`artifacts` and re-emits `run_running` on
+  every tick (`agentruns.ts:318-325`). If those verbs stayed
+  heartbeat-class/no-replay, journal-primary replay would silently drop
+  artifacts reported mid-run. Normative invariant: **any event reflecting
+  a durable-field mutation must be replayable by the phase its family goes
+  journal-primary.** Resolution, effective at phase 1.5 (no write-path
+  code change before then):
+  - `assignment_progress` and `run_progress` (new) are **pure ticks** —
+    observability-class, payload FORBIDDEN, touching only ephemeral-class
+    fields (`last_heartbeat_at`, `updated_at`, `last_event_at`); excluded
+    from replay, exactly as §2.8 masks them.
+  - `run_running` re-scopes to the status **transition into** running —
+    registry-lifecycle, emitted once per transition, never as a tick.
+  - A progress call that carries durable mutations (`status_reason`,
+    `artifacts`, `session_id` binding) emits `assignment_amended` /
+    `run_amended` instead — registry-lifecycle, REQUIRED post-image,
+    `entity_rev` bumped. The write path splits on argument presence;
+    existing tests that assert artifacts-on-progress move to the amended
+    verbs with the phase 1.5 migration.
 - **Whole-store operations** (`rollback`, `upgrade` — today emitted once
   with `item_type: "state"`): in v2 the diff choke point (§2.8) emits them
   *per entity* (entity-state class, post-image each), plus one
@@ -164,6 +202,17 @@ All journal-meta records use `item_type: "journal"`, omit `item_id` and
     "meta_next_seq": 18301,    // stale value found in meta.json
     "tail_seq": 18342,         // observed at the active-segment tail
     "repaired_next_seq": 18343 } }
+
+// federation_apply — local record of an applied remote slice
+// (required by identity-model-proposal §"local apply"; declared NOW so
+// the frozen v2 union needs no post-freeze extension — emitted only once
+// federation ships, inert until then)
+{ "action": "federation_apply", "item_type": "journal", "payload": {
+    "origin_id": "org_a1b2…", "origin_epoch": 3,
+    "seq_range": [120, 184],        // remote seqs covered by the slice
+    "applied": 64,                   // records materialized locally
+    "conflicts": 1,                  // LWW losers surfaced as candidates (§2.11)
+    "slice_sha256": "…" } }          // hash of the ingested slice bytes
 ```
 
 `backfill` is **entity-state class**, not journal-meta: normal envelope
@@ -536,6 +585,20 @@ adopted**:
      when referenced by zero records in non-archived segments AND by
      neither of the two newest verified checkpoints' closures — the §2.3
      floor extended verbatim.
+   - **Redaction closure (J1 × `payload_ref`, normative — resolves the
+     blocking half of R2, 2026-06-12):** `doctor redact` of a record whose
+     payload lives in a blob must also **delete the blob** (true erasure —
+     the one exception to park-don't-delete; an erasure request is not
+     satisfied by parking) AND regenerate any checkpoint whose closure
+     references it *before* the redaction completes — manifest rewritten
+     minus the redacted post-image, re-verified, the stale checkpoint
+     parked. The redaction `journal_note` (§2.1.2) lists rewritten
+     checkpoints alongside segments. Invariant: after `doctor redact`
+     returns, no live segment, no `archive/blobs/` entry, and no
+     checkpoint closure can yield the redacted bytes. The *federation*
+     half of R2 (peer re-presenting a pre-redaction record or checkpoint)
+     stays open in §6 — it cannot be closed before the federation
+     transport exists.
    - **Git (J2 boundary):** `events/blobs/` is gitignored like segments.
      With the diet in place no live entity ships an oversized payload, so
      bare-clone restorability from projections + checkpoints holds in
@@ -730,12 +793,25 @@ is carried here.
 | C3 | MED | Falsifier FIRED on handoffs (phase-0 measurements). Resolved in §2.10: handoff diet (primary) + `payload_ref` (safety net), blob-before-ref ordering, checkpoint blob closure, gc floor extension, J2 git posture. Residual product call → J6. |
 | C4 | MED | Resolved in §2.11 against `identity-model-proposal.md`: scalar `(entity_rev, origin_id)` survives — convergence intact; conflict *surfacing* via (rev, origin) journal collision; documented miss-window past the gc floor with the per-origin watermark as named upgrade path. |
 
+### [CODEX pre-P0 review] — RESOLVED 2026-06-12 (claude-code, codex out of credits)
+
+Codex's final pass before P0 implementation surfaced 5 findings; all
+verified against code and resolved in this revision:
+
+| # | Sev | Resolution |
+|---|---|---|
+| F1 | MED/HIGH | `assignment_progress` carried durable state (`status_reason`, `artifacts`) on the heartbeat path — un-replayable as specced. Resolved in §2.1.1: heartbeat/durable split (`assignment_progress`/`run_progress` = pure ticks; `assignment_amended`/`run_amended` = registry-lifecycle with post-image), effective phase 1.5. |
+| F2 | MED | Same ambiguity on `run_running` (re-emitted per tick). Resolved with F1 — one decision: `run_running` = transition-only; ticks move to `run_progress`. |
+| F3 | MED | `federation_apply` required by the identity proposal but absent from the taxonomy. Resolved: declared as journal-meta NOW (§2.1.1 table + §2.1.2 schema), inert until federation ships — avoids a post-freeze union extension. |
+| F4 | MED | Redaction × payload_ref/checkpoints under-specified. Blocking half resolved in §2.10 (redaction closure: blob deletion + checkpoint regeneration, normative invariant); federation re-import half stays open as R2 below. |
+| F5 | LOW | Spec said 32 `EventAction` members; code has 34. Corrected in §2.1.1. |
+
 ### [CODEX residue — needs a second model's schema instincts]
 
 | # | Sev | Question |
 |---|---|---|
-| R1 | MED | **Zod encoding of §2.1.1.** Five classes with mode-gated payload requiredness for registry-lifecycle (optional → required at phase 1.5): discriminated union on what key — `action` (32-way) or a derived `class` field? Schema-level enforcement vs runtime refinement; parse cost on hot read paths. |
-| R2 | MED | **Redaction × cursors × federation (J1 + §2.1.2).** Does seq-watermark survival hold for a cursor positioned *inside* a redacted range? And the re-import hole: a federation peer that pulled a record pre-redaction can re-present it — `(seq, writer)` dedup would *reject* the redacted copy (good) but the peer's checkpoint may still embed the payload. Does the redaction note need to propagate as a federation signal? |
+| R1 | MED | ~~Zod encoding of §2.1.1~~ **RESOLVED 2026-06-12** (codex recommendation, claude-code verified zod 4.4.3 installed): `action` stays the only discriminant — no serialized `class` field (derived-field drift, trp#180 family). `ACTION_CLASS_BY_ACTION` table `satisfies Record<EventAction, ActionClass>` for compile-time exhaustiveness; zod discriminatedUnion on `action` enums per class; phase-gated payload requiredness = runtime refinement by journal mode, not schema variants. See §2.1.1. |
+| R2 | MED | **Redaction × cursors × federation — federation half only** (blob/checkpoint closure resolved in §2.10). Does seq-watermark survival hold for a cursor positioned *inside* a redacted range? And the re-import hole: a federation peer that pulled a record pre-redaction can re-present it — `(seq, writer)` dedup would *reject* the redacted copy (good) but the peer's checkpoint may still embed the payload. The redaction note likely needs to propagate as a federation signal; decide with the federation transport (cannot be closed before it exists). |
 | R3 | LOW | **Ephemeral field set enumeration (§2.8).** Adversarial sweep of the real zod schemas for fields beyond `last_heartbeat_at` / claim `expires_at` / `last_progress` that mutate without semantic change (counters, denormalized caches?) — the masking set must be complete or verify-journal cries wolf. |
 | R4 | LOW | **C4 miss-window sizing (§2.11).** Gc-floor window (weeks) vs realistic offline-origin durations; should the per-origin watermark ship in federation v1 regardless of dogfood evidence? |
 | R-C4 | MED | **Dual conflict-detection adjudication (§2.11, reconciliation 2026-06-11).** The two symmetric reviews independently produced `base_rev` fast-forward (identity proposal) and `(rev, origin)` journal collision (this spec); the coordinator kept BOTH (primary + defense-in-depth). Adjudicate: is the redundancy worth the dual maintenance, or should one become normative? Note `base_rev` is the only one that survives gc and fresh materializes. |
