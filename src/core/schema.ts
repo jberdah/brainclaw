@@ -1230,6 +1230,9 @@ export const MemorySeedKindSchema = z.enum([
   'warning',
   'environment',
   'tooling',
+  'decision',
+  'constraint',
+  'trap',
 ]);
 export type MemorySeedKind = z.infer<typeof MemorySeedKindSchema>;
 
