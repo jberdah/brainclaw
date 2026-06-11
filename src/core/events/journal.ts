@@ -423,6 +423,18 @@ export function appendJournalRecords(inputs: JournalAppendInput[], cwd?: string)
   }
 }
 
+/**
+ * Append regardless of the journal mode flag — for explicit operations that
+ * seed or repair the journal itself (genesis migration, doctor repair). The
+ * mode flag gates the automatic dual-write from mutations, not deliberate
+ * journal-authoring tools. Throws on failure (unlike the dual-write path,
+ * the operator wants to know a migration write failed).
+ */
+export function forceAppendJournalRecords(inputs: JournalAppendInput[], cwd?: string): JournalRecord[] {
+  if (inputs.length === 0) return [];
+  return mutate({ cwd: cwd ?? process.cwd() }, (resolvedCwd) => appendLocked(inputs, resolvedCwd));
+}
+
 function appendLocked(inputs: JournalAppendInput[], cwd: string): JournalRecord[] {
   const dir = journalDir(cwd);
   fs.mkdirSync(dir, { recursive: true });

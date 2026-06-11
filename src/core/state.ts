@@ -315,7 +315,8 @@ function cleanupLegacyDir<T extends { id: string }>(
   cwd: string,
   documentType: VersionedDocumentType,
   schema: ZodType<T, unknown>,
-): void {
+): string[] {
+  const deleted: string[] = [];
   const writeDir = resolveEntityDir(entityName, cwd, 'write');
   const readDir = resolveEntityDir(entityName, cwd, 'read');
   // If read resolves to a different (legacy) directory, clean orphans there too.
@@ -338,9 +339,11 @@ function cleanupLegacyDir<T extends { id: string }>(
       }
       if (parseable) {
         fs.unlinkSync(filepath);
+        deleted.push(id); // O3: surface so a delete tombstone is emitted
       }
     }
   }
+  return deleted;
 }
 
 /**
@@ -375,11 +378,14 @@ function writeStateDirectories(state: State, cwd?: string, deleteMissing = false
   for (const { name, itemType, items, docType, schema } of entities) {
     const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
     const result = syncDirectory(writeDir, items, docType, schema, deleteMissing);
-    dirty.push({ itemType, written: result.written, deleted: result.deleted });
+    const deleted = [...result.deleted];
     const currentIds = new Set(items.map(item => item.id));
     if (deleteMissing) {
-      cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema);
+      // O3: legacy-dir orphans removed here must also emit a delete tombstone,
+      // or the journal would show missing_in_projection drift for them.
+      deleted.push(...cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema));
     }
+    dirty.push({ itemType, written: result.written, deleted });
   }
   return dirty;
 }
