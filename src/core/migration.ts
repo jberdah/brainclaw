@@ -260,8 +260,19 @@ export function preparePersistedDocument<T>(documentType: VersionedDocumentType,
   } as T;
 }
 
+/**
+ * The exact on-disk bytes for a versioned JSON document — the single
+ * serialization source of truth shared by the writer and the
+ * dirty-tracking skip check (pln#543 step 3). Computing the would-be
+ * content here means the skip comparison can never drift from what the
+ * writer actually produces.
+ */
+export function serializeVersionedJson<T>(documentType: VersionedDocumentType, document: T): string {
+  return `${JSON.stringify(preparePersistedDocument(documentType, document), null, 2)}\n`;
+}
+
 export function saveVersionedJsonFile<T>(documentType: VersionedDocumentType, filepath: string, document: T): void {
-  writeFileAtomic(filepath, `${JSON.stringify(preparePersistedDocument(documentType, document), null, 2)}\n`);
+  writeFileAtomic(filepath, serializeVersionedJson(documentType, document));
 }
 
 export function saveVersionedYamlFile<T>(documentType: VersionedDocumentType, filepath: string, document: T): void {

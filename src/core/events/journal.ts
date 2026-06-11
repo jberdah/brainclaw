@@ -210,6 +210,26 @@ function listSegments(dir: string): string[] {
     .sort();
 }
 
+/**
+ * Read every valid v2 record across all segments in (segment, file-line)
+ * order — the canonical replay order (§2.2: never sorted by seq). Torn or
+ * schema-invalid lines are skipped per the §2.6 reader rules. This is the
+ * substrate for journal→projection materialization (materialize.ts).
+ */
+export function readJournalRecords(cwd?: string): JournalRecord[] {
+  const dir = journalDir(cwd);
+  const records: JournalRecord[] = [];
+  for (const seg of listSegments(dir)) {
+    const lines = fs.readFileSync(path.join(dir, seg), 'utf-8').split('\n');
+    for (const line of lines) {
+      if (!line) continue;
+      const rec = parseRecordLine(line);
+      if (rec) records.push(rec);
+    }
+  }
+  return records;
+}
+
 // --- Meta (rebuildable cache, §2.3) ---
 
 interface JournalMeta {

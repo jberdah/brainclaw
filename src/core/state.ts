@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ZodType } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
-import { memoryDir, ensureMemoryDir, resolveEntityDir } from './io.js';
+import { memoryDir, ensureMemoryDir, resolveEntityDir, writeFileAtomic } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { commitMemoryChange } from './memory-git.js';
-import { appendEvent } from './event-log.js';
-import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';
+import { appendEvent, type EventItemType } from './event-log.js';
+import { appendJournalRecords, resolveJournalMode, type JournalAppendInput } from './events/journal.js';
+import { loadVersionedJsonFile, serializeVersionedJson, preparePersistedDocument, type VersionedDocumentType } from './migration.js';
 import { rebuildProjectMd } from './markdown.js';
 import { refreshLiveCompanions } from '../commands/export.js';
 import { logger } from './logger.js';
@@ -133,26 +134,106 @@ export function loadState(cwd?: string): State {
   return state;
 }
 
+/**
+ * Counters for the dirty-tracking persist path (pln#543 step 3). Observable
+ * so the perf benchmark suite (step 4) can assert the full-rewrite is off the
+ * hot path: a single-entity mutation should write 1 file, not N.
+ */
+export interface PersistWriteStats {
+  written: number;
+  skippedUnchanged: number;
+}
+const persistWriteStats: PersistWriteStats = { written: 0, skippedUnchanged: 0 };
+
+export function readPersistWriteStats(): PersistWriteStats {
+  return { ...persistWriteStats };
+}
+export function resetPersistWriteStats(): void {
+  persistWriteStats.written = 0;
+  persistWriteStats.skippedUnchanged = 0;
+}
+
+/**
+ * Order-insensitive canonical form of a JSON document, for the dirty-tracking
+ * skip compare. Recursively sorts object keys; returns the raw input on parse
+ * failure so corrupt/non-JSON bytes never compare equal to a valid desired doc.
+ */
+function canonicalJson(raw: string): string {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, sortKeys(v)]),
+      );
+    }
+    return value;
+  };
+  try {
+    return JSON.stringify(sortKeys(JSON.parse(raw)));
+  } catch {
+    return raw; // unparseable → never equals a canonical desired doc
+  }
+}
+
+interface SyncResult<T> {
+  /** Items whose file was actually (re)written this sync, with create-vs-update. */
+  written: Array<{ item: T; created: boolean }>;
+  /** Ids whose projection file was unlinked (intentional removals). */
+  deleted: string[];
+}
+
 function syncDirectory<T extends { id: string }>(
   dirPath: string,
   items: T[],
   documentType: VersionedDocumentType,
   schema: ZodType<T, unknown>,
   deleteMissing: boolean,
-) {
+): SyncResult<T> {
+  const result: SyncResult<T> = { written: [], deleted: [] };
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
 
-  // Write all current items
+  // Write only the items whose on-disk bytes would change (dirty-tracking,
+  // pln#543 step 3). The full-store rewrite on every mutation was the hot-path
+  // cost syncDirectory imposed; comparing the would-be content against what is
+  // on disk skips the unchanged majority. The comparison uses the writer's own
+  // serializer (serializeVersionedJson) so a "skip" can never diverge from what
+  // saveVersionedJsonFile would have produced. Safe against the trp#126
+  // silent-data-loss class: a missing or byte-different file never matches, so
+  // an in-state entity whose projection is absent/corrupt is always rewritten.
   const currentIds = new Set<string>();
   for (const item of items) {
     currentIds.add(item.id);
     const filepath = path.join(dirPath, `${item.id}.json`);
-    saveVersionedJsonFile(documentType, filepath, item);
+    const desired = serializeVersionedJson(documentType, item);
+    let existing: string | undefined;
+    try {
+      existing = fs.readFileSync(filepath, 'utf-8');
+    } catch {
+      existing = undefined; // missing/unreadable → write
+    }
+    // Skip when the on-disk content is SEMANTICALLY identical, not just
+    // byte-identical: loadState re-parses through zod, which can reorder keys
+    // (e.g. schema_version migrates to the front). A byte compare would then
+    // see every reloaded entity as "changed" and rewrite the whole store on
+    // every persist — defeating dirty-tracking. The canonical (sorted-key)
+    // compare treats order-only differences as unchanged; genuinely changed
+    // content always differs. Unparseable on-disk bytes never match → rewrite
+    // (keeps the trp#126 safety: a corrupt/missing projection is always
+    // re-materialized from in-state truth).
+    if (existing !== undefined && canonicalJson(existing) === canonicalJson(desired)) {
+      persistWriteStats.skippedUnchanged += 1;
+      continue;
+    }
+    writeFileAtomic(filepath, desired);
+    persistWriteStats.written += 1;
+    result.written.push({ item, created: existing === undefined });
   }
 
-  if (!deleteMissing) return;
+  if (!deleteMissing) return result;
 
   // Remove files that are no longer in the state (e.g. if deleted/pruned).
   // CRITICAL: we must distinguish "file dropped from state intentionally" from
@@ -176,8 +257,10 @@ function syncDirectory<T extends { id: string }>(
     }
     if (parseable) {
       fs.unlinkSync(filepath);
+      result.deleted.push(id);
     }
   }
+  return result;
 }
 
 export function saveState(state: State, cwd?: string): void {
@@ -193,16 +276,20 @@ interface PersistStateOptions {
 }
 
 function persistStateUnlocked(state: State, cwd: string, options: PersistStateOptions = {}): void {
-  writeStateDirectories(state, cwd, options.deleteMissing ?? false);
+  const dirty = writeStateDirectories(state, cwd, options.deleteMissing ?? false);
   if (options.writeProjectMarkdown ?? true) {
     rebuildProjectMd(state, cwd);
   }
+  // v1 events.jsonl: keep the coarse store event for existing consumers, but
+  // suppress its envelope-only journal dual-write — persist is the §2.8 "diff
+  // choke point" and emits the rich per-entity post-images below instead.
   appendEvent({
     action: options.eventAction ?? 'update',
     item_type: 'state',
     agent: 'system',
     summary: options.eventSummary,
-  }, cwd);
+  }, cwd, { journalDualWrite: false });
+  emitPerEntityJournalRecords(dirty, options.eventAction, cwd);
   // NOTE (pln#558 step 2): the git commit and refreshLiveCompanions used to
   // run here, INSIDE the mutation lock. A single persistState was holding
   // the lock for >5s on Juan's machine (full-store rewrite + git add -A +
@@ -256,31 +343,79 @@ function cleanupLegacyDir<T extends { id: string }>(
   }
 }
 
-function writeStateDirectories(state: State, cwd?: string, deleteMissing = false): void {
+/**
+ * Per-entity-type dirty set produced by a persist, consumed by the journal
+ * post-image emission. `itemType` is the EventItemType for the family.
+ */
+interface DirtyEntities {
+  itemType: EventItemType;
+  written: Array<{ item: { id: string }; created: boolean }>;
+  deleted: string[];
+}
+
+function writeStateDirectories(state: State, cwd?: string, deleteMissing = false): DirtyEntities[] {
   ensureMemoryDir(cwd);
   const effectiveCwd = cwd ?? process.cwd();
 
   const entities: Array<{
     name: string;
+    itemType: EventItemType;
     items: { id: string }[];
     docType: VersionedDocumentType;
     schema: ZodType<{ id: string }, unknown>;
   }> = [
-    { name: 'constraints', items: state.active_constraints, docType: 'constraint', schema: ConstraintSchema as unknown as ZodType<{ id: string }, unknown> },
-    { name: 'decisions', items: state.recent_decisions, docType: 'decision', schema: DecisionSchema as unknown as ZodType<{ id: string }, unknown> },
-    { name: 'traps', items: state.known_traps, docType: 'trap', schema: TrapSchema as unknown as ZodType<{ id: string }, unknown> },
-    { name: 'handoffs', items: state.open_handoffs, docType: 'handoff', schema: HandoffSchema as unknown as ZodType<{ id: string }, unknown> },
-    { name: 'plans', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'constraints', itemType: 'constraint', items: state.active_constraints, docType: 'constraint', schema: ConstraintSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'decisions', itemType: 'decision', items: state.recent_decisions, docType: 'decision', schema: DecisionSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'traps', itemType: 'trap', items: state.known_traps, docType: 'trap', schema: TrapSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'handoffs', itemType: 'handoff', items: state.open_handoffs, docType: 'handoff', schema: HandoffSchema as unknown as ZodType<{ id: string }, unknown> },
+    { name: 'plans', itemType: 'plan', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, unknown> },
   ];
 
-  for (const { name, items, docType, schema } of entities) {
+  const dirty: DirtyEntities[] = [];
+  for (const { name, itemType, items, docType, schema } of entities) {
     const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
-    syncDirectory(writeDir, items, docType, schema, deleteMissing);
+    const result = syncDirectory(writeDir, items, docType, schema, deleteMissing);
+    dirty.push({ itemType, written: result.written, deleted: result.deleted });
     const currentIds = new Set(items.map(item => item.id));
     if (deleteMissing) {
       cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema);
     }
   }
+  return dirty;
+}
+
+/**
+ * Emit one journal record per dirty entity with its full post-image
+ * (entity-state class, §2.1.1 / §2.8): the persist path is where the store's
+ * source-of-truth events are minted, because only it holds the entity docs.
+ * No-op when the journal flag is off. Failures are swallowed inside
+ * appendJournalRecords (dual mode: v1 projections remain the truth).
+ */
+function emitPerEntityJournalRecords(
+  dirty: DirtyEntities[],
+  storeAction: PersistStateOptions['eventAction'],
+  cwd: string,
+): void {
+  if (resolveJournalMode() === 'off') return;
+  const records: JournalAppendInput[] = [];
+  for (const { itemType, written, deleted } of dirty) {
+    for (const { item, created } of written) {
+      // Post-image = the prepared document (with schema_version), so the
+      // journal record is byte-faithful to the projection: materialize can
+      // reconstruct an identical file, and verify compares like-for-like.
+      records.push({
+        action: storeAction && storeAction !== 'update' ? storeAction : (created ? 'create' : 'update'),
+        item_type: itemType,
+        item_id: item.id,
+        agent: 'system',
+        payload: preparePersistedDocument(itemType as VersionedDocumentType, item) as Record<string, unknown>,
+      });
+    }
+    for (const id of deleted) {
+      records.push({ action: 'delete', item_type: itemType, item_id: id, agent: 'system' });
+    }
+  }
+  if (records.length > 0) appendJournalRecords(records, cwd);
 }
 
 export function persistState(state: State, cwd?: string, options: PersistStateOptions = {}): void {

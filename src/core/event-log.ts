@@ -84,7 +84,21 @@ export interface MemoryEvent {
 
 // --- Writer ---
 
-export function appendEvent(event: Partial<MemoryEvent> & { action: EventAction; item_type: EventItemType }, cwd?: string): void {
+export interface AppendEventOptions {
+  /**
+   * Mirror this event into the v2 segmented journal when the journal flag is
+   * on (default true). The persist path sets this false: it emits rich
+   * per-entity post-image records itself (state.ts), so the coarse `*:state`
+   * envelope must not be double-written as a store_marker.
+   */
+  journalDualWrite?: boolean;
+}
+
+export function appendEvent(
+  event: Partial<MemoryEvent> & { action: EventAction; item_type: EventItemType },
+  cwd?: string,
+  options: AppendEventOptions = {},
+): void {
   try {
     const full: MemoryEvent = {
       ts: event.ts ?? nowISO(),
@@ -103,7 +117,9 @@ export function appendEvent(event: Partial<MemoryEvent> & { action: EventAction;
   } catch (err) {
     logger.debug('Failed to write event log entry:', err);
   }
-  dualWriteToJournal(event, cwd);
+  if (options.journalDualWrite !== false) {
+    dualWriteToJournal(event, cwd);
+  }
 }
 
 /**
