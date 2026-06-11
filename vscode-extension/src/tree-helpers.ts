@@ -52,11 +52,23 @@ export function isStale(isoDate: string | undefined, thresholdMs: number): boole
 }
 
 export function agentFreshness(agent: { has_open_session?: boolean; claim_count?: number; last_active?: string }): Freshness {
-  if (agent.has_open_session || (agent.claim_count ?? 0) > 0) return 'active';
-  if (!agent.last_active) return 'stale';
-  const hours = (Date.now() - new Date(agent.last_active).getTime()) / 3600000;
+  // pln#559 step 5 — evidence-based roster freshness. The previous rule
+  // ("claim_count > 0 → active") forced a green dot on a crashed worker that
+  // never released its claims (the 2026-06-10 silent_death pattern). Liveness
+  // is now derived from last_active: a session/claim only counts as
+  // confirming activity when last_active is recent. Otherwise the row
+  // degrades to idle/stale based on age, even with a session left open and
+  // claims dangling.
+  const lastActiveMs = agent.last_active ? Date.now() - new Date(agent.last_active).getTime() : undefined;
+  if (lastActiveMs === undefined) return 'stale';
+  const hours = lastActiveMs / 3600000;
   if (hours < 1) return 'active';
-  if (hours < 6) return 'idle';
+  // A held session OR held claim with last_active in the 1–6h band keeps the
+  // row at 'idle' rather than collapsing to 'stale' — the agent had real
+  // work in flight before going quiet.
+  if (hours < 6) {
+    return (agent.has_open_session || (agent.claim_count ?? 0) > 0) ? 'idle' : 'idle';
+  }
   return 'stale';
 }
 

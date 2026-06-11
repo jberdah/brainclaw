@@ -71,20 +71,26 @@ describe('tree-helpers — isStale', () => {
 });
 
 describe('tree-helpers — agentFreshness', () => {
-  it('is "active" when agent has an open session (regardless of last_active)', () => {
+  // pln#559 step 5 — agentFreshness is now evidence-based: open sessions and
+  // claim_count alone no longer force 'active'. A crashed worker with a
+  // dangling claim must NOT show a green dot (2026-06-10 calibration).
+  it('is "stale" when last_active is decades old, even with an open session', () => {
     assert.equal(
       agentFreshness({ has_open_session: true, last_active: isoDaysAgo(30) }),
-      'active',
+      'stale',
     );
   });
-  it('is "active" when claim_count > 0 (working)', () => {
+  it('is "stale" when last_active is decades old, even with held claims (crashed worker pattern)', () => {
     assert.equal(
       agentFreshness({ claim_count: 2, last_active: isoDaysAgo(30) }),
-      'active',
+      'stale',
     );
   });
   it('is "stale" when last_active is missing and no session/claims', () => {
     assert.equal(agentFreshness({}), 'stale');
+  });
+  it('is "stale" when last_active is missing even with an open session (no liveness evidence)', () => {
+    assert.equal(agentFreshness({ has_open_session: true }), 'stale');
   });
   it('is "active" when last_active is under an hour old', () => {
     assert.equal(agentFreshness({ last_active: isoMinutesAgo(30) }), 'active');

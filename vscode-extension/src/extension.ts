@@ -25,6 +25,12 @@ let searchOutput: vscode.OutputChannel;
 let memoryOutput: vscode.OutputChannel;
 let statusBarSummary: BrainclawStatusSummary = emptyStatusSummary();
 let previousActionCount: number | undefined;
+let previousFailedRuns: number | undefined;
+// pln#559 step 3 — the TreeView reference, retained so we can update its
+// badge (the chip on the activity-bar icon) when the summary changes.
+// `registerTreeDataProvider` does not expose the badge property; `createTreeView`
+// does. The badge is the visible-without-opening-the-sidebar attention surface.
+let boardTreeView: vscode.TreeView<BrainclawTreeItem> | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'brainclaw.active', true);
@@ -66,9 +72,17 @@ export function activate(context: vscode.ExtensionContext) {
   doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
   searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
   memoryOutput = vscode.window.createOutputChannel('Brainclaw Memory');
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('brainclaw.agentBoard', treeProvider ?? new EmptyTreeProvider())
-  );
+  // pln#559 step 3 — createTreeView (not registerTreeDataProvider) so we own
+  // a TreeView ref carrying the `.badge` property. The badge is rendered on
+  // the activity-bar icon without the user opening the sidebar.
+  if (treeProvider) {
+    boardTreeView = vscode.window.createTreeView('brainclaw.agentBoard', { treeDataProvider: treeProvider });
+    context.subscriptions.push(boardTreeView);
+  } else {
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider('brainclaw.agentBoard', new EmptyTreeProvider()),
+    );
+  }
   context.subscriptions.push(doctorOutput, searchOutput, memoryOutput);
   if (treeProvider) {
     context.subscriptions.push({ dispose: () => treeProvider.dispose() });
@@ -133,6 +147,44 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('brainclaw.dispatchPlan', async (item: BrainclawTreeItem) => {
       if (item.itemId) await treeProvider?.dispatchPlan(item.itemId, item.projectPath);
+    }),
+    // pln#559 step 4 — triage shortcuts. The supervisor's incident loop is
+    // see-anomaly → open-worktree → inspect; the tree only supported step 1.
+    vscode.commands.registerCommand('brainclaw.openWorktree', async (item: BrainclawTreeItem) => {
+      // Worker rows carry `worktreePath` attached during build. Fallback: ask
+      // the provider to resolve it from the live entity (cheap, no MCP call —
+      // the tree already has the assignment data cached).
+      const worktreePath = (item as any).worktreePath ?? await treeProvider?.resolveWorktreePath(item);
+      if (!worktreePath) {
+        vscode.window.showWarningMessage('Brainclaw: no worktree path on this item.');
+        return;
+      }
+      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(worktreePath), { forceNewWindow: true });
+    }),
+    vscode.commands.registerCommand('brainclaw.showCapturedLogs', async (item: BrainclawTreeItem) => {
+      const logPaths = ((item as any).logPaths ?? []) as string[];
+      if (logPaths.length === 0) {
+        // pln#559 step 4 — fallback: synthesize the canonical log paths from
+        // the worktree-or-project + assignment id, since dispatch_status may
+        // not have populated logPaths on items that landed via summary mode.
+        const fallback = await treeProvider?.resolveCapturedLogPaths(item);
+        if (!fallback || fallback.length === 0) {
+          vscode.window.showWarningMessage('Brainclaw: no captured logs known for this item.');
+          return;
+        }
+        logPaths.push(...fallback);
+      }
+      // Open each log in a peek-style document (preserveFocus so the tree
+      // keeps the keyboard). Reading the file is read-only; if it doesn't
+      // exist VS Code surfaces its own friendly error.
+      for (const p of logPaths) {
+        try {
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(p));
+          await vscode.window.showTextDocument(doc, { preview: false });
+        } catch (err) {
+          vscode.window.showWarningMessage(`Brainclaw: cannot open log ${p}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }),
   );
 
@@ -268,10 +320,32 @@ function getNotificationMode(): 'urgent' | 'all' | 'none' {
 
 function handleStatusSummary(summary: BrainclawStatusSummary): void {
   const previous = previousActionCount;
+  const previousFailed = previousFailedRuns;
   statusBarSummary = summary;
   updateStatusBar(summary);
 
-  if (previous !== undefined && summary.actions > previous && getNotificationMode() !== 'none') {
+  // pln#559 step 3 — update the activity-bar badge from the same composite
+  // the status bar uses. Badge value = action count; tooltip = the same
+  // human-readable summary. Setting `value: 0` clears the badge.
+  if (boardTreeView) {
+    if (summary.actions > 0) {
+      boardTreeView.badge = {
+        value: summary.actions,
+        tooltip: `${summary.actions} item(s) need attention`,
+      };
+    } else {
+      boardTreeView.badge = undefined;
+    }
+  }
+
+  const mode = getNotificationMode();
+
+  // pln#559 step 3 — fix the no-op urgent/all distinction (D7). The previous
+  // handler treated urgent and all identically (both gated only by "actions
+  // increased"). "All" must additionally surface a toast when the registry
+  // observes a worker failure (failed runs increased) so the operator hears
+  // about the 2026-06-10-style silent_death without watching the tree.
+  if (mode !== 'none' && previous !== undefined && summary.actions > previous) {
     void vscode.window.showInformationMessage(
       `Brainclaw: ${summary.actions - previous} new action required`,
       'Show Board',
@@ -281,7 +355,22 @@ function handleStatusSummary(summary: BrainclawStatusSummary): void {
       }
     });
   }
+  if (mode === 'all'
+    && previousFailed !== undefined
+    && summary.failedRuns !== undefined
+    && summary.failedRuns > previousFailed
+  ) {
+    void vscode.window.showWarningMessage(
+      `Brainclaw: ${summary.failedRuns - previousFailed} assignment(s) failed`,
+      'Show Board',
+    ).then((choice) => {
+      if (choice === 'Show Board') {
+        void vscode.commands.executeCommand('brainclaw.showBoard');
+      }
+    });
+  }
   previousActionCount = summary.actions;
+  previousFailedRuns = summary.failedRuns;
 }
 
 // --- Entity preview column tracking ---
