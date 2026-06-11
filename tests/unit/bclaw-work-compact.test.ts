@@ -191,4 +191,16 @@ describe('bclaw_work compact mode', () => {
       assert.ok(result.stale_warnings.length <= 3, 'stale_warnings should be capped at 3');
     }
   });
+
+  it('proposes bclaw_create(entity=plan) in next_actions when memory is empty', async () => {
+    // pln#556 step 5 / 2026-06-10 front-door audit: the bootstrap hint
+    // covers vision; an empty store also needs a *work* affordance so the
+    // agent does not consult, see nothing, and stop.
+    const response = await callWork(workspace, { intent: 'consult' });
+    assert.equal(response.status, 'ok');
+    const createPlanHint = (response.next_actions ?? []).find(
+      (entry) => entry.tool === 'bclaw_create' && (entry.args as { entity?: string })?.entity === 'plan',
+    );
+    assert.ok(createPlanHint, `expected a bclaw_create(entity='plan') hint, got ${JSON.stringify(response.next_actions)}`);
+  });
 });

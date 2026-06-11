@@ -19,6 +19,8 @@ import { ensureUserStore, hasCompletedSetup } from '../core/setup-state.js';
 import { resolveEmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { writeDetectedAgentExport } from './export.js';
 import { writeDetectedAgentHooks } from './hooks.js';
+import { checkGitPresence, runGlobalInstall } from './setup.js';
+import { createBackup, BackupError } from '../core/upgrades/backup.js';
 import { ConfigSchema, type Config, type IgnoreStrategy, type ProjectMode, type ProjectStrategy, type TopologyMode } from '../core/schema.js';
 
 export interface InitOptions {
@@ -36,6 +38,14 @@ export interface InitOptions {
   noAiScan?: boolean;
   skipAgentBootstrap?: boolean;
   skipSetupRequirement?: boolean;
+  /**
+   * Skip the per-agent machine-prereq slice that init normally runs for the
+   * detected agent (the same writes setup performs at machine scope, scoped
+   * to just one agent). Disabled implicitly by BRAINCLAW_TEST_MODE and by
+   * skipAgentBootstrap, so tests and explicit no-bootstrap callers don't
+   * spuriously touch ~/.<agent>/ files.
+   */
+  skipMachinePrereqs?: boolean;
 }
 
 export async function runInit(options: InitOptions = {}): Promise<void> {
@@ -47,6 +57,15 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   // init always ensures the user store exists before proceeding.
   if (!hasCompletedSetup()) {
     ensureUserStore();
+  }
+
+  // Git-presence gate, aligned with `brainclaw setup`: agent-first onboarding
+  // assumes git for memory versioning + post-merge hooks. Allow override via
+  // BRAINCLAW_SKIP_REPO_ANALYSIS=1 for tests that exercise non-git fixtures.
+  if (process.env.BRAINCLAW_SKIP_REPO_ANALYSIS !== '1' && !checkGitPresence()) {
+    console.error('brainclaw init needs git to work.');
+    console.error('Install git from https://git-scm.com and try again.');
+    process.exit(1);
   }
 
   if (containingMemoryStore) {
@@ -82,6 +101,29 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const storageDir = resolveStorageDir(options.storageDir);
   const projectMemoryExists = memoryExists(cwd);
   const existingConfig = projectMemoryExists ? loadExistingConfig(cwd, storageDir) : undefined;
+
+  // --force backup gate: feedback_no_init_force (June 2026) entered the code.
+  // Before rebuilding identity fields on top of an existing store, take a
+  // sibling backup so curator personalisations (redaction patterns, claim
+  // TTL, governance, sensitive_paths) can always be recovered even if the
+  // merge below regresses or the agent ran `init --force` by mistake.
+  let forceBackupPath: string | undefined;
+  if (options.force && projectMemoryExists) {
+    try {
+      const handle = createBackup({
+        storePath: path.join(cwd, storageDir),
+        note: 'init --force pre-reconstruction snapshot',
+        storeSchemaVersion: existingConfig ? String(existingConfig.schema_version) : null,
+      });
+      forceBackupPath = handle.backupPath;
+    } catch (err) {
+      const reason = err instanceof BackupError
+        ? `${err.code}: ${err.message}`
+        : err instanceof Error ? err.message : String(err);
+      console.error(`Error: --force backup failed (${reason}). Aborting to preserve the existing store. Re-run without --force, or move the store aside manually.`);
+      process.exit(1);
+    }
+  }
   const topology = resolveTopology(options.topology, existingConfig?.topology);
   const ignoreStrategy = resolveIgnoreStrategy(topology, existingConfig?.ignore_strategy);
   const skipAgentBootstrap = options.skipAgentBootstrap === true || process.env.BRAINCLAW_SKIP_AGENT_BOOTSTRAP === '1';
@@ -156,7 +198,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     storageDir,
     topology,
     ignoreStrategy,
-    existingConfig: options.force ? undefined : existingConfig,
+    // --force rebuilds identity (project_id, agent, topology, storage_dir)
+    // but merges through existingConfig so curator personalisations
+    // (redaction patterns, governance, claims TTL, sensitive_paths,
+    // cross_project_links, custom markdown caps) survive the reset.
+    // The original `force ? undefined` path wiped these silently —
+    // discovered when feedback_no_init_force was promoted from a memory
+    // habit to a tracked regression.
+    existingConfig,
     compact: options.compact === true,
   });
   if (detectedAi && isAgentIntegrationName(detectedAi.name)) {
@@ -177,6 +226,21 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     : [];
 
   const detectedAutoConfig = detectedAi ? writeDetectedAgentAutoConfig(detectedAi.name, cwd) : [];
+
+  // Per-agent slice of machine prerequisites (the same writes setup performs
+  // globally, but scoped to the detected agent). This makes `init` the single
+  // entry point for the carte-blanche / fresh-repo case: an agent-first
+  // bootstrap no longer needs a separate `brainclaw setup` shell-out + session
+  // reload. Idempotent — each ensure* function returns "skipped" when the
+  // agent's user-scope config doesn't exist.
+  const skipMachinePrereqs =
+    options.skipMachinePrereqs === true
+    || skipAgentBootstrap
+    || testMode
+    || process.env.BRAINCLAW_INIT_SKIP_MACHINE_PREREQS === '1';
+  const machinePrereqsWritten = detectedAi && !skipMachinePrereqs
+    ? safeRunMachinePrereqs(detectedAi.name)
+    : [];
 
   // Register in global project registry
   try {
@@ -217,7 +281,10 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if (projectMemoryExists) {
     console.log(`✔ Refreshed existing project memory in ${storageDir}/`);
     if (options.force) {
-      console.log('✔ Existing memory preserved; rebuilt managed configuration and agent integration files from defaults');
+      if (forceBackupPath) {
+        console.log(`✔ Pre-reconstruction backup at ${forceBackupPath} (rollback: brainclaw upgrade --rollback)`);
+      }
+      console.log('✔ Existing memory preserved; rebuilt managed identity and refreshed agent integration files (customisations merged through)');
     } else {
       console.log('✔ Existing memory preserved; refreshed managed configuration and agent integration files');
     }
@@ -229,7 +296,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   console.log(`✔ Current agent: ${currentAgent.agent_name} (${currentAgent.agent_id})`);
   if (registeredAiAgent) {
     console.log(`✔ AI agent detected: ${registeredAiAgent.agent_name} [${detectedAi!.detection_source}] (${registeredAiAgent.agent_id})`);
-  }  if (detectedExport) {
+  }
+  if (machinePrereqsWritten.length > 0) {
+    console.log(`\u2714 Machine prerequisites for ${detectedAi!.name}:`);
+    for (const filePath of machinePrereqsWritten) {
+      console.log(`  - ${filePath}`);
+    }
+  }
+  if (detectedExport) {
     console.log(`\u2714 Agent instructions written to ${detectedExport.relativePath} (${detectedExport.created ? 'created' : 'updated'})`);
   }
   if (!skipAiSurfaceScan) {
@@ -343,6 +417,15 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log(`Tip: run 'brainclaw init' again later to refresh the detected agent's integration files on this project.`);
   }
   console.log(`Tip: in an agent session, call the bclaw_work MCP tool (intent: "consult") to load the shared memory; from a terminal, 'brainclaw context --json' does the same.`);
+}
+
+function safeRunMachinePrereqs(agentName: string): string[] {
+  try {
+    return runGlobalInstall([agentName]);
+  } catch {
+    // Non-fatal: machine-scope writes are best-effort, never block init.
+    return [];
+  }
 }
 
 function installPostMergeHookIfMissing(cwd: string): void {
@@ -568,6 +651,12 @@ function buildInitConfig(input: {
     storageDir: input.storageDir,
     topology: input.topology,
     ignoreStrategy: input.ignoreStrategy,
+    // Solo-agent fresh default: the human running init is the default curator.
+    // Without it, approval_policy=review + curators=[] = every candidate sits
+    // in pending forever — a surprise the 2026-06-10 front-door audit flagged.
+    // mergeConfigWithDefaults preserves any explicit curators list on an
+    // existing store, so this only takes effect on fresh installs.
+    curatorName: input.currentAgent.name,
   });
   const config = input.existingConfig
     ? mergeConfigWithDefaults(input.existingConfig, fallbackConfig)

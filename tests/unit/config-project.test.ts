@@ -16,6 +16,20 @@ describe('core/config + project identity', () => {
     assert.deepEqual(config.agent_integrations.declarations, []);
   });
 
+  it('seeds governance.curators with the provided curator name', () => {
+    // Solo-agent fresh default (pln#556 step 5 / 2026-06-10 front-door
+    // audit): approval_policy=review + curators=[] = every note trapped
+    // pending forever. The human running init becomes the default curator.
+    const config = defaultConfig('solo-fresh', { curatorName: 'juan' });
+    assert.deepEqual(config.governance?.curators, ['juan']);
+    assert.equal(config.governance?.approval_policy, 'review');
+  });
+
+  it('leaves curators empty when no curator name is supplied', () => {
+    const config = defaultConfig('solo-fresh');
+    assert.deepEqual(config.governance?.curators, []);
+  });
+
   it('preserves an existing project identity when rebuilding it', () => {
     const existing = {
       version: 1 as const,

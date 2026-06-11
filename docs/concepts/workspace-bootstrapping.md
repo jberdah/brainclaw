@@ -59,6 +59,47 @@ It may simply mean the workspace has not been onboarded yet.
 
 This lets a single machine support multiple very different workspaces without forcing one static instruction layer to fit all of them equally well.
 
+## init = single project entry point
+
+`brainclaw init` is the single code path for turning a project into a
+brainclaw-aware workspace, whether invoked from a terminal, from the
+`bclaw_setup` MCP tool's quick-init step, or from a multi-repo
+`brainclaw setup`. After detecting the local AI agent, init runs the
+per-agent slice of the machine prerequisites (the same writes `setup`
+performs at machine scope, scoped to the detected agent) so an agent
+landing in the carte-blanche / fresh-repo case does not need a separate
+shell-out + session reload. The slice is idempotent — each `ensure*`
+function returns "skipped" when the agent's user-scope config doesn't
+exist, and the writes are short-circuited in `BRAINCLAW_TEST_MODE` or
+when `--skip-agent-bootstrap` is passed. `setup` is rescoped to
+multi-repo / machine-bootstrap; `setup-machine` is the explicit
+machine-only path.
+
+### `init --force`
+
+`--force` rebuilds managed identity fields (project_id, current_agent,
+storage_dir, topology) but **merges through the existing config** so
+curator personalisations (redaction patterns, sensitive paths,
+governance overrides, claim TTL, cross-project links, custom markdown
+caps) survive the reset. Before any write, a sibling backup is taken at
+`.brainclaw.bak-<timestamp>/` — the standard recovery-backups pattern
+used by `brainclaw upgrade`. Recovery: `brainclaw upgrade --rollback`.
+
+## Solo-agent fresh defaults
+
+A fresh `brainclaw init` seeds `governance.curators` with the human
+running init. Without this, the default `approval_policy: 'review'`
+combined with `curators: []` trapped every reflective note in pending
+forever — a surprise that doesn't show up until enough memory has
+accumulated to notice. The merge logic preserves any explicit curator
+list on an existing store, so this only takes effect on fresh installs.
+
+On an empty store, `bclaw_work` carries an explicit
+`bclaw_create(entity='plan')` hint in `next_actions` alongside the
+bootstrap recommendation: the bootstrap covers *vision*, the plan
+affordance covers *work* itself. The two are independent — both can
+appear simultaneously.
+
 ## Multi-project workspaces
 
 A workspace may contain multiple brainclaw-initialized child projects (each with its own `.brainclaw/` store). In this topology:
