@@ -23,7 +23,7 @@ import { preparePersistedDocument, type VersionedDocumentType } from '../migrati
 import { nowISO } from '../ids.js';
 import { logger } from '../logger.js';
 import {
-  forceAppendJournalRecords, journalDir, readJournalRecords,
+  forceAppendJournalRecords, journalDir, readJournalRecords, resolveJournalMode,
   type JournalAppendInput, type EventItemTypeV2,
 } from './journal.js';
 
@@ -107,6 +107,17 @@ export function runGenesisMigration(options: GenesisOptions = {}): GenesisResult
     parkJournal(cwd, nowISO());
   }
 
+  // Genesis is the phase-1 (dual) seed (spec §4). Running it with the flag
+  // off lays the seed but mutations after will not dual-write — the journal
+  // then silently diverges from projections until BRAINCLAW_JOURNAL_MODE is
+  // flipped to dual. Warn so the operator flips the flag (or accepts the
+  // seed-then-flip sequence deliberately).
+  if (resolveJournalMode() === 'off') {
+    logger.warn(
+      'runGenesisMigration: BRAINCLAW_JOURNAL_MODE=off — genesis will seed the journal, but subsequent mutations will not dual-write, so the journal will diverge from projections until you set BRAINCLAW_JOURNAL_MODE=dual.',
+    );
+  }
+
   const backupPath = backupStore(cwd, nowISO());
 
   // genesis note first, then the backfill batch — all under one lock hold via
@@ -125,7 +136,13 @@ export function runGenesisMigration(options: GenesisOptions = {}): GenesisResult
     },
   };
   const written = forceAppendJournalRecords([genesisNote, ...backfill], cwd);
-  const genesisSeq = written[0]?.seq;
+  // Locate the genesis note by action+kind, not array position: appendLocked
+  // can prepend a `seq_repair` or `journal_note kind torn_tail_adjudicated`
+  // when meta is stale or the prior segment tail is torn, which would shift
+  // written[0] off the genesis note and report the wrong genesis_seq.
+  const genesisSeq = written.find(
+    r => r.action === 'journal_note' && (r.payload as { kind?: string } | undefined)?.kind === 'genesis',
+  )?.seq;
   logger.debug(`journal genesis: ${total} entities backfilled at seq ${genesisSeq}, backup ${backupPath}`);
 
   return { status: 'migrated', genesis_seq: genesisSeq, backfilled: total, backup_path: backupPath, per_family: perFamily };

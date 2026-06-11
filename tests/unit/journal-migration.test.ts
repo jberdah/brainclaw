@@ -110,4 +110,34 @@ describe('journal genesis migration + rollback (pln#543 step 4)', () => {
 
     assert.equal(rollbackJournal({ cwd: dir }).status, 'nothing_to_roll_back');
   });
+
+  // Regression: review of step 4 — genesis_seq used to be `written[0].seq`,
+  // which silently reported the wrong seq if appendLocked prepended a
+  // seq_repair (stale meta) or torn_tail_adjudicated note ahead of inputs.
+  // The contract is "seq of the journal_note kind genesis", regardless of
+  // what tail-validation injected first.
+  it('genesis_seq points at the genesis note even when appendLocked injects a seq_repair', () => {
+    const dir = tmpDir(); cleanup.push(dir);
+    seedStore(dir);
+    // Hand-stage a journal with stale meta + a tail record higher than
+    // meta.next_seq, so appendLocked observes meta-was-behind and prepends a
+    // seq_repair note before the inputs. (Bypassing the public writer is the
+    // simplest way to land a stale meta deterministically.)
+    const jdir = journalDir(dir);
+    fs.mkdirSync(jdir, { recursive: true });
+    const seedRec = { v: 2, seq: 5, ts: '2026-01-01T00:00:00.000Z', writer: 'w_seed', agent: 'seed', action: 'create', item_type: 'decision', item_id: 'dec_seed', entity_rev: 1, payload: { id: 'dec_seed' } };
+    fs.writeFileSync(path.join(jdir, 'seg-00000001.jsonl'), '\n' + JSON.stringify(seedRec) + '\n', 'utf-8');
+    fs.writeFileSync(path.join(jdir, 'meta.json'), JSON.stringify({ next_seq: 1, active_segment: 'seg-00000001.jsonl', entity_revs: {} }), 'utf-8');
+
+    const result = runGenesisMigration({ cwd: dir });
+    assert.equal(result.status, 'migrated');
+
+    const recs = readJournalRecords(dir);
+    const genesisNote = recs.find(r => r.action === 'journal_note' && (r.payload as { kind?: string })?.kind === 'genesis');
+    const seqRepair = recs.find(r => r.action === 'seq_repair');
+    assert.ok(genesisNote, 'genesis note must be present in the journal');
+    assert.ok(seqRepair, 'a seq_repair must have been injected (proves the regression is exercised)');
+    assert.equal(result.genesis_seq, genesisNote!.seq, 'result.genesis_seq points at the genesis note, not the seq_repair');
+    assert.notEqual(result.genesis_seq, seqRepair!.seq, 'and definitely not at the prepended seq_repair');
+  });
 });
