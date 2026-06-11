@@ -49,6 +49,20 @@ export function activate(context: vscode.ExtensionContext) {
   const treeProvider = cwd
     ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh(), handleStatusSummary)
     : undefined;
+  // pln#558 step 4 — share the BoardProvider's MCP client pool with the file
+  // decoration provider. Previously each provider spawned its own
+  // `brainclaw mcp` subprocess + ran 3 --version probes per project. Routing
+  // through one owner halves both, and (just as important) collapses the two
+  // separate MCP sessions per project — which the server treats as two
+  // distinct clients, doubling cursor consumption and reconciliation passes.
+  if (fileDecoProvider && treeProvider) {
+    fileDecoProvider.setMcpClientResolver((projectPath) => treeProvider.getMcpClient(projectPath));
+    // Kick the initial claim fetch now that the shared pool is wired.
+    fileDecoProvider.refresh();
+  } else if (fileDecoProvider) {
+    // No board provider (cwd-less workspace?) — still need the initial fetch.
+    fileDecoProvider.refresh();
+  }
   doctorOutput = vscode.window.createOutputChannel('Brainclaw Doctor');
   searchOutput = vscode.window.createOutputChannel('Brainclaw Search');
   memoryOutput = vscode.window.createOutputChannel('Brainclaw Memory');
