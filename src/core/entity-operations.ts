@@ -31,6 +31,7 @@ import { listActionRequired } from './actions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
 import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
+import { isObserverMode } from './observer-mode.js';
 import {
   deleteRuntimeNote,
   listRuntimeNotes,
@@ -224,6 +225,11 @@ export interface TransitionResult {
  */
 function loadAgentRunsWithReconciliation(cwd: string): unknown[] {
   const runs = listAgentRuns(cwd);
+  // Observer mode (BRAINCLAW_OBSERVER=1) suppresses the lazy reconciliation
+  // pass. A dashboard reading agent_run records must never transition them —
+  // that loop drove the 2026-06-10 lock storm (every poll could mutate every
+  // non-terminal run, holding the mutation lock under each transition).
+  if (isObserverMode()) return runs;
   for (const run of runs) {
     if (run.status === 'running') {
       try { reconcileDeadPidRunningAgentRunAtRead(run.id, cwd); } catch { /* best-effort: never block reads on reconciliation errors */ }

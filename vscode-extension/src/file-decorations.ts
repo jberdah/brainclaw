@@ -9,6 +9,8 @@ interface ClaimInfo {
   description?: string;
 }
 
+export type McpClientResolver = (projectPath: string) => Promise<McpClient | null>;
+
 export class BrainclawFileDecorationProvider implements vscode.FileDecorationProvider {
   private readonly _onDidChangeFileDecorations = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
   readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
@@ -16,14 +18,30 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
   private _projectRoots: string[];
   private _claimsByProject = new Map<string, ClaimInfo[]>();
   private _refreshTimer?: ReturnType<typeof setTimeout>;
+  // Local fallback cache — used ONLY when no shared resolver is set. With the
+  // resolver in place (BoardProvider as MCP-client owner, pln#558 step 4)
+  // these maps stay empty; one process per project instead of two.
   private _mcpClients = new Map<string, McpClient>();
   private _mcpResolved = new Map<string, boolean>();
+  private _externalResolver?: McpClientResolver;
 
   constructor(cwd: string, projects: readonly Pick<BoardProject, 'path'>[] = []) {
     const roots = projects.length > 0 ? projects.map((project) => project.path) : [cwd];
     this._projectRoots = [...new Set(roots.map((root) => path.resolve(root)))]
       .sort((left, right) => right.length - left.length);
-    this._refreshClaims();
+    // Defer the first refresh so the caller can wire setMcpClientResolver()
+    // before we touch the MCP layer (otherwise we'd spawn a private subprocess
+    // and the shared-pool optimisation wouldn't apply to the initial fetch).
+  }
+
+  /**
+   * Share the MCP-client pool with the board tree provider (pln#558 step 4).
+   * Once set, this provider stops spawning its own `brainclaw mcp` subprocess
+   * and reuses the one BoardProvider already manages — halving the process
+   * count, the --version probes, and the open MCP sessions per project.
+   */
+  setMcpClientResolver(resolver: McpClientResolver): void {
+    this._externalResolver = resolver;
   }
 
   refresh(): void {
@@ -63,6 +81,12 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
   }
 
   private async _getOrCreateClient(projectRoot: string): Promise<McpClient | undefined> {
+    // Prefer the shared resolver if BoardProvider has been wired in — single
+    // MCP process per project, single --version probe, single cursor.
+    if (this._externalResolver) {
+      const shared = await this._externalResolver(projectRoot);
+      return shared ?? undefined;
+    }
     if (this._mcpResolved.get(projectRoot)) return this._mcpClients.get(projectRoot);
     this._mcpResolved.set(projectRoot, true);
     const bclaw = await resolveBrainclawCmd(projectRoot);

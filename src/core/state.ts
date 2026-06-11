@@ -203,10 +203,22 @@ function persistStateUnlocked(state: State, cwd: string, options: PersistStateOp
     agent: 'system',
     summary: options.eventSummary,
   }, cwd);
-  commitMemoryChange(options.commitMessage ?? 'state update', cwd);
+  // NOTE (pln#558 step 2): the git commit and refreshLiveCompanions used to
+  // run here, INSIDE the mutation lock. A single persistState was holding
+  // the lock for >5s on Juan's machine (full-store rewrite + git add -A +
+  // git commit + live-companion refresh), which serialized every other
+  // writer. They are now invoked by persistState / mutateState AFTER the
+  // lock releases — see runPostWriteHooks below. The critical section is
+  // now writes-only; commit / companion-refresh are best-effort observers.
+}
 
-  // Auto-refresh live companion files (Tier B/C agents) after state mutations.
-  // Non-fatal: failures are logged but don't break the mutation.
+function runPostWriteHooks(cwd: string, commitMessage: string): void {
+  // git add + git commit. Safe outside the lock because (a) git itself
+  // serializes concurrent index access via .git/index.lock, (b) the
+  // implementation already swallows failures (see memory-git.ts), and
+  // (c) the commit is an audit trail, not the data itself.
+  try { commitMemoryChange(commitMessage, cwd); } catch { /* best-effort */ }
+  // Live companion files (Tier B/C agent surfaces). Already best-effort.
   try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
 }
 
@@ -276,6 +288,7 @@ export function persistState(state: State, cwd?: string, options: PersistStateOp
   mutate({ cwd: effectiveCwd }, () => {
     persistStateUnlocked(state, effectiveCwd, options);
   });
+  runPostWriteHooks(effectiveCwd, options.commitMessage ?? 'state update');
 }
 
 export function mutateState<T>(
@@ -284,10 +297,12 @@ export function mutateState<T>(
   options: PersistStateOptions = {},
 ): T {
   const effectiveCwd = cwd ?? process.cwd();
-  return mutate({ cwd: effectiveCwd }, () => {
+  const result = mutate({ cwd: effectiveCwd }, () => {
     const state = loadState(effectiveCwd);
-    const result = mutateFn(state);
+    const value = mutateFn(state);
     persistStateUnlocked(state, effectiveCwd, { ...options, deleteMissing: true });
-    return result;
+    return value;
   });
+  runPostWriteHooks(effectiveCwd, options.commitMessage ?? 'state update');
+  return result;
 }

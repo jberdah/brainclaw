@@ -16,6 +16,7 @@ import {
   type AgentTrustLevel,
 } from './schema.js';
 import { logger } from './logger.js';
+import { isObserverMode } from './observer-mode.js';
 
 // agents/ stays at top level in entity model (already entity-aligned)
 const TRUST_ORDER: AgentTrustLevel[] = ['observer', 'contributor', 'trusted', 'curator'];
@@ -254,6 +255,27 @@ export function findAgentIdentityById(agentId: string, cwd?: string, preferredDi
 export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentIdentityDocument {
   const normalizedCapabilities = normalizeCapabilities(input.capabilities);
   const existing = findAgentIdentityByName(input.agentName, input.cwd, input.preferredDirName);
+
+  // Observer mode (BRAINCLAW_OBSERVER=1) refuses to mint or mutate identity
+  // on the disk. A dashboard is not an agent — it must never auto-register
+  // (the 2026-06-10 leak where the VS Code extension impersonated whichever
+  // shell-parent agent VS Code was launched from). Return existing read-only,
+  // or a transient synthetic identity that callers can use without persisting.
+  if (isObserverMode()) {
+    if (existing) return existing;
+    const normalizedNewName = normalizeAgentName(input.agentName);
+    return {
+      schema_version: 2,
+      version: 1,
+      agent_id: generateAgentId(),
+      agent_name: normalizedNewName,
+      created_at: nowISO(),
+      kind: input.kind ?? 'unknown',
+      trust_level: input.trustLevel ?? 'observer',
+      capabilities: normalizedCapabilities,
+      ...(input.contextProfile ? { context_profile: input.contextProfile as AgentIdentityDocument['context_profile'] } : {}),
+    };
+  }
 
   if (existing) {
     let updated: AgentIdentityDocument = existing;

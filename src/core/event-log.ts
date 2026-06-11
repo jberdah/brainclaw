@@ -3,6 +3,7 @@ import path from 'node:path';
 import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
 import { logger } from './logger.js';
+import { isObserverMode } from './observer-mode.js';
 
 const EVENT_LOG_FILE = 'events.jsonl';
 const CURSORS_DIR = '.cursors';
@@ -260,8 +261,13 @@ export function readUnseenEvents(reader: string | EventLogReader, cwd?: string):
     }
   }
 
-  // Update cursor
-  saveCursor(effectiveReader, { offset: stat.size, last_read: nowISO() }, cwd);
+  // Update cursor. Observer mode (BRAINCLAW_OBSERVER=1) skips this — the
+  // dashboard impersonating an agent must not consume that agent's cursor
+  // (the 2026-06-10 leak where the extension drained Juan's claude-code
+  // unseen-events queue on every poll).
+  if (!isObserverMode()) {
+    saveCursor(effectiveReader, { offset: stat.size, last_read: nowISO() }, cwd);
+  }
 
   return events;
 }

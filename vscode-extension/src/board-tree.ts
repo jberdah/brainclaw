@@ -162,7 +162,11 @@ interface SearchResultItem {
   score?: number;
 }
 
-const SECTION_CACHE_TTL_MS = 30_000;
+// pln#558 step 5 — kept slightly above the default poll interval (30s). Equal
+// TTL and poll forced a cold refetch on every cycle for every expanded
+// section. The cache must outlive at least one full poll so the next refresh
+// can return cached data while the background fetch runs.
+const SECTION_CACHE_TTL_MS = 45_000;
 
 function freshnessIcon(freshness: Freshness): vscode.ThemeIcon {
   switch (freshness) {
@@ -1419,12 +1423,19 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         this._setSectionBoard(normalizedPath, sectionId, board);
         return board;
       })
-      .catch(async (error) => {
+      .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        const fallback = await this._loadFullBoardForProject(normalizedPath);
-        if (fallback) {
-          this._setSectionBoard(normalizedPath, sectionId, fallback);
-          return fallback;
+        // NEVER escalate to the full-board load here (pln#558 step 3). That
+        // fallback was the contention amplifier: a section load failed
+        // because the store was under lock, so we fired the HEAVIEST call
+        // against the same store ("contention engendre contention"). Reuse
+        // the cached board if we have one and surface the error so the next
+        // poll retries the lightweight per-section fetch — the pln#453
+        // "never blank the tree on refresh" pattern, applied to errors.
+        const stale = this._getSectionCacheEntry(normalizedPath, sectionId);
+        if (stale?.board) {
+          this._setSectionBoard(normalizedPath, sectionId, stale.board, message);
+          return stale.board;
         }
         this._setSectionBoard(normalizedPath, sectionId, null, message);
         return null;
@@ -1526,35 +1537,26 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.SYSTEM: {
-        // Same self-sufficient pattern as BACKLOG. Linked projects + incoming
-        // signals still come from the full-board snapshot because they are
-        // not reachable via a canonical `bclaw_find` yet — use the cached
-        // project board if present and fall back to a one-off load ONLY if
-        // nothing is cached (no cascading fire in the common case).
+        // pln#558 step 3 — linked_projects + incoming_signals come from the
+        // dedicated lightweight endpoint (bclaw_context kind='cross_project')
+        // instead of falling back to kind='board'. That fallback was paying
+        // for the whole coordination snapshot (claims, plans, agents,
+        // handoffs, reputation, …) just to render two summary lists.
         // runtime_note limit is intentionally large: the filter at render
         // time drops ~99% of them (session-lifecycle noise, agent-runtime
-        // tracking). Fetching 200 leaves a realistic number of human-facing
-        // notes after filtering. Compaction (pln#436) will trim this at the
-        // source eventually.
-        const [autoCandidates, runtimeNotes, handoffs] = await Promise.all([
+        // tracking). Compaction (pln#436) will trim this at the source.
+        const [autoCandidates, runtimeNotes, handoffs, crossProject] = await Promise.all([
           this._findEntities(client, 'candidate', { status: 'pending', auto_generated: true, limit: 100, includeLegacy: true }),
           this._findEntities(client, 'runtime_note', { limit: 200, includeLegacy: true }),
           this._findEntities(client, 'handoff', { limit: 50, includeLegacy: true }),
+          client.callTool('bclaw_context', { kind: 'cross_project' })
+            .catch(() => ({} as Record<string, unknown>)),
         ]);
         board.pending_candidates = autoCandidates;
         board.runtime_notes = runtimeNotes;
         board.open_handoffs = handoffs;
-        const cached = this._getBoardForPath(projectPath);
-        if (cached && !cached.summary) {
-          board.linked_projects = cached.linked_projects ?? [];
-          board.incoming_signals = cached.incoming_signals ?? [];
-        } else {
-          const loadedBoard = await this._loadFullBoardForProject(projectPath);
-          if (loadedBoard) {
-            board.linked_projects = loadedBoard.linked_projects ?? [];
-            board.incoming_signals = loadedBoard.incoming_signals ?? [];
-          }
-        }
+        board.linked_projects = (crossProject as { linked_projects?: any[] }).linked_projects ?? [];
+        board.incoming_signals = (crossProject as { incoming_signals?: any[] }).incoming_signals ?? [];
         return board;
       }
       case SECTION.PLANS: {
