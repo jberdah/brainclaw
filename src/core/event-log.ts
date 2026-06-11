@@ -4,6 +4,7 @@ import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
 import { logger } from './logger.js';
 import { isObserverMode } from './observer-mode.js';
+import { appendJournalRecords, resolveJournalMode } from './events/journal.js';
 
 const EVENT_LOG_FILE = 'events.jsonl';
 const CURSORS_DIR = '.cursors';
@@ -101,6 +102,45 @@ export function appendEvent(event: Partial<MemoryEvent> & { action: EventAction;
     fs.appendFileSync(logPath, line + '\n', 'utf-8');
   } catch (err) {
     logger.debug('Failed to write event log entry:', err);
+  }
+  dualWriteToJournal(event, cwd);
+}
+
+/**
+ * v2 journal dual-write (pln#543 step 2). Mirrors every v1 emission into
+ * the segmented journal when BRAINCLAW_JOURNAL_MODE=dual; a no-op when off.
+ * Mapping per spec §2.1.1: the coarse `update/upgrade/rollback : state`
+ * store event becomes a `journal_note` kind `store_marker` (the per-entity
+ * events it stands for arrive with step 3 dirty-tracking).
+ */
+function dualWriteToJournal(event: Partial<MemoryEvent> & { action: EventAction; item_type: EventItemType }, cwd?: string): void {
+  try {
+    if (resolveJournalMode() === 'off') return;
+    const base = {
+      agent: event.agent,
+      agent_id: event.agent_id,
+      session_id: event.session_id,
+      user: event.user,
+      summary: event.summary,
+      ts: event.ts,
+    };
+    if (event.item_type === 'state') {
+      appendJournalRecords([{
+        ...base,
+        action: 'journal_note',
+        item_type: 'journal',
+        payload: { kind: 'store_marker', op: event.action, detail: event.summary },
+      }], cwd);
+      return;
+    }
+    appendJournalRecords([{
+      ...base,
+      action: event.action,
+      item_type: event.item_type,
+      item_id: event.item_id,
+    }], cwd);
+  } catch (err) {
+    logger.debug('journal dual-write skipped:', err);
   }
 }
 
