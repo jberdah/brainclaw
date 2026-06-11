@@ -501,11 +501,36 @@ export function handleMcpReadToolCall(
           return !plan || plan.status === 'todo';
         }).length
       : 0;
+    // pln#559 step 3 — attention_required is now the FULL composite the
+    // Attention section already displays in the extension: pending actions
+    // + non-auto (human-review) candidates + blocked assignments + stale
+    // runs. The 2026-06-10 calibration: the badge previously read only
+    // pendingActions and chronically undercounted while the Attention
+    // section showed N >> badge. The badge must NEVER be smaller than the
+    // section header it represents.
+    const pendingCandidates = listCandidates('pending', cwd);
+    const pendingHumanCandidates = pendingCandidates.filter((c) => resolvedSource(c) !== 'auto');
+    const allAssignments = listAssignments(cwd);
+    const blockedAssignments = allAssignments.filter((a) => a.status === 'blocked');
+    const allRuns = listAgentRuns(cwd);
+    const staleRuns = allRuns.filter((r) =>
+      r.status === 'blocked' || r.status === 'waiting_input' || r.status === 'failed');
+    const attentionRequiredComposite =
+      pendingActions.length +
+      pendingHumanCandidates.length +
+      blockedAssignments.length +
+      staleRuns.length;
     const summary = {
       project_id: config.project_id,
       agent,
       current_host: currentHost,
-      attention_required: pendingActions.length,
+      attention_required: attentionRequiredComposite,
+      attention_breakdown: {
+        pending_actions: pendingActions.length,
+        pending_human_candidates: pendingHumanCandidates.length,
+        blocked_assignments: blockedAssignments.length,
+        stale_runs: staleRuns.length,
+      },
       in_progress: activeClaims.length,
       plans: {
         in_progress: state.plan_items.filter((p) => p.status === 'in_progress').length,

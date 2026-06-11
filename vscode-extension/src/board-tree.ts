@@ -101,6 +101,12 @@ interface BoardSummaryCounts {
   actions: number;
   agents: number;
   sessions: number;
+  /**
+   * pln#559 step 3 — failed agent_runs visible in the current snapshot.
+   * Drives the 'assignment failed' toast in `notifications: all` mode (D7)
+   * so the operator hears about silent_deaths without watching the tree.
+   */
+  failedRuns?: number;
 }
 
 export type BrainclawStatusSummary = BoardSummaryCounts;
@@ -136,7 +142,69 @@ interface BoardData {
   summary?: boolean;
   /** Pre-computed counts populated in summary mode instead of full arrays. */
   _counts?: BoardSummaryCounts;
+  /**
+   * pln#559 — assignments in a terminal state within the recent window
+   * (RECENTLY_TERMINAL_WINDOW_MS) rendered under "Recently terminal" so a
+   * worker that died (faussement-expiré, silent_death, completed) doesn't
+   * just vanish from the tree. The 2026-06-10 calibration: 3 false TTL
+   * expirations would have been invisible without this list.
+   */
+  recently_terminal_assignments?: any[];
+  /**
+   * pln#559 — bclaw_dispatch_status payload keyed by assignment_id.
+   * Evidence-based replacement for the administrative `status` field that
+   * the 2026-06-10 incidents proved wrong 4× in one day. Carries verdict
+   * (diagnosis.health), digest (commits_ahead/dirty_tracked/fs activity)
+   * and the verbatim recommended_next_action for the tooltip.
+   */
+  dispatch_statuses?: Record<string, DispatchStatusLite>;
+  /** pln#559 — active loops, rendered as their own node group in Live activity. */
+  active_loops?: any[];
 }
+
+/**
+ * pln#559 — lite mirror of src/core/dispatch-status.ts DispatchStatus so the
+ * extension can consume the bclaw_dispatch_status structuredContent without
+ * pulling the full server types (the extension package has no access to the
+ * project's src/). Only the fields the tree actually reads are declared.
+ */
+interface DispatchStatusLite {
+  diagnosis?: {
+    health?: string;
+    summary?: string;
+    recommended_next_action?: string;
+  };
+  runtime?: {
+    pid?: number;
+    pid_alive?: boolean;
+    last_fs_activity_ms?: number;
+    commits_ahead?: number;
+    dirty_tracked?: number;
+    lane_result?: { status: string; summary: string };
+    log_files?: {
+      stdout?: { path: string; exists: boolean };
+      stderr?: { path: string; exists: boolean };
+    };
+  };
+  entities?: {
+    assignment_id?: string;
+    claim_id?: string;
+    loop_id?: string;
+    run_id?: string;
+  };
+}
+
+/**
+ * pln#559 — only assignments terminal within this window appear under
+ * "Recently terminal". Long enough to catch a refresh cycle after the
+ * sweep that buried the worker, short enough that the list doesn't grow
+ * into a history view. 6h matches the operator session length the
+ * 2026-06-10 incidents stretched across.
+ */
+const RECENTLY_TERMINAL_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/** pln#559 — cap of dispatch_status calls per refresh (git execs aren't cheap on Windows). */
+const DISPATCH_STATUS_BUDGET = 10;
 
 interface ListedPlan {
   id: string;
@@ -368,6 +436,52 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   public async exec(command: string, cwd?: string): Promise<void> {
     const targetCwd = this._normalizePath(cwd ?? this._rootProjectPath ?? this._workspaceRoot);
     await this._execViaMcp(command, targetCwd);
+  }
+
+  /**
+   * pln#559 step 4 — fallback resolver for `brainclaw.openWorktree`. When the
+   * row carries no cached worktree_path (summary mode / older snapshot), look
+   * the assignment up in the cached board and return its worktree_path. Best-
+   * effort: returns undefined when the tree has no fix for this item.
+   */
+  public async resolveWorktreePath(item: BrainclawTreeItem): Promise<string | undefined> {
+    if (!item.itemId || !item.projectPath) return undefined;
+    const board = this._getBoardForPath(item.projectPath);
+    if (!board) return undefined;
+    const haystack = [
+      ...(board.active_assignments ?? []),
+      ...(board.recently_terminal_assignments ?? []),
+      ...(board.active_claims ?? []),
+      ...(board.active_runs ?? []),
+    ];
+    const hit = haystack.find((e: any) => e.id === item.itemId);
+    return hit?.worktree_path;
+  }
+
+  /**
+   * pln#559 step 4 — canonical log paths for an assignment-shaped row:
+   * `<project>/.brainclaw/coordination/runtime/log/<asgn>.{stdout,stderr}.log`.
+   * Reproduces the layout dispatch-status.ts:442 builds against, so the
+   * triage shortcut works even when the live row never received a
+   * dispatch_status payload (older brainclaw, or assignment outside the
+   * DISPATCH_STATUS_BUDGET).
+   */
+  public async resolveCapturedLogPaths(item: BrainclawTreeItem): Promise<string[]> {
+    if (!item.itemId || !item.projectPath) return [];
+    // Assignments and runs both live under the same .brainclaw runtime path,
+    // keyed by assignment_id. For a run-shaped item, look up the
+    // assignment_id; otherwise the itemId IS the assignment_id.
+    let assignmentId = item.itemId;
+    const board = this._getBoardForPath(item.projectPath);
+    if (board && item.contextValue === 'run') {
+      const run = (board.active_runs ?? []).find((r: any) => r.id === item.itemId);
+      if (run?.assignment_id) assignmentId = run.assignment_id;
+    }
+    const root = path.join(this._normalizePath(item.projectPath), '.brainclaw', 'coordination', 'runtime', 'log');
+    return [
+      path.join(root, `${assignmentId}.stdout.log`),
+      path.join(root, `${assignmentId}.stderr.log`),
+    ];
   }
 
   public async quickCapture(text: string): Promise<void> {
@@ -813,14 +927,28 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return [join(actions), join(cands), join(blocked), join(stale), join(hints)].join('||');
       }
       case SECTION.IN_PROGRESS: {
+        const ds = sectionBoard.dispatch_statuses ?? {};
+        // pln#559 — include the evidence digest in the signature so the tree
+        // refreshes when health flips (e.g. healthy → silent_death) even if
+        // the administrative status hasn't changed.
+        const evidenceKey = (id: string): string => {
+          const d = ds[id];
+          if (!d?.diagnosis) return '-';
+          const rt = d.runtime ?? {};
+          return `${d.diagnosis.health ?? '-'}:${rt.commits_ahead ?? '-'}:${rt.dirty_tracked ?? '-'}:${rt.pid_alive ?? '-'}`;
+        };
         const claims = activeClaims(sectionBoard).map((c: any) => `cl:${c.id}:${c.agent}:${c.scope}:${c.updated_at ?? c.created_at}`);
         const asgs = activeAssignments(sectionBoard)
           .filter((a: any) => a.status !== 'blocked')
-          .map((a: any) => `as:${a.id}:${a.status}:${a.last_heartbeat_at}`);
+          .map((a: any) => `as:${a.id}:${a.status}:${a.last_heartbeat_at}:${evidenceKey(a.id)}`);
         const runs = activeRuns(sectionBoard)
           .filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed')
           .map((r: any) => `ru:${r.id}:${r.status}:${r.attempt_index}:${r.last_event_at}`);
-        return [join(claims), join(asgs), join(runs)].join('||');
+        const terminal = (sectionBoard.recently_terminal_assignments ?? [])
+          .map((a: any) => `at:${a.id}:${a.status}:${a.updated_at}:${evidenceKey(a.id)}`);
+        const loops = (sectionBoard.active_loops ?? [])
+          .map((l: any) => `lp:${l.id}:${l.status}:${l.current_phase}:${l.iteration_count ?? 0}`);
+        return [join(claims), join(asgs), join(runs), join(terminal), join(loops)].join('||');
       }
       case SECTION.SPRINTS: {
         const items = (sectionBoard.active_sequence?.items ?? []) as any[];
@@ -965,9 +1093,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         claims: (raw['in_progress'] as number | undefined) ?? 0,
         assignments: 0,
         runs: 0,
+        // pln#559 step 3 — the server now returns a composite attention_required
+        // (pending actions + non-auto candidates + blocked + stale runs) so this
+        // value already matches what the Attention section header displays.
         actions: (raw['attention_required'] as number | undefined) ?? 0,
         agents: (raw['agents'] as number | undefined) ?? 0,
         sessions: (raw['sessions'] as number | undefined) ?? 0,
+        // failedRuns is best-effort from the summary path (the lightweight
+        // endpoint doesn't return it yet); aggregator + Live activity load
+        // populate the real count when the full section is fetched.
+        failedRuns: ((raw['attention_breakdown'] as any) ?? {}).stale_runs ?? 0,
       },
     };
   }
@@ -1065,6 +1200,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       actions: activeActions(board).length,
       agents: workingAgents(board).length,
       sessions: openSessions(board),
+      failedRuns: activeRuns(board).filter((r: any) => r.status === 'failed').length,
     };
   }
 
@@ -1077,6 +1213,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       actions: 0,
       agents: 0,
       sessions: 0,
+      failedRuns: 0,
     };
 
     const boards: BoardData[] = [];
@@ -1098,6 +1235,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       total.actions += summary.actions;
       total.agents += summary.agents;
       total.sessions += summary.sessions;
+      total.failedRuns = (total.failedRuns ?? 0) + (summary.failedRuns ?? 0);
     }
 
     return total;
@@ -1499,16 +1637,69 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         const TERMINAL_ASSIGNMENT_STATUSES = new Set([
           'completed', 'expired', 'rerouted', 'cancelled', 'failed', 'timed_out',
         ]);
-        const [claims, assignments, runs] = await Promise.all([
+        const [claims, assignments, runs, loopsResult] = await Promise.all([
           this._findEntities(client, 'claim', { status: 'active', limit: 100, includeLegacy: true }),
           this._findEntities(client, 'assignment', { limit: 100, includeLegacy: true }),
           this._findEntities(client, 'agent_run', { limit: 100, includeLegacy: true }),
+          // pln#559 — surface active loops in the tree (the 2026-06-10 review
+          // loop was invisible because nothing rendered loops). Loops aren't
+          // a bclaw_find entity; the canonical surface is bclaw_loop(intent='list').
+          // Best-effort: pre-loop brainclaw versions return an error, treat as empty.
+          client.callTool('bclaw_loop', { intent: 'list', limit: 50 })
+            .then((r) => (Array.isArray((r as any).loops) ? (r as any).loops : []) as any[])
+            .catch(() => [] as any[]),
         ]);
         board.active_claims = claims;
-        board.active_assignments = assignments.filter((a: any) =>
+        const liveAssignments = assignments.filter((a: any) =>
           !TERMINAL_ASSIGNMENT_STATUSES.has(a.status));
+        board.active_assignments = liveAssignments;
         board.active_runs = runs.filter((run: any) =>
           !TERMINAL_RUN_STATUSES.has(run.status));
+        board.active_loops = loopsResult.filter((l: any) =>
+          l.status === 'open' || l.status === 'paused');
+
+        // pln#559 step 2 — terminal-within-window assignments rendered under
+        // "Recently terminal" so a worker that died doesn't vanish without
+        // trace (the 4 false-expirations of 2026-06-10).
+        const now = Date.now();
+        board.recently_terminal_assignments = assignments
+          .filter((a: any) => TERMINAL_ASSIGNMENT_STATUSES.has(a.status))
+          .filter((a: any) => {
+            const tsRaw =
+              a.completed_at ?? a.expired_at ?? a.failed_at ?? a.timed_out_at ??
+              a.rerouted_at ?? a.cancelled_at ?? a.updated_at ?? a.created_at;
+            if (!tsRaw) return false;
+            const ts = Date.parse(tsRaw);
+            return Number.isFinite(ts) && now - ts <= RECENTLY_TERMINAL_WINDOW_MS;
+          })
+          .sort((a: any, b: any) => {
+            const tsA = Date.parse(a.updated_at ?? a.created_at ?? '0') || 0;
+            const tsB = Date.parse(b.updated_at ?? b.created_at ?? '0') || 0;
+            return tsB - tsA;
+          });
+
+        // pln#559 step 1 — evidence overrides administrative status: fetch
+        // bclaw_dispatch_status for live assignments first, then recently-
+        // terminal ones, capped at DISPATCH_STATUS_BUDGET. The facade does
+        // every entity resolution itself, so one call per assignment is fine.
+        const enrichTargets = [
+          ...liveAssignments,
+          ...board.recently_terminal_assignments,
+        ].slice(0, DISPATCH_STATUS_BUDGET);
+        const statuses: Record<string, DispatchStatusLite> = {};
+        if (enrichTargets.length > 0) {
+          const results = await Promise.allSettled(
+            enrichTargets.map((a: any) =>
+              client.callTool('bclaw_dispatch_status', { target_id: a.id, tail_log_lines: 0 })),
+          );
+          enrichTargets.forEach((a: any, i: number) => {
+            const r = results[i];
+            if (r.status === 'fulfilled' && r.value && typeof r.value === 'object') {
+              statuses[a.id] = r.value as DispatchStatusLite;
+            }
+          });
+        }
+        board.dispatch_statuses = statuses;
         return board;
       }
       case SECTION.SPRINTS:
@@ -1633,7 +1824,9 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const claims = activeClaims(liveSectionBoard ?? board);
     const runningAssignments = activeAssignments(liveSectionBoard ?? board).filter((a: any) => a.status !== 'blocked');
     const activeRunsList = activeRuns(liveSectionBoard ?? board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
-    const liveArrayCount = claims.length + runningAssignments.length + activeRunsList.length;
+    // pln#559 — loops count as live work too: they were invisible before.
+    const liveLoops = (liveSectionBoard?.active_loops ?? board.active_loops ?? []) as any[];
+    const liveArrayCount = claims.length + runningAssignments.length + activeRunsList.length + liveLoops.length;
     const summaryLiveCount = board.summary && board._counts
       ? board._counts.claims + board._counts.assignments + board._counts.runs
       : 0;
@@ -1821,12 +2014,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _buildInProgressChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
     // Work only — no roster. Claims + running assignments + running agent_runs.
     const items: BrainclawTreeItem[] = [];
+    const dispatchStatuses = board.dispatch_statuses;
 
     items.push(...this._buildClaims(board, projectPath));
 
     const runningAssignments = activeAssignments(board).filter((a: any) => a.status !== 'blocked');
     if (runningAssignments.length > 0) {
-      items.push(...this._buildAssignmentItems(runningAssignments, projectPath));
+      items.push(...this._buildAssignmentItems(runningAssignments, projectPath, { dispatchStatuses }));
     }
 
     const activeRunsList = activeRuns(board).filter((r: any) => r.status !== 'blocked' && r.status !== 'waiting_input' && r.status !== 'failed');
@@ -1834,8 +2028,88 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       items.push(...this._buildRunItems(activeRunsList, projectPath));
     }
 
+    // pln#559 step 5 — loops as first-class entries in Live activity. Previously
+    // invisible: the 2026-06-10 review loop ran without ANY surface, leaving
+    // the operator to discover it via inbox messages.
+    const loops = (board.active_loops ?? []) as any[];
+    if (loops.length > 0) {
+      items.push(...this._buildLoopItems(loops, projectPath));
+    }
+
+    // pln#559 step 2 — terminal-within-window rows under a divider. The
+    // 2026-06-10 false-expirations would have been invisible without this.
+    const terminal = (board.recently_terminal_assignments ?? []) as any[];
+    if (terminal.length > 0) {
+      items.push(this._sectionDivider(
+        `Recently terminal (${terminal.length})`,
+        `recently-terminal:${projectPath}`,
+      ));
+      items.push(...this._buildAssignmentItems(terminal, projectPath, { dispatchStatuses, terminal: true }));
+    }
+
     if (items.length === 0) return [this._emptyLeaf('No active claims, assignments, or runs')];
     return items;
+  }
+
+  /**
+   * pln#559 step 2 — non-expandable header used as a visual separator inside
+   * a section (between live and terminal rows). Distinct icon so it doesn't
+   * read like a real entity.
+   */
+  private _sectionDivider(label: string, treeId: string): BrainclawTreeItem {
+    return new BrainclawTreeItem(
+      label,
+      vscode.TreeItemCollapsibleState.None,
+      undefined,
+      new vscode.ThemeIcon('list-flat'),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'leaf',
+      treeId,
+    );
+  }
+
+  /**
+   * pln#559 step 5 — render active loops (one row per loop). Carries the
+   * iteration / current phase so the operator sees the work without leaving
+   * the tree. Tooltip lists the slots and their statuses.
+   */
+  private _buildLoopItems(loops: any[], projectPath: string): BrainclawTreeItem[] {
+    return loops.map((loop: any) => {
+      const phaseName = loop.current_phase ?? '?';
+      const iter = typeof loop.iteration_count === 'number' ? loop.iteration_count : 0;
+      const slots: any[] = Array.isArray(loop.slots) ? loop.slots : [];
+      const slotSummary = slots
+        .map((s) => `${s.role ?? s.id ?? '?'}=${s.status ?? '?'}`)
+        .join(', ');
+      const desc = `${loop.kind ?? 'loop'} · phase=${phaseName} · iter=${iter}`;
+      const tooltipLines: string[] = [
+        `Loop: ${loop.id}`,
+        `Title: ${loop.title ?? ''}`,
+        `Kind: ${loop.kind ?? '?'}`,
+        `Status: ${loop.status ?? '?'}`,
+        `Phase: ${phaseName} (iteration ${iter})`,
+      ];
+      if (slotSummary) tooltipLines.push(`Slots: ${slotSummary}`);
+      if (loop.goal) tooltipLines.push('', `Goal: ${loop.goal}`);
+      const icon = loop.status === 'paused' ? 'debug-pause' : 'sync';
+      return new BrainclawTreeItem(
+        loop.title ?? loop.id,
+        vscode.TreeItemCollapsibleState.None,
+        desc,
+        new vscode.ThemeIcon(icon),
+        tooltipLines.join('\n'),
+        'loop',
+        loop.id,
+        projectPath,
+        undefined,
+        'leaf',
+        `loop:${projectPath}:${loop.id}`,
+      );
+    });
   }
 
   private _buildBacklogChildren(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -2034,11 +2308,17 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     return claims.map((claim: any) => {
       const ago = claim.created_at ? timeAgo(claim.created_at) : '';
       const summary = `Claimed by: ${claim.agent}\nScope: ${claim.scope}\nDescription: ${claim.description ?? ''}\nSince: ${ago}`;
+      // pln#559 finitions — D8: claims older than STALE_MS.claim (4h) dim
+      // out. A 16h-old claim is almost always a dangling one from a
+      // crashed worker — surfacing the staleness invites release.
+      const claimReference = claim.updated_at ?? claim.created_at;
+      const stale = isStale(claimReference, STALE_MS.claim);
+      const description = stale ? `by ${claim.agent} · ${ago} · stale` : `by ${claim.agent} · ${ago}`;
       const item = new BrainclawTreeItem(
-        claim.scope,
+        stale ? `· ${claim.scope}` : claim.scope,
         vscode.TreeItemCollapsibleState.None,
-        `by ${claim.agent} · ${ago}`,
-        new vscode.ThemeIcon('shield'),
+        description,
+        new vscode.ThemeIcon('shield', stale ? new vscode.ThemeColor('disabledForeground') : undefined),
         summary,
         'claim',
         claim.id,
@@ -2052,35 +2332,157 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     });
   }
 
-  private _buildAssignmentItems(assignments: any[], projectPath: string): BrainclawTreeItem[] {
+  /**
+   * pln#559 step 1 — build the "evidence digest" line that replaces the
+   * administrative `status · agent · last_heartbeat` triplet that lied 4×
+   * on 2026-06-10. The verdict comes from dispatch_status.diagnosis.health,
+   * the digest from runtime.commits_ahead/dirty_tracked + last_fs_activity.
+   * Returns undefined when no status is available (caller falls back).
+   */
+  private _formatDispatchDigest(status: DispatchStatusLite | undefined): string | undefined {
+    if (!status?.diagnosis) return undefined;
+    const health = status.diagnosis.health ?? 'unknown';
+    const parts: string[] = [health];
+    const rt = status.runtime ?? {};
+    if (typeof rt.commits_ahead === 'number') {
+      const dirty = rt.dirty_tracked ?? 0;
+      const clean = rt.commits_ahead > 0 && dirty === 0;
+      parts.push(`${rt.commits_ahead}↑${clean ? ' clean' : dirty > 0 ? ` · ${dirty} dirty` : ''}`);
+    }
+    if (typeof rt.last_fs_activity_ms === 'number') {
+      const s = Math.max(0, Math.round(rt.last_fs_activity_ms / 1000));
+      parts.push(s < 60 ? `fs ${s}s` : s < 3600 ? `fs ${Math.round(s / 60)}m` : `fs ${Math.round(s / 3600)}h`);
+    }
+    if (rt.lane_result) {
+      parts.push(`lane-result:${rt.lane_result.status}`);
+    }
+    if (rt.pid_alive === false) parts.push('pid dead');
+    return parts.join(' · ');
+  }
+
+  private _buildAssignmentItems(
+    assignments: any[],
+    projectPath: string,
+    options?: { dispatchStatuses?: Record<string, DispatchStatusLite>; terminal?: boolean },
+  ): BrainclawTreeItem[] {
+    const statuses = options?.dispatchStatuses;
+    const terminalRow = options?.terminal === true;
     return assignments.map((assignment: any) => {
       const heartbeatAgo = assignment.last_heartbeat_at ? timeAgo(assignment.last_heartbeat_at) : 'no heartbeat yet';
-      const icon = assignment.status === 'started'
-        ? 'play-circle'
-        : assignment.status === 'accepted'
-          ? 'check'
-          : assignment.status === 'offered'
-            ? 'mail'
-            : assignment.status === 'blocked'
-              ? 'warning'
-              : 'circle-outline';
-      const label = assignment.description?.slice(0, 80) || assignment.scope || assignment.id;
-      const plan = assignment.plan_id ? `\nPlan: ${assignment.plan_id}` : '';
+      const status = statuses?.[assignment.id];
+      const digest = this._formatDispatchDigest(status);
+      const health = status?.diagnosis?.health;
 
-      return new BrainclawTreeItem(
-        label,
+      // Icon priority: evidence-based health > administrative status.
+      // A terminal-but-contradicted assignment (status=expired but commits ahead)
+      // surfaces with a warning so the operator catches the registry lie at
+      // a glance — the 2026-06-10 trap.
+      const evidenceIcon = health === 'silent_death'
+        ? 'error'
+        : health === 'stalled'
+          ? 'warning'
+          : health === 'healthy'
+            ? 'play-circle'
+            : health === 'terminal'
+              ? ((status?.runtime?.commits_ahead ?? 0) > 0 ? 'cloud-upload' : 'check')
+              : undefined;
+      const adminIcon = terminalRow
+        ? (assignment.status === 'completed' ? 'check'
+          : assignment.status === 'failed' ? 'error'
+          : assignment.status === 'expired' ? 'circle-slash'
+          : assignment.status === 'timed_out' ? 'clock'
+          : 'circle-outline')
+        : (assignment.status === 'started' ? 'play-circle'
+          : assignment.status === 'accepted' ? 'check'
+          : assignment.status === 'offered' ? 'mail'
+          : assignment.status === 'blocked' ? 'warning'
+          : 'circle-outline');
+      const icon = evidenceIcon ?? adminIcon;
+
+      // pln#559 finitions — stale heartbeat dims the row. A stale heartbeat
+      // alone never marked anything; combined with evidence (pid dead /
+      // health=silent_death) it now reads at a glance.
+      const heartbeatStale = isStale(assignment.last_heartbeat_at, STALE_MS.assignment);
+      const dim = heartbeatStale && (status?.runtime?.pid_alive === false || health === 'silent_death');
+
+      const label = assignment.description?.slice(0, 80) || assignment.scope || assignment.id;
+
+      // Description: evidence digest if available, else legacy admin triplet.
+      let description: string;
+      if (digest) {
+        description = `${digest} · ${assignment.agent}`;
+        // For a terminal row also surface provenance (sweep vs self-report)
+        // so the operator sees WHO transitioned the assignment.
+        if (terminalRow) {
+          const provenance = this._terminalProvenance(assignment);
+          description = `${assignment.status} ${provenance ? `(${provenance}) ` : ''}· ${description}`;
+        }
+      } else {
+        description = `${assignment.status} · ${assignment.agent} · ${heartbeatAgo}`;
+      }
+
+      // Tooltip: verbatim diagnosis.summary + recommended_next_action so the
+      // operator sees the same verdict bclaw_dispatch_status would print.
+      const plan = assignment.plan_id ? `\nPlan: ${assignment.plan_id}` : '';
+      const tooltipLines: string[] = [
+        `Assignment: ${assignment.id}`,
+        `Agent: ${assignment.agent}`,
+        `Status: ${assignment.status}${assignment.status_reason ? ` (${assignment.status_reason})` : ''}`,
+        `Scope: ${assignment.scope}`,
+      ];
+      if (plan) tooltipLines.push(plan.trim());
+      tooltipLines.push(`Last heartbeat: ${heartbeatAgo}`);
+      if (status?.diagnosis) {
+        tooltipLines.push('', `Verdict: ${status.diagnosis.health ?? 'unknown'}`);
+        if (status.diagnosis.summary) tooltipLines.push(status.diagnosis.summary);
+        if (status.diagnosis.recommended_next_action) {
+          tooltipLines.push('', `Next: ${status.diagnosis.recommended_next_action}`);
+        }
+      }
+      const finalDescription = dim ? `${description} · stale` : description;
+      const item = new BrainclawTreeItem(
+        dim ? `· ${label}` : label,
         vscode.TreeItemCollapsibleState.None,
-        `${assignment.status} · ${assignment.agent} · ${heartbeatAgo}`,
-        new vscode.ThemeIcon(icon),
-        `Assignment: ${assignment.id}\nAgent: ${assignment.agent}\nStatus: ${assignment.status}\nScope: ${assignment.scope}${plan}\nLast heartbeat: ${heartbeatAgo}`,
-        'assignment',
+        finalDescription,
+        new vscode.ThemeIcon(icon, dim ? new vscode.ThemeColor('disabledForeground') : undefined),
+        tooltipLines.join('\n'),
+        // contextValue toggles whether triage shortcuts (Open worktree,
+        // Show captured logs) appear in the inline / context menu.
+        terminalRow ? 'assignment-terminal' : 'assignment',
         assignment.id,
         projectPath,
         undefined,
         'leaf',
         `assignment:${projectPath}:${assignment.id}`,
       );
+      // Attach worktree_path / log paths via item properties so the triage
+      // commands (brainclaw.openWorktree / brainclaw.showLogs) resolve them
+      // without another MCP round-trip.
+      const logFiles = status?.runtime?.log_files;
+      const logPaths = [logFiles?.stdout?.path, logFiles?.stderr?.path]
+        .filter((p): p is string => typeof p === 'string' && p.length > 0);
+      (item as any).worktreePath = assignment.worktree_path;
+      (item as any).logPaths = logPaths;
+      return item;
     });
+  }
+
+  /**
+   * pln#559 step 2 — best-guess provenance of a terminal transition. The
+   * assignment carries timestamps (expired_at, failed_at, …) and a
+   * status_reason set by whichever subsystem flipped it. Returns a short
+   * tag (e.g. "ttl-sweep", "self-report", "reconciler") for inline display.
+   */
+  private _terminalProvenance(assignment: any): string | undefined {
+    const reason = String(assignment.status_reason ?? '').toLowerCase();
+    if (!reason) return undefined;
+    if (reason.includes('sweep') || reason.includes('ttl')) return 'sweep';
+    if (reason.includes('reconcil')) return 'reconciler';
+    if (reason.includes('self') || reason.includes('report')) return 'self-report';
+    if (reason.includes('harvest')) return 'harvest';
+    if (reason.includes('rerout')) return 'rerouted';
+    // Default: surface the raw reason truncated so it remains informative.
+    return reason.slice(0, 24);
   }
 
   private _buildAssignments(board: BoardData, projectPath: string): BrainclawTreeItem[] {
@@ -2104,11 +2506,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
               ? 'warning'
               : 'circle-outline';
       const label = `${run.description?.slice(0, 70) || run.scope || run.id} [#${run.attempt_index}]`;
+      // pln#559 finitions — D8: dim+warn runs whose last_event_at is past the
+      // assignment-staleness threshold. A "running" row whose events stopped
+      // 45min ago is visually distinct from a fresh one.
+      const stale = isStale(run.last_event_at, STALE_MS.assignment) && run.status === 'running';
+      const description = stale ? `${run.status} · ${run.transport} · ${ago} · stale` : `${run.status} · ${run.transport} · ${ago}`;
       return new BrainclawTreeItem(
-        label,
+        stale ? `· ${label}` : label,
         vscode.TreeItemCollapsibleState.None,
-        `${run.status} · ${run.transport} · ${ago}`,
-        new vscode.ThemeIcon(icon),
+        description,
+        new vscode.ThemeIcon(icon, stale ? new vscode.ThemeColor('disabledForeground') : undefined),
         `Run: ${run.id}\nAssignment: ${run.assignment_id}\nAgent: ${run.agent}\nStatus: ${run.status}\nTransport: ${run.transport}\nAttempt: ${run.attempt_index}\nScope: ${run.scope}\nLast event: ${ago}`,
         'run',
         run.id,

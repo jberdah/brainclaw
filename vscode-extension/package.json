@@ -112,6 +112,16 @@
       {
         "command": "brainclaw.refreshEntityPreview",
         "title": "Brainclaw: Refresh entity preview"
+      },
+      {
+        "command": "brainclaw.openWorktree",
+        "title": "Open worktree in new window",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "brainclaw.showCapturedLogs",
+        "title": "Show captured logs",
+        "icon": "$(output)"
       }
     ],
     "menus": {
@@ -182,6 +192,16 @@
           "command": "brainclaw.dispatchPlan",
           "when": "viewItem == plan",
           "group": "inline"
+        },
+        {
+          "command": "brainclaw.openWorktree",
+          "when": "viewItem == assignment || viewItem == assignment-terminal || viewItem == claim || viewItem == run",
+          "group": "triage@1"
+        },
+        {
+          "command": "brainclaw.showCapturedLogs",
+          "when": "viewItem == assignment || viewItem == assignment-terminal || viewItem == run",
+          "group": "triage@2"
         }
       ],
       "explorer/context": [
