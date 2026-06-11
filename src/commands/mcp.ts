@@ -253,15 +253,15 @@ export const MCP_READ_TOOLS = [
     // Unified dispatcher over the four legacy context reads.
     // Promoted to standard tier at the v1.0 cut.
     name: 'bclaw_context',
-    description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), delta (memory changes since a reference session).',
+    description: 'Unified context read. Dispatches by kind: memory (project memory for a path), execution (local execution env), board (full agent board), board_summary (compact counts), cross_project (linked_projects + incoming_signals only), delta (memory changes since a reference session).',
     annotations: { tier: 'facade', category: 'context', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         kind: {
           type: 'string',
-          enum: ['memory', 'execution', 'board', 'board_summary', 'delta'],
-          description: 'memory = project memory context; execution = local env/tooling; board = full agent board; board_summary = lightweight counts; delta = memory changes since `since`.',
+          enum: ['memory', 'execution', 'board', 'board_summary', 'cross_project', 'delta'],
+          description: 'memory = project memory context; execution = local env/tooling; board = full agent board; board_summary = lightweight counts; cross_project = linked_projects + incoming_signals only; delta = memory changes since `since`.',
         },
         since: {
           type: 'string',

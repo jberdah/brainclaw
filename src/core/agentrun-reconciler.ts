@@ -347,7 +347,29 @@ function describeEvidence(evidence: ReconcileEvidence): string {
 
 // ── Synthetic event for unverified spawns ──────────────────────────────────
 
+/**
+ * Per-run throttle for "delivered_but_unverified" events (pln#558 step 5).
+ *
+ * Before this throttle every reconciliation pass during the health-check
+ * window produced a fresh runtime_event file. With the VS Code extension
+ * polling kind='board' every 30s, both reconciliation passes firing per
+ * poll, and several non-terminal runs in flight, the store accumulated
+ * ~120 of these files per hour per run — all writing under the mutation
+ * lock, none ever surfaced to the UI.
+ *
+ * Surfacing the uncertainty once per window is enough; the event content
+ * is monotonic (age increases) so re-emitting adds no information.
+ */
+const UNVERIFIED_EVENT_THROTTLE_MS = 5 * 60_000;
+const lastUnverifiedEmitAt = new Map<string, number>();
+
 function emitUnverifiedEvent(run: AgentRun, evidence: ReconcileEvidence, actor: string, cwd?: string): void {
+  const now = Date.now();
+  const last = lastUnverifiedEmitAt.get(run.id);
+  if (last !== undefined && now - last < UNVERIFIED_EVENT_THROTTLE_MS) {
+    return;
+  }
+  lastUnverifiedEmitAt.set(run.id, now);
   try {
     createRuntimeEvent({
       agent: actor,

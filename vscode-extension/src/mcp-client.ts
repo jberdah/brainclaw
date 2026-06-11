@@ -106,6 +106,14 @@ export class McpClient {
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      // BRAINCLAW_OBSERVER=1: the VS Code extension is a dashboard, not an
+      // agent. The server-side observer mode (src/core/observer-mode.ts)
+      // suppresses every read-path side effect — autoAcknowledge, lazy
+      // agent_run reconciliation, cursor advancement, implicit identity
+      // registration — so polling the board never mutates the store. Also
+      // strip BRAINCLAW_AGENT* so the extension cannot inherit the parent
+      // shell's identity and consume that agent's cursor.
+      env: this._spawnEnv(),
     });
 
     this._process.stderr?.on('data', () => { /* drain stderr */ });
@@ -197,6 +205,17 @@ export class McpClient {
       pending.reject(err);
     }
     this._pendingRequests.clear();
+  }
+
+  private _spawnEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env, BRAINCLAW_OBSERVER: '1' };
+    // Strip parent-shell agent identity so the MCP server never resolves to
+    // the agent whose terminal launched VS Code (otherwise the extension's
+    // polling consumes that agent's event-log cursor and runtime state).
+    delete env.BRAINCLAW_AGENT;
+    delete env.BRAINCLAW_AGENT_ID;
+    delete env.BRAINCLAW_AGENT_NAME;
+    return env;
   }
 
   /**

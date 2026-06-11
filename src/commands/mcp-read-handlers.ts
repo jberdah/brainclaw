@@ -9,7 +9,7 @@
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
-import { buildCoordinationSnapshot } from '../core/coordination.js';
+import { buildCoordinationSnapshot, buildCrossProjectSnapshot } from '../core/coordination.js';
 import { scanDescendantPlans } from './list-plans.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
@@ -24,6 +24,7 @@ import { listClaims, assessClaimLiveness } from '../core/claims.js';
 import { listAssignments } from '../core/assignments.js';
 import { listAgentRuns } from '../core/agentruns.js';
 import { reconcileAgentRun } from '../core/agentrun-reconciler.js';
+import { isObserverMode } from '../core/observer-mode.js';
 import { getDispatchStatus } from '../core/dispatch-status.js';
 import { listActionRequired } from '../core/actions.js';
 import { queryRuntimeEvents } from '../core/events.js';
@@ -1042,19 +1043,24 @@ export function handleMcpReadToolCall(
     // committed but never called bclaw_assignment_update) and surfaces
     // delivered_but_unverified for spawns past the 60s grace with no
     // life-sign — see runtime_note run_77e65e77 for the empirical case.
-    try {
-      if (runId) {
-        reconcileAgentRun(runId, cwd);
-      } else if (assignmentId) {
-        for (const run of listAgentRuns(cwd, { assignment_id: assignmentId })) {
-          reconcileAgentRun(run.id, cwd);
+    // Observer mode (BRAINCLAW_OBSERVER=1) suppresses this pre-read sweep —
+    // a dashboard fetching assignment events must not be allowed to transition
+    // agent_run records as a side effect of the read.
+    if (!isObserverMode()) {
+      try {
+        if (runId) {
+          reconcileAgentRun(runId, cwd);
+        } else if (assignmentId) {
+          for (const run of listAgentRuns(cwd, { assignment_id: assignmentId })) {
+            reconcileAgentRun(run.id, cwd);
+          }
+        } else if (claimId) {
+          for (const run of listAgentRuns(cwd, { claim_id: claimId })) {
+            reconcileAgentRun(run.id, cwd);
+          }
         }
-      } else if (claimId) {
-        for (const run of listAgentRuns(cwd, { claim_id: claimId })) {
-          reconcileAgentRun(run.id, cwd);
-        }
-      }
-    } catch { /* defensive: never block events query on reconcile failure */ }
+      } catch { /* defensive: never block events query on reconcile failure */ }
+    }
 
     let events = queryRuntimeEvents({
       ...(id ? { id } : {}),
@@ -1838,6 +1844,17 @@ export function handleMcpReadToolCall(
         return handleMcpReadToolCall('bclaw_get_agent_board', args, context);
       case 'board_summary':
         return handleMcpReadToolCall('bclaw_get_agent_board_summary', args, context);
+      case 'cross_project': {
+        // pln#558 step 3 — lightweight endpoint for the VS Code extension's
+        // SYSTEM section: returns linked_projects + incoming_signals only,
+        // so the dashboard no longer pulls the full coordination snapshot
+        // just to render two summary lists.
+        const snap = buildCrossProjectSnapshot(cwd);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(snap, null, 2) }],
+          structuredContent: snap as unknown as Record<string, unknown>,
+        };
+      }
       case 'delta': {
         const since = args.since;
         if (typeof since !== 'string' || !since) {
@@ -1850,7 +1867,7 @@ export function handleMcpReadToolCall(
         );
       }
       default:
-        throw new Error(`bclaw_context: unknown kind '${kind}'. Expected memory | execution | board | board_summary | delta.`);
+        throw new Error(`bclaw_context: unknown kind '${kind}'. Expected memory | execution | board | board_summary | cross_project | delta.`);
     }
   }
 

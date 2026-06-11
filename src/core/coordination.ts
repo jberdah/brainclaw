@@ -16,6 +16,7 @@ import { loadAllSessions } from './identity.js';
 import { countActionable } from './messaging.js';
 import { listCandidates } from './candidates.js';
 import { pullSignalsFromLinkedProjects } from './federation-transport.js';
+import { isObserverMode } from './observer-mode.js';
 
 export interface CoordinationOptions {
   agent?: string;
@@ -79,8 +80,13 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
     ? openHandoffs.filter((h) => (!project || !h.project || h.project === project) && (h.to === agent || h.from === agent))
     : (project ? openHandoffs.filter((h) => !h.project || h.project === project) : openHandoffs);
 
-  // perf.2: auto-acknowledge shown handoffs
-  if (options.autoAcknowledge && filteredHandoffs.length > 0) {
+  // perf.2: auto-acknowledge shown handoffs.
+  // Observer mode (BRAINCLAW_OBSERVER=1) suppresses this — a dashboard reading
+  // the board must never mutate the store it observes. The 2026-06-10 lock
+  // storm was caused by the VS Code extension polling kind='board' (which sets
+  // autoAcknowledge=true) and triggering persistState → full store rewrite +
+  // git commit on every refresh.
+  if (options.autoAcknowledge && filteredHandoffs.length > 0 && !isObserverMode()) {
     const toAckIds = new Set(filteredHandoffs.map((h) => h.id));
     let changed = false;
     for (const h of state.open_handoffs) {
@@ -293,6 +299,23 @@ interface LinkedProjectSummary {
   active_claims: number;
   active_plans: number;
   agents: string[];
+}
+
+/**
+ * Lightweight cross-project snapshot — linked_projects + incoming_signals only.
+ * Used by the VS Code extension's SYSTEM section so it does not have to fetch
+ * the full coordination snapshot (pln#558 step 3). Loads two linked-project
+ * states plus the incoming-signals scan; never builds the agent/handoff/claim
+ * summaries.
+ */
+export function buildCrossProjectSnapshot(cwd?: string): {
+  linked_projects?: LinkedProjectSummary[];
+  incoming_signals?: IncomingSignalSummary[];
+} {
+  return {
+    linked_projects: buildLinkedProjectsSummary(cwd),
+    incoming_signals: buildIncomingSignalsSummary(cwd),
+  };
 }
 
 function buildLinkedProjectsSummary(cwd?: string): LinkedProjectSummary[] | undefined {
