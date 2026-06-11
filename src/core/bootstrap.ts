@@ -785,29 +785,9 @@ function extractExecutionContextSeeds(
 ): MemorySeedDocument[] {
   const seeds: MemorySeedDocument[] = [];
 
-  if (snapshot.branch) {
-    seeds.push(createSeed({
-      text: `Current branch: ${snapshot.branch}`,
-      seedKind: 'environment',
-      sourceKind: 'machine',
-      sourceRef: 'git:branch',
-      confidence: 'high',
-      tags: ['bootstrap', 'execution', 'git'],
-      relatedPaths: target ? [target] : undefined,
-    }));
-  }
-
-  if (snapshot.git_status === 'dirty') {
-    seeds.push(createSeed({
-      text: 'Repository has uncommitted changes.',
-      seedKind: 'warning',
-      sourceKind: 'machine',
-      sourceRef: 'git:status',
-      confidence: 'high',
-      tags: ['bootstrap', 'execution', 'git'],
-      relatedPaths: target ? [target] : undefined,
-    }));
-  }
+  // Branch + dirty-status are execution-context-volatile (change on every
+  // checkout/edit). They stay on the live snapshot for display but must NOT
+  // be persisted as seeds — otherwise every dispatch invalidates the cache.
 
   for (const tool of snapshot.toolchains.slice(0, 3)) {
     seeds.push(createSeed({
@@ -904,25 +884,9 @@ function probeGit(cwd: string, target?: string): GitProbeResult {
     }
   }
 
-  // Step 13: Active branches
-  const branchResult = spawnSync('git', ['branch', '--no-merged', 'HEAD', '--format=%(refname:short)'], {
-    cwd,
-    encoding: 'utf-8',
-    timeout: 5000,
-  });
-  if (branchResult.status === 0) {
-    const branches = branchResult.stdout.split(/\r?\n/).map((b) => b.trim()).filter(Boolean).slice(0, 5);
-    for (const branch of branches) {
-      hotspotSeeds.push(createSeed({
-        text: `Active branch: ${branch}`,
-        seedKind: 'hotspot',
-        sourceKind: 'git',
-        sourceRef: `branch:${branch}`,
-        confidence: 'low',
-        tags: ['bootstrap', 'git', 'branch'],
-      }));
-    }
-  }
+  // Active branch names are execution-context-volatile (branches come and go
+  // every dispatch); we deliberately do not persist them as seeds — see the
+  // transient-seed policy in extractExecutionContextSeeds.
 
   // Step 13: Recent tags
   const tagResult = spawnSync('git', ['tag', '--sort=-creatordate', '-l'], {
@@ -1561,6 +1525,10 @@ function seedToBootstrapSuggestion(
   seed: MemorySeedDocument,
   allowSummaryFallback: boolean,
 ): Omit<BootstrapSuggestionDocument, 'schema_version'> | undefined {
+  if (seed.seed_kind === 'decision' || seed.seed_kind === 'constraint' || seed.seed_kind === 'trap') {
+    return seedToTypedSuggestion(seed);
+  }
+
   if (seed.seed_kind !== 'agent_rule' && seed.seed_kind !== 'command') {
     return undefined;
   }
@@ -1588,6 +1556,35 @@ function seedToBootstrapSuggestion(
     related_paths: seed.related_paths,
     reversible: true,
   };
+}
+
+function seedToTypedSuggestion(
+  seed: MemorySeedDocument,
+): Omit<BootstrapSuggestionDocument, 'schema_version'> | undefined {
+  const target: 'decision' | 'constraint' | 'trap' = seed.seed_kind === 'decision'
+    ? 'decision'
+    : seed.seed_kind === 'constraint' ? 'constraint' : 'trap';
+
+  const base: Omit<BootstrapSuggestionDocument, 'schema_version'> = {
+    id: generateId('bootstrap_suggestions'),
+    target,
+    text: seed.text,
+    rationale: renderBootstrapSuggestionRationale(seed),
+    confidence: seed.confidence,
+    source_seed_ids: [seed.id],
+    source_refs: [seed.source_ref],
+    tags: normalizeBootstrapSuggestionTags(seed.tags),
+    related_paths: seed.related_paths,
+    reversible: true,
+  };
+
+  if (target === 'constraint') {
+    return { ...base, category: 'process' as ConstraintCategory };
+  }
+  if (target === 'trap') {
+    return { ...base, severity: 'medium' as Severity };
+  }
+  return { ...base, outcome: 'pending' as DecisionOutcome };
 }
 
 function inferBootstrapInstructionTarget(seed: MemorySeedDocument): { layer: 'global' | 'agent'; scope?: string } | undefined {
@@ -1623,6 +1620,8 @@ function renderBootstrapSuggestionRationale(seed: MemorySeedDocument): string {
       return `Derived from ${seed.source_ref}`;
     case 'manifest':
       return `Derived from ${seed.source_ref}`;
+    case 'adr':
+      return `Derived from architecture decision record ${seed.source_ref}`;
     default:
       return `Derived from ${seed.source_ref}`;
   }
@@ -2032,8 +2031,14 @@ function scoreSeed(seed: MemorySeedDocument, target?: string): number {
 
 function seedKindWeight(kind: MemorySeedKind): number {
   switch (kind) {
+    case 'decision':
+      return 13;
     case 'agent_rule':
       return 12;
+    case 'constraint':
+      return 11;
+    case 'trap':
+      return 11;
     case 'warning':
       return 10;
     case 'tooling':
@@ -2250,17 +2255,22 @@ function extractAdditionalBrownfieldSeeds(
     if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
       sources.push('adr');
       try {
-        const files = fs.readdirSync(fullPath).filter((f) => f.endsWith('.md'));
-        if (files.length > 0) {
-          seeds.push(createSeed({
-            text: `Architecture Decision Records: ${files.length} ADR(s) in ${dir}/`,
-            seedKind: 'convention',
-            sourceKind: 'adr',
-            sourceRef: dir,
-            confidence: 'high',
-            tags: ['bootstrap', 'adr', 'architecture'],
-            relatedPaths: target ? [target] : undefined,
-          }));
+        const files = fs.readdirSync(fullPath)
+          .filter((f) => f.endsWith('.md'))
+          .map((name) => {
+            const filePath = path.join(fullPath, name);
+            let mtimeMs = 0;
+            try { mtimeMs = fs.statSync(filePath).mtimeMs; } catch { /* ignore */ }
+            return { name, filePath, mtimeMs };
+          })
+          .sort((a, b) => b.mtimeMs - a.mtimeMs)
+          .slice(0, ADR_READ_LIMIT);
+
+        for (const entry of files) {
+          const adrSeed = extractAdrSeed(entry.filePath, dir, target);
+          if (adrSeed) {
+            seeds.push(adrSeed);
+          }
         }
       } catch { /* skip unreadable */ }
       break;
@@ -2268,4 +2278,135 @@ function extractAdditionalBrownfieldSeeds(
   }
 
   return { seeds, sources: [...new Set(sources)] };
+}
+
+const ADR_READ_LIMIT = 20;
+const ADR_DECISION_EXCERPT_CAP = 600;
+
+function extractAdrSeed(
+  filePath: string,
+  dirRef: string,
+  target?: string,
+): MemorySeedDocument | undefined {
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  if (!content.trim()) {
+    return undefined;
+  }
+
+  const parsed = parseAdrMarkdown(content);
+  const baseName = path.basename(filePath);
+  const sourceRef = path.posix.join(dirRef.replace(/\\/g, '/'), baseName);
+  const relatedPath = sourceRef;
+
+  const titleSegment = parsed.title ? parsed.title : baseName.replace(/\.md$/i, '');
+  const statusSegment = parsed.status ? ` [${parsed.status}]` : '';
+  const decisionSegment = parsed.decision
+    ? ` — ${parsed.decision}`
+    : '';
+  const fullText = `ADR ${titleSegment}${statusSegment}${decisionSegment}`.trim();
+  const text = fullText.length > ADR_DECISION_EXCERPT_CAP
+    ? `${fullText.slice(0, ADR_DECISION_EXCERPT_CAP - 1).trimEnd()}…`
+    : fullText;
+
+  return createSeed({
+    text,
+    seedKind: 'decision',
+    sourceKind: 'adr',
+    sourceRef,
+    confidence: 'high',
+    tags: ['bootstrap', 'adr', 'architecture'],
+    relatedPaths: target ? [relatedPath, target] : [relatedPath],
+    promotionHint: 'decision',
+  });
+}
+
+interface ParsedAdr {
+  title?: string;
+  status?: string;
+  decision?: string;
+}
+
+function parseAdrMarkdown(content: string): ParsedAdr {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const titleLine = lines.find((line) => /^#\s+/.test(line));
+  const title = titleLine ? titleLine.replace(/^#\s+/, '').trim() : undefined;
+
+  const sections = splitAdrSections(lines);
+
+  const statusSection = sections.find((s) => /^(status|statut)$/i.test(s.heading));
+  const status = statusSection ? firstNonEmptyLine(statusSection.body) : undefined;
+
+  const decisionSection = sections.find((s) => /^(decision|décision)$/i.test(s.heading));
+  let decision: string | undefined;
+  if (decisionSection) {
+    decision = firstParagraph(decisionSection.body);
+  }
+  if (!decision) {
+    const fallbackSection = sections.find((s) => !/^(status|statut|title|titre)$/i.test(s.heading));
+    if (fallbackSection) {
+      decision = firstParagraph(fallbackSection.body);
+    }
+  }
+  if (!decision) {
+    decision = firstNonTitleParagraph(lines);
+  }
+  if (decision && decision.length > ADR_DECISION_EXCERPT_CAP) {
+    decision = `${decision.slice(0, ADR_DECISION_EXCERPT_CAP - 1).trimEnd()}…`;
+  }
+
+  return { title, status, decision };
+}
+
+function splitAdrSections(lines: string[]): { heading: string; body: string[] }[] {
+  const sections: { heading: string; body: string[] }[] = [];
+  let current: { heading: string; body: string[] } | undefined;
+  for (const line of lines) {
+    const match = line.match(/^#{2,6}\s+(.+?)\s*$/);
+    if (match) {
+      if (current) sections.push(current);
+      current = { heading: match[1].trim(), body: [] };
+    } else if (current) {
+      current.body.push(line);
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
+}
+
+function firstNonEmptyLine(body: string[]): string | undefined {
+  for (const line of body) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return undefined;
+}
+
+function firstParagraph(body: string[]): string | undefined {
+  const paragraph: string[] = [];
+  for (const line of body) {
+    if (line.trim().length === 0) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  return paragraph.length > 0 ? paragraph.join(' ') : undefined;
+}
+
+function firstNonTitleParagraph(lines: string[]): string | undefined {
+  const paragraph: string[] = [];
+  for (const line of lines) {
+    if (/^#{1,6}\s+/.test(line)) continue;
+    if (line.trim().length === 0) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  return paragraph.length > 0 ? paragraph.join(' ') : undefined;
 }
