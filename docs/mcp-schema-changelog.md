@@ -104,8 +104,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:8f86d3998f8a24e3`
-  (updated 2026-06-11: uninitialized setup mode — the server now boots with
+- MCP public surface fingerprint: `sha256:21fa9544977a3754`
+  (updated 2026-06-11b: observability surfaces — composite
+  `attention_required` in board_summary, observer-mode read flags,
+  `bootstrap_verdict` in FacadeResponse; pln#557/#558/#559.
+  Previous: `sha256:8f86d3998f8a24e3`,
+  updated 2026-06-11: uninitialized setup mode — the server now boots with
   a minimal catalog on a missing project store instead of exit(1), and the
   empty-memory decision rule is surfaced in setup/work hints; pln#556.
   Previous: `sha256:eaa8865070b10401`,

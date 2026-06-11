@@ -59,8 +59,13 @@ describe('MCP connection principal (pln#562 step 3)', () => {
     process.env.BRAINCLAW_AGENT = 'claude-code';
 
     const outcome = await createDecision({ agent: 'codex' });
-    assert.equal(outcome.response.isError, false, JSON.stringify(outcome.response));
-    assert.equal(lastDecisionAuthor(), 'claude-code', 'mutation attributed to the pinned principal, not the spoofed arg');
+    // Fail-loud contract (coordinator adjudication, 2026-06-11): a mismatch
+    // is REJECTED with remediation, never silently re-attributed — silent
+    // correction hides caller bugs. The spoof still cannot succeed.
+    assert.equal(outcome.response.isError, true, JSON.stringify(outcome.response));
+    const text = outcome.response.content?.[0]?.text ?? '';
+    assert.match(text, /does not match the pinned connection principal 'claude-code'/);
+    assert.equal(loadState(workspace.dir).recent_decisions.length, 0, 'no record written under either identity');
   });
 
   it('curator principal may explicitly override with args.agent', async () => {
