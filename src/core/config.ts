@@ -13,6 +13,14 @@ export interface DefaultConfigOptions {
   storageDir?: string;
   topology?: TopologyMode;
   ignoreStrategy?: IgnoreStrategy;
+  /**
+   * Seed governance.curators with this name. Used by `init` on a fresh
+   * project so the human running init becomes the default curator —
+   * otherwise approval_policy=review + curators=[] traps every note in
+   * pending forever (a solo-agent surprise documented in the 2026-06-10
+   * front-door analysis).
+   */
+  curatorName?: string;
 }
 
 export function defaultConfig(projectName: string, options: DefaultConfigOptions = {}): Config {
@@ -69,7 +77,7 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
     },
     governance: {
       approval_policy: 'review',
-      curators: [],
+      curators: options.curatorName ? [options.curatorName] : [],
       review_sla_hours: 24,
     },
     reputation: {

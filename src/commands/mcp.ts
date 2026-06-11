@@ -5145,10 +5145,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       let bootstrapRefreshReason: string | undefined;
       let nextAction: string | undefined;
       let emptyMemoryRec: EmptyMemoryRecommendation | undefined;
+      let storeDensity: 'empty' | 'low' | 'rich' | undefined;
       try {
         const assessment = assessBootstrapNeed(targetCwd);
         bootstrapVerdict = assessment.verdict;
         bootstrapRecommended = assessment.verdict !== 'none';
+        storeDensity = assessment.store_density;
         if (assessment.verdict === 'bootstrap') {
           emptyMemoryRec = resolveEmptyMemoryRecommendation(targetCwd);
           nextAction = emptyMemoryRec.mcp_next_action;
@@ -5176,6 +5178,29 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         nextActions.push({ tool: 'bclaw_release_claim', args: { id: claimId, planStatus: 'done' }, when: 'implementation complete and committed' });
       } else if (workReq.intent === 'consult' || workReq.intent === 'resume') {
         nextActions.push({ tool: 'bclaw_work', args: { intent: 'execute', scope: workReq.scope ?? '<scope>' }, when: 'ready to edit — claims the scope' });
+      }
+      // Solo-agent empty-store hint: the bootstrap recommendation covers
+      // vision; agents arriving on a freshly-initialised store also need a
+      // surface for *work* itself. Without this they reliably consult, see
+      // nothing, and stop — bclaw_create(entity='plan') is the missing
+      // affordance (2026-06-10 front-door audit). The store-density signal
+      // bumps to 'low' as soon as session_start lands a single event, so
+      // gate the hint directly on "no plans yet" — the actual condition
+      // the agent is in.
+      let noPlansYet = false;
+      try {
+        noPlansYet = loadState(targetCwd).plan_items.length === 0;
+      } catch {
+        // loadState may fail on a brand-new store with no project.md yet;
+        // treat that as "no plans yet" — the next_action remains correct.
+        noPlansYet = true;
+      }
+      if (noPlansYet && (storeDensity === 'empty' || storeDensity === 'low')) {
+        nextActions.push({
+          tool: 'bclaw_create',
+          args: { entity: 'plan', input: { title: '<plan title>', steps: ['<first step>'] } },
+          when: 'memory has no plans yet — once you know what you are doing, create a plan so progress is tracked',
+        });
       }
       const diffTotal = contextResult?.context_diff?.counts.total ?? 0;
       if (useCompact && diffTotal > 0) {
