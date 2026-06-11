@@ -177,4 +177,108 @@ describe('journal projections — dirty tracking + materialize (pln#543 step 3)'
     assert.equal(drift.length, 1);
     assert.deepEqual(drift[0], { item_type: 'decision', item_id: 'dec_v', kind: 'mismatch' });
   });
+
+  // --- Regression coverage added by review (pln#543 step 3) ---
+
+  it('trp#126 safety extends to empty AND unparseable on-disk files', () => {
+    delete process.env.BRAINCLAW_JOURNAL_MODE;
+    const dir = tmpDir(); cleanup.push(dir);
+    const state = emptyState();
+    state.recent_decisions.push(decision('dec_e', 'present'));
+    persistState(state, dir);
+
+    const file = path.join(dir, '.brainclaw', 'memory', 'decisions', 'dec_e.json');
+
+    // Empty existing file — canonical("") parses-fail → raw "" ≠ canonical desired → REWRITE.
+    fs.writeFileSync(file, '', 'utf-8');
+    resetPersistWriteStats();
+    persistState(state, dir);
+    assert.equal(readPersistWriteStats().written, 1, 'empty existing file must be rewritten');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf-8')).id, 'dec_e');
+
+    // Binary/garbage non-JSON bytes — same protection.
+    fs.writeFileSync(file, ' binary garbage{not json', 'utf-8');
+    resetPersistWriteStats();
+    persistState(state, dir);
+    assert.equal(readPersistWriteStats().written, 1, 'unparseable existing file must be rewritten');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf-8')).id, 'dec_e');
+
+    // Parseable JSON of a DIFFERENT shape — still a rewrite (canonical differs).
+    fs.writeFileSync(file, '{"unrelated":"value"}\n', 'utf-8');
+    resetPersistWriteStats();
+    persistState(state, dir);
+    assert.equal(readPersistWriteStats().written, 1, 'parseable-but-different existing file must be rewritten');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf-8')).id, 'dec_e');
+  });
+
+  it('entity_rev is strictly monotonic across delete→recreate (spec §2.1: never resets)', () => {
+    process.env.BRAINCLAW_JOURNAL_MODE = 'dual';
+    const dir = tmpDir(); cleanup.push(dir);
+    const state = emptyState();
+    state.recent_decisions.push(decision('dec_r', 'v1'));
+    persistState(state, dir);
+
+    const upd = loadState(dir);
+    upd.recent_decisions.find(d => d.id === 'dec_r')!.text = 'v2';
+    persistState(upd, dir);
+
+    const del = loadState(dir);
+    del.recent_decisions = del.recent_decisions.filter(d => d.id !== 'dec_r');
+    persistState(del, dir, { deleteMissing: true });
+
+    // Recreate the SAME id — rev MUST continue from where the tombstone left
+    // it, NOT reset to 1 (spec: entity_rev is per-id-monotonic across the
+    // entity's whole life, including delete→recreate cycles).
+    const recreate = loadState(dir);
+    recreate.recent_decisions.push(decision('dec_r', 'reborn'));
+    persistState(recreate, dir);
+
+    const recs = readJournalRecords(dir).filter(r => r.item_id === 'dec_r');
+    assert.deepEqual(recs.map(r => r.action), ['create', 'update', 'delete', 'create']);
+    assert.deepEqual(recs.map(r => r.entity_rev), [1, 2, 3, 4], 'rev must continue, never reset');
+  });
+
+  it('storeAction override (rollback) emits the broader verb but keeps entity-state class semantics', () => {
+    process.env.BRAINCLAW_JOURNAL_MODE = 'dual';
+    const dir = tmpDir(); cleanup.push(dir);
+    const state = emptyState();
+    state.recent_decisions.push(decision('dec_rb', 'pre-rollback'));
+    persistState(state, dir, { eventAction: 'rollback' });
+
+    const recs = readJournalRecords(dir).filter(r => r.item_id === 'dec_rb');
+    assert.equal(recs.length, 1);
+    assert.equal(recs[0].action, 'rollback', 'storeAction overrides the default create/update verb');
+    assert.ok(recs[0].payload, 'rollback is entity-state class → MUST carry the post-image');
+    assert.equal(recs[0].entity_rev, 1);
+
+    // Materialize still ingests rollback as a post-image (class drives replay,
+    // not the verb) — so a rollback never produces phantom drift in verify.
+    const mat = materializeMemoryStateFromJournal(dir);
+    assert.equal(mat.recent_decisions.length, 1);
+    assert.equal(mat.recent_decisions[0].id, 'dec_rb');
+    assert.deepEqual(verifyProjectionsAgainstJournal(dir), []);
+  });
+
+  it('canonical compare is locale/key-order tolerant: re-persisting after schema-reorder writes 0 files', () => {
+    delete process.env.BRAINCLAW_JOURNAL_MODE;
+    const dir = tmpDir(); cleanup.push(dir);
+    const state = emptyState();
+    state.recent_decisions.push(decision('dec_o', 'ordered'));
+    persistState(state, dir);
+
+    // Hand-rewrite the file with EXPLICITLY-REORDERED keys (the byte stream
+    // diverges from what serializeVersionedJson produced, but the semantic
+    // content is identical). The dirty-tracking compare MUST treat this as
+    // unchanged — otherwise every loadState→persistState round-trip would
+    // rewrite the whole store on key-order alone, defeating the optimisation.
+    const file = path.join(dir, '.brainclaw', 'memory', 'decisions', 'dec_o.json');
+    const original = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const reordered: Record<string, unknown> = {};
+    for (const k of Object.keys(original).reverse()) reordered[k] = original[k];
+    fs.writeFileSync(file, JSON.stringify(reordered, null, 2) + '\n', 'utf-8');
+
+    resetPersistWriteStats();
+    persistState(loadState(dir), dir);
+    assert.equal(readPersistWriteStats().written, 0, 'key-order-only divergence must NOT trigger a rewrite');
+  });
 });
