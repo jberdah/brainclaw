@@ -117,7 +117,7 @@ export function buildCoordinationSnapshot(options: CoordinationOptions = {}) {
       ? listAssignments(options.cwd, { agent })
       : listAssignments(options.cwd)
     ).filter((assignment) =>
-      !['completed', 'failed', 'cancelled', 'expired', 'rerouted'].includes(assignment.status) &&
+      !['completed', 'failed', 'cancelled', 'expired', 'rerouted', 'timed_out'].includes(assignment.status) &&
       (!project || !assignment.plan_id || filteredPlans.some((plan) => plan.id === assignment.plan_id))
     ),
     active_runs: (agent

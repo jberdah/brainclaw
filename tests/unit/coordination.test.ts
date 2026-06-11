@@ -392,6 +392,25 @@ describe('core/coordination', () => {
     assert.equal(boardWithMeta.session_meta_hidden, 0);
   });
 
+  it('excludes timed_out assignments from active assignment snapshot', () => {
+    const copilot = workspace.currentAgent;
+    const assignment = createAssignment({
+      claim_id: 'clm_timeout_snapshot',
+      plan_id: 'pln_timeout_snapshot',
+      agent: copilot.agent_name,
+      agent_id: copilot.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/core/context.ts',
+      description: 'Timed out assignment should not be active',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: copilot.agent_name }, workspace.dir);
+    transitionAssignment(assignment.id, 'timed_out', { actor: 'sweeper', status_reason: 'No heartbeat' }, workspace.dir);
+
+    const board = buildCoordinationSnapshot({ agent: copilot.agent_name, cwd: workspace.dir });
+    assert.equal(board.active_assignments.length, 0);
+  });
+
   it('perf.2: auto-acknowledges open handoffs when autoAcknowledge is true', () => {
     const copilot = workspace.currentAgent;
     const claude = workspace.registerAgent('claude');

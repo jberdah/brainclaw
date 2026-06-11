@@ -161,6 +161,24 @@ describe('open_work in context', () => {
     assert.equal(result.open_work.active_assignments[0].scope, 'src/core/context.ts');
   });
 
+  it('open_work excludes timed_out assignments', () => {
+    const assignment = createAssignment({
+      claim_id: 'clm_assignment_timed_out',
+      plan_id: 'pln_assignment_timed_out',
+      agent: 'testuser',
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'codex',
+      scope: 'src/core/context.ts',
+      description: 'Timed out assignment should not be open work',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'codex' }, workspace.dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'testuser', session_id: 'sess_assignment_timed_out' }, workspace.dir);
+    transitionAssignment(assignment.id, 'timed_out', { actor: 'sweeper', status_reason: 'No heartbeat' }, workspace.dir);
+
+    const result = buildContext({ agent: 'testuser', cwd: workspace.dir });
+    assert.equal(result.open_work, undefined);
+  });
+
   it('renderContextMarkdown shows open_work section at the top', () => {
     saveClaim({
       id: 'clm_test005',
