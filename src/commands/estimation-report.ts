@@ -97,7 +97,7 @@ export function parseEffortMinutes(effort: string): number | undefined {
 
   if (!matched) {
     const bare = parseFloat(s);
-    if (!isNaN(bare)) return bare;
+    if (!isNaN(bare) && /^\d+(?:\.\d+)?$/.test(s)) return bare;
     return undefined;
   }
   return total > 0 ? total : undefined;

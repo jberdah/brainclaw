@@ -17,6 +17,7 @@ describe('parseEffortMinutes', () => {
   it('parses days: "1d"', () => assert.equal(parseEffortMinutes('1d'), 480));
   it('parses bare number as minutes', () => assert.equal(parseEffortMinutes('20'), 20));
   it('returns undefined for garbage', () => assert.equal(parseEffortMinutes('abc'), undefined));
+  it('returns undefined for mixed numeric prose', () => assert.equal(parseEffortMinutes('3-4 sessions'), undefined));
   it('parses fractional hours: "0.5h"', () => assert.equal(parseEffortMinutes('0.5h'), 30));
   it('handles spaces: "1 h 30 min"', () => assert.equal(parseEffortMinutes('1 h 30 min'), 90));
 });

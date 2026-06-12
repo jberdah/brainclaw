@@ -113,6 +113,57 @@ describe('step-level effort estimation — aggregation (pln#495)', () => {
     assert.ok(bySource.plan_wallclock, 'wallclock bucket present');
     assert.equal(bySource.plan_wallclock!.median_ratio, 0.44); // 120/270
   });
+
+  it('falls back to plan actual_effort when a step duration is negative or zero', () => {
+    persistDonePlan('pln_bad_duration', {
+      estimated_effort: 60,
+      actual_effort: '45m',
+      steps: [
+        step({ id: 'negative', started_at: '2026-01-01T11:00:00.000Z', completed_at: '2026-01-01T10:00:00.000Z' }),
+      ],
+    });
+    persistDonePlan('pln_zero_duration', {
+      estimated_effort: 60,
+      actual_effort: '30m',
+      steps: [
+        step({ id: 'zero', started_at: '2026-01-01T10:00:00.000Z', completed_at: '2026-01-01T10:00:00.000Z' }),
+      ],
+    });
+
+    const entries = buildEstimationReport({ cwd: ws.dir }).entries;
+    const negative = entries.find(x => x.id === 'pln_bad_duration')!;
+    assert.equal(negative.elapsed_minutes, 45);
+    assert.equal(negative.source, 'plan_string');
+    const zero = entries.find(x => x.id === 'pln_zero_duration')!;
+    assert.equal(zero.elapsed_minutes, 30);
+    assert.equal(zero.source, 'plan_string');
+  });
+
+  it('falls back to plan actual_effort when a step actual_effort string is unparseable', () => {
+    persistDonePlan('pln_unparseable_step_actual', {
+      estimated_effort: 120,
+      actual_effort: '2h',
+      steps: [
+        step({ id: 'a', actual_effort: '3-4 sessions' }),
+      ],
+    });
+    const e = buildEstimationReport({ cwd: ws.dir }).entries.find(x => x.id === 'pln_unparseable_step_actual')!;
+    assert.equal(e.elapsed_minutes, 120);
+    assert.equal(e.source, 'plan_string');
+  });
+
+  it('falls back to plan actual_effort when a direct todo→done step has no measurable duration', () => {
+    persistDonePlan('pln_direct_done', {
+      estimated_effort: 30,
+      actual_effort: '25m',
+      steps: [
+        step({ id: 'a', completed_at: '2026-01-01T10:25:00.000Z' }),
+      ],
+    });
+    const e = buildEstimationReport({ cwd: ws.dir }).entries.find(x => x.id === 'pln_direct_done')!;
+    assert.equal(e.elapsed_minutes, 25);
+    assert.equal(e.source, 'plan_string');
+  });
 });
 
 describe('step-level effort estimation — lifecycle timestamps (pln#495)', () => {
@@ -134,6 +185,18 @@ describe('step-level effort estimation — lifecycle timestamps (pln#495)', () =
     assert.equal(stepDoc.started_at, undefined); // todo, not started
   });
 
+  it('addStep duration-string estimated_effort survives reload as minutes', () => {
+    const state = emptyState();
+    state.plan_items.push(PlanItemSchema.parse({
+      id: 'pln_string_est', short_label: 'pln#se', text: 'string estimate', type: 'feat', status: 'in_progress',
+      priority: 'medium', author: 'tester', tags: [], created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+    }));
+    persistState(state, ws.dir);
+    const r = addStep({ planId: 'pln_string_est', text: 'estimated by string', estimatedEffort: '2h' }, ws.dir);
+    const stepDoc = loadState(ws.dir).plan_items[0].steps!.find(s => s.id === r.stepId)!;
+    assert.equal(stepDoc.estimated_effort, 120);
+  });
+
   it('updateStep→in_progress stamps started_at; →done stamps completed_at', () => {
     const { planId, stepId } = seedPlanWithStep();
     updateStep({ planId, stepId, status: 'in_progress' }, ws.dir);
@@ -146,10 +209,47 @@ describe('step-level effort estimation — lifecycle timestamps (pln#495)', () =
     assert.ok(s.completed_at, 'completed_at set on done');
   });
 
-  it('completeStep stamps completed_at even when never marked in_progress', () => {
+  it('updateStep todo→done stamps both lifecycle endpoints', () => {
+    const { planId, stepId } = seedPlanWithStep();
+    updateStep({ planId, stepId, status: 'done' }, ws.dir);
+    const s = loadState(ws.dir).plan_items[0].steps!.find(x => x.id === stepId)!;
+    assert.ok(s.started_at, 'started_at set by direct done');
+    assert.ok(s.completed_at, 'completed_at set by direct done');
+  });
+
+  it('completeStep stamps both lifecycle endpoints even when never marked in_progress', () => {
     const { planId, stepId } = seedPlanWithStep();
     completeStep({ planId, stepId }, ws.dir);
     const s = loadState(ws.dir).plan_items[0].steps!.find(x => x.id === stepId)!;
+    assert.ok(s.started_at, 'started_at set by completeStep');
     assert.ok(s.completed_at, 'completed_at set by completeStep');
+  });
+
+  it('reopened steps clear stale completion and restamp on re-completion', () => {
+    const state = emptyState();
+    state.plan_items.push(PlanItemSchema.parse({
+      id: 'pln_reopen', short_label: 'pln#ro', text: 'reopen', type: 'feat', status: 'in_progress',
+      priority: 'medium', author: 'tester', tags: [],
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      steps: [
+        step({
+          id: 'stp_reopen',
+          status: 'done',
+          started_at: '2026-01-01T10:00:00.000Z',
+          completed_at: '2026-01-01T10:30:00.000Z',
+        }),
+      ],
+    }));
+    persistState(state, ws.dir);
+
+    updateStep({ planId: 'pln_reopen', stepId: 'stp_reopen', status: 'in_progress' }, ws.dir);
+    let s = loadState(ws.dir).plan_items[0].steps!.find(x => x.id === 'stp_reopen')!;
+    assert.notEqual(s.started_at, '2026-01-01T10:00:00.000Z');
+    assert.equal(s.completed_at, undefined);
+
+    updateStep({ planId: 'pln_reopen', stepId: 'stp_reopen', status: 'done' }, ws.dir);
+    s = loadState(ws.dir).plan_items[0].steps!.find(x => x.id === 'stp_reopen')!;
+    assert.ok(s.completed_at, 'completed_at set again after reopen');
+    assert.notEqual(s.completed_at, '2026-01-01T10:30:00.000Z');
   });
 });

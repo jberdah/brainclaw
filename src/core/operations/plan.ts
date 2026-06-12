@@ -211,8 +211,10 @@ export function completeStep(input: CompleteStepInput, cwd?: string): CompleteSt
     }
 
     const timestamp = nowISO();
+    const previousStatus = step.status;
     step.status = 'done';
-    if (!step.completed_at) step.completed_at = timestamp; // pln#495: stamp completion for per-step duration
+    if (!step.started_at) step.started_at = timestamp;
+    if (previousStatus !== 'done' || !step.completed_at) step.completed_at = timestamp; // pln#495: stamp completion for per-step duration
     step.updated_at = timestamp;
     plan.updated_at = timestamp;
 
@@ -273,11 +275,16 @@ export function updateStep(input: UpdateStepInput, cwd?: string): UpdateStepResu
 
     const timestamp = nowISO();
     if (input.status) {
+      const previousStatus = step.status;
       step.status = input.status;
       // pln#495: stamp the step lifecycle so the report can sum per-step
       // durations (started→completed) and exclude inter-step idle gaps.
-      if (input.status === 'in_progress' && !step.started_at) step.started_at = timestamp;
-      if (input.status === 'done' && !step.completed_at) step.completed_at = timestamp;
+      if (input.status !== 'todo' && (!step.started_at || previousStatus === 'done')) step.started_at = timestamp;
+      if (input.status === 'done') {
+        if (previousStatus !== 'done' || !step.completed_at) step.completed_at = timestamp;
+      } else if (previousStatus === 'done') {
+        step.completed_at = undefined;
+      }
     }
     if (input.text !== undefined) step.text = input.text;
     if (input.assignee !== undefined) step.assignee = input.assignee || undefined;
