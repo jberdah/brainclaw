@@ -100,7 +100,7 @@ import { initLogLevel, logger } from './core/logger.js';
 import { resolveEffectiveCwd } from './core/store-resolution.js';
 import { resolveProjectCwd } from './core/cross-project.js';
 import { runSwitch } from './commands/switch.js';
-import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean, runWorktreeMerge } from './commands/worktree.js';
+import { runWorktreeCreate, runWorktreeList, runWorktreeRemove, runWorktreePrune, runWorktreeClean, runWorktreeMerge, runWorktreeCheck } from './commands/worktree.js';
 import { runCheckEvents } from './commands/check-events.js';
 import { runDiscover } from './commands/discover.js';
 import { runMigrate } from './commands/migrate.js';
@@ -2001,6 +2001,16 @@ worktreeCmd
   .action((branch: string, options) => {
     const globalOpts = program.opts();
     runWorktreeMerge({ branch, message: options.message, dryRun: options.dryRun, cwd: globalOpts.cwd });
+  });
+
+worktreeCmd
+  .command('check')
+  .description('Pre-merge conflict detection: which parallel lanes touch overlapping files, and who owns them (exit 3 if overlaps found)')
+  .option('--base <ref>', 'Base ref each lane is diffed against (default: current branch)')
+  .option('--json', 'Emit the full risk report as JSON')
+  .action((options) => {
+    const globalOpts = program.opts();
+    runWorktreeCheck({ baseRef: options.base, json: options.json, cwd: globalOpts.cwd });
   });
 
 // --- federation cloud ---

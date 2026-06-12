@@ -8,6 +8,7 @@ import {
   worktreesBaseDir,
   type WorktreeInfo,
 } from '../core/worktree.js';
+import { analyzeMergeRisk, type MergeRiskReport } from '../core/merge-risk.js';
 import { memoryExists } from '../core/io.js';
 import { resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 
@@ -138,6 +139,20 @@ export interface WorktreeMergeOptions {
 export function runWorktreeMerge(options: WorktreeMergeOptions): void {
   const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
 
+  // Pre-merge conflict reflex (pln#396): warn if another live lane overlaps
+  // the files this branch would land. Advisory — never blocks the merge.
+  try {
+    const risk = analyzeMergeRisk(cwd, { branches: undefined });
+    const conflicting = risk.overlaps.filter(o => o.branches.includes(options.branch));
+    if (conflicting.length > 0) {
+      console.warn(`⚠ Pre-merge risk: ${options.branch} overlaps ${conflicting.length} file(s) with other live lane(s):`);
+      for (const o of conflicting.slice(0, 10)) {
+        console.warn(`    ${o.file} — also in ${o.branches.filter(b => b !== options.branch).join(', ')}`);
+      }
+      console.warn('  Run `brainclaw worktree check` for the full picture. Proceeding with merge.');
+    }
+  } catch { /* advisory only — never block the merge on the risk probe */ }
+
   const result = mergeWorktreeBranch(cwd, options.branch, {
     message: options.message,
     dryRun: options.dryRun,
@@ -155,6 +170,60 @@ export function runWorktreeMerge(options: WorktreeMergeOptions): void {
 
   console.log(`✔ Merged ${options.branch} → ${result.commitHash}`);
   console.log(`  ${result.filesChanged} files changed, ${result.filesRestored} parasitic deletion(s) auto-restored.`);
+}
+
+export interface WorktreeCheckOptions {
+  baseRef?: string;
+  json?: boolean;
+  cwd?: string;
+  store?: StoreTarget;
+}
+
+/**
+ * `brainclaw worktree check` (pln#396) — pre-merge conflict detection across
+ * the parallel lanes. Exit 0 when lanes are disjoint, 3 when overlaps exist
+ * (a distinct non-error code so a supervisor script can gate a batch merge
+ * without treating "risk found" as a crash).
+ */
+export function runWorktreeCheck(options: WorktreeCheckOptions): void {
+  const cwd = resolveTargetStore(options.cwd ?? process.cwd(), options.store ?? 'local');
+  const report = analyzeMergeRisk(cwd, { baseRef: options.baseRef });
+
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+    if (report.has_risk) process.exitCode = 3;
+    return;
+  }
+
+  printMergeRiskReport(report);
+  if (report.has_risk) process.exitCode = 3;
+}
+
+function printMergeRiskReport(report: MergeRiskReport): void {
+  console.log(`Pre-merge conflict check (base: ${report.base_ref})`);
+  console.log(`  ${report.summary}`);
+  if (report.lanes.length === 0) return;
+
+  console.log('\nLanes:');
+  for (const lane of report.lanes) {
+    const who = lane.claim_id
+      ? `${lane.agent ?? 'unknown'} · claim ${lane.claim_id}`
+      : (lane.agent ?? lane.session_id ?? 'unclaimed');
+    const dirtyNote = lane.dirty_files.length ? ` (+${lane.dirty_files.length} uncommitted)` : '';
+    console.log(`  • ${lane.branch} [${who}] — ${lane.changed_files.length} file(s)${dirtyNote}`);
+  }
+
+  if (report.overlaps.length > 0) {
+    console.log('\n⚠ Overlapping files (potential conflicts on merge):');
+    for (const o of report.overlaps) {
+      console.log(`  ${o.file}`);
+      console.log(`      lanes: ${o.branches.join(', ')}`);
+      if (o.claims.length) console.log(`      claims: ${o.claims.join(', ')}`);
+    }
+    console.log('\nMerge protocol: merge one overlapping lane, then rebase/re-check the others');
+    console.log('before merging them. Disjoint lanes can merge in any order. See');
+    console.log('docs/concepts/parallel-merge-protocol.md.');
+  }
 }
 
 /** Returns WorktreeInfo[] for use by MCP tools. */
