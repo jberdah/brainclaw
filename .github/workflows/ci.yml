@@ -18,19 +18,24 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: [20, 22, 24]
+        # Node 20 EOL 2026-04 and removed from GitHub runners 2026-09-16.
+        # 22 = Active LTS (until 2026-10), 24 = current Active LTS — the two
+        # versions a user could rationally run today. pln#459.
+        node: [22, 24]
         exclude:
+          # Windows runs only on the newer LTS to keep job count down; Linux
+          # provides full coverage across both supported Node versions.
           - os: windows-latest
             node: 22
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           cache: 'npm'
@@ -68,12 +73,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: 'npm'
