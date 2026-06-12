@@ -12,10 +12,8 @@ import {
   DecisionSchema, PlanItemSchema, TrapSchema,
 } from '../../src/core/schema.js';
 import { readJournalRecords } from '../../src/core/events/journal.js';
-import {
-  materializeMemoryStateFromJournal,
-  verifyProjectionsAgainstJournal,
-} from '../../src/core/events/materialize.js';
+import { materializeMemoryStateFromJournal } from '../../src/core/events/materialize.js';
+import { verifyProjectionsAgainstJournal } from '../../src/core/events/verify.js';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-jproj-'));

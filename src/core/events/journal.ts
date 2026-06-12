@@ -200,6 +200,25 @@ function resolveFsyncPolicy(cwd?: string): FsyncPolicy {
   return 'mutation';
 }
 
+/**
+ * Phase-3 primary capability: serve cold reads from a journal-derived
+ * checkpoint + sealed tail instead of reading every projection file (pln#566
+ * Inc0 s2). OFF by default and ONLY in a primary-family mode — in dual/off the
+ * projection files remain the read substrate, so this is a no-op until a soak
+ * explicitly enables it. A truthy boolean here is necessary but not sufficient:
+ * the read path still verifies the checkpoint and falls back on any failure.
+ */
+export function resolveCheckpointRead(cwd?: string): boolean {
+  const env = process.env.BRAINCLAW_PRIMARY_CHECKPOINT_READ?.trim().toLowerCase();
+  if (env === '1' || env === 'true' || env === 'on') return true;
+  if (env === '0' || env === 'false' || env === 'off') return false;
+  try {
+    return loadConfig(cwd).store?.journal?.primary?.checkpointRead === true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Writer identity (§2.1: pid + start-nonce, never bare pid) ---
 
 const WRITER_ID = `w_${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
