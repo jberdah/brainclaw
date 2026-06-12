@@ -34,7 +34,16 @@ export function runSetupSecurity(options: SetupSecurityOptions = {}): void {
 
   // Enable preinstall in config
   if (!config.security) {
-    config.security = { mode: 'warn', strict_redaction: false, block_sensitive_paths: true };
+    config.security = {
+      mode: 'warn',
+      strict_redaction: false,
+      block_sensitive_paths: true,
+      token_detection: {
+        enabled: true,
+        entropy: { enabled: true, min_length: 32, min_entropy: 4.0 },
+        detectors: {},
+      },
+    };
   }
   config.security.preinstall = {
     enabled: true,
