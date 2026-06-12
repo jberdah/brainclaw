@@ -4,7 +4,8 @@ import { listClaims } from './claims.js';
 import { loadConfig } from './config.js';
 import { nowISO } from './ids.js';
 import { listRuntimeNotes } from './runtime.js';
-import type { AgentIdentityDocument, Candidate, Claim, Config, RuntimeNote } from './schema.js';
+import { loadState } from './state.js';
+import type { AgentIdentityDocument, Candidate, Claim, Config, Constraint, Decision, RuntimeNote, Trap } from './schema.js';
 
 type IdentityKind = 'registered-agent' | 'actor';
 
@@ -34,6 +35,15 @@ interface ReputationAccumulator {
     claims_created: number;
     released_claims: number;
     orphan_runtime_noise: number;
+    /** pln#544 — memory-lifecycle signals. */
+    memory_confirmations_authored: number;
+    memory_infirmations_authored: number;
+    memory_saved_me_reports: number;
+    memory_misled_me_reports: number;
+    /** Items this actor authored that another actor flagged saved_me. */
+    memory_items_reinforced: number;
+    /** Items this actor authored that another actor flagged misled_me. */
+    memory_items_misled_others: number;
   };
 }
 
@@ -133,6 +143,12 @@ function createAccumulator(identity: IdentityRef): ReputationAccumulator {
       claims_created: 0,
       released_claims: 0,
       orphan_runtime_noise: 0,
+      memory_confirmations_authored: 0,
+      memory_infirmations_authored: 0,
+      memory_saved_me_reports: 0,
+      memory_misled_me_reports: 0,
+      memory_items_reinforced: 0,
+      memory_items_misled_others: 0,
     },
   };
 }
@@ -281,6 +297,57 @@ function trackRuntimeSignals(
   }
 }
 
+/**
+ * pln#544 — memory lifecycle reinforcement signals.
+ *
+ * For each decision / constraint / trap, walk the bounded confirmations[]
+ * log and attribute:
+ *   - the event itself to the attesting agent (`by`/`by_id`), increasing
+ *     their confirmations/infirmations/saved-me/misled-me counters.
+ *   - reinforcement back to the item author (saved_me / misled_me) so that
+ *     "memory that actually helped" rewards whoever wrote it.
+ *
+ * The 30-day reputation window applies — older confirmation events do not
+ * count, mirroring how stale candidate signals are excluded above.
+ */
+function trackMemoryLifecycleSignals(
+  item: { author: string; author_id?: string; confirmations?: { at: string; by: string; by_id?: string; kind: string }[] },
+  store: Map<string, ReputationAccumulator>,
+  sinceMs: number,
+  resolveIdentity: (value?: string) => IdentityRef | undefined,
+): void {
+  const events = item.confirmations ?? [];
+  if (events.length === 0) return;
+
+  const author = resolveIdentity(item.author_id ?? item.author);
+
+  for (const event of events) {
+    if (!withinWindow(event.at, sinceMs)) continue;
+    const attester = resolveIdentity(event.by_id ?? event.by);
+    if (attester) {
+      const stats = getAccumulator(store, attester);
+      if (event.kind === 'confirm') stats.signals.memory_confirmations_authored += 1;
+      else if (event.kind === 'infirm') stats.signals.memory_infirmations_authored += 1;
+      else if (event.kind === 'saved_me') {
+        stats.signals.memory_confirmations_authored += 1;
+        stats.signals.memory_saved_me_reports += 1;
+      } else if (event.kind === 'misled_me') {
+        stats.signals.memory_infirmations_authored += 1;
+        stats.signals.memory_misled_me_reports += 1;
+      }
+    }
+
+    // Reinforcement back to the item author — only "explicitly reinforced" /
+    // "explicitly debunked" events flow there. Passive confirm/infirm are
+    // peer-review signals, not author signals.
+    if (author && attester && attester.key !== author.key) {
+      const ownerStats = getAccumulator(store, author);
+      if (event.kind === 'saved_me') ownerStats.signals.memory_items_reinforced += 1;
+      else if (event.kind === 'misled_me') ownerStats.signals.memory_items_misled_others += 1;
+    }
+  }
+}
+
 function trackClaimSignals(
   claim: Claim,
   store: Map<string, ReputationAccumulator>,
@@ -320,17 +387,31 @@ function finalizeSnapshot(accumulator: ReputationAccumulator): ReputationAgentSn
   const boundedPlanActivity = Math.min(accumulator.signals.plan_linked_activity, 4);
   const boundedNoise = Math.min(accumulator.signals.orphan_runtime_noise, 4);
 
+  // pln#544 — memory-lifecycle reinforcement caps so a single noisy attester
+  // can't dominate the score. Saved-me on items I authored is the strongest
+  // positive signal ("my memory actually saved another agent"); misled-me on
+  // my items is the symmetric penalty.
+  const boundedSavedMeAuthored = Math.min(accumulator.signals.memory_items_reinforced, 5);
+  const boundedMisledOthers = Math.min(accumulator.signals.memory_items_misled_others, 5);
+  const boundedMemoryReviewVolume = Math.min(
+    accumulator.signals.memory_confirmations_authored + accumulator.signals.memory_infirmations_authored,
+    10,
+  );
+
   const contributionQuality = clampScore(
     35 * accumulator.signals.accepted_candidates
       + 20 * accumulator.signals.promoted_runtime_accepted
       + 10 * boundedUses
       + 4 * boundedStars
-      - 12 * accumulator.signals.rejected_candidates_authored,
+      + 15 * boundedSavedMeAuthored
+      - 12 * accumulator.signals.rejected_candidates_authored
+      - 18 * boundedMisledOthers,
   );
   const reviewReliability = clampScore(
     30 * accumulator.signals.accepted_reviews
       + 18 * accumulator.signals.rejected_reviews
-      + 4 * accumulator.signals.reasoned_rejections,
+      + 4 * accumulator.signals.reasoned_rejections
+      + 6 * boundedMemoryReviewVolume,
   );
   const continuityHygiene = clampScore(
     12 * boundedRuntimeNotes
@@ -398,6 +479,22 @@ export function buildReputationSnapshot(cwd?: string): ReputationSnapshot {
   for (const claim of listClaims(cwd)) {
     trackClaimSignals(claim, store, sinceMs, resolvers.resolve);
   }
+
+  // pln#544 — feed memory-lifecycle confirmations back into reputation:
+  // attesting agents earn confirmation_authored; items reinforced by
+  // 'saved_me' reward their author. Best-effort: never let a lifecycle
+  // signal failure block reputation rebuild.
+  try {
+    const state = loadState(cwd);
+    const memoryItems: Array<Decision | Constraint | Trap> = [
+      ...state.recent_decisions,
+      ...state.active_constraints,
+      ...state.known_traps,
+    ];
+    for (const item of memoryItems) {
+      trackMemoryLifecycleSignals(item, store, sinceMs, resolvers.resolve);
+    }
+  } catch { /* state may be unreadable in cold-start scenarios */ }
 
   const agents = [...store.values()]
     .map((entry) => finalizeSnapshot(entry))
