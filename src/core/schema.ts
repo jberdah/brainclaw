@@ -590,11 +590,27 @@ export const PreinstallConfigSchema = z.object({
 });
 export type PreinstallConfig = z.infer<typeof PreinstallConfigSchema>;
 
+export const TokenDetectionConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Entropy-based detection for high-randomness strings (typically API keys / tokens). */
+  entropy: z.object({
+    enabled: z.boolean().default(true),
+    /** Minimum string length to consider as a potential secret. */
+    min_length: z.number().int().min(8).max(1024).default(32),
+    /** Minimum Shannon entropy (bits per char) to flag the string. ~4.0 is a reasonable line. */
+    min_entropy: z.number().min(0).max(8).default(4.0),
+  }).prefault({}),
+  /** Per-detector overrides: { aws_access_key: false } disables that detector. */
+  detectors: z.record(z.string(), z.boolean()).default({}),
+});
+export type TokenDetectionConfig = z.infer<typeof TokenDetectionConfigSchema>;
+
 export const SecurityConfigSchema = z.object({
   mode: z.enum(['warn', 'strict']).default('warn'),
   strict_redaction: z.boolean().default(false),
   block_sensitive_paths: z.boolean().default(true),
   preinstall: PreinstallConfigSchema.optional(),
+  token_detection: TokenDetectionConfigSchema.prefault({}),
 });
 
 export const MarkdownConfigSchema = z.object({

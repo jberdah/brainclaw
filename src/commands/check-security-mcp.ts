@@ -1,9 +1,16 @@
-import path from 'node:path';
 import { memoryExists, memoryPath } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
 import { SecurityCache } from '../core/security-cache.js';
 import { querySocketScores, type PackageQuery, type PackageScores } from '../core/socket-client.js';
-import { evaluateBatch, worstDecision, type SecurityVerdict } from '../core/security-scoring.js';
+import {
+  applyMode,
+  evaluateBatch,
+  worstDecision,
+  type SecurityDecision,
+  type SecurityMode,
+} from '../core/security-scoring.js';
+import { parsePackageSpec } from '../core/security-packages.js';
+import { collectPackages } from '../core/security-extract.js';
 import { createTrap } from '../core/operations/memory-write.js';
 
 interface McpToolResult {
@@ -24,13 +31,28 @@ export async function handleCheckSecurity(args: Record<string, unknown>, cwd: st
     return { content: [{ type: 'text', text: 'Security preinstall checks are not enabled. Set security.preinstall.enabled: true in config.yaml.' }] };
   }
 
-  const packagesStr = String(args.packages ?? '').trim();
-  if (!packagesStr) {
-    return { content: [{ type: 'text', text: 'Error: missing required argument: packages' }] };
+  const ecosystem = (String(args.ecosystem ?? 'npm').trim()) as 'npm' | 'pypi';
+  const modeArg = args.mode ? String(args.mode).trim() : undefined;
+  const effectiveMode: SecurityMode = (modeArg === 'enforced' || modeArg === 'advisory')
+    ? modeArg
+    : (preinstall.mode ?? 'advisory');
+
+  let packageSpecs: string[];
+  try {
+    packageSpecs = collectPackages({
+      packages: args.packages ? String(args.packages) : undefined,
+      requirements: args.requirements ? String(args.requirements) : undefined,
+      lockfile: args.lockfile ? String(args.lockfile) : undefined,
+      defaultEcosystem: ecosystem,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: [{ type: 'text', text: `Error: ${msg}` }] };
   }
 
-  const ecosystem = (String(args.ecosystem ?? 'npm').trim()) as 'npm' | 'pypi';
-  const packageNames = packagesStr.split(',').map(p => p.trim()).filter(Boolean);
+  if (packageSpecs.length === 0) {
+    return { content: [{ type: 'text', text: 'Error: no packages specified (pass --packages, --requirements, or --lockfile).' }] };
+  }
 
   // Build cache
   const cachePath = memoryPath('security/cache.json', cwd);
@@ -40,8 +62,8 @@ export async function handleCheckSecurity(args: Record<string, unknown>, cwd: st
   const queries: PackageQuery[] = [];
   const cachedScores: PackageScores[] = [];
 
-  for (const name of packageNames) {
-    const [depname, version] = parsePackageName(name);
+  for (const spec of packageSpecs) {
+    const { depname, version } = parsePackageSpec(spec);
     const cached = cache.get(ecosystem, depname, version);
     if (cached) {
       cachedScores.push(cached);
@@ -72,28 +94,37 @@ export async function handleCheckSecurity(args: Record<string, unknown>, cwd: st
 
   if (allScores.length === 0 && fetchError) {
     const fallback = preinstall.fallback_on_error;
+    const fallbackVerdict: SecurityDecision = fallback === 'block' ? 'block' : fallback === 'warn' ? 'warn' : 'pass';
+    const effective = applyMode(fallbackVerdict, effectiveMode);
     return {
-      content: [{ type: 'text', text: `Socket MCP error: ${fetchError}\nFallback policy: ${fallback}` }],
-      structuredContent: { error: fetchError, fallback, decision: fallback === 'block' ? 'block' : fallback === 'warn' ? 'warn' : 'pass' },
+      content: [{ type: 'text', text: `Socket MCP error: ${fetchError}\nFallback policy: ${fallback} (mode=${effectiveMode}) → ${effective.toUpperCase()}` }],
+      structuredContent: {
+        error: fetchError,
+        fallback,
+        mode: effectiveMode,
+        decision: fallbackVerdict,
+        effective_decision: effective,
+      },
     };
   }
 
   const verdicts = evaluateBatch(allScores, preinstall);
-  const worst = worstDecision(verdicts);
+  const intrinsic = worstDecision(verdicts);
+  const effective = applyMode(intrinsic, effectiveMode);
 
   // Build text output
   const lines: string[] = [];
   if (fetchError) {
-    lines.push(`\u26A0 Socket MCP partial error: ${fetchError} (${cachedScores.length} results from cache)`);
+    lines.push(`⚠ Socket MCP partial error: ${fetchError} (${cachedScores.length} results from cache)`);
     lines.push('');
   }
 
   for (const v of verdicts) {
-    const icon = v.decision === 'pass' ? '\u2705' : v.decision === 'warn' ? '\u26A0\uFE0F' : '\uD83D\uDED1';
-    lines.push(`${icon} ${v.ecosystem}/${v.package}@${v.version} \u2014 composite=${v.composite} [${v.decision.toUpperCase()}]`);
+    const icon = v.decision === 'pass' ? '✅' : v.decision === 'warn' ? '⚠️' : '🛑';
+    lines.push(`${icon} ${v.ecosystem}/${v.package}@${v.version} — composite=${v.composite} [${v.decision.toUpperCase()}]`);
     lines.push(`   SC=${v.scores.supplyChain} vuln=${v.scores.vulnerability} qual=${v.scores.quality} maint=${v.scores.maintenance} lic=${v.scores.license}`);
     for (const r of v.reasons) {
-      lines.push(`   \u2192 ${r}`);
+      lines.push(`   → ${r}`);
     }
   }
 
@@ -123,7 +154,11 @@ export async function handleCheckSecurity(args: Record<string, unknown>, cwd: st
   }
 
   lines.push('');
-  lines.push(`Overall decision: ${worst.toUpperCase()}`);
+  if (intrinsic !== effective) {
+    lines.push(`Verdict: ${intrinsic.toUpperCase()} — downgraded to ${effective.toUpperCase()} by mode=${effectiveMode}.`);
+  } else {
+    lines.push(`Verdict: ${intrinsic.toUpperCase()} (mode=${effectiveMode})`);
+  }
 
   return {
     content: [{ type: 'text', text: lines.join('\n') }],
@@ -143,25 +178,10 @@ export async function handleCheckSecurity(args: Record<string, unknown>, cwd: st
           license: v.scores.license,
         },
       })),
-      decision: worst,
+      decision: intrinsic,
+      effective_decision: effective,
+      mode: effectiveMode,
       ...(fetchError ? { fetch_error: fetchError } : {}),
     },
   };
-}
-
-function parsePackageName(name: string): [string, string] {
-  // Handle scoped packages: @scope/pkg@version
-  if (name.startsWith('@')) {
-    const lastAt = name.lastIndexOf('@', name.length - 1);
-    if (lastAt > 0) {
-      return [name.slice(0, lastAt), name.slice(lastAt + 1)];
-    }
-    return [name, 'latest'];
-  }
-  // Regular: pkg@version
-  if (name.includes('@')) {
-    const [depname, version] = name.split('@') as [string, string];
-    return [depname, version || 'latest'];
-  }
-  return [name, 'latest'];
 }

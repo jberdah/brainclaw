@@ -58,6 +58,11 @@ export function defaultConfig(projectName: string, options: DefaultConfigOptions
       mode: 'warn',
       strict_redaction: false,
       block_sensitive_paths: true,
+      token_detection: {
+        enabled: true,
+        entropy: { enabled: true, min_length: 32, min_entropy: 4.0 },
+        detectors: {},
+      },
     },
     markdown: {
       max_items_per_section: 20,
