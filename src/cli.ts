@@ -787,6 +787,7 @@ program
   .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
   .option('--dispatch', 'Run dispatch-health diagnostic only: reconcile open agent_runs and report stuck/unverified/silent failures (pln#496 step stp_8c072d75)')
+  .option('--verify-journal', 'Phase-2 cutover gate (pln#565): rebuild state from the event journal and diff vs live projections; exits non-zero on any drift')
   .option('--spawn-check', 'Real spawn round-trip per installed agent before dispatch (pln#520 step 2): validates delivery + handshake on this host, exits non-zero on any installed-agent failure')
   .option('--spawn-check-timeout <ms>', 'Per-agent timeout for --spawn-check (default 15000)', parseInt)
   .action(async (options) => {
@@ -794,7 +795,7 @@ program
       await runDoctorSpawnCheck({ cwd: options.cwd, json: options.json, timeoutMs: options.spawnCheckTimeout });
       return;
     }
-    runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch });
+    runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch, verifyJournal: options.verifyJournal });
   });
 
 // --- repair (Phase 4 Sprint 2 Lane C / pln#397) ---

@@ -751,6 +751,27 @@ phase flip (upgrade-style, park-don't-delete).
   to `dual` or `off`, re-arm legacy delete semantics, no data
   transformation.
 
+### Phase 2 gate status (pln#565, 2026-06-12)
+
+The promotion gate is now **mechanically checkable** via one command and an
+automated hardening suite. Status of each Phase-2 exit criterion:
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Journal reproduces projections (the core claim) | ✅ | `brainclaw doctor --verify-journal` — rebuilds from journal, diffs vs live projections, exit 1 on drift. GREEN on this repo's store (mode=dual). |
+| Tail validation / torn-tail adjudication | ✅ | `journal-v2.test` (torn tail → `torn_tail_adjudicated`, stale meta → `seq_repair`). |
+| Two-process append stress | ✅ | `journal-concurrency.test` — N processes × K appends, gap-free 1..N*K seq, N distinct writers, zero torn/lost. |
+| Kill-9 storm convergence | ✅ | `journal-concurrency.test` — SIGKILL mid-append storm: journal stays readable, seqs never duplicate, post-storm append re-derives a non-colliding seq, state still materializes. |
+| Migration + rollback tooling | ✅ | genesis backfill + `rollbackJournal` (park `events/`, projections untouched). |
+| Dual-OS CI | ✅ | `.github/workflows/ci.yml` matrix `[ubuntu, windows]`. |
+| **Zero divergence across a real multi-agent sprint** | ✅ | seq#47 (2026-06-12): 4 parallel claude-code lanes + dispatch worktree churn + 4 merges → `verify-journal` zero drift throughout. |
+| Lock wait-time distribution (§2.9 falsifier) | ◐ | Lock serialization proven under contention by `journal-concurrency.test`; explicit p50/p95 telemetry via doctor counters is the one remaining instrumentation item — lands with the cutover (it touches the mutate hot path). |
+
+**Verdict:** the correctness gate is GREEN. The only residual is wait-time
+*telemetry* (not a correctness blocker). The primary cutover (Phase 3) is a
+Juan sequencing call (§6) and a distinct implementation chantier (tombstones +
+per-entity append/patch), not gated on more verification.
+
 ## 5. Perf targets (measured, not asserted)
 
 - `bclaw_work` cold read < 1 s on a 100k-event store.
