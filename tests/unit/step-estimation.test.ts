@@ -253,3 +253,65 @@ describe('step-level effort estimation — lifecycle timestamps (pln#495)', () =
     assert.notEqual(s.completed_at, '2026-01-01T10:30:00.000Z');
   });
 });
+
+describe('step-level effort estimation — wall-clock outlier filter (pln#495 step 7)', () => {
+  it('excludes a >24h plan_wallclock actual from stats but keeps it visible', () => {
+    // Trusted step-derived plan (1.0x) + a wall-clock plan whose span is ~30 days
+    // (created_at reassigned during a memory-recovery accident — the +9900% case).
+    persistDonePlan('pln_good', { estimated_effort: 60, steps: [step({ id: 'a', estimated_effort: 60, actual_effort: '1h' })] });
+    const state = loadState(ws.dir);
+    state.plan_items.push(PlanItemSchema.parse({
+      id: 'pln_accident', short_label: 'pln#acc', text: 'recovery accident', type: 'feat', status: 'done',
+      priority: 'medium', author: 'tester', tags: [], estimated_effort: 60,
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-31T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z', completed_at: '2026-01-31T00:00:00.000Z', // 43200min
+    }));
+    persistState(state, ws.dir);
+
+    const report = buildEstimationReport({ cwd: ws.dir });
+    const accident = report.entries.find(e => e.id === 'pln_accident')!;
+    assert.equal(accident.source, 'plan_wallclock');
+    assert.equal(accident.excluded_from_stats, true, 'the 30-day outlier is flagged');
+    assert.ok(accident.ratio !== undefined, 'but it keeps its ratio for the chart');
+
+    // The median is computed from the trusted plan ONLY (1.0x), not poisoned to ~0.001x.
+    assert.equal(report.summary.median_ratio, 1);
+    assert.equal(report.summary.outliers_excluded, 1);
+    // by_source has no plan_wallclock bucket — its only member was excluded.
+    assert.equal(report.summary.by_source!.plan_wallclock, undefined);
+    assert.equal(report.summary.by_source!.step!.median_ratio, 1);
+  });
+
+  it('a plan_wallclock actual UNDER the threshold is kept in stats', () => {
+    persistDonePlan('pln_short', { estimated_effort: 120 }); // 270min wall-clock < 1440
+    const report = buildEstimationReport({ cwd: ws.dir });
+    const e = report.entries.find(x => x.id === 'pln_short')!;
+    assert.equal(e.excluded_from_stats, undefined);
+    assert.equal(report.summary.outliers_excluded, undefined);
+    assert.ok(report.summary.median_ratio !== undefined);
+  });
+
+  it('step/string sources are NEVER excluded even when huge (only wall-clock is suspect)', () => {
+    // A step-derived actual of 3 days is real measured work, not idle — keep it.
+    persistDonePlan('pln_bigstep', { estimated_effort: 60, steps: [step({ id: 'a', estimated_effort: 60, actual_effort: '3d' })] });
+    const report = buildEstimationReport({ cwd: ws.dir });
+    const e = report.entries.find(x => x.id === 'pln_bigstep')!;
+    assert.equal(e.elapsed_minutes, 1440); // 3d = 1440min, over threshold
+    assert.equal(e.excluded_from_stats, undefined, 'step-derived is trusted regardless of size');
+  });
+
+  it('threshold=0 disables the filter (the accident outlier rejoins the stats)', () => {
+    const state = emptyState();
+    state.plan_items.push(PlanItemSchema.parse({
+      id: 'pln_acc2', short_label: 'pln#a2', text: 'accident', type: 'feat', status: 'done',
+      priority: 'medium', author: 'tester', tags: [], estimated_effort: 60,
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-31T00:00:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z', completed_at: '2026-01-31T00:00:00.000Z',
+    }));
+    persistState(state, ws.dir);
+    const report = buildEstimationReport({ cwd: ws.dir, outlierThresholdMinutes: 0 });
+    assert.equal(report.entries[0].excluded_from_stats, undefined);
+    assert.equal(report.summary.outliers_excluded, undefined);
+    assert.ok(report.summary.median_ratio !== undefined);
+  });
+});

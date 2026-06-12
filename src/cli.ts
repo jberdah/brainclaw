@@ -699,8 +699,13 @@ program
   .description('Show estimation accuracy report for completed plans')
   .option('--agent <name>', 'Filter by agent/author name')
   .option('--json', 'Output as JSON')
+  .option('--outlier-threshold <minutes>', 'Drop plan-wallclock actuals over N minutes from the stats (default 1440 = 24h; 0 disables)')
   .action((options) => {
-    runEstimationReport(options);
+    runEstimationReport({
+      agent: options.agent,
+      json: options.json,
+      outlierThresholdMinutes: options.outlierThreshold !== undefined ? Number(options.outlierThreshold) : undefined,
+    });
   });
 
 // --- update-plan ---

@@ -6,7 +6,20 @@ export interface EstimationReportOptions {
   agent?: string;
   json?: boolean;
   cwd?: string;
+  /**
+   * Wall-clock outlier threshold in minutes (pln#495 step 7). A plan whose
+   * `actual` came from plan-level wall-clock AND exceeds this is dropped from
+   * the median/mean/by_source stats (it stays visible in the chart, flagged).
+   * This is the post-restoration-accident guard: when `created_at` was
+   * reassigned during memory recovery, plans showed +9900% overruns that
+   * poisoned the median. Step- and string-derived actuals are trusted
+   * regardless of size. Default 1440 (24h); set 0 to disable the filter.
+   */
+  outlierThresholdMinutes?: number;
 }
+
+/** Default wall-clock outlier cutoff: a single plan's "actual" over 24h is almost certainly idle, not work. */
+export const DEFAULT_OUTLIER_THRESHOLD_MINUTES = 1440;
 
 /**
  * How a plan's `actual` measurement was derived (pln#495). 'step' is the
@@ -26,6 +39,8 @@ export interface PlanEstimationEntry {
   completed_at?: string;
   /** Provenance of elapsed_minutes — the measurement-quality tag (pln#495). */
   source?: EstimationSource;
+  /** True when a plan_wallclock actual over the outlier threshold excludes this from stats (pln#495 step 7). */
+  excluded_from_stats?: boolean;
 }
 
 export interface EstimationReportResult {
@@ -39,6 +54,8 @@ export interface EstimationReportResult {
     calibration_hint?: string;
     /** Median ratio per measurement source — shows how much noise is wall-clock contamination. */
     by_source?: Partial<Record<EstimationSource, { count: number; median_ratio: number }>>;
+    /** Count of plan_wallclock outliers excluded from the stats above (pln#495 step 7). */
+    outliers_excluded?: number;
   };
 }
 
@@ -185,21 +202,39 @@ export function buildEstimationReport(options: EstimationReportOptions = {}): Es
     return entry;
   });
 
+  // Wall-clock outlier filter (pln#495 step 7): a plan whose actual is plan-level
+  // wall-clock AND exceeds the threshold is flagged and dropped from the summary
+  // stats — it would otherwise drag the median/mean (the post-restoration +9900%
+  // accident). Step- and string-derived actuals are trusted at any size. A
+  // threshold of 0 disables the filter. Outliers keep their ratio and stay in
+  // `entries` so the chart still shows them, just marked.
+  const threshold = options.outlierThresholdMinutes ?? DEFAULT_OUTLIER_THRESHOLD_MINUTES;
+  if (threshold > 0) {
+    for (const e of entries) {
+      if (e.source === 'plan_wallclock' && e.elapsed_minutes !== undefined && e.elapsed_minutes > threshold) {
+        e.excluded_from_stats = true;
+      }
+    }
+  }
+
   const withBoth = entries.filter((e) => e.ratio !== undefined);
-  const ratios = withBoth.map((e) => e.ratio as number);
+  const included = withBoth.filter((e) => !e.excluded_from_stats);
+  const ratios = included.map((e) => e.ratio as number);
 
   const medianRatio = ratios.length > 0 ? parseFloat(median(ratios).toFixed(2)) : undefined;
   const meanRatio = ratios.length > 0 ? parseFloat(mean(ratios).toFixed(2)) : undefined;
 
   // Per-source median (pln#495): exposes how much calibration noise is wall-clock
-  // contamination vs idle-gap-free step measurement.
+  // contamination vs idle-gap-free step measurement. Excludes flagged outliers.
   const bySource: Partial<Record<EstimationSource, { count: number; median_ratio: number }>> = {};
   for (const src of ['step', 'plan_string', 'plan_wallclock'] as const) {
-    const srcRatios = withBoth.filter((e) => e.source === src).map((e) => e.ratio as number);
+    const srcRatios = included.filter((e) => e.source === src).map((e) => e.ratio as number);
     if (srcRatios.length > 0) {
       bySource[src] = { count: srcRatios.length, median_ratio: parseFloat(median(srcRatios).toFixed(2)) };
     }
   }
+
+  const outliersExcluded = withBoth.filter((e) => e.excluded_from_stats).length;
 
   return {
     entries,
@@ -211,6 +246,7 @@ export function buildEstimationReport(options: EstimationReportOptions = {}): Es
       mean_ratio: meanRatio,
       calibration_hint: medianRatio !== undefined ? buildCalibrationHint(medianRatio) : undefined,
       by_source: Object.keys(bySource).length > 0 ? bySource : undefined,
+      outliers_excluded: outliersExcluded > 0 ? outliersExcluded : undefined,
     },
   };
 }
@@ -241,6 +277,10 @@ export function runEstimationReport(options: EstimationReportOptions = {}): void
   if (summary.median_ratio !== undefined) {
     console.log(`\nMedian ratio (estimated÷actual): ${summary.median_ratio}x · Mean: ${summary.mean_ratio}x`);
     console.log(`→ ${summary.calibration_hint}`);
+  }
+
+  if (summary.outliers_excluded) {
+    console.log(`(${summary.outliers_excluded} wall-clock outlier(s) >24h excluded from the stats above — shown ⚠ in the chart)`);
   }
 
   if (summary.by_source) {
@@ -276,7 +316,7 @@ export function runEstimationReport(options: EstimationReportOptions = {}): void
         : ` OVER  +${Math.round((1 / e.ratio! - 1) * 100)}%`;
       const est = e.estimated_minutes !== undefined ? `${e.estimated_minutes}min` : '?';
       const act = e.elapsed_minutes !== undefined ? `${e.elapsed_minutes}min` : '?';
-      const srcTag = e.source === 'step' ? ' ✓step' : e.source === 'plan_wallclock' ? ' ~wall' : '';
+      const srcTag = e.excluded_from_stats ? ' ⚠outlier' : e.source === 'step' ? ' ✓step' : e.source === 'plan_wallclock' ? ' ~wall' : '';
       console.log(`  ${label} ${bar} ${e.ratio}x  ${est}→${act}${pct}${srcTag}`);
     }
     console.log('');
