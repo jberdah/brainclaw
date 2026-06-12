@@ -112,7 +112,7 @@ export function runGenesisMigration(options: GenesisOptions = {}): GenesisResult
   // then silently diverges from projections until BRAINCLAW_JOURNAL_MODE is
   // flipped to dual. Warn so the operator flips the flag (or accepts the
   // seed-then-flip sequence deliberately).
-  if (resolveJournalMode() === 'off') {
+  if (resolveJournalMode(cwd) === 'off') {
     logger.warn(
       'runGenesisMigration: BRAINCLAW_JOURNAL_MODE=off — genesis will seed the journal, but subsequent mutations will not dual-write, so the journal will diverge from projections until you set BRAINCLAW_JOURNAL_MODE=dual.',
     );

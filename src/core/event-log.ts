@@ -131,7 +131,7 @@ export function appendEvent(
  */
 function dualWriteToJournal(event: Partial<MemoryEvent> & { action: EventAction; item_type: EventItemType }, cwd?: string): void {
   try {
-    if (resolveJournalMode() === 'off') return;
+    if (resolveJournalMode(cwd) === 'off') return;
     const base = {
       agent: event.agent,
       agent_id: event.agent_id,

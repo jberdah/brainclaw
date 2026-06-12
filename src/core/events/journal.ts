@@ -26,6 +26,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { mutate } from '../mutation-pipeline.js';
+import { loadConfig } from '../config.js';
 import { nowISO } from '../ids.js';
 import { logger } from '../logger.js';
 import type { EventAction, EventItemType } from '../event-log.js';
@@ -152,24 +153,51 @@ export type JournalMode = 'off' | 'dual' | 'primary' | 'registryPrimary';
 
 let warnedUnsupportedMode = false;
 
-export function resolveJournalMode(): JournalMode {
-  const raw = process.env.BRAINCLAW_JOURNAL_MODE?.trim().toLowerCase();
-  if (!raw || raw === 'off' || raw === '0' || raw === 'false') return 'off';
-  if (raw === 'dual') return 'dual';
-  if (raw === 'primary' || raw === 'registryprimary') {
+function coerceMode(raw: string | undefined): JournalMode | undefined {
+  const v = raw?.trim().toLowerCase();
+  if (v === undefined || v === '') return undefined;
+  if (v === 'off' || v === '0' || v === 'false') return 'off';
+  if (v === 'dual') return 'dual';
+  if (v === 'primary' || v === 'registryprimary') {
     if (!warnedUnsupportedMode) {
       warnedUnsupportedMode = true;
-      logger.warn(`BRAINCLAW_JOURNAL_MODE=${raw} not available until projections land (pln#543 step 3) — running dual`);
+      logger.warn(`journal mode "${v}" not available until the primary cutover (pln#543 step 5) — running dual`);
     }
     return 'dual';
   }
-  return 'off';
+  return undefined; // unrecognized → let the next source decide
+}
+
+/** Read the persisted journal mode from config.yaml (best-effort, off on any failure). */
+function configJournalMode(cwd?: string): JournalMode | undefined {
+  try {
+    return coerceMode(loadConfig(cwd).store?.journal?.mode);
+  } catch {
+    return undefined; // uninitialized / unreadable config → no opinion
+  }
+}
+
+/**
+ * Resolve the journal mode. Precedence: the BRAINCLAW_JOURNAL_MODE env var
+ * (a per-process override — tests and one-off runs use it) wins when set;
+ * otherwise the persisted config.yaml `store.journal.mode`; otherwise off.
+ * Config is read live (not cached) so a flip in config.yaml is picked up by a
+ * running MCP server on its next mutation — no restart, unlike an env change
+ * (trp#522 cold-start). Mutations are human-paced, so the small config read is
+ * negligible next to the persist it gates.
+ */
+export function resolveJournalMode(cwd?: string): JournalMode {
+  return coerceMode(process.env.BRAINCLAW_JOURNAL_MODE) ?? configJournalMode(cwd) ?? 'off';
 }
 
 type FsyncPolicy = 'mutation' | 'never';
 
-function resolveFsyncPolicy(): FsyncPolicy {
-  return process.env.BRAINCLAW_JOURNAL_FSYNC?.trim() === 'never' ? 'never' : 'mutation';
+function resolveFsyncPolicy(cwd?: string): FsyncPolicy {
+  if (process.env.BRAINCLAW_JOURNAL_FSYNC?.trim() === 'never') return 'never';
+  try {
+    if (loadConfig(cwd).store?.journal?.fsync === 'never') return 'never';
+  } catch { /* no config → default */ }
+  return 'mutation';
 }
 
 // --- Writer identity (§2.1: pid + start-nonce, never bare pid) ---
@@ -390,7 +418,7 @@ export function journalStatus(cwd?: string): JournalStatus {
   const dir = journalDir(cwd);
   const meta = fs.existsSync(dir) ? loadOrRebuildMeta(dir) : freshMeta();
   return {
-    mode: resolveJournalMode(),
+    mode: resolveJournalMode(cwd),
     next_seq: meta.next_seq,
     segments: listSegments(dir).length,
     violations: violationCount,
@@ -411,7 +439,7 @@ export function journalStatus(cwd?: string): JournalStatus {
  * Returns the appended records (empty when mode=off or on failure).
  */
 export function appendJournalRecords(inputs: JournalAppendInput[], cwd?: string): JournalRecord[] {
-  const mode = resolveJournalMode();
+  const mode = resolveJournalMode(cwd);
   if (mode === 'off' || inputs.length === 0) return [];
 
   try {
@@ -522,7 +550,7 @@ function appendLocked(inputs: JournalAppendInput[], cwd: string): JournalRecord[
     if (written !== buffer.length) {
       throw new Error(`short write: ${written}/${buffer.length} bytes`);
     }
-    if (resolveFsyncPolicy() === 'mutation') {
+    if (resolveFsyncPolicy(cwd) === 'mutation') {
       fs.fsyncSync(fd);
     }
   } finally {

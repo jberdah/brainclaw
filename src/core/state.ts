@@ -402,7 +402,7 @@ function emitPerEntityJournalRecords(
   storeAction: PersistStateOptions['eventAction'],
   cwd: string,
 ): void {
-  if (resolveJournalMode() === 'off') return;
+  if (resolveJournalMode(cwd) === 'off') return;
   const records: JournalAppendInput[] = [];
   for (const { itemType, written, deleted } of dirty) {
     for (const { item, created } of written) {

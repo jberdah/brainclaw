@@ -1559,5 +1559,15 @@ export const ConfigSchema = z.object({
     shared_paths: z.array(z.string()).default([]),
     exclude_shared: z.array(z.string()).default([]),
   }).optional(),
+  // Event-log store (pln#543). Absent ⇒ off — fresh and existing stores keep
+  // today's behavior; the journal only activates when explicitly set here (or
+  // via the BRAINCLAW_JOURNAL_MODE env override). The cutover (step 5) flips
+  // the default to dual/primary.
+  store: z.object({
+    journal: z.object({
+      mode: z.enum(['off', 'dual', 'primary', 'registryPrimary']).optional(),
+      fsync: z.enum(['mutation', 'never']).optional(),
+    }).optional(),
+  }).optional(),
 });
 export type Config = z.infer<typeof ConfigSchema>;
