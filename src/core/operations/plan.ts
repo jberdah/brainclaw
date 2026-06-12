@@ -73,6 +73,9 @@ export interface AddStepInput {
   planId: string;
   text: string;
   assignee?: string;
+  /** Step-level estimate (pln#495); minutes, or a legacy duration string coerced by the schema. */
+  estimatedEffort?: number | string;
+  actualEffort?: string;
 }
 
 export interface AddStepResult {
@@ -98,6 +101,10 @@ export function addStep(input: AddStepInput, cwd?: string): AddStepResult {
       assignee: input.assignee,
       created_at: nowISO(),
       updated_at: nowISO(),
+      // PlanStepSchema preprocesses estimated_effort (string→minutes); the cast
+      // defers coercion to the schema parse on persist, matching plan-level.
+      estimated_effort: input.estimatedEffort as number | undefined,
+      actual_effort: input.actualEffort,
     };
 
     plan.steps = [...(plan.steps ?? []), step];
@@ -205,6 +212,7 @@ export function completeStep(input: CompleteStepInput, cwd?: string): CompleteSt
 
     const timestamp = nowISO();
     step.status = 'done';
+    if (!step.completed_at) step.completed_at = timestamp; // pln#495: stamp completion for per-step duration
     step.updated_at = timestamp;
     plan.updated_at = timestamp;
 
@@ -232,6 +240,8 @@ export interface UpdateStepInput {
   status?: PlanStepStatus;
   text?: string;
   assignee?: string;
+  estimatedEffort?: number | string;
+  actualEffort?: string;
 }
 
 export interface UpdateStepResult {
@@ -262,9 +272,17 @@ export function updateStep(input: UpdateStepInput, cwd?: string): UpdateStepResu
     }
 
     const timestamp = nowISO();
-    if (input.status) step.status = input.status;
+    if (input.status) {
+      step.status = input.status;
+      // pln#495: stamp the step lifecycle so the report can sum per-step
+      // durations (started→completed) and exclude inter-step idle gaps.
+      if (input.status === 'in_progress' && !step.started_at) step.started_at = timestamp;
+      if (input.status === 'done' && !step.completed_at) step.completed_at = timestamp;
+    }
     if (input.text !== undefined) step.text = input.text;
     if (input.assignee !== undefined) step.assignee = input.assignee || undefined;
+    if (input.estimatedEffort !== undefined) step.estimated_effort = input.estimatedEffort as number | undefined;
+    if (input.actualEffort !== undefined) step.actual_effort = input.actualEffort;
     step.updated_at = timestamp;
     plan.updated_at = timestamp;
 

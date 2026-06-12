@@ -4,6 +4,8 @@ import { addStep } from '../core/operations/plan.js';
 
 export interface AddStepOptions {
   assignee?: string;
+  estimatedEffort?: number | string;
+  actualEffort?: string;
 }
 
 export function runAddStep(planId: string, text: string, options: AddStepOptions = {}): void {
@@ -12,7 +14,7 @@ export function runAddStep(planId: string, text: string, options: AddStepOptions
   validateCliInput(text);
 
   try {
-    const result = addStep({ planId, text, assignee: options.assignee });
+    const result = addStep({ planId, text, assignee: options.assignee, estimatedEffort: options.estimatedEffort, actualEffort: options.actualEffort });
 
     console.log(`✔ Step added: [${result.stepId}] ${text}`);
     console.log(`  Plan [${result.planId}] progress: ${result.doneSteps}/${result.totalSteps} steps done`);

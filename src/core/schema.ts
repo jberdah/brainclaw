@@ -283,6 +283,15 @@ export const PlanStepSchema = z.object({
   assignee: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
+  // Step-level effort (pln#495). estimated_effort accepts legacy duration
+  // strings ("2h", "30m") via the same preprocess as plan-level; actual_effort
+  // stays a free string parsed by parseEffortMinutes when reported. started_at /
+  // completed_at are set on the todo→in_progress→done transitions so the
+  // estimation report can sum per-step durations and exclude inter-step idle.
+  estimated_effort: z.preprocess(coerceEffortToMinutes, z.number().int().positive().optional()),
+  actual_effort: z.string().optional(),
+  started_at: z.string().optional(),
+  completed_at: z.string().optional(),
 });
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 

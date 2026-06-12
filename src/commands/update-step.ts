@@ -6,6 +6,8 @@ export interface UpdateStepCliOptions {
   status?: string;
   text?: string;
   assign?: string;
+  estimate?: number | string;
+  actualEffort?: string;
 }
 
 export function runUpdateStep(planId: string, stepId: string, options: UpdateStepCliOptions): void {
@@ -24,12 +26,16 @@ export function runUpdateStep(planId: string, stepId: string, options: UpdateSte
       status: options.status as PlanStepStatus | undefined,
       text: options.text,
       assignee: options.assign,
+      estimatedEffort: options.estimate,
+      actualEffort: options.actualEffort,
     });
 
     const changes: string[] = [];
     if (options.status) changes.push(`status=${options.status}`);
     if (options.text) changes.push('text updated');
     if (options.assign !== undefined) changes.push(`assignee=${options.assign || 'unassigned'}`);
+    if (options.estimate !== undefined) changes.push(`estimate=${options.estimate}`);
+    if (options.actualEffort !== undefined) changes.push(`actual=${options.actualEffort}`);
     console.log(`✔ Step updated: [${result.stepId}] ${changes.join(', ')}`);
     console.log(`  Plan [${result.planId}] progress: ${result.doneSteps}/${result.totalSteps} steps done`);
     if (result.planAutoCompleted) {

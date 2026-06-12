@@ -658,8 +658,10 @@ program
   .command('add-step <planId> <text>')
   .description('Add an optional step to a plan item')
   .option('--assign <assignee>', 'Assign this step to an agent or person')
+  .option('--estimate <minutes>', 'Step-level estimate (minutes, or a duration like "2h"/"30m")')
+  .option('--actual-effort <effort>', 'Step-level actual effort (e.g. "45m", "2h")')
   .action((planId, text, options) => {
-    runAddStep(planId, text, { assignee: options.assign });
+    runAddStep(planId, text, { assignee: options.assign, estimatedEffort: options.estimate, actualEffort: options.actualEffort });
   });
 
 // --- complete-step ---
@@ -673,10 +675,12 @@ program
 // --- update-step ---
 program
   .command('update-step <planId> <stepId>')
-  .description('Update a plan step (status, text, assignee)')
+  .description('Update a plan step (status, text, assignee, effort)')
   .option('--status <status>', 'New status: todo, in_progress, testing, done, blocked')
   .option('--text <text>', 'Replace step description')
   .option('--assign <assignee>', 'Assign the step (empty string to unassign)')
+  .option('--estimate <minutes>', 'Step-level estimate (minutes, or a duration like "2h"/"30m")')
+  .option('--actual-effort <effort>', 'Step-level actual effort (e.g. "45m", "2h")')
   .action((planId, stepId, options) => {
     runUpdateStep(planId, stepId, options);
   });

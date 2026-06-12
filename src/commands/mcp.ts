@@ -839,6 +839,8 @@ const MCP_WRITE_TOOLS = [
             text: { type: 'string', description: 'Step description.' },
             title: { type: 'string', description: 'Alias for text.' },
             assignee: { type: 'string', description: 'Optional assignee.' },
+            estimated_effort: { type: 'number', description: 'Step-level estimate in minutes (pln#495). A duration string like "2h"/"30m" is also accepted and coerced.' },
+            actual_effort: { type: 'string', description: 'Step-level actual effort, free-form ("45m", "2h"), parsed when the estimation report runs.' },
           },
         },
         text: { type: 'string', description: 'Legacy top-level step description; prefer data.text.' },
@@ -878,6 +880,8 @@ const MCP_WRITE_TOOLS = [
         status: { type: 'string', description: 'New status: todo, in_progress, testing, done, blocked.' },
         text: { type: 'string', description: 'New step text.' },
         assignee: { type: 'string', description: 'New assignee (empty string to unassign).' },
+        estimated_effort: { type: 'number', description: 'Step-level estimate in minutes (pln#495); a duration string is also coerced.' },
+        actual_effort: { type: 'string', description: 'Step-level actual effort, free-form ("45m", "2h").' },
         agent: { type: 'string', description: 'Agent name.' },
         agentId: { type: 'string', description: 'Registered agent id.' },
         project: { type: 'string', description: 'Optional: name of a linked project to update the step in. Defaults to the current project.' },
@@ -4492,11 +4496,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const stepTextRaw = stepData.text ?? stepData.title ?? args.text;
       const stepText = typeof stepTextRaw === 'string' ? stepTextRaw.trim() : '';
       const stepAssignee = (stepData.assignee ?? args.assignee) as string | undefined;
+      const stepEstimated = (stepData.estimated_effort ?? args.estimated_effort) as number | string | undefined;
+      const stepActual = (stepData.actual_effort ?? args.actual_effort) as string | undefined;
       if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: data.text') };
       const stepTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
       try {
-        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: stepAssignee }, stepTargetCwd);
+        const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: stepAssignee, estimatedEffort: stepEstimated, actualEffort: stepActual }, stepTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step added: [${result.stepId}] ${stepText} (${result.doneSteps}/${result.totalSteps} done)` }],
@@ -4573,11 +4579,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           status: args.status as PlanStepStatus | undefined,
           text: args.text as string | undefined,
           assignee: args.assignee as string | undefined,
+          estimatedEffort: args.estimated_effort as number | string | undefined,
+          actualEffort: args.actual_effort as string | undefined,
         }, usTargetCwd);
         const changes: string[] = [];
         if (args.status) changes.push(`status=${args.status}`);
         if (args.text) changes.push('text updated');
         if (args.assignee !== undefined) changes.push(`assignee=${args.assignee || 'unassigned'}`);
+        if (args.estimated_effort !== undefined) changes.push(`estimate=${args.estimated_effort}`);
+        if (args.actual_effort !== undefined) changes.push(`actual=${args.actual_effort}`);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Step updated: [${result.stepId}] ${changes.join(', ')} (${result.doneSteps}/${result.totalSteps} done)` }],

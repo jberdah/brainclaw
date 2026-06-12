@@ -109,7 +109,7 @@ const step: EntitySpec = {
   name: 'step',
   shortLabelPrefix: 'stp',
   schema: PlanStepSchema,
-  updatable: ['text', 'assignee'],
+  updatable: ['text', 'assignee', 'estimated_effort', 'actual_effort'],
   statusField: 'status',
   transitions: {
     todo: ['in_progress', 'blocked', 'done'],

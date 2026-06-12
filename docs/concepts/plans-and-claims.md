@@ -75,6 +75,49 @@ task with estimate      est:30min  actual:45min  [ratio:1.5x]
 
 A ratio below 1.0 means the task finished faster than expected (early). Above 1.0 means it took longer (over).
 
+### Step-level estimation (pln#495)
+
+Estimation can be captured per **step**, not just per plan — which removes a real
+source of noise. A plan's wall-clock span (`created_at`→`completed_at`) counts
+the idle time *between* steps as if it were work: if steps 1–5 finish in a
+morning and step 6 lands the next day, the plan-level elapsed smears an 18h gap
+that was never effort. Summing per-step durations excludes those gaps.
+
+Set step estimates and actuals via `add-step` / `update-step`:
+
+```bash
+brainclaw add-step <plan-id> "write unit tests" --estimate 30
+brainclaw update-step <plan-id> <step-id> --status in_progress   # stamps started_at
+brainclaw update-step <plan-id> <step-id> --status done           # stamps completed_at
+# or record an explicit actual:
+brainclaw update-step <plan-id> <step-id> --actual-effort 45m
+```
+
+`estimated_effort` accepts the same forms as the plan-level `--estimate` (an
+integer of minutes, or a legacy duration string like `2h` / `30m`).
+
+`estimation-report` then prefers step-level data and tags each plan with its
+**measurement source**:
+
+- **`step`** — the highest quality: `estimated_minutes` is the sum of step
+  estimates (used only when *every* step has one), and `elapsed_minutes` is the
+  sum of per-step durations (used only when *every* step is measurable, via an
+  explicit `actual_effort` or both `started_at`+`completed_at`). Idle gaps
+  between steps are excluded.
+- **`plan_string`** — fell back to the plan-level `actual_effort` string.
+- **`plan_wallclock`** — fell back to the plan's `created_at`→`completed_at`
+  span (the noisiest; what older plans use).
+
+The report's summary breaks the median ratio down per source
+(`step-derived: 1.0x · plan-wallclock: 0.4x …`) so you can see how much
+calibration error was wall-clock contamination vs real estimation drift, and the
+chart tags each line (`✓step` / `~wall`).
+
+**Migration:** none required. A plan whose steps carry no estimation data — or a
+plan with no steps at all — keeps working exactly as before via the fallback
+chain. Mixed plans (some steps estimated, some not) fall back to plan-level
+entirely rather than reporting a misleading partial sum.
+
 ## Claims
 
 Claims make current ownership explicit.

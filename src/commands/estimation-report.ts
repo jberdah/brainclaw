@@ -8,6 +8,13 @@ export interface EstimationReportOptions {
   cwd?: string;
 }
 
+/**
+ * How a plan's `actual` measurement was derived (pln#495). 'step' is the
+ * highest-quality: the sum of per-step durations, which excludes the inter-step
+ * idle gaps that smear plan-level wall-clock. 'plan_wallclock' is the noisiest.
+ */
+export type EstimationSource = 'step' | 'plan_string' | 'plan_wallclock';
+
 export interface PlanEstimationEntry {
   id: string;
   text: string;
@@ -17,6 +24,8 @@ export interface PlanEstimationEntry {
   elapsed_minutes?: number;
   ratio?: number;
   completed_at?: string;
+  /** Provenance of elapsed_minutes — the measurement-quality tag (pln#495). */
+  source?: EstimationSource;
 }
 
 export interface EstimationReportResult {
@@ -28,7 +37,46 @@ export interface EstimationReportResult {
     median_ratio?: number;
     mean_ratio?: number;
     calibration_hint?: string;
+    /** Median ratio per measurement source — shows how much noise is wall-clock contamination. */
+    by_source?: Partial<Record<EstimationSource, { count: number; median_ratio: number }>>;
   };
+}
+
+/**
+ * Sum of per-step estimates — only when EVERY step carries one. A mixed plan
+ * (some steps estimated, some not) returns undefined so the caller falls back
+ * to the plan-level estimate rather than mixing half-measured data (pln#495).
+ */
+function sumStepEstimates(plan: PlanItem): number | undefined {
+  const steps = plan.steps ?? [];
+  if (steps.length === 0) return undefined;
+  if (!steps.every((s) => typeof s.estimated_effort === 'number')) return undefined;
+  return steps.reduce((acc, s) => acc + (s.estimated_effort as number), 0);
+}
+
+/**
+ * Sum of per-step actual durations — only when EVERY step is measurable, via an
+ * explicit `actual_effort` string OR both `started_at`+`completed_at`. Returns
+ * undefined otherwise (→ fall back to plan-level). This is the key win: summing
+ * per-step durations excludes the idle time BETWEEN steps that plan-level
+ * wall-clock wrongly counts as work (pln#495, the pln#494 step-6 bias).
+ */
+function sumStepActuals(plan: PlanItem): number | undefined {
+  const steps = plan.steps ?? [];
+  if (steps.length === 0) return undefined;
+  let total = 0;
+  for (const s of steps) {
+    let dur: number | undefined;
+    if (s.actual_effort) {
+      dur = parseEffortMinutes(s.actual_effort);
+    } else if (s.started_at && s.completed_at) {
+      const d = (new Date(s.completed_at).getTime() - new Date(s.started_at).getTime()) / 60000;
+      dur = d > 0 ? d : undefined;
+    }
+    if (dur === undefined) return undefined; // any unmeasurable step → no step-level actual
+    total += dur;
+  }
+  return total > 0 ? total : undefined;
 }
 
 /** Parse legacy actual_effort strings ("30min", "2h", "1h30m", "1d", "45m") → minutes.
@@ -92,29 +140,43 @@ export function buildEstimationReport(options: EstimationReportOptions = {}): Es
   );
 
   const entries: PlanEstimationEntry[] = done.map((p: PlanItem) => {
+    // Estimate: prefer the sum of per-step estimates when ALL steps carry one,
+    // else the plan-level estimate (pln#495).
+    const stepEstimate = sumStepEstimates(p);
     const entry: PlanEstimationEntry = {
       id: p.id,
       text: p.text,
       author: p.author,
-      estimated_minutes: p.estimated_effort,   // already a number after schema coercion
+      estimated_minutes: stepEstimate ?? p.estimated_effort,
       actual_effort: p.actual_effort,
       completed_at: p.completed_at,
     };
 
-    // Compute elapsed from wall-clock timestamps
-    const endTime = p.completed_at ?? p.updated_at;
-    const startTime = p.started_at ?? p.created_at;
-    if (endTime && startTime) {
-      const elapsed = (new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000;
-      if (elapsed > 0) entry.elapsed_minutes = Math.round(elapsed);
+    // Actual + source, in fallback order (pln#495):
+    //   step durations (idle-gap-free) > plan.actual_effort string > plan wall-clock.
+    let actualMinutes: number | undefined;
+    let source: EstimationSource;
+    const stepActual = sumStepActuals(p);
+    if (stepActual !== undefined) {
+      actualMinutes = stepActual;
+      source = 'step';
+    } else if (p.actual_effort) {
+      actualMinutes = parseEffortMinutes(p.actual_effort);
+      source = 'plan_string';
+    } else {
+      const endTime = p.completed_at ?? p.updated_at;
+      const startTime = p.started_at ?? p.created_at;
+      if (endTime && startTime) {
+        const elapsed = (new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000;
+        if (elapsed > 0) actualMinutes = elapsed;
+      }
+      source = 'plan_wallclock';
     }
 
-    // Resolve actual minutes: explicit actual_effort string > elapsed wall-clock
-    const actualMinutes = p.actual_effort
-      ? parseEffortMinutes(p.actual_effort)
-      : entry.elapsed_minutes;
-
-    if (actualMinutes !== undefined) entry.elapsed_minutes = Math.round(actualMinutes);
+    if (actualMinutes !== undefined) {
+      entry.elapsed_minutes = Math.round(actualMinutes);
+      entry.source = source;
+    }
 
     if (entry.estimated_minutes !== undefined && actualMinutes !== undefined && actualMinutes > 0) {
       entry.ratio = parseFloat((entry.estimated_minutes / actualMinutes).toFixed(2));
@@ -129,6 +191,16 @@ export function buildEstimationReport(options: EstimationReportOptions = {}): Es
   const medianRatio = ratios.length > 0 ? parseFloat(median(ratios).toFixed(2)) : undefined;
   const meanRatio = ratios.length > 0 ? parseFloat(mean(ratios).toFixed(2)) : undefined;
 
+  // Per-source median (pln#495): exposes how much calibration noise is wall-clock
+  // contamination vs idle-gap-free step measurement.
+  const bySource: Partial<Record<EstimationSource, { count: number; median_ratio: number }>> = {};
+  for (const src of ['step', 'plan_string', 'plan_wallclock'] as const) {
+    const srcRatios = withBoth.filter((e) => e.source === src).map((e) => e.ratio as number);
+    if (srcRatios.length > 0) {
+      bySource[src] = { count: srcRatios.length, median_ratio: parseFloat(median(srcRatios).toFixed(2)) };
+    }
+  }
+
   return {
     entries,
     summary: {
@@ -138,6 +210,7 @@ export function buildEstimationReport(options: EstimationReportOptions = {}): Es
       median_ratio: medianRatio,
       mean_ratio: meanRatio,
       calibration_hint: medianRatio !== undefined ? buildCalibrationHint(medianRatio) : undefined,
+      by_source: Object.keys(bySource).length > 0 ? bySource : undefined,
     },
   };
 }
@@ -170,6 +243,17 @@ export function runEstimationReport(options: EstimationReportOptions = {}): void
     console.log(`→ ${summary.calibration_hint}`);
   }
 
+  if (summary.by_source) {
+    const labels: Record<EstimationSource, string> = {
+      step: 'step-derived', plan_string: 'plan-string', plan_wallclock: 'plan-wallclock',
+    };
+    const parts = (['step', 'plan_string', 'plan_wallclock'] as const)
+      .filter((s) => summary.by_source![s])
+      .map((s) => `${labels[s]}: ${summary.by_source![s]!.median_ratio}x (n=${summary.by_source![s]!.count})`);
+    console.log(`By measurement quality — ${parts.join(' · ')}`);
+    console.log('  (step-derived excludes inter-step idle; plan-wallclock is the noisiest)');
+  }
+
   // Chart — only plans with ratio data
   const chartable = entries.filter((e) => e.ratio !== undefined);
   if (chartable.length > 0) {
@@ -192,7 +276,8 @@ export function runEstimationReport(options: EstimationReportOptions = {}): void
         : ` OVER  +${Math.round((1 / e.ratio! - 1) * 100)}%`;
       const est = e.estimated_minutes !== undefined ? `${e.estimated_minutes}min` : '?';
       const act = e.elapsed_minutes !== undefined ? `${e.elapsed_minutes}min` : '?';
-      console.log(`  ${label} ${bar} ${e.ratio}x  ${est}→${act}${pct}`);
+      const srcTag = e.source === 'step' ? ' ✓step' : e.source === 'plan_wallclock' ? ' ~wall' : '';
+      console.log(`  ${label} ${bar} ${e.ratio}x  ${est}→${act}${pct}${srcTag}`);
     }
     console.log('');
   }
