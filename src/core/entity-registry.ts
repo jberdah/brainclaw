@@ -178,7 +178,16 @@ const decision: EntitySpec = {
   name: 'decision',
   shortLabelPrefix: 'dec',
   schema: DecisionSchema,
-  updatable: ['text', 'tags', 'outcome', 'scope', 'related_paths', 'verified_at', 'verify_cmd'],
+  updatable: [
+    'text', 'tags', 'outcome', 'scope', 'related_paths', 'verified_at', 'verify_cmd',
+    // pln#544 lifecycle (touched via memory-lifecycle.ts recordMemoryEvent;
+    // exposing them here keeps bclaw_update straight-through for tests and
+    // operator backfills).
+    'last_confirmed_at', 'last_infirmed_at',
+    'confirmation_count', 'infirmation_count',
+    'saved_me_count', 'misled_me_count',
+    'confirmations',
+  ],
   statusField: 'outcome',
   transitions: {
     pending: ['approved', 'rejected', 'deferred'],
@@ -193,7 +202,14 @@ const constraint: EntitySpec = {
   name: 'constraint',
   shortLabelPrefix: 'cst',
   schema: ConstraintSchema,
-  updatable: ['text', 'tags', 'category', 'scope', 'related_paths', 'expires_at'],
+  updatable: [
+    'text', 'tags', 'category', 'scope', 'related_paths', 'expires_at',
+    // pln#544 lifecycle — see decision.updatable.
+    'last_confirmed_at', 'last_infirmed_at',
+    'confirmation_count', 'infirmation_count',
+    'saved_me_count', 'misled_me_count',
+    'confirmations',
+  ],
   statusField: 'status',
   transitions: {
     active: ['resolved', 'expired'],
@@ -210,7 +226,15 @@ const trap: EntitySpec = {
   name: 'trap',
   shortLabelPrefix: 'trp',
   schema: TrapSchema,
-  updatable: ['text', 'tags', 'severity', 'scope', 'related_paths', 'expires_at', 'platform_scope', 'verified_at', 'verify_cmd'],
+  updatable: [
+    'text', 'tags', 'severity', 'scope', 'related_paths', 'expires_at', 'platform_scope',
+    'verified_at', 'verify_cmd',
+    // pln#544 lifecycle — see decision.updatable.
+    'last_confirmed_at', 'last_infirmed_at',
+    'confirmation_count', 'infirmation_count',
+    'saved_me_count', 'misled_me_count',
+    'confirmations',
+  ],
   statusField: 'status',
   transitions: {
     active: ['resolved', 'expired'],
