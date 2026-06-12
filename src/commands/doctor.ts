@@ -24,6 +24,8 @@ import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
 import { isTaskLifecycleRuntimeEvent, listRuntimeEvents } from '../core/events.js';
+import { verifyProjectionsAgainstJournal } from '../core/events/materialize.js';
+import { resolveJournalMode } from '../core/events/journal.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
 import { loadVersionedJsonFile, scanMigrationStatus } from '../core/migration.js';
@@ -137,6 +139,14 @@ export interface DoctorOptions {
    * unverified flags are informational, not blocking.
    */
   dispatch?: boolean;
+  /**
+   * pln#565 — Phase-2 cutover gate check. Rebuilds memory state from the event
+   * journal and diffs it against the live projections (the dual-mode source of
+   * truth). Empty drift = the journal faithfully reproduces state and is safe
+   * to promote to the read substrate (pln#543 step 5). Skips the normal doctor
+   * suite; exits non-zero on any drift. No-op-safe when the journal is off.
+   */
+  verifyJournal?: boolean;
 }
 
 interface DoctorCheck {
@@ -778,7 +788,57 @@ export async function runDoctorSpawnCheck(options: SpawnCheckOptions & { json?: 
   if (report.exit_code !== 0) process.exit(report.exit_code);
 }
 
+/**
+ * pln#565 — `brainclaw doctor --verify-journal`: the single-command Phase-2
+ * cutover gate. Rebuilds state from the journal and diffs it against the live
+ * projections; zero drift across real multi-agent traffic is the green light
+ * to flip `store.journal.mode` to primary (pln#543 step 5). Exit 1 on drift so
+ * CI can gate on it.
+ */
+function runJournalVerification(options: DoctorOptions): void {
+  if (!memoryExists(options.cwd)) {
+    console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+    process.exit(1);
+  }
+
+  const mode = resolveJournalMode(options.cwd);
+  const t0 = Date.now();
+  const drift = verifyProjectionsAgainstJournal(options.cwd);
+  const elapsed_ms = Date.now() - t0;
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      check: 'verify-journal',
+      journal_mode: mode,
+      drift_count: drift.length,
+      drift: drift.slice(0, 100),
+      elapsed_ms,
+      gate: drift.length === 0 ? 'green' : 'drift',
+    }, null, 2));
+  } else if (mode === 'off') {
+    console.log('⚠ Journal mode is "off" — nothing to verify (no dual-write running). Set store.journal.mode=dual first.');
+  } else if (drift.length === 0) {
+    console.log(`✔ Journal verification GREEN (mode=${mode}, replay ${elapsed_ms}ms): journal reproduces projections exactly — zero drift.`);
+    console.log('  → Phase-2 gate criterion met for this store snapshot. Sustained zero drift across multi-agent traffic authorizes the primary cutover (pln#543 step 5).');
+  } else {
+    console.error(`✗ Journal verification found ${drift.length} drift entr${drift.length === 1 ? 'y' : 'ies'} (mode=${mode}):`);
+    const byKind: Record<string, number> = {};
+    for (const d of drift) byKind[d.kind] = (byKind[d.kind] ?? 0) + 1;
+    for (const [kind, n] of Object.entries(byKind)) console.error(`    ${kind}: ${n}`);
+    for (const d of drift.slice(0, 20)) console.error(`    - ${d.kind}: ${d.item_type} ${d.item_id}`);
+    if (drift.length > 20) console.error(`    … and ${drift.length - 20} more`);
+    console.error('  → Gate NOT met: the journal does not yet reproduce projections. Do NOT cut over.');
+  }
+
+  if (drift.length > 0) process.exit(1);
+}
+
 export function runDoctor(options: DoctorOptions = {}): void {
+  if (options.verifyJournal) {
+    runJournalVerification(options);
+    return;
+  }
+
   if (options.dispatch) {
     const report = runDispatchHealthCheck(options);
     if (options.json) {
