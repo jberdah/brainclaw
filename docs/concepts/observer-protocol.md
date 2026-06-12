@@ -31,9 +31,23 @@ The journal defined in `event-log-store.md`:
   meta.json                # { next_seq, active_segment, entity_revs } — a cache
   seg-<firstSeq>.jsonl     # immutable once rolled; named by first seq it holds
   seg-<firstSeq>.jsonl     # active = lexicographically-last segment
-  checkpoints/
-    ckpt-<seq>.json        # self-contained state manifest at head <seq>
+  checkpoints/             # NOT YET EMITTED by the writer (see §5) — directory
+    ckpt-<seq>.json        # may be absent today; self-contained state manifest
 ```
+
+**Segment naming is normative.** `firstSeq` is encoded as a **decimal,
+zero-padded to 8 digits** (e.g. `seg-00018342.jsonl`) so directory-listing
+lex-sort matches numeric seq order with no parsing. Implementations MUST emit
+and accept exactly this format; any other padding (or none) breaks the
+binary-search-by-filename in §5. The 8-digit field overflows at `seq > 1e8`;
+at the historical write rate (~17k events to date) this is decades away, but
+a journal that crosses the boundary requires a coordinated widen-and-pad
+migration in writer + every observer (deferred until needed; flagged here so
+no implementer assumes the pad width is incidental).
+
+`meta.json` is advisory only (§4): the observer reads it to cheaply detect
+"did anything change" but never trusts its `entity_revs` or `next_seq` for
+correctness — those are derived from the journal tail itself.
 
 Record envelope (v2), one JSON object per line:
 
@@ -99,19 +113,42 @@ zero lock acquisitions by the surface — the validation gate (step 3).
 
 ## 5. Bootstrap and tail algorithm
 
+**Status of checkpoint emission (2026-06-12, pln#543 step 4 landed):** the
+writer does NOT yet produce `checkpoints/ckpt-*.json` files — checkpoint
+emission ships with step 3/5 of pln#543. Until then, the empty-seed + full
+tail path below is the **primary** cold-start path in production, not a
+degenerate fallback. The checkpoint-first path is the spec the consumer must
+implement for forward-compatibility; an observer that hard-requires a
+checkpoint at activation is broken against today's store. The perf targets
+in §10 assume checkpoint emission; until it ships, "activation → first
+summary" is bounded by the full tail length instead (~10 MB of segments in
+the typical case, sub-second in practice, but the budget no longer has
+slack).
+
 **Cold start (no cursor, or cursor below the oldest live segment):**
 
-1. Load the newest verified checkpoint `ckpt-<S>.json` → seed the in-memory
-   projection (full post-image set at head `S`). Set `cursor.checkpoint_seq = S`.
-2. Tail every record with `seq > S` across segments in (segment, file-line)
-   order; apply by class (§2).
-3. Set `cursor.seq` to the last applied seq. Render.
+1. **If a verified checkpoint exists**, load the newest `ckpt-<S>.json` →
+   seed the in-memory projection (full post-image set at head `S`). Set
+   `cursor.checkpoint_seq = S`. (Today: this branch is dead until the
+   writer ships checkpoint emission.)
+2. **Otherwise** (today's primary path), seed from the empty projection
+   with `cursor.checkpoint_seq = 0`.
+3. Tail every record with `seq > checkpoint_seq` across segments in
+   (segment, file-line) order; apply by class (§2). With no checkpoint
+   this is a full replay from seq 1, bounded by retention (the
+   `events/archive/` floor — segments are park-don't-deleted past the
+   second-newest verified checkpoint; with no checkpoint, no segment is
+   ever eligible for archive, so "the journal" = "every segment ever
+   written" until checkpoint emission ships).
+4. Set `cursor.seq` to the last applied seq. Render.
 
-If no checkpoint exists, seed from the empty projection and tail from seq 1
-(small/young stores). If the cursor's `seq` is **below the oldest non-archived
-segment's first seq** (gap — segments archived past the watermark), discard the
-cursor and cold-start from the checkpoint: notifications degrade, state never
-does.
+If the cursor's `seq` is **below the oldest non-archived segment's first
+seq** (gap — segments archived past the watermark), discard the cursor and
+cold-start: notifications degrade, state never does. Today no segment is
+ever archived (gc requires a verified checkpoint floor, see §2.3 of the
+store spec), so this branch is unreachable in production until checkpoint
+emission ships — but the rule is normative regardless: an observer that
+crashes on a gap is broken against any future store.
 
 **Warm tail (cursor present, within live segments):**
 
@@ -153,6 +190,52 @@ human candidates + blocked/failed assignments + failed runs + evidence-
 contradicted terminals), matching what the server-side composite returns — the
 surface must not under-count by reading "actions only" (the pln#559 fix, now in
 the projection rule).
+
+### 6.1 Dual-mode coverage gap (today, until pln#543 phase 1.5)
+
+The journal classifies records into five classes (§2). In phase 1 / `dual`
+mode — what runs today after pln#543 step 4 — **registry-lifecycle records
+are payload-OPTIONAL** (event-log-store.md §2.1.1, J4); the dual-write path
+in `src/core/event-log.ts:152` forwards `assignment_*` and `run_*` events to
+the journal with `item_id` only, no `payload`. The §2 rule "upsert when
+payload present, else a status/activity signal" means today's journal carries
+**no post-images for `assignment` or `agent_run`**: the in-memory projection
+has zero rows for those item_types, and the materializer
+(`src/core/events/materialize.ts`) only enumerates the 5 memory families
+(constraint/decision/trap/handoff/plan).
+
+Consequence for the §6 mapping table: until phase 1.5 ships, the rows that
+the table claims `assignment` / `agent_run` / `claim` populate (IN_PROGRESS
+worker rows, ATTENTION blocked/failed, Recently terminal under IN_PROGRESS)
+cannot be drawn from the journal alone. A conforming observer in dual mode
+MUST:
+
+- Seed those sections at activation from a **single observer-flagged
+  `bclaw_context(kind: "board_summary")`** call (no timer, no poll) — that
+  read is lock-free under the §8 observer contract (validated against
+  `getDispatchStatus` and `loadAssignment`/`loadAgentRun`, which are pure
+  projection reads — `mcp-read-handlers.ts:1916`, `json-store.ts:47`); and
+- Mark those sections "live-view degraded" in the tooltip until phase 1.5,
+  so the operator can tell journal-driven sections (memory entities,
+  attention badges) from MCP-seeded sections (workers, lifecycle).
+
+Memory-entity sections (plan / constraint / decision / trap / handoff /
+sequence / handoff-derived ACTIVITY) ARE journal-driven today via the
+per-entity diff in `persistState` (`src/core/state.ts:400`) — the protocol
+delivers its full value for them.
+
+### 6.2 Section ID glossary
+
+The §6 table uses display names; the canonical IDs in
+`vscode-extension/src/board-tree.ts:321` are `attention | in-progress |
+sprints | backlog | system | agents | candidates | activity | plans | claims
+| assignments | runs | actions | handoffs | sprint | traps | cross-project`.
+"Recently terminal" is **not** a top-level section — it is a sub-node
+rendered under `in-progress`. The board also surfaces `cross-project`
+(federation incoming signals) and `linked_projects`, neither of which has a
+single journal `item_type` today: cross-project signals arrive via the
+handoff/candidate streams (already covered), `linked_projects` is derived
+from project config and is intentionally NOT a journal concern.
 
 The projection is **state**, not administrative belief: a worker row's health
 comes from evidence in the records (commits/fs signals carried on
@@ -240,3 +323,17 @@ Reference implementation: the VS Code extension (pln#560 step 2). The JetBrains
 plugin (next plan) implements this same checklist in Kotlin — its existence is
 the cross-language validation that this protocol, not the TypeScript code, is
 the contract.
+
+## 12. OPEN QUESTIONS
+
+Carried from the 2026-06-12 symmetric review (pln#560 step 1, this branch).
+Each is something the spec text cannot close on its own; one or more must
+be answered before the JetBrains plugin (Kotlin) ships.
+
+| # | Sev | Question |
+|---|---|---|
+| O1 | MED | **Shared `ACTION_CLASS_BY_ACTION` manifest.** §2 says implementations MUST mirror the table "or fetch it from a shared manifest." Today only the TS version exists (`src/core/events/journal.ts:66`); a Kotlin implementer would re-type 42 entries by hand and silently drift on the 43rd. Should this ship as a generated JSON next to `event-log-store.md` (single source of truth, both runtimes load it) or as part of a versioned schema bundle? Recommend the generated JSON — the table is small and changes per spec revision, not per release. |
+| O2 | MED | **Phase-1.5 cutover signal for §6.1.** When registry-lifecycle records start carrying payloads, observers must know to drop the "live-view degraded" badge and stop the MCP seed for worker rows. How is the cutover signaled — a new `journal_note` kind (`registry_primary_at: <seq>`), a config flag the observer reads, or version bump in `meta.json`? Today no signal exists; designing one before the cutover beats discovering one observer didn't notice. |
+| O3 | LOW | **`bclaw_dispatch_status` enrichment scope.** §6 + §7 allow it "per visible terminal row" but the wording is ambiguous between "terminal-state row" (Recently terminal) and "row currently visible in the terminal UI" (every IN_PROGRESS row). Settle: probably the first (only failed/silent_death rows want the evidence digest) — but the contract must say so, otherwise an implementor renders an O(workers) burst on every refresh. |
+| O4 | LOW | **Segment pad-width upgrade path.** §2 pins 8-digit decimal padding; the writer is 8-digit too (`src/core/events/journal.ts:214 SEGMENT_PAD=8`). At ~17k events historical, the 1e8 ceiling is decades out — but a future widen would require coordinated writer + every observer roll-out. Carry the migration recipe (pad-width in `meta.json`?) here so a future maintainer doesn't have to rediscover it. |
+| O5 | LOW | **File watch semantics on Windows network mounts.** §4 falls back to a "long-interval stat" when the watcher is unavailable. VS Code's `FileSystemWatcher` on a junction-linked worktree (the brainclaw dispatch substrate) may fire on the link target's mtime but not the source-of-truth segment writes from another process; verify against the dispatch worktree machinery (`pln#498` junctions) before declaring the watch path universal. |
