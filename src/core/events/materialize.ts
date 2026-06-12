@@ -35,9 +35,17 @@ export interface MaterializedEntity {
  * id, tombstones removed). Keyed by `${item_type}:${item_id}` so the same
  * id under different families never collides.
  */
-export function materializeEntitiesFromJournal(cwd?: string): Map<string, MaterializedEntity> {
-  const live = new Map<string, MaterializedEntity>();
-  for (const rec of readJournalRecords(cwd)) {
+/**
+ * The journal reducer (§2.2): apply records onto a live entity map in
+ * (segment, file-line) order — later post-image wins wholesale, tombstone
+ * removes. Extracted so the same reducer drives full-journal materialization
+ * AND checkpoint+tail replay (pln#566 Inc0) — they can never diverge.
+ */
+export function applyRecordsToLive(
+  records: Iterable<JournalRecord>,
+  live: Map<string, MaterializedEntity>,
+): Map<string, MaterializedEntity> {
+  for (const rec of records) {
     if (!rec.item_id) continue;
     const cls = ACTION_CLASS_BY_ACTION[rec.action as EventActionV2];
     const key = `${rec.item_type}:${rec.item_id}`;
@@ -59,6 +67,10 @@ export function materializeEntitiesFromJournal(cwd?: string): Map<string, Materi
   return live;
 }
 
+export function materializeEntitiesFromJournal(cwd?: string): Map<string, MaterializedEntity> {
+  return applyRecordsToLive(readJournalRecords(cwd), new Map());
+}
+
 const MEMORY_FAMILIES: Array<{
   itemType: string;
   schema: ZodType<{ id: string; created_at: string }, unknown>;
@@ -76,8 +88,13 @@ const MEMORY_FAMILIES: Array<{
  * Payloads failing schema validation are skipped (mirrors loadState's
  * tolerant read) — verify treats them as drift.
  */
-export function materializeMemoryStateFromJournal(cwd?: string): State {
-  const live = materializeEntitiesFromJournal(cwd);
+/**
+ * Project a materialized live-entity map into the 5 memory-class collections
+ * of `State`. Shared by full-journal materialization and checkpoint+tail
+ * replay (pln#566 Inc0) so both produce byte-identical state. Payloads failing
+ * schema validation are skipped (mirrors loadState's tolerant read).
+ */
+export function projectLiveToState(live: Map<string, MaterializedEntity>): State {
   const state: State = {
     active_constraints: [], recent_decisions: [], known_traps: [],
     open_handoffs: [], plan_items: [],
@@ -94,6 +111,10 @@ export function materializeMemoryStateFromJournal(cwd?: string): State {
     (state[collection] as unknown[]) = items;
   }
   return state;
+}
+
+export function materializeMemoryStateFromJournal(cwd?: string): State {
+  return projectLiveToState(materializeEntitiesFromJournal(cwd));
 }
 
 export type DriftKind = 'missing_in_journal' | 'missing_in_projection' | 'mismatch';
