@@ -2,7 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { memoryExists, memoryPath, ensureMemoryDir } from '../core/io.js';
 import { loadConfig, saveConfig } from '../core/config.js';
-import { generateBashGuard, generatePowerShellGuard, generatePipBashGuard } from '../core/security-guard.js';
+import {
+  generateBashGuard,
+  generatePowerShellGuard,
+  generatePipBashGuard,
+} from '../core/security-guard.js';
+
+/**
+ * Each guard wraps a single install command. The CLI invocation that gets
+ * called is identical — only ORIGINAL_CMD differs — so we generate one
+ * script per supported tool with the right ORIGINAL_CMD baked in.
+ */
+const NPM_LIKE = ['npm', 'pnpm', 'yarn'] as const;
+const PIP_LIKE = ['pip', 'pip3'] as const;
 
 export interface SetupSecurityOptions {
   mode?: 'advisory' | 'enforced';
@@ -58,32 +70,46 @@ export function runSetupSecurity(options: SetupSecurityOptions = {}): void {
     fs.mkdirSync(guardDir, { recursive: true });
   }
 
-  // npm guard (bash)
-  const npmBashPath = path.join(guardDir, 'npm');
-  fs.writeFileSync(npmBashPath, generateBashGuard(brainclawBin), { mode: 0o755 });
+  const writtenScripts: string[] = [];
 
-  // npm guard (PowerShell)
-  const npmPs1Path = path.join(guardDir, 'npm.ps1');
-  fs.writeFileSync(npmPs1Path, generatePowerShellGuard(brainclawBin));
+  for (const cmd of NPM_LIKE) {
+    const bashPath = path.join(guardDir, cmd);
+    const bashScript = generateBashGuard(brainclawBin).replace(
+      'ORIGINAL_CMD="${BRAINCLAW_GUARD_ORIGINAL_CMD:-npm}"',
+      `ORIGINAL_CMD="\${BRAINCLAW_GUARD_ORIGINAL_CMD:-${cmd}}"`,
+    );
+    fs.writeFileSync(bashPath, bashScript, { mode: 0o755 });
+    writtenScripts.push(bashPath);
 
-  // pip guard (bash)
-  const pipBashPath = path.join(guardDir, 'pip');
-  fs.writeFileSync(pipBashPath, generatePipBashGuard(brainclawBin), { mode: 0o755 });
+    const ps1Path = path.join(guardDir, `${cmd}.ps1`);
+    const ps1Script = generatePowerShellGuard(brainclawBin).replace(
+      '} else { "npm" }',
+      `} else { "${cmd}" }`,
+    );
+    fs.writeFileSync(ps1Path, ps1Script);
+    writtenScripts.push(ps1Path);
+  }
 
-  // pip guard (PowerShell)
-  const pipPs1Path = path.join(guardDir, 'pip.ps1');
-  fs.writeFileSync(pipPs1Path, generatePowerShellGuard(brainclawBin).replace(
-    '} else { "npm" }',
-    '} else { "pip" }',
-  ));
+  for (const cmd of PIP_LIKE) {
+    const bashPath = path.join(guardDir, cmd);
+    fs.writeFileSync(bashPath, generatePipBashGuard(brainclawBin).replace(
+      'ORIGINAL_CMD="${BRAINCLAW_GUARD_ORIGINAL_CMD:-pip}"',
+      `ORIGINAL_CMD="\${BRAINCLAW_GUARD_ORIGINAL_CMD:-${cmd}}"`,
+    ), { mode: 0o755 });
+    writtenScripts.push(bashPath);
+
+    const ps1Path = path.join(guardDir, `${cmd}.ps1`);
+    fs.writeFileSync(ps1Path, generatePowerShellGuard(brainclawBin).replace(
+      '} else { "npm" }',
+      `} else { "${cmd}" }`,
+    ));
+    writtenScripts.push(ps1Path);
+  }
 
   console.log(`\u2705 Security gate enabled (mode: ${mode})`);
   console.log('');
   console.log('Generated wrapper scripts:');
-  console.log(`  ${npmBashPath}`);
-  console.log(`  ${npmPs1Path}`);
-  console.log(`  ${pipBashPath}`);
-  console.log(`  ${pipPs1Path}`);
+  for (const p of writtenScripts) console.log(`  ${p}`);
   console.log('');
   console.log('To activate, prepend the guard directory to your PATH:');
   console.log(`  export PATH="${guardDir}:$PATH"    # bash/zsh`);
