@@ -761,7 +761,8 @@ automated hardening suite. Status of each Phase-2 exit criterion:
 | Journal reproduces projections (the core claim) | ✅ | `brainclaw doctor --verify-journal` — rebuilds from journal, diffs vs live projections, exit 1 on drift. GREEN on this repo's store (mode=dual). |
 | Tail validation / torn-tail adjudication | ✅ | `journal-v2.test` (torn tail → `torn_tail_adjudicated`, stale meta → `seq_repair`). |
 | Two-process append stress | ✅ | `journal-concurrency.test` — N processes × K appends, gap-free 1..N*K seq, N distinct writers, zero torn/lost. |
-| Kill-9 storm convergence | ✅ | `journal-concurrency.test` — SIGKILL mid-append storm: journal stays readable, seqs never duplicate, post-storm append re-derives a non-colliding seq, state still materializes. |
+| Kill-9 storm convergence (append path) | ✅ | `journal-concurrency.test` — SIGKILL mid-append storm: journal stays readable, seqs never duplicate, post-storm append re-derives a non-colliding seq, state still materializes. |
+| **Persist crash-ordering — journal before projections (I2)** | ✅ | pln#566 F1 (codex review): persist now PLANs → emits+fsyncs the journal → APPLIES projection writes, so a crash can only leave the journal ahead (recoverable), never projections ahead. Proven by `journal-crash-ordering.test` via deterministic fault injection on the real `mutateState` pipeline. (Earlier the kill-9 test exercised `forceAppendJournalRecords` directly, not the mutation pipeline — that gap is now closed.) |
 | Migration + rollback tooling | ✅ | genesis backfill + `rollbackJournal` (park `events/`, projections untouched). |
 | Dual-OS CI | ✅ | `.github/workflows/ci.yml` matrix `[ubuntu, windows]`. |
 | **Zero divergence across a real multi-agent sprint** | ✅ | seq#47 (2026-06-12): 4 parallel claude-code lanes + dispatch worktree churn + 4 merges → `verify-journal` zero drift throughout. |

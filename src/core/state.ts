@@ -184,26 +184,40 @@ interface SyncResult<T> {
   deleted: string[];
 }
 
-function syncDirectory<T extends { id: string }>(
+/**
+ * A computed-but-not-yet-applied projection sync for one entity dir (pln#566
+ * F1). Splitting plan (pure compute) from apply (the actual writes/unlinks)
+ * lets persist emit + fsync the journal BEFORE touching projection files, so a
+ * crash can only leave the journal AHEAD of projections (the recoverable
+ * direction the lazy-reconcile assumes), never projections ahead.
+ */
+interface SyncPlan<T> {
+  dirPath: string;
+  /** Pre-serialized bytes ready to write (dirty-tracking already applied). */
+  writes: Array<{ filepath: string; desired: string; item: T; created: boolean }>;
+  /** Files to unlink (intentional removals). */
+  deletes: Array<{ filepath: string; id: string }>;
+}
+
+/**
+ * Pure planning pass: compute which projection files WOULD change, without
+ * writing anything. Same dirty-tracking + canonical-compare + parseable-guard
+ * logic as the old syncDirectory; only the IO is deferred to applySyncPlan.
+ */
+function planSyncDirectory<T extends { id: string }>(
   dirPath: string,
   items: T[],
   documentType: VersionedDocumentType,
   schema: ZodType<T, unknown>,
   deleteMissing: boolean,
-): SyncResult<T> {
-  const result: SyncResult<T> = { written: [], deleted: [] };
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
+): SyncPlan<T> {
+  const plan: SyncPlan<T> = { dirPath, writes: [], deletes: [] };
 
   // Write only the items whose on-disk bytes would change (dirty-tracking,
-  // pln#543 step 3). The full-store rewrite on every mutation was the hot-path
-  // cost syncDirectory imposed; comparing the would-be content against what is
-  // on disk skips the unchanged majority. The comparison uses the writer's own
-  // serializer (serializeVersionedJson) so a "skip" can never diverge from what
-  // saveVersionedJsonFile would have produced. Safe against the trp#126
-  // silent-data-loss class: a missing or byte-different file never matches, so
-  // an in-state entity whose projection is absent/corrupt is always rewritten.
+  // pln#543 step 3). The comparison uses the writer's own serializer so a
+  // "skip" can never diverge from what saveVersionedJsonFile would produce.
+  // Safe against trp#126: a missing/byte-different file never matches, so an
+  // in-state entity whose projection is absent/corrupt is always rewritten.
   const currentIds = new Set<string>();
   for (const item of items) {
     currentIds.add(item.id);
@@ -215,50 +229,57 @@ function syncDirectory<T extends { id: string }>(
     } catch {
       existing = undefined; // missing/unreadable → write
     }
-    // Skip when the on-disk content is SEMANTICALLY identical, not just
-    // byte-identical: loadState re-parses through zod, which can reorder keys
-    // (e.g. schema_version migrates to the front). A byte compare would then
-    // see every reloaded entity as "changed" and rewrite the whole store on
-    // every persist — defeating dirty-tracking. The canonical (sorted-key)
-    // compare treats order-only differences as unchanged; genuinely changed
-    // content always differs. Unparseable on-disk bytes never match → rewrite
-    // (keeps the trp#126 safety: a corrupt/missing projection is always
-    // re-materialized from in-state truth).
+    // Semantic (canonical, sorted-key) compare, not byte compare: loadState
+    // re-parses through zod which can reorder keys; a byte compare would
+    // rewrite the whole store every persist. Unparseable bytes never match
+    // → rewrite (keeps trp#126 safety).
     if (existing !== undefined && canonicalJson(existing) === canonicalJson(desired)) {
       persistWriteStats.skippedUnchanged += 1;
       continue;
     }
-    writeFileAtomic(filepath, desired);
-    persistWriteStats.written += 1;
-    result.written.push({ item, created: existing === undefined });
+    plan.writes.push({ filepath, desired, item, created: existing === undefined });
   }
 
-  if (!deleteMissing) return result;
+  if (!deleteMissing) return plan;
 
-  // Remove files that are no longer in the state (e.g. if deleted/pruned).
-  // CRITICAL: we must distinguish "file dropped from state intentionally" from
-  // "file silently dropped by loadDirectoryItems because its schema.parse threw".
-  // Deleting the second kind corrupts data (see trap: silent-data-loss via
-  // load-swallow + write-sync-GC). So before unlinking, we re-validate the file
-  // against the schema. Parseable + not in state = intentional remove → unlink.
-  // Unparseable = preserved, operator can inspect/repair.
-  const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.json'));
+  // Plan removals of files no longer in state. CRITICAL: distinguish an
+  // intentional drop from a file silently dropped by loadDirectoryItems on a
+  // schema.parse throw (deleting the second kind corrupts data — trp#126). Only
+  // parseable + not-in-state files are unlinked; unparseable are preserved.
+  const files = fs.existsSync(dirPath)
+    ? fs.readdirSync(dirPath).filter(f => f.endsWith('.json'))
+    : [];
   for (const file of files) {
     const id = file.replace('.json', '');
     if (currentIds.has(id)) continue;
 
     const filepath = path.join(dirPath, file);
-    let parseable = false;
     try {
       schema.parse(loadVersionedJsonFile<T>(documentType, filepath).document);
-      parseable = true;
     } catch {
       // Already logged by loadDirectoryItems — leave the file in place.
+      continue;
     }
-    if (parseable) {
-      fs.unlinkSync(filepath);
-      result.deleted.push(id);
-    }
+    plan.deletes.push({ filepath, id });
+  }
+  return plan;
+}
+
+/** Apply a planned sync: the actual projection-file writes/unlinks (the IO that
+ * must happen AFTER the journal append+fsync). Returns the dirty result. */
+function applySyncPlan<T extends { id: string }>(plan: SyncPlan<T>): SyncResult<T> {
+  const result: SyncResult<T> = { written: [], deleted: [] };
+  if (plan.writes.length > 0 && !fs.existsSync(plan.dirPath)) {
+    fs.mkdirSync(plan.dirPath, { recursive: true });
+  }
+  for (const { filepath, desired, item, created } of plan.writes) {
+    writeFileAtomic(filepath, desired);
+    persistWriteStats.written += 1;
+    result.written.push({ item, created });
+  }
+  for (const { filepath, id } of plan.deletes) {
+    fs.unlinkSync(filepath);
+    result.deleted.push(id);
   }
   return result;
 }
@@ -276,20 +297,31 @@ interface PersistStateOptions {
 }
 
 function persistStateUnlocked(state: State, cwd: string, options: PersistStateOptions = {}): void {
-  const dirty = writeStateDirectories(state, cwd, options.deleteMissing ?? false);
+  ensureMemoryDir(cwd);
+  const effectiveCwd = cwd ?? process.cwd();
+  // pln#566 F1 — JOURNAL BEFORE PROJECTIONS (invariant I2). Persist now runs in
+  // three ordered phases so the journal can never lag the projections: a crash
+  // mid-persist leaves the journal AHEAD (the only direction lazy-reconcile can
+  // recover), never projections ahead (which materialize/verify could not
+  // explain). Phase 1 PLAN (pure compute, no IO) → Phase 2 emit+fsync the
+  // per-entity post-images to the journal → Phase 3 APPLY projection writes.
+  const { plans, legacyDeletes, dirty } = planStateDirectories(state, effectiveCwd, options.deleteMissing ?? false);
+  emitPerEntityJournalRecords(dirty, options.eventAction, effectiveCwd);
+  faultPoint('after_journal'); // test-only: crash AFTER journal, BEFORE projections
+  applyStatePlans(plans, legacyDeletes);
+  faultPoint('after_projection'); // test-only: crash AFTER projections written
   if (options.writeProjectMarkdown ?? true) {
-    rebuildProjectMd(state, cwd);
+    rebuildProjectMd(state, effectiveCwd);
   }
   // v1 events.jsonl: keep the coarse store event for existing consumers, but
-  // suppress its envelope-only journal dual-write — persist is the §2.8 "diff
-  // choke point" and emits the rich per-entity post-images below instead.
+  // suppress its envelope-only journal dual-write — the v2 per-entity emit
+  // above is the authoritative §2.8 diff choke point.
   appendEvent({
     action: options.eventAction ?? 'update',
     item_type: 'state',
     agent: 'system',
     summary: options.eventSummary,
-  }, cwd, { journalDualWrite: false });
-  emitPerEntityJournalRecords(dirty, options.eventAction, cwd);
+  }, effectiveCwd, { journalDualWrite: false });
   // NOTE (pln#558 step 2): the git commit and refreshLiveCompanions used to
   // run here, INSIDE the mutation lock. A single persistState was holding
   // the lock for >5s on Juan's machine (full-store rewrite + git add -A +
@@ -309,41 +341,50 @@ function runPostWriteHooks(cwd: string, commitMessage: string): void {
   try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
 }
 
-function cleanupLegacyDir<T extends { id: string }>(
+/**
+ * Test-only crash injection (pln#566 F1). No-op unless BRAINCLAW_FAULT_POINT
+ * matches the label — then it throws, simulating a process death at that exact
+ * point in the persist pipeline so crash-ordering invariants can be tested
+ * deterministically without racing a real SIGKILL.
+ */
+function faultPoint(label: string): void {
+  if (process.env.BRAINCLAW_FAULT_POINT === label) {
+    throw new Error(`fault-injection: crashed at "${label}" (BRAINCLAW_FAULT_POINT)`);
+  }
+}
+
+/**
+ * Plan (do not apply) the removal of legacy-dir orphans. Read-only: matches
+ * syncDirectory's safety condition (only parseable records absent from state
+ * are deletable; unparseable are preserved for inspection/repair). The actual
+ * unlink is deferred to applyStatePlans so it lands AFTER the journal append.
+ */
+function planCleanupLegacyDir<T extends { id: string }>(
   entityName: string,
   currentIds: Set<string>,
   cwd: string,
   documentType: VersionedDocumentType,
   schema: ZodType<T, unknown>,
-): string[] {
-  const deleted: string[] = [];
+): Array<{ filepath: string; id: string }> {
+  const out: Array<{ filepath: string; id: string }> = [];
   const writeDir = resolveEntityDir(entityName, cwd, 'write');
   const readDir = resolveEntityDir(entityName, cwd, 'read');
-  // If read resolves to a different (legacy) directory, clean orphans there too.
-  // Match syncDirectory's safety condition: only delete parseable records that
-  // are absent from the current state. Schema-invalid legacy files may be drifted
-  // data that operators still need to inspect or repair.
   if (readDir !== writeDir && fs.existsSync(readDir)) {
     const files = fs.readdirSync(readDir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       const id = file.replace('.json', '');
       if (currentIds.has(id)) continue;
       const filepath = path.join(readDir, file);
-      let parseable = false;
       try {
         schema.parse(loadVersionedJsonFile<T>(documentType, filepath).document);
-        parseable = true;
       } catch {
         logger.warn(`Preserving unparseable legacy ${entityName} file ${file}`);
         continue;
       }
-      if (parseable) {
-        fs.unlinkSync(filepath);
-        deleted.push(id); // O3: surface so a delete tombstone is emitted
-      }
+      out.push({ filepath, id }); // O3: surfaced so a delete tombstone is emitted
     }
   }
-  return deleted;
+  return out;
 }
 
 /**
@@ -356,10 +397,19 @@ interface DirtyEntities {
   deleted: string[];
 }
 
-function writeStateDirectories(state: State, cwd?: string, deleteMissing = false): DirtyEntities[] {
-  ensureMemoryDir(cwd);
-  const effectiveCwd = cwd ?? process.cwd();
+interface StatePlan {
+  plans: SyncPlan<{ id: string }>[];
+  legacyDeletes: Array<{ filepath: string; id: string }>;
+  /** Derived from the plan (not the apply) so the journal can be emitted first. */
+  dirty: DirtyEntities[];
+}
 
+/**
+ * Phase 1 of persist: compute every projection change WITHOUT writing. The
+ * returned `dirty` (post-images + tombstone ids) lets the journal be emitted +
+ * fsync'd before applyStatePlans touches any file (pln#566 F1 / I2).
+ */
+function planStateDirectories(state: State, cwd: string, deleteMissing: boolean): StatePlan {
   const entities: Array<{
     name: string;
     itemType: EventItemType;
@@ -374,20 +424,31 @@ function writeStateDirectories(state: State, cwd?: string, deleteMissing = false
     { name: 'plans', itemType: 'plan', items: state.plan_items, docType: 'plan', schema: PlanItemSchema as unknown as ZodType<{ id: string }, unknown> },
   ];
 
+  const plans: SyncPlan<{ id: string }>[] = [];
+  const legacyDeletes: Array<{ filepath: string; id: string }> = [];
   const dirty: DirtyEntities[] = [];
   for (const { name, itemType, items, docType, schema } of entities) {
-    const writeDir = resolveEntityDir(name, effectiveCwd, 'write');
-    const result = syncDirectory(writeDir, items, docType, schema, deleteMissing);
-    const deleted = [...result.deleted];
-    const currentIds = new Set(items.map(item => item.id));
+    const writeDir = resolveEntityDir(name, cwd, 'write');
+    const plan = planSyncDirectory(writeDir, items, docType, schema, deleteMissing);
+    plans.push(plan);
+    const deleted = plan.deletes.map(d => d.id);
     if (deleteMissing) {
-      // O3: legacy-dir orphans removed here must also emit a delete tombstone,
-      // or the journal would show missing_in_projection drift for them.
-      deleted.push(...cleanupLegacyDir(name, currentIds, effectiveCwd, docType, schema));
+      // O3: legacy-dir orphans must also emit a delete tombstone.
+      const legacy = planCleanupLegacyDir(name, new Set(items.map(i => i.id)), cwd, docType, schema);
+      for (const l of legacy) { legacyDeletes.push(l); deleted.push(l.id); }
     }
-    dirty.push({ itemType, written: result.written, deleted });
+    dirty.push({ itemType, written: plan.writes.map(w => ({ item: w.item, created: w.created })), deleted });
   }
-  return dirty;
+  return { plans, legacyDeletes, dirty };
+}
+
+/** Phase 3 of persist: apply the planned projection writes/unlinks (the IO that
+ * must follow the journal append+fsync). */
+function applyStatePlans(plans: SyncPlan<{ id: string }>[], legacyDeletes: Array<{ filepath: string; id: string }>): void {
+  for (const plan of plans) applySyncPlan(plan);
+  for (const { filepath } of legacyDeletes) {
+    try { fs.unlinkSync(filepath); } catch { /* already gone — idempotent */ }
+  }
 }
 
 /**
