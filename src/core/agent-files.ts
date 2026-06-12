@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'yaml';
 import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
+import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
+import { getInstalledBrainclawVersion } from './brainclaw-version.js';
 
 /**
  * Resolve the brainclaw command for MCP configs.
@@ -1198,6 +1200,30 @@ CLI fallback only: \`brainclaw context --json\` / \`brainclaw claim create\` / \
     filePath,
     relativePath: UNIVERSAL_SKILL_RELATIVE_PATH,
   };
+}
+
+/**
+ * Write the protocol-skills pack (pln#519) to the universal `.agents/skills/`
+ * path — one SKILL.md per workflow (session / memory-capture / multi-agent).
+ * Orthogonal to the agent-PROFILE skill above; same agents discover both via
+ * the shared `.agents/skills/` convention, so no per-agent branching is needed.
+ * Idempotent (writeTextFileIfChanged). Called only for skill-capable agents.
+ */
+export function ensureProtocolSkills(cwd: string): AutoConfigWriteResult[] {
+  const version = getInstalledBrainclawVersion();
+  return PROTOCOL_SKILLS.map((skill) => {
+    const relativePath = `.agents/skills/${skill.id}/SKILL.md`;
+    const filePath = path.join(cwd, '.agents', 'skills', skill.id, 'SKILL.md');
+    const { created, updated } = writeTextFileIfChanged(filePath, renderProtocolSkill(skill, version));
+    return {
+      kind: 'skill' as const,
+      label: `Protocol-skill ${skill.id} (${relativePath})`,
+      created,
+      updated,
+      filePath,
+      relativePath,
+    };
+  });
 }
 
 export function ensureCopilotMcpConfig(cwd: string): AutoConfigWriteResult {
@@ -2541,27 +2567,27 @@ export function writeDetectedAgentAutoConfig(
       return results;
     }
     case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd), ensureUniversalBrainclawSkill(cwd), ensureVscodeExtensionRecommendation(cwd)];
+      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd), ensureVscodeExtensionRecommendation(cwd)];
     case 'cursor': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd), ensureUniversalBrainclawSkill(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
       const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
       if (mcp) results.push(mcp);
       return results;
     }
     case 'roo':
-      return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+      return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     case 'mistral-vibe':
-      return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+      return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     case 'hermes': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
       const mcp = ensureHermesMcpConfig(resolveHomeDir(env), cwd);
       if (mcp) results.push(mcp);
       return results;
     }
     case 'codex': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd)];
+      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
       const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
       if (result) results.push(result);
       return results;
@@ -2576,7 +2602,7 @@ export function writeDetectedAgentAutoConfig(
       return results;
     }
     case 'opencode':
-      return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+      return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     case 'antigravity': {
       const homeDir = resolveHomeDir(env);
       const results: AutoConfigWriteResult[] = [];
@@ -2634,7 +2660,7 @@ export function writeExportCompanionFiles(
     case 'roo':
       return [ensureRooMcpConfig(cwd)];
     case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd)];
+      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     case 'continue': {
       const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
       const homeDir = resolveHomeDir(env);
@@ -2654,7 +2680,7 @@ export function writeExportCompanionFiles(
       return results;
     }
     case 'agents-md':
-      return [ensureUniversalBrainclawSkill(cwd)];
+      return [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
     default:
       return [];
   }

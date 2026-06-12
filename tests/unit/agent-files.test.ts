@@ -513,15 +513,15 @@ describe('core/agent-files — auto-config writers', () => {
   it('writes only the relevant detected auto-config companion files', () => {
     const dir = tmpDir();
     try {
-      // cursor without homeDir → MDC + hooks + universal skill
+      // cursor without homeDir → MDC + hooks + universal skill + 3 protocol-skills (pln#519)
       const cursorResults = writeDetectedAgentAutoConfig('cursor', dir, {});
-      assert.equal(cursorResults.length, 3);
+      assert.equal(cursorResults.length, 6);
       assert.ok(cursorResults.some(r => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
       assert.ok(cursorResults.some(r => r.relativePath === '.cursor/hooks.json'));
       assert.ok(cursorResults.some(r => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
 
       const copilotResults = writeDetectedAgentAutoConfig('github-copilot', dir);
-      assert.equal(copilotResults.length, 5);
+      assert.equal(copilotResults.length, 8); // + 3 protocol-skills (pln#519)
       assert.ok(copilotResults.some(r => r.relativePath === '.vscode/settings.json'));
       assert.ok(copilotResults.some(r => r.relativePath === '.github/skills/brainclaw-context/SKILL.md'));
       assert.ok(copilotResults.some(r => r.relativePath === '.github/copilot/hooks.json'));
@@ -819,7 +819,7 @@ describe('core/agent-files — auto-config writers', () => {
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('cursor', dir, { HOME: homeDir });
-      assert.equal(results.length, 4);
+      assert.equal(results.length, 7); // 4 + 3 protocol-skills (pln#519)
       assert.ok(results.some((r) => r.relativePath === '.cursor/rules/brainclaw-mcp-shim.mdc'));
       assert.ok(results.some((r) => r.relativePath === '.cursor/hooks.json'));
       assert.ok(results.some((r) => r.relativePath === '.cursor/mcp.json'));
@@ -834,7 +834,7 @@ describe('core/agent-files — auto-config writers', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('roo', dir);
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 5); // 2 + 3 protocol-skills (pln#519)
       assert.ok(results.some((r) => r.relativePath === '.roo/mcp.json'));
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
@@ -846,7 +846,7 @@ describe('core/agent-files — auto-config writers', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('kilocode', dir);
-      assert.equal(results.length, 3);
+      assert.equal(results.length, 6); // 3 + 3 protocol-skills (pln#519)
       assert.ok(results.some((r) => r.relativePath === '.kilo/mcp.json'));
       assert.ok(results.some((r) => r.relativePath === 'kilo.jsonc'));
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
@@ -1111,7 +1111,7 @@ describe('core/agent-files — auto-config writers', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('opencode', dir);
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 5); // 2 + 3 protocol-skills (pln#519)
       assert.ok(results.some((r) => r.relativePath === 'opencode.json'));
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
@@ -1486,8 +1486,8 @@ describe('ensureUniversalBrainclawSkill', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('codex', dir, {});
-      assert.equal(results.length, 1);
-      assert.equal(results[0]?.relativePath, '.agents/skills/brainclaw/SKILL.md');
+      assert.equal(results.length, 4); // universal skill + 3 protocol-skills (pln#519)
+      assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1498,7 +1498,7 @@ describe('ensureUniversalBrainclawSkill', () => {
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('codex', dir, { HOME: homeDir });
-      assert.equal(results.length, 2);
+      assert.equal(results.length, 5); // 2 + 3 protocol-skills (pln#519)
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
       assert.ok(results.some((r) => r.filePath.includes('.codex') && r.filePath.includes('config.toml')));
     } finally {
