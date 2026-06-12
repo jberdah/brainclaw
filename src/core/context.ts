@@ -142,6 +142,13 @@ export interface ContextResult {
   workflow_hints?: string[];
   project_vision?: string;
   stale_warnings?: StalenessWarning[];
+  /**
+   * pln#544 — memory lifecycle health. Aggregate confirmed_ratio, average
+   * age, oldest unconfirmed, saved_me / misled_me totals. Surfaced so the
+   * operator can see whether memory is earning its keep without having to
+   * crawl the store.
+   */
+  memory_lifecycle?: MemoryLifecycleMetrics;
   selected: ContextItem[];
 }
 
@@ -784,6 +791,25 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     }
   } catch { /* non-fatal */ }
 
+  // pln#544 — memory lifecycle metrics. Best-effort: build once, surface in
+  // the result + thread to workflow_hints so the curation hint can quote the
+  // oldest unconfirmed id. Empty stores still pass through (total_items=0).
+  let memoryLifecycleMetrics: MemoryLifecycleMetrics;
+  try {
+    memoryLifecycleMetrics = buildMemoryLifecycleMetricsForState(state);
+  } catch {
+    memoryLifecycleMetrics = {
+      total_items: 0,
+      confirmed_items: 0,
+      confirmed_ratio: 0,
+      average_age_days: 0,
+      total_saved_me: 0,
+      total_misled_me: 0,
+      total_infirmed_active: 0,
+      recall_precision_proxy: 0,
+    };
+  }
+
   const result: ContextResult = {
     context_schema: CONTEXT_SCHEMA_VERSION,
     profile,
@@ -834,8 +860,9 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     active_project: findActiveProjectInChain(contextCwd, storeChain),
     cross_project_items: crossProjectItems.length > 0 ? crossProjectItems : undefined,
     claim_conflicts: detectClaimConflicts(myClaims, otherActiveClaims),
-    workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items),
+    workflow_hints: buildWorkflowHints(myClaims, openWork, state.plan_items, memoryLifecycleMetrics),
     stale_warnings: staleWarnings,
+    memory_lifecycle: memoryLifecycleMetrics.total_items > 0 ? memoryLifecycleMetrics : undefined,
     selected,
   };
 
@@ -2067,6 +2094,7 @@ function buildWorkflowHints(
   myClaims: Claim[],
   openWork: OpenWorkSummary | undefined,
   plans: PlanItem[],
+  memoryLifecycle?: MemoryLifecycleMetrics,
 ): string[] | undefined {
   const hints: string[] = [];
 
@@ -2090,6 +2118,33 @@ function buildWorkflowHints(
     );
     if (unclaimedInProgress.length > 0) {
       hints.push(`${unclaimedInProgress.length} in-progress plan(s) without a claim — consider claiming the scope you're editing`);
+    }
+  }
+
+  // pln#544 — memory curation surfacing. Pick the strongest signal:
+  //  - an oldest unconfirmed item past the half-life-ish horizon, OR
+  //  - an item that an agent flagged as misleading (still active).
+  if (memoryLifecycle && memoryLifecycle.total_items > 0) {
+    if (memoryLifecycle.total_infirmed_active > 0) {
+      hints.push(
+        `${memoryLifecycle.total_infirmed_active} active memory item(s) were infirmed after their last confirmation — review with bclaw_find(status:'active') and consider archiving via bclaw_transition`,
+      );
+    } else if (
+      memoryLifecycle.oldest_unconfirmed_id
+      && memoryLifecycle.oldest_unconfirmed_age_days !== undefined
+      && memoryLifecycle.oldest_unconfirmed_age_days >= 30
+    ) {
+      const ent = memoryLifecycle.oldest_unconfirmed_entity ?? 'item';
+      hints.push(
+        `Oldest unconfirmed ${ent} ${memoryLifecycle.oldest_unconfirmed_id} is ${memoryLifecycle.oldest_unconfirmed_age_days}d old — confirm or retire when you next encounter it`,
+      );
+    } else if (
+      memoryLifecycle.confirmed_ratio < 0.2
+      && memoryLifecycle.total_items >= 10
+    ) {
+      hints.push(
+        `Memory health: only ${Math.round(memoryLifecycle.confirmed_ratio * 100)}% of ${memoryLifecycle.total_items} item(s) have been confirmed — start attesting in passing to age memory honestly`,
+      );
     }
   }
 
