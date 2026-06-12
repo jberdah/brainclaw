@@ -2,6 +2,7 @@ import type { PreinstallConfig, PreinstallThresholds, PreinstallWeights } from '
 import type { PackageScores } from './socket-client.js';
 
 export type SecurityDecision = 'pass' | 'warn' | 'block';
+export type SecurityMode = 'advisory' | 'enforced';
 
 export interface SecurityVerdict {
   package: string;
@@ -11,6 +12,28 @@ export interface SecurityVerdict {
   composite: number;
   decision: SecurityDecision;
   reasons: string[];
+}
+
+/**
+ * Map an intrinsic verdict (pass/warn/block) to the effective decision under
+ * a given mode. In advisory mode, a block is downgraded to warn so the
+ * operator sees the issue but the wrapper does not abort the install.
+ */
+export function applyMode(decision: SecurityDecision, mode: SecurityMode): SecurityDecision {
+  if (mode === 'enforced') return decision;
+  return decision === 'block' ? 'warn' : decision;
+}
+
+/**
+ * Map an effective decision to a CLI exit code.
+ *   pass  -> 0
+ *   warn  -> 1   (wrapper continues, but surfaces the warning)
+ *   block -> 2   (wrapper aborts the install)
+ */
+export function decisionExitCode(decision: SecurityDecision): number {
+  if (decision === 'block') return 2;
+  if (decision === 'warn') return 1;
+  return 0;
 }
 
 const DEFAULT_WEIGHTS: PreinstallWeights = {

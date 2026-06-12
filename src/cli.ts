@@ -1397,13 +1397,19 @@ program
 program
   .command('check-security')
   .description('Check supply chain security scores for packages via Socket.dev')
-  .requiredOption('--packages <names>', 'Comma-separated package names (e.g. "axios,express" or "axios@1.14.1")')
+  .option('--packages <names>', 'Comma-separated package names (e.g. "axios,express" or "axios@1.14.1")')
+  .option('--requirements <file>', 'Path to a pip-style requirements.txt to scan')
+  .option('--lockfile <file>', 'Path to a package-lock.json (npm) to scan top-level deps')
   .option('--ecosystem <type>', 'Package ecosystem: npm or pypi', 'npm')
+  .option('--mode <mode>', 'Override security mode: advisory or enforced (defaults to config)')
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     await runCheckSecurity({
       packages: options.packages,
+      requirements: options.requirements,
+      lockfile: options.lockfile,
       ecosystem: options.ecosystem,
+      mode: options.mode,
       json: options.json,
     });
   });

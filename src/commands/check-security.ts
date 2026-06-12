@@ -1,13 +1,25 @@
-import path from 'node:path';
 import { memoryExists, memoryPath } from '../core/io.js';
 import { loadConfig } from '../core/config.js';
 import { SecurityCache } from '../core/security-cache.js';
-import { querySocketScores, type PackageQuery } from '../core/socket-client.js';
-import { evaluateBatch, worstDecision, type SecurityVerdict } from '../core/security-scoring.js';
+import { querySocketScores, type PackageQuery, type PackageScores } from '../core/socket-client.js';
+import {
+  applyMode,
+  decisionExitCode,
+  evaluateBatch,
+  worstDecision,
+  type SecurityDecision,
+  type SecurityMode,
+  type SecurityVerdict,
+} from '../core/security-scoring.js';
+import { parsePackageSpec } from '../core/security-packages.js';
+import { collectPackages } from '../core/security-extract.js';
 
 export interface CheckSecurityCommandOptions {
-  packages: string;
+  packages?: string;
   ecosystem?: 'npm' | 'pypi';
+  mode?: SecurityMode;
+  requirements?: string;
+  lockfile?: string;
   json?: boolean;
   cwd?: string;
 }
@@ -27,9 +39,23 @@ export async function runCheckSecurity(options: CheckSecurityCommandOptions): Pr
   }
 
   const ecosystem = options.ecosystem ?? 'npm';
-  const packageNames = options.packages.split(',').map(p => p.trim()).filter(Boolean);
+  const effectiveMode: SecurityMode = options.mode ?? preinstall.mode ?? 'advisory';
 
-  if (packageNames.length === 0) {
+  let packageSpecs: string[];
+  try {
+    packageSpecs = collectPackages({
+      packages: options.packages,
+      requirements: options.requirements,
+      lockfile: options.lockfile,
+      defaultEcosystem: ecosystem,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${msg}`);
+    process.exit(1);
+  }
+
+  if (packageSpecs.length === 0) {
     console.error('No packages specified.');
     process.exit(1);
   }
@@ -40,31 +66,24 @@ export async function runCheckSecurity(options: CheckSecurityCommandOptions): Pr
 
   // Separate cached vs uncached
   const queries: PackageQuery[] = [];
-  const cachedResults: Array<{ query: PackageQuery; scores: ReturnType<typeof cache.get> }> = [];
+  const cachedScores: PackageScores[] = [];
 
-  for (const name of packageNames) {
-    const [depname, version] = name.includes('@') && !name.startsWith('@')
-      ? name.split('@') as [string, string]
-      : name.startsWith('@')
-        ? [name.slice(0, name.lastIndexOf('@')) || name, name.slice(name.lastIndexOf('@') + 1) || 'latest']
-        : [name, 'latest'];
-
+  for (const spec of packageSpecs) {
+    const { depname, version } = parsePackageSpec(spec);
     const cached = cache.get(ecosystem, depname, version);
-    const query: PackageQuery = { depname, ecosystem, ...(version !== 'latest' ? { version } : {}) };
-
     if (cached) {
-      cachedResults.push({ query, scores: cached });
+      cachedScores.push(cached);
     } else {
-      queries.push(query);
+      queries.push({ depname, ecosystem, ...(version !== 'latest' ? { version } : {}) });
     }
   }
 
   // Fetch uncached from Socket
-  let fetchedScores: Awaited<ReturnType<typeof querySocketScores>> = [];
+  let fetchedScores: PackageScores[] = [];
+  let fetchError: string | null = null;
   if (queries.length > 0) {
     try {
       fetchedScores = await querySocketScores(queries, { endpoint: preinstall.socket_endpoint });
-      // Update cache
       for (const s of fetchedScores) {
         const eco = s.purl.startsWith('pkg:pypi') ? 'pypi' : 'npm';
         const depname = s.purl.replace(/^pkg:\w+\//, '');
@@ -72,54 +91,92 @@ export async function runCheckSecurity(options: CheckSecurityCommandOptions): Pr
       }
       cache.flush();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (preinstall.fallback_on_error === 'block') {
-        console.error(`Socket MCP error: ${msg} — blocking (fallback=block)`);
-        process.exit(2);
-      }
-      if (preinstall.fallback_on_error === 'warn') {
-        console.error(`Socket MCP error: ${msg} — allowing with warning (fallback=warn)`);
-      }
-      // fallback=pass: silent continue
-      if (cachedResults.length === 0) {
-        process.exit(preinstall.fallback_on_error === 'warn' ? 1 : 0);
-      }
+      fetchError = err instanceof Error ? err.message : String(err);
     }
   }
 
-  // Combine cached + fetched scores
-  const allScores = [
-    ...cachedResults.filter(c => c.scores !== null).map(c => c.scores!),
-    ...fetchedScores,
-  ];
-
-  const verdicts = evaluateBatch(allScores, preinstall);
-  const worst = worstDecision(verdicts);
-
-  if (options.json) {
-    console.log(JSON.stringify({ verdicts, decision: worst }, null, 2));
-  } else {
-    printVerdicts(verdicts);
+  // Decide what to do on offline / fetch failure.
+  // fallback_on_error semantics:
+  //   block — abort regardless of mode (operator opted into strictness)
+  //   warn  — surface warning, continue with whatever cache we have
+  //   pass  — silent, continue with cache (or treat as pass if no data)
+  if (fetchError && cachedScores.length === 0) {
+    const fallback = preinstall.fallback_on_error;
+    if (options.json) {
+      console.log(JSON.stringify({
+        verdicts: [],
+        decision: fallbackDecision(fallback),
+        effective_decision: applyMode(fallbackDecision(fallback), effectiveMode),
+        mode: effectiveMode,
+        fetch_error: fetchError,
+      }, null, 2));
+    } else {
+      console.error(`Socket MCP error: ${fetchError}`);
+      console.error(`Fallback policy: ${fallback} — no cached results to fall back to.`);
+    }
+    process.exit(decisionExitCode(applyMode(fallbackDecision(fallback), effectiveMode)));
   }
 
-  // Exit codes: 0=pass, 1=warn, 2=block
-  if (worst === 'block') process.exit(2);
-  if (worst === 'warn') process.exit(1);
-  process.exit(0);
+  if (fetchError) {
+    // Partial failure: we have some cache, surface a warning.
+    if (!options.json) {
+      console.error(`Warning: Socket MCP error: ${fetchError} (continuing with ${cachedScores.length} cached result(s))`);
+    }
+  }
+
+  const allScores = [...cachedScores, ...fetchedScores];
+  const verdicts = evaluateBatch(allScores, preinstall);
+  const intrinsic = worstDecision(verdicts);
+  const effective = applyMode(intrinsic, effectiveMode);
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      verdicts,
+      decision: intrinsic,
+      effective_decision: effective,
+      mode: effectiveMode,
+      ...(fetchError ? { fetch_error: fetchError } : {}),
+    }, null, 2));
+  } else {
+    printVerdicts(verdicts, intrinsic, effective, effectiveMode);
+  }
+
+  process.exit(decisionExitCode(effective));
 }
 
-function printVerdicts(verdicts: SecurityVerdict[]): void {
+function fallbackDecision(fallback: 'warn' | 'pass' | 'block'): SecurityDecision {
+  if (fallback === 'block') return 'block';
+  if (fallback === 'warn') return 'warn';
+  return 'pass';
+}
+
+function printVerdicts(
+  verdicts: SecurityVerdict[],
+  intrinsic: SecurityDecision,
+  effective: SecurityDecision,
+  mode: SecurityMode,
+): void {
   if (verdicts.length === 0) {
     console.log('No packages to check.');
     return;
   }
 
   for (const v of verdicts) {
-    const icon = v.decision === 'pass' ? '\u2705' : v.decision === 'warn' ? '\u26A0\uFE0F' : '\uD83D\uDED1';
+    const icon = v.decision === 'pass' ? '✅' : v.decision === 'warn' ? '⚠️' : '🛑';
     console.log(`${icon} ${v.ecosystem}/${v.package}@${v.version} — composite=${v.composite} [${v.decision.toUpperCase()}]`);
     console.log(`   SC=${v.scores.supplyChain} vuln=${v.scores.vulnerability} qual=${v.scores.quality} maint=${v.scores.maintenance} lic=${v.scores.license}`);
     for (const r of v.reasons) {
-      console.log(`   \u2192 ${r}`);
+      console.log(`   → ${r}`);
     }
+  }
+
+  // Surface the mode-aware outcome so operators see what would have happened.
+  if (intrinsic !== effective) {
+    console.log('');
+    console.log(`Verdict: ${intrinsic.toUpperCase()} — downgraded to ${effective.toUpperCase()} by mode=advisory.`);
+    console.log('   Switch to enforced mode (brainclaw setup-security --mode enforced) to block on this verdict.');
+  } else if (verdicts.length > 0) {
+    console.log('');
+    console.log(`Verdict: ${intrinsic.toUpperCase()} (mode=${mode})`);
   }
 }
