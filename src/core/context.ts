@@ -17,6 +17,7 @@ import { getVisibleMemoryVersion } from './freshness.js';
 import { resolveCurrentHostId } from './host.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildCurrentAgentResumeSummary, buildReputationRankingLookup, type AgentResumeSummary } from './reputation.js';
+import { buildMemoryLifecycleMetricsForState, getLifecycleStats, type MemoryLifecycleEntity, type MemoryLifecycleMetrics } from './memory-lifecycle.js';
 import { loadState } from './state.js';
 import { readAuditLog, type AuditAction, type AuditEntry } from './audit.js';
 import { listCandidates } from './candidates.js';
@@ -65,6 +66,20 @@ export interface ContextItem {
     project_id?: string;
     host_id?: string;
     session_id?: string;
+  };
+  /** pln#544 — memory-lifecycle inputs threaded through scoring. Only set for
+   *  decision/constraint/trap items loaded from the primary store; parent-
+   *  store records and other sections are left undefined (ranking is then
+   *  driven purely by the other relevance signals). */
+  lifecycle?: {
+    entity: MemoryLifecycleEntity;
+    created_at: string;
+    last_confirmed_at?: string;
+    last_infirmed_at?: string;
+    confirmation_count?: number;
+    infirmation_count?: number;
+    saved_me_count?: number;
+    misled_me_count?: number;
   };
 }
 
@@ -235,6 +250,16 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         host_id: c.host_id,
         session_id: c.session_id,
       },
+      lifecycle: {
+        entity: 'constraint',
+        created_at: c.created_at,
+        last_confirmed_at: c.last_confirmed_at,
+        last_infirmed_at: c.last_infirmed_at,
+        confirmation_count: c.confirmation_count,
+        infirmation_count: c.infirmation_count,
+        saved_me_count: c.saved_me_count,
+        misled_me_count: c.misled_me_count,
+      },
     });
   }
 
@@ -256,6 +281,16 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         host_id: d.host_id,
         session_id: d.session_id,
       },
+      lifecycle: {
+        entity: 'decision',
+        created_at: d.created_at,
+        last_confirmed_at: d.last_confirmed_at,
+        last_infirmed_at: d.last_infirmed_at,
+        confirmation_count: d.confirmation_count,
+        infirmation_count: d.infirmation_count,
+        saved_me_count: d.saved_me_count,
+        misled_me_count: d.misled_me_count,
+      },
     });
   }
 
@@ -276,6 +311,16 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
         project_id: t.project_id,
         host_id: t.host_id,
         session_id: t.session_id,
+      },
+      lifecycle: {
+        entity: 'trap',
+        created_at: t.created_at,
+        last_confirmed_at: t.last_confirmed_at,
+        last_infirmed_at: t.last_infirmed_at,
+        confirmation_count: t.confirmation_count,
+        infirmation_count: t.infirmation_count,
+        saved_me_count: t.saved_me_count,
+        misled_me_count: t.misled_me_count,
       },
     });
   }
@@ -515,6 +560,22 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       if (trustBonus > 0) {
         item.score += trustBonus;
         item.reasons = uniqueReasons([...item.reasons, `reputation signal:+${trustBonus.toFixed(2)}`]);
+      }
+    }
+
+    // pln#544 — memory lifecycle: items confirmed-recent + reinforced rise;
+    // stale-unconfirmed and explicitly-infirmed sink in the same ranking.
+    // Only items we tagged with a lifecycle payload (primary-store decision/
+    // constraint/trap) carry a delta — parent-store items rank by other signals.
+    if (item.score >= 0 && item.lifecycle) {
+      const stats = getLifecycleStats(item.lifecycle);
+      if (stats.ranking_delta !== 0) {
+        item.score += stats.ranking_delta;
+        const sign = stats.ranking_delta >= 0 ? '+' : '';
+        item.reasons = uniqueReasons([
+          ...item.reasons,
+          `lifecycle ${stats.classification}:${sign}${stats.ranking_delta}`,
+        ]);
       }
     }
 
