@@ -14,11 +14,25 @@ import os from 'node:os';
 import path from 'node:path';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
-import { forceAppendJournalRecords, journalDir } from '../../src/core/events/journal.js';
+import { forceAppendJournalRecords, journalDir, readJournalRecords } from '../../src/core/events/journal.js';
 import { materializeMemoryStateFromJournal } from '../../src/core/events/materialize.js';
 import {
   createCheckpoint, verifyCheckpoint, loadLatestCheckpointManifest, materializeStateFromCheckpoint,
 } from '../../src/core/events/checkpoint.js';
+
+/** Append a raw v2 record line carrying an externalized payload_ref (the API
+ * does not expose payload_ref) to the active segment, to exercise the F4 guard. */
+function appendPayloadRefRecord(dir: string): void {
+  const segDir = journalDir(dir);
+  const seg = fs.readdirSync(segDir).filter(f => f.startsWith('seg-') && f.endsWith('.jsonl')).sort().pop()!;
+  const nextSeq = Math.max(0, ...readJournalRecords(dir).map(r => r.seq)) + 1;
+  const rec = {
+    v: 2, seq: nextSeq, ts: '2026-06-12T01:00:00.000Z', writer: 'w_test-0000', agent: 'system',
+    action: 'create', item_type: 'decision', item_id: 'dec_ext',
+    payload_ref: { sha256: 'a'.repeat(64), bytes: 123 },
+  };
+  fs.appendFileSync(path.join(segDir, seg), JSON.stringify(rec) + '\n');
+}
 
 function tmpStore(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-checkpoint-'));
@@ -99,6 +113,18 @@ describe('journal-derived checkpoints (pln#566 Inc0 s1)', () => {
 
     const forged = { ...manifest, store_id: 'prj_SOMEONE_ELSE' };
     assert.equal(verifyCheckpoint(forged, snap, dir).valid, false, 'wrong store_id must fail');
+  });
+
+  it('F4 guard: refuses to build or serve a checkpoint when the journal has externalized payload_ref', () => {
+    const dir = tmpStore();
+    cleanupDirs.push(dir);
+    for (let i = 1; i <= 2; i++) appendCreate(dir, i);
+    assert.equal(createCheckpoint(dir).created, true, 'builds while payloads are inline');
+
+    // an externalized-payload record arrives (materialize cannot deref it yet)
+    appendPayloadRefRecord(dir);
+    assert.equal(createCheckpoint(dir).created, false, 'refuses to build with externalized payload_ref present');
+    assert.equal(materializeStateFromCheckpoint(dir), null, 'refuses to serve (fall back to projections)');
   });
 
   it('rejects when the covered head record is no longer in the journal (lineage diverged)', () => {
