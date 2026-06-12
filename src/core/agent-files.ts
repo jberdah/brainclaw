@@ -1639,8 +1639,21 @@ export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
 // new facade tools or canonical grammar verbs propagate without a manual edit
 // here (pln#546 step 2). REMOVED_IN_V1_TOOLS are stripped so deprecated names
 // don't reappear in user-facing configs.
-const HERMES_BRAINCLAW_MCP_TOOLS: string[] = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
-  .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
+//
+// LAZY (pln#564 coordinator fix): computed on first call, NOT at module init.
+// agent-files.ts ↔ commands/mcp.ts form an import cycle; reading the imported
+// MCP_CANONICAL_GRAMMAR_TOOL_NAMES at module-eval time threw a TDZ
+// ("Cannot access 'MCP_CANONICAL_GRAMMAR_TOOL_NAMES' before initialization")
+// when agent-files loaded mid-mcp-init — which broke the MCP server. tsc does
+// not catch this (runtime-only). Deferring the read to call time fixes it.
+let hermesBrainclawMcpToolsCache: string[] | undefined;
+function getHermesBrainclawMcpTools(): string[] {
+  if (!hermesBrainclawMcpToolsCache) {
+    hermesBrainclawMcpToolsCache = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
+      .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
+  }
+  return hermesBrainclawMcpToolsCache;
+}
 
 export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath?: string): AutoConfigWriteResult | undefined {
   if (!homeDir) return undefined;
@@ -1697,7 +1710,7 @@ export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath
     },
     tools: {
       ...currentTools,
-      include: Array.isArray(currentTools.include) ? currentTools.include : HERMES_BRAINCLAW_MCP_TOOLS,
+      include: Array.isArray(currentTools.include) ? currentTools.include : getHermesBrainclawMcpTools(),
       prompts: typeof currentTools.prompts === 'boolean' ? currentTools.prompts : false,
       resources: typeof currentTools.resources === 'boolean' ? currentTools.resources : false,
     },
