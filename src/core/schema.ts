@@ -37,6 +37,38 @@ function coerceTags(val: unknown): unknown {
 export const TagsSchema = z.preprocess(coerceTags, z.array(z.string()));
 export const TagsWithDefaultSchema = z.preprocess(coerceTags, z.array(z.string()).default([]));
 
+// --- Memory lifecycle (pln#544) ---
+
+/**
+ * One confirmation/infirmation event on a memory item (decision, constraint,
+ * trap). The full history is stored on the item as a bounded list — the
+ * `last_confirmed_at` / `last_infirmed_at` / `confirmation_count` /
+ * `infirmation_count` denormalisations let read paths avoid scanning the log
+ * for the common "is this still trustworthy" question.
+ *
+ *  - `confirm` / `infirm`: passive observation that the rule still holds /
+ *    no longer holds.
+ *  - `saved_me`: agent explicitly credits the item with avoiding a bug —
+ *    reinforces ranking weight via reputation.ts.
+ *  - `misled_me`: agent explicitly blames the item for a wrong move —
+ *    sinks ranking weight, mirror of saved_me.
+ */
+export const MemoryConfirmationKindSchema = z.enum(['confirm', 'infirm', 'saved_me', 'misled_me']);
+export type MemoryConfirmationKind = z.infer<typeof MemoryConfirmationKindSchema>;
+
+export const MemoryConfirmationEventSchema = z.object({
+  at: z.string(),
+  by: z.string(),
+  by_id: z.string().optional(),
+  session_id: z.string().optional(),
+  kind: MemoryConfirmationKindSchema,
+  /** Pointer at the evidence — file:line, commit sha, message id, command output. */
+  evidence: z.string().optional(),
+  /** Free-form note (the one-line "why" the agent attests). */
+  note: z.string().optional(),
+});
+export type MemoryConfirmationEvent = z.infer<typeof MemoryConfirmationEventSchema>;
+
 // --- Entry schemas ---
 
 export const ConstraintStatusSchema = z.enum(['active', 'resolved', 'expired']);
@@ -139,6 +171,18 @@ export const ConstraintSchema = z.object({
   related_paths: z.array(z.string()).optional(),
   plan_id: z.string().optional(),
   expires_at: z.string().optional(),
+  // pln#544 — memory-lifecycle (confirm/decay/reinforce). Symmetric across
+  // constraint/decision/trap. `verified_at` (pln#530 perishable-fact
+  // re-verification) is kept as a narrower legacy signal alongside.
+  last_confirmed_at: z.string().optional(),
+  last_infirmed_at: z.string().optional(),
+  confirmation_count: z.number().int().nonnegative().optional(),
+  infirmation_count: z.number().int().nonnegative().optional(),
+  saved_me_count: z.number().int().nonnegative().optional(),
+  misled_me_count: z.number().int().nonnegative().optional(),
+  /** Bounded event log (most recent N) — older events are dropped, the
+   *  counts remain accurate. Empty / absent means "never confirmed". */
+  confirmations: z.array(MemoryConfirmationEventSchema).optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Constraint = z.infer<typeof ConstraintSchema>;
@@ -165,6 +209,14 @@ export const DecisionSchema = z.object({
   // facts (tool behaviour, config values), probe before trusting the memory.
   verified_at: z.string().optional(),
   verify_cmd: z.string().optional(),
+  // pln#544 — memory-lifecycle (see ConstraintSchema).
+  last_confirmed_at: z.string().optional(),
+  last_infirmed_at: z.string().optional(),
+  confirmation_count: z.number().int().nonnegative().optional(),
+  infirmation_count: z.number().int().nonnegative().optional(),
+  saved_me_count: z.number().int().nonnegative().optional(),
+  misled_me_count: z.number().int().nonnegative().optional(),
+  confirmations: z.array(MemoryConfirmationEventSchema).optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Decision = z.infer<typeof DecisionSchema>;
@@ -195,6 +247,14 @@ export const TrapSchema = z.object({
   // traps that go stale (e.g. a service_tier value that the API later rejects).
   verified_at: z.string().optional(),
   verify_cmd: z.string().optional(),
+  // pln#544 — memory-lifecycle (see ConstraintSchema).
+  last_confirmed_at: z.string().optional(),
+  last_infirmed_at: z.string().optional(),
+  confirmation_count: z.number().int().nonnegative().optional(),
+  infirmation_count: z.number().int().nonnegative().optional(),
+  saved_me_count: z.number().int().nonnegative().optional(),
+  misled_me_count: z.number().int().nonnegative().optional(),
+  confirmations: z.array(MemoryConfirmationEventSchema).optional(),
   provenance: ProvenancePassthroughSchema,
 });
 export type Trap = z.infer<typeof TrapSchema>;
