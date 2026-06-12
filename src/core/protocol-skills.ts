@@ -45,13 +45,13 @@ reachable (cold start, or a worktree without \`.brainclaw/\`).
 1. \`bclaw_work(intent='consult')\` — loads project memory and reports active claims. Read \`bootstrap_recommended\`: if true the project has no usable PROJECT.md (see \`brainclaw-multi-agent\` → bootstrap loop).
 2. If you will edit a scope, claim it: \`bclaw_work(intent='execute', scope='<path-or-feature>')\`. The response's \`claim_id\` is yours; \`claim_status='created'\` = new, \`'existing'\` = resumed.
 3. Do the work. Honor the \`warnings\` array (claim conflicts, sensitive paths, high-severity traps on your scope).
-4. When done (committed, tested), \`bclaw_session_end\` — it auto-releases your remaining claims and closes the session record.
+4. When done (committed, tested), \`bclaw_session_end(autoRelease: true)\` — closes the session record and releases your remaining claims. \`autoRelease\` defaults to false; pass it explicitly or claims survive the session.
 
 CLI fallback: \`brainclaw context --json\` · \`brainclaw claim create "<desc>" --scope <path>\` · \`brainclaw session-end --auto-release\`.
 
 ## Anti-rationalizations
 
-- **"I'm just exploring, I'll skip session-end."** → A live claim outlives a crash. The next agent sees your stale claim and is blocked. Auto-release is the zero-cost guarantee.
+- **"I'm just exploring, I'll skip session-end."** → A live claim outlives a crash. The next agent sees your stale claim and is blocked. Calling \`bclaw_session_end(autoRelease: true)\` is the zero-cost guarantee — without the flag the claim survives.
 - **"I know the project, I don't need to consult."** → State changes between sessions (commits, new traps, new constraints). Consult is cheap and surfaces what you'd miss.
 - **"I'll claim later once I know the exact scope."** → Claim-before-edit IS the contract; it is exactly what prevents races with parallel agents.
 
@@ -100,16 +100,16 @@ later. The entity type is not cosmetic — it drives retrieval and surfacing.
    Else                                              → runtime_note
    \`\`\`
 
-2. Write via the canonical grammar: \`bclaw_create(entity='<type>', data={ text, ...required })\`. Declare the classifying field yourself (caller assertion wins over keyword heuristics): a \`decision\` needs an \`outcome\` (e.g. \`proposed\` until ratified — it is enum-validated), a \`trap\` a \`severity\`, a \`constraint\` a \`category\`, a \`candidate\` its proposed \`type\`. For free-form capture, \`bclaw_quick_capture(text, type)\` is the shortcut.
-3. Verify it is re-readable: \`bclaw_get(entity='<type>', id='<id>')\` returns your content. If it 404s or errors \`validation_error\`, the write was rejected at the load path — re-check the required fields.
+2. Write via the canonical grammar: \`bclaw_create(entity='<type>', data={ text, author, ...optional })\`. Declare the classifying field yourself (caller assertion wins over keyword heuristics): for a \`decision\` set \`outcome\` (one of \`approved | rejected | deferred | pending\` — \`pending\` until ratified); for a \`trap\` set \`severity\` (\`low | medium | high\`, defaults to medium); for a \`constraint\` set \`category\`; for a \`candidate\` its proposed \`type\` (\`constraint | decision | trap | handoff\` — required). \`handoff\` is NOT created via bclaw_create — use \`brainclaw handoff "<text>"\` (CLI) or let \`bclaw_session_end(reflectHandoff: true)\` materialize one from commits. For free-form capture restricted to \`decision | trap | constraint | note\`, \`bclaw_quick_capture(text, type)\` is the shortcut.
+3. Verify it is re-readable: \`bclaw_get(entity='<type>', id='<id>')\` returns your content. If \`bclaw_create\` returned \`validation_error\` (e.g. \`outcome\` not in enum), fix the field and retry — the error message lists the accepted values.
 
-CLI fallback: \`brainclaw create <type> …\` · \`brainclaw quick-capture "<text>" --type <type>\`.
+CLI fallback: \`brainclaw memory create <type> "<text>"\` (decision | constraint | trap | handoff via top-level \`brainclaw handoff "<text>"\`).
 
 ## Anti-rationalizations
 
 - **"I'll write a runtime_note, I'm unsure of the type."** → Notes are the lowest-signal type (aggregated, not surfaced). If it's actionable, pick decision/constraint/trap — being wrong is fine, that's what candidates are for.
 - **"I'll add it as a decision AND a runtime_note to be safe."** → Duplicates pollute search and retrieval. Pick ONE.
-- **"I'll write the decision without an outcome."** → \`outcome\` is enum-validated; an absent/invalid value is rejected (silently, on older paths). Set \`proposed\` if not yet ratified.
+- **"I'll write the decision without an outcome."** → \`outcome\` is optional but enum-validated when set; an invalid value (e.g. \`proposed\`, \`accepted\`) is rejected with the accepted list (\`approved | rejected | deferred | pending\`). Set \`pending\` early if not yet ratified — it makes the lifecycle explicit and lets reviewers transition it cleanly.
 - **"A 5-line trap for a 1-line problem."** → Traps are read under pressure. Severity + symptom + mitigation, scannable.
 
 ## Red flags
