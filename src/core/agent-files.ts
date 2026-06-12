@@ -2,186 +2,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import yaml from 'yaml';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';
+import { isAgentInstalledPerInventory } from './agent-inventory.js';
+import {
+  brainclawMcpEntry,
+  buildHookCommand,
+  getBclawCliParts,
+  getBrainclawMcpCommand,
+  isForceResolveEnabled,
+  quoteShellArg,
+  resetMcpCommandCache,
+  withForcedResolve,
+} from './mcp-command-resolution.js';
 
-/**
- * Resolve the brainclaw command for MCP configs.
- * Returns `{ command: "<node>", args: ["<cli.js>", "mcp"] }` so the config
- * works in non-login shells (VS Code Server, MCP subprocesses) on all OSes.
- *
- * Strategy:
- * 1. Find the brainclaw bin via which/where
- * 2. Trace from the bin/shim to the actual cli.js entry point
- * 3. Pair it with the absolute node path
- * Falls back to 'npx brainclaw mcp' if resolution fails.
- */
-function resolveBrainclawMcpCommand(): { command: string; args: string[] } {
-  const nodeBin = process.execPath;
-
-  // 1. Try to resolve the cli.js from the installed brainclaw binary
-  const cliJs = resolveBrainclawCliJs();
-  if (cliJs) {
-    return { command: nodeBin, args: [cliJs, 'mcp'] };
-  }
-
-  // 2. Fallback: npx (relies on PATH, may resolve wrong version)
-  return { command: 'npx', args: ['brainclaw', 'mcp'] };
-}
-
-/**
- * Trace from the brainclaw bin/shim to the actual dist/cli.js file.
- * Works on Windows (.cmd shim), macOS/Linux (symlink to bin stub).
- */
-function resolveBrainclawCliJs(): string | undefined {
-  // Strategy A: find via which/where and trace to cli.js
-  const whichCmd = os.platform() === 'win32' ? 'where' : 'which';
-  try {
-    const result = spawnSync(whichCmd, ['brainclaw'], { encoding: 'utf-8', timeout: 3000 });
-    if (result.status === 0) {
-      const resolved = result.stdout.trim().split(/\r?\n/)[0]?.trim();
-      if (resolved) {
-        const cliJs = traceToCliJs(resolved);
-        if (cliJs) return cliJs;
-      }
-    }
-  } catch {
-    // Non-fatal — try next strategy
-  }
-
-  // Strategy B: resolve from this file's own package (we ARE brainclaw)
-  try {
-    const ownCliJs = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli.js');
-    if (fs.existsSync(ownCliJs)) return ownCliJs;
-  } catch {
-    // Non-fatal
-  }
-
-  return undefined;
-}
-
-/**
- * Given a bin path (shim or symlink), trace to the dist/cli.js entry point.
- *
- * Windows: .cmd shim contains a line like `"%_prog%" "%dp0%\node_modules\brainclaw\dist\cli.js" %*`
- * Unix: bin is a symlink → resolve to real path → go up to package root → dist/cli.js
- */
-function traceToCliJs(binPath: string): string | undefined {
-  const isWindows = os.platform() === 'win32';
-
-  if (isWindows) {
-    // Read the .cmd shim and extract the cli.js path
-    const cmdPath = binPath.endsWith('.cmd') ? binPath : `${binPath}.cmd`;
-    try {
-      const content = fs.readFileSync(cmdPath, 'utf-8');
-      // Match patterns like: "%dp0%\node_modules\brainclaw\dist\cli.js"
-      const match = content.match(/%dp0%\\([^\s"]+cli\.js)/);
-      if (match) {
-        const shimDir = path.dirname(cmdPath);
-        const cliJs = path.resolve(shimDir, match[1]!);
-        if (fs.existsSync(cliJs)) return cliJs;
-      }
-    } catch {
-      // Fall through
-    }
-  } else {
-    // Unix: follow symlink chain to the real bin, then find cli.js
-    try {
-      const realBin = fs.realpathSync(binPath);
-      // Typical layout: .../node_modules/.bin/brainclaw → ../brainclaw/dist/cli.js
-      // Or: .../node_modules/brainclaw/dist/cli.js (direct)
-      if (realBin.endsWith('cli.js') && fs.existsSync(realBin)) return realBin;
-
-      // The bin stub typically lives at node_modules/brainclaw/dist/cli.js
-      // or node_modules/.bin/brainclaw → ../brainclaw/dist/cli.js
-      const packageRoot = findPackageRoot(realBin);
-      if (packageRoot) {
-        const cliJs = path.join(packageRoot, 'dist', 'cli.js');
-        if (fs.existsSync(cliJs)) return cliJs;
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
-  return undefined;
-}
-
-/** Walk up from a file to find the nearest directory containing package.json with name "brainclaw". */
-function findPackageRoot(from: string): string | undefined {
-  let dir = path.dirname(from);
-  for (let i = 0; i < 10; i++) {
-    const pkgPath = path.join(dir, 'package.json');
-    try {
-      if (fs.existsSync(pkgPath)) {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { name?: string };
-        if (pkg.name === 'brainclaw') return dir;
-      }
-    } catch { /* continue */ }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return undefined;
-}
-
-/** Cached MCP command — resolved once per process. */
-let cachedMcpCommand: { command: string; args: string[] } | undefined;
-function getBrainclawMcpCommand(): { command: string; args: string[] } {
-  if (!cachedMcpCommand) {
-    cachedMcpCommand = resolveBrainclawMcpCommand();
-  }
-  return cachedMcpCommand;
-}
-
-/** Reset the cached MCP command so it gets re-resolved on next access. */
-export function resetMcpCommandCache(): void {
-  cachedMcpCommand = undefined;
-}
-
-/** Module-level flag: when true, brainclawMcpEntry overwrites existing paths. */
-let _forceResolve = false;
-
-/**
- * Build a complete MCP server entry with relay model env injection.
- * Merges with the existing entry to preserve manual edits (e.g. custom command
- * path, additional env vars, extra args). Only sets defaults for missing fields.
- *
- * When `workspacePath` is provided, injects BRAINCLAW_CWD into the env so
- * the MCP server resolves the correct workspace root regardless of the IDE's
- * process.cwd() at launch time.
- */
-function brainclawMcpEntry(agentName: string, existing?: unknown, workspacePath?: string): Record<string, unknown> {
-  const defaults = getBrainclawMcpCommand();
-  const ex = isJsonObject(existing) ? existing : {};
-  const exEnv = isJsonObject(ex.env) ? ex.env : {};
-
-  // When _forceResolve is true (post-upgrade), always use newly resolved paths.
-  // Otherwise preserve existing command if it's an absolute path (manual edit).
-  // CRITICAL: once we decide to preserve the command, we MUST also preserve
-  // the args. Previously args was always overwritten, which silently clobbered
-  // manual customizations (--cwd, --debug, etc.) and broke setups on DGX.
-  // See trp#12 + pln#450.
-  const useExisting = !_forceResolve && typeof ex.command === 'string' && ex.command !== 'npx';
-  const existingArgs = Array.isArray(ex.args) ? (ex.args as unknown[]) : undefined;
-
-  return {
-    command: useExisting ? ex.command : defaults.command,
-    args: useExisting && existingArgs ? existingArgs : defaults.args,
-    // Merge env: preserve user-added vars, ensure BRAINCLAW_AGENT is set
-    env: {
-      ...exEnv,
-      BRAINCLAW_AGENT: agentName,
-      ...(workspacePath ? { BRAINCLAW_CWD: workspacePath } : {}),
-    },
-    // Preserve timeout if set
-    ...(typeof ex.timeout === 'number' ? { timeout: ex.timeout } : {}),
-  };
-}
+export { resetMcpCommandCache };
 
 export const BRAINCLAW_SECTION_START = '<!-- brainclaw:start -->';
 export const BRAINCLAW_SECTION_END = '<!-- brainclaw:end -->';
@@ -1796,15 +1634,13 @@ export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
-const HERMES_BRAINCLAW_MCP_TOOLS = [
-  'bclaw_work',
-  'bclaw_context',
-  'bclaw_find',
-  'bclaw_get',
-  'bclaw_create',
-  'bclaw_update',
-  'bclaw_transition',
-];
+// Hermes' MCP `tools.include` array — narrow canonical-grammar surface. Derived
+// from MCP_CANONICAL_GRAMMAR_TOOL_NAMES (which is itself ALL_TOOLS-derived) so
+// new facade tools or canonical grammar verbs propagate without a manual edit
+// here (pln#546 step 2). REMOVED_IN_V1_TOOLS are stripped so deprecated names
+// don't reappear in user-facing configs.
+const HERMES_BRAINCLAW_MCP_TOOLS: string[] = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
+  .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
 
 export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath?: string): AutoConfigWriteResult | undefined {
   if (!homeDir) return undefined;
@@ -2062,7 +1898,7 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
   if (!content.includes('[mcp_servers.brainclaw]')) {
     content = content + brainclawBlock + '\n';
     changed = true;
-  } else if (_forceResolve) {
+  } else if (isForceResolveEnabled()) {
     const replaced = replaceTomlSection(content, 'mcp_servers.brainclaw', brainclawBlock.slice(1) + '\n');
     if (replaced !== content) {
       content = replaced;
@@ -2071,8 +1907,8 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
   }
 
   // Per-tool approval blocks: ALWAYS sync to the current catalog, regardless
-  // of _forceResolve. These sections are purely machine-managed (no user edits
-  // expected) and must match the narrowed headless-auto catalog.
+  // of force-resolve state. These sections are purely machine-managed (no user
+  // edits expected) and must match the narrowed headless-auto catalog.
   const hasToolSections = /^\[mcp_servers\.brainclaw\.tools\./m.test(content);
   if (hasToolSections) {
     const replaced = replaceTomlSection(content, 'mcp_servers.brainclaw.tools', toolsBlock.slice(1));
@@ -2352,43 +2188,6 @@ export function ensureAntigravityMcpConfig(homeDir: string | undefined): AutoCon
   };
 }
 
-function quoteShellArg(arg: string): string {
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) return arg;
-  return `"${arg.replace(/"/g, '\\"')}"`;
-}
-
-/**
- * Resolve the brainclaw CLI invocation for hook configs.
- * Returns shell-safe parts like `["<node>", "<cli.js>"]` or `["npx", "brainclaw"]`.
- */
-function getBclawCliParts(): string[] {
-  const mcpCmd = getBrainclawMcpCommand();
-  if (mcpCmd.command === 'npx') return ['npx', 'brainclaw'];
-
-  const argsWithoutMcp = [...mcpCmd.args];
-  if (argsWithoutMcp[argsWithoutMcp.length - 1] === 'mcp') {
-    argsWithoutMcp.pop();
-  }
-
-  return [
-    mcpCmd.command.replace(/\\/g, '/'),
-    ...argsWithoutMcp.map((arg) => arg.replace(/\\/g, '/')),
-  ];
-}
-
-type HookShell = 'bash' | 'powershell';
-
-function buildHookCommand(
-  args: string[],
-  shell: HookShell = os.platform() === 'win32' ? 'powershell' : 'bash',
-): string {
-  const rendered = [...getBclawCliParts(), ...args].map(quoteShellArg).join(' ');
-  if (shell === 'powershell') {
-    return `& ${rendered} 2>$null`;
-  }
-  return `${rendered} 2>/dev/null`;
-}
-
 /**
  * Writes `.cursor/hooks.json` — Cursor's native hooks config.
  * Events: sessionStart, beforeSubmitPrompt, stop (Cursor uses camelCase).
@@ -2537,88 +2336,268 @@ export function ensureOpenClawMcpConfig(homeDir: string | undefined): AutoConfig
   };
 }
 
+// ── Per-agent writer descriptors (pln#546) ────────────────────────────────
+//
+// AGENT_WIRING_REGISTRY collapses what used to be three divergent dispatch
+// tables — writeDetectedAgentAutoConfig (init/setup), writeExportCompanionFiles
+// (export), and patchAllMcpConfigs (upgrade/doctor) — into a single per-agent
+// descriptor. Each writer receives a uniform context (cwd / homeDir / env /
+// optional workspacePath) and returns one or more AutoConfigWriteResult. The
+// three orchestrators below just iterate this registry; adding a new agent N+1
+// is a data entry, not a 3-table cross-edit.
+//
+// Writer grouping:
+//   - workspaceWriters: project-scoped configs (cwd) — MCP, rules, skills, hooks
+//   - userWriters: machine-scoped configs (homeDir) — fabricated only when the
+//     agent is installed per agents-inventory (avoids polluting unrelated
+//     machines with user-level config stubs)
+//   - hookWriters: subset of workspace writers that target hook configs
+//     (kept as a separate array so doctor / status can surface "wired with
+//     hooks" vs "wired without hooks" without re-running every writer)
+
+export interface AgentWriterContext {
+  cwd: string;
+  homeDir: string | undefined;
+  env: NodeJS.ProcessEnv;
+  /** Workspace path passed to writers that embed it (e.g. Hermes external_dirs). */
+  workspacePath?: string;
+}
+
+export type AgentWriterFn = (ctx: AgentWriterContext) => AutoConfigWriteResult | AutoConfigWriteResult[] | undefined | null;
+
+export interface AgentWriterDescriptor {
+  workspaceWriters: AgentWriterFn[];
+  userWriters: AgentWriterFn[];
+  hookWriters: AgentWriterFn[];
+}
+
+// Shared writer builders — referenced across multiple agents.
+const writeUniversalSkill: AgentWriterFn = (ctx) => ensureUniversalBrainclawSkill(ctx.cwd);
+const writeProtocolSkills: AgentWriterFn = (ctx) => ensureProtocolSkills(ctx.cwd);
+const writeVscodeExtensionRec: AgentWriterFn = (ctx) => ensureVscodeExtensionRecommendation(ctx.cwd);
+
+/**
+ * Per-agent writer wiring. The keys are canonical agent names from
+ * `AgentName` (see agent-capability.ts) — keep in sync with AGENT_EXPORT_REGISTRY.
+ * Agents missing from this map yield an empty writer list (no-op detection),
+ * which the drift test below guards against.
+ */
+export const AGENT_WIRING_REGISTRY: Record<string, AgentWriterDescriptor> = {
+  'claude-code': {
+    // .claude/settings.local.json bundles permissions + session/Stop/PostToolUse
+    // hooks in one file, so it lives in workspaceWriters — not duplicated in
+    // hookWriters (which would double-count the result).
+    workspaceWriters: [
+      (ctx) => ensureClaudeCodeMcpConfig(ctx.cwd),
+      (ctx) => ensureClaudeCodeCommand(ctx.cwd),
+      (ctx) => ensureClaudeCodeSettings(ctx.cwd),
+      writeVscodeExtensionRec,
+      (ctx) => ensureProjectDevDependency(ctx.cwd),
+    ],
+    userWriters: [
+      (ctx) => ensureClaudeCodeUserSettings(ctx.homeDir, ctx.env),
+      (ctx) => ensureClaudeCodeUserCommand(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+  cline: {
+    workspaceWriters: [(ctx) => ensureClineMcpConfig(ctx.cwd)],
+    userWriters: [],
+    hookWriters: [],
+  },
+  windsurf: {
+    workspaceWriters: [(ctx) => ensureWindsurfModernRules(ctx.cwd)],
+    userWriters: [(ctx) => ensureWindsurfMcpConfig(ctx.homeDir)],
+    hookWriters: [],
+  },
+  'github-copilot': {
+    workspaceWriters: [
+      (ctx) => ensureCopilotMcpConfig(ctx.cwd),
+      (ctx) => ensureCopilotSkill(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+      writeVscodeExtensionRec,
+    ],
+    userWriters: [],
+    hookWriters: [(ctx) => ensureCopilotHooks(ctx.cwd)],
+  },
+  cursor: {
+    workspaceWriters: [
+      (ctx) => ensureCursorMdc(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureCursorMcpConfig(ctx.homeDir)],
+    hookWriters: [(ctx) => ensureCursorHooks(ctx.cwd)],
+  },
+  roo: {
+    workspaceWriters: [
+      (ctx) => ensureRooMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  kilocode: {
+    workspaceWriters: [
+      (ctx) => ensureKilocodeMcpConfig(ctx.cwd),
+      (ctx) => ensureKilocodeConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  'mistral-vibe': {
+    workspaceWriters: [
+      (ctx) => ensureMistralVibeMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  hermes: {
+    workspaceWriters: [
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureHermesMcpConfig(ctx.homeDir, ctx.workspacePath ?? ctx.cwd)],
+    hookWriters: [],
+  },
+  codex: {
+    workspaceWriters: [
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureCodexMcpConfig(ctx.homeDir, ctx.env)],
+    hookWriters: [],
+  },
+  continue: {
+    workspaceWriters: [(ctx) => ensureContinueMcpConfig(ctx.cwd)],
+    userWriters: [
+      (ctx) => ensureContinueUserMcpConfig(ctx.homeDir),
+      (ctx) => ensureContinueUserPermissions(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+  opencode: {
+    workspaceWriters: [
+      (ctx) => ensureOpenCodeMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  antigravity: {
+    workspaceWriters: [],
+    userWriters: [(ctx) => ensureAntigravityMcpConfig(ctx.homeDir)],
+    // Antigravity hook config lives under the user home — keep it in
+    // hookWriters (semantic grouping) but skip with the inventory gate like
+    // the other user-level fabricators.
+    hookWriters: [(ctx) => ensureAntigravityHooks(ctx.homeDir)],
+  },
+  openclaw: {
+    workspaceWriters: [],
+    userWriters: [(ctx) => ensureOpenClawMcpConfig(ctx.homeDir)],
+    hookWriters: [],
+  },
+  // Pure SKILL.md surfaces — nanoclaw/nemoclaw/picoclaw/zeroclaw have no MCP
+  // config and their instruction file is written by the export pipeline.
+  nanoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  nemoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  picoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  zeroclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  // claude-sonnet: shares CLAUDE.md surface with claude-code; the workspace
+  // and user wiring is identical, so detection should reuse claude-code's
+  // descriptor rather than duplicate it.
+  'claude-sonnet': {
+    workspaceWriters: [
+      (ctx) => ensureClaudeCodeMcpConfig(ctx.cwd),
+      (ctx) => ensureClaudeCodeCommand(ctx.cwd),
+      (ctx) => ensureClaudeCodeSettings(ctx.cwd),
+      writeVscodeExtensionRec,
+      (ctx) => ensureProjectDevDependency(ctx.cwd),
+    ],
+    userWriters: [
+      (ctx) => ensureClaudeCodeUserSettings(ctx.homeDir, ctx.env),
+      (ctx) => ensureClaudeCodeUserCommand(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+};
+
+/**
+ * Drain a writer's return value into the result list (skip null/undefined,
+ * flatten arrays from writers like ensureProtocolSkills).
+ */
+function pushWriterResult(
+  results: AutoConfigWriteResult[],
+  value: AutoConfigWriteResult | AutoConfigWriteResult[] | undefined | null,
+): void {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    for (const r of value) results.push(r);
+  } else {
+    results.push(value);
+  }
+}
+
+/**
+ * Run a descriptor's writers against the given context. The `skipUserIfNotInstalled`
+ * flag consults `isAgentInstalledPerInventory` and drops user-level writers when
+ * the agent isn't present on this machine — preventing init from fabricating
+ * `~/.codex/config.toml` (etc.) on machines that never had codex installed.
+ */
+function runAgentWriters(
+  descriptor: AgentWriterDescriptor,
+  ctx: AgentWriterContext,
+  agentName: string,
+  opts: { skipUserIfNotInstalled?: boolean; kindFilter?: AutoConfigWriteResult['kind'] } = {},
+): AutoConfigWriteResult[] {
+  const out: AutoConfigWriteResult[] = [];
+
+  for (const fn of descriptor.workspaceWriters) pushWriterResult(out, fn(ctx));
+  for (const fn of descriptor.hookWriters) pushWriterResult(out, fn(ctx));
+
+  // User-level writers fabricate machine-wide config. When agents-inventory is
+  // available and reports the agent as NOT installed, skip them — see the
+  // brief's "consult agent-inventory before fabricating user-level configs".
+  const installed = opts.skipUserIfNotInstalled
+    ? isAgentInstalledPerInventory(agentName)
+    : undefined;
+  const skipUser = opts.skipUserIfNotInstalled && installed === false;
+  if (!skipUser) {
+    for (const fn of descriptor.userWriters) pushWriterResult(out, fn(ctx));
+  }
+
+  if (opts.kindFilter) {
+    return out.filter((r) => r.kind === opts.kindFilter);
+  }
+  return out;
+}
+
 export function writeDetectedAgentAutoConfig(
   agentName: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
-  switch (agentName) {
-    case 'claude-code': {
-      const results: AutoConfigWriteResult[] = [
-        ensureClaudeCodeMcpConfig(cwd),
-        ensureClaudeCodeCommand(cwd),
-        ensureClaudeCodeSettings(cwd),
-        ensureVscodeExtensionRecommendation(cwd),
-      ];
-      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
-      if (userSettings) results.push(userSettings);
-      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
-      if (userCmd) results.push(userCmd);
-      const dep = ensureProjectDevDependency(cwd);
-      if (dep) results.push(dep);
-      return results;
-    }
-    case 'cline':
-      return [ensureClineMcpConfig(cwd)];
-    case 'windsurf': {
-      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
-      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd), ensureVscodeExtensionRecommendation(cwd)];
-    case 'cursor': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'roo':
-      return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'mistral-vibe':
-      return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'hermes': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const mcp = ensureHermesMcpConfig(resolveHomeDir(env), cwd);
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'codex': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
-      if (result) results.push(result);
-      return results;
-    }
-    case 'continue': {
-      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const homeDir = resolveHomeDir(env);
-      const userMcp = ensureContinueUserMcpConfig(homeDir);
-      if (userMcp) results.push(userMcp);
-      const perms = ensureContinueUserPermissions(homeDir);
-      if (perms) results.push(perms);
-      return results;
-    }
-    case 'opencode':
-      return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'antigravity': {
-      const homeDir = resolveHomeDir(env);
-      const results: AutoConfigWriteResult[] = [];
-      const mcp = ensureAntigravityMcpConfig(homeDir);
-      if (mcp) results.push(mcp);
-      const hooks = ensureAntigravityHooks(homeDir);
-      if (hooks) results.push(hooks);
-      return results;
-    }
-    case 'openclaw': {
-      const result = ensureOpenClawMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
-    }
-    default:
-      return [];
-  }
+  const descriptor = AGENT_WIRING_REGISTRY[agentName];
+  if (!descriptor) return [];
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
+  return runAgentWriters(descriptor, ctx, agentName);
+}
+
+/**
+ * Map an ExportFormat to the agent whose wiring should run. For formats shared
+ * by multiple agents (e.g. agents-md is reused by codex / opencode / mistral /
+ * hermes), the registry order in AGENT_EXPORT_REGISTRY determines the winner —
+ * matching the existing dedupe behaviour in `brainclaw export --all`.
+ */
+function resolveAgentForFormat(format: ExportFormat): string | undefined {
+  return AGENT_EXPORT_REGISTRY.find((t) => t.format === format)?.agentName;
 }
 
 export function writeExportCompanionFiles(
@@ -2626,72 +2605,24 @@ export function writeExportCompanionFiles(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
-  switch (format) {
-    case 'claude-md': {
-      const results: AutoConfigWriteResult[] = [
-        ensureClaudeCodeMcpConfig(cwd),
-        ensureClaudeCodeCommand(cwd),
-        ensureClaudeCodeSettings(cwd),
-      ];
-      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
-      if (userSettings) results.push(userSettings);
-      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
-      if (userCmd) results.push(userCmd);
-      const dep = ensureProjectDevDependency(cwd);
-      if (dep) results.push(dep);
-      return results;
-    }
-    case 'cline':
-      return [ensureClineMcpConfig(cwd)];
-    case 'windsurf': {
-      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
-      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'copilot-instructions':
-      return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd)];
-    case 'cursor-rules': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd)];
-      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'roo':
-      return [ensureRooMcpConfig(cwd)];
-    case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'continue': {
-      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const homeDir = resolveHomeDir(env);
-      const userMcp = ensureContinueUserMcpConfig(homeDir);
-      if (userMcp) results.push(userMcp);
-      const perms = ensureContinueUserPermissions(homeDir);
-      if (perms) results.push(perms);
-      return results;
-    }
-    case 'gemini-md': {
-      const homeDir = resolveHomeDir(env);
-      const results: AutoConfigWriteResult[] = [];
-      const mcp = ensureAntigravityMcpConfig(homeDir);
-      if (mcp) results.push(mcp);
-      const hooks = ensureAntigravityHooks(homeDir);
-      if (hooks) results.push(hooks);
-      return results;
-    }
-    case 'agents-md':
-      return [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    default:
-      return [];
-  }
+  const agentName = resolveAgentForFormat(format);
+  if (!agentName) return [];
+  const descriptor = AGENT_WIRING_REGISTRY[agentName];
+  if (!descriptor) return [];
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
+  // Export is "I want this surface even if the agent isn't installed yet" —
+  // the user explicitly asked for it, so we don't gate on the inventory.
+  return runAgentWriters(descriptor, ctx, agentName);
 }
 
 /**
  * Patch all MCP config files to use the currently resolved brainclaw binary.
  *
  * Called after upgrade / version --publish-local to fix stale paths.
- * Re-resolves the brainclaw command, then re-runs all ensure*McpConfig()
- * functions with forceResolve=true so existing absolute paths are overwritten.
+ * Re-resolves the brainclaw command, then iterates AGENT_WIRING_REGISTRY with
+ * force-resolve enabled, filtering writer output to `kind: 'mcp'`. Agents that
+ * aren't installed on this machine skip their user-level writers (avoids
+ * minting unrelated user configs as a side effect of an upgrade).
  *
  * Returns the list of configs that were actually updated (not just created).
  */
@@ -2699,45 +2630,34 @@ export function patchAllMcpConfigs(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
-  // 1. Clear cached path so resolution picks up the new install location
+  // Clear cached path so resolution picks up the new install location
   resetMcpCommandCache();
 
-  // 2. Set force-resolve mode so brainclawMcpEntry overwrites existing paths
-  _forceResolve = true;
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
 
-  const results: AutoConfigWriteResult[] = [];
-  const homeDir = resolveHomeDir(env);
-
-  try {
-    // Workspace-level configs
-    results.push(ensureClaudeCodeMcpConfig(cwd));
-    results.push(ensureVscodeMcpConfig(cwd));
-    results.push(ensureVscodeExtensionRecommendation(cwd));
-    results.push(ensureCopilotMcpConfig(cwd));
-    results.push(ensureClineMcpConfig(cwd));
-    results.push(ensureRooMcpConfig(cwd));
-    results.push(ensureContinueMcpConfig(cwd));
-    results.push(ensureOpenCodeMcpConfig(cwd));
-
-    // Machine-level configs (in ~ or platform-specific)
-    const userConfigs = [
-      ensureClaudeCodeUserSettings(homeDir, env),
-      ensureCursorMcpConfig(homeDir),
-      ensureWindsurfMcpConfig(homeDir),
-      ensureContinueUserMcpConfig(homeDir),
-      ensureContinueUserPermissions(homeDir),
-      ensureAntigravityMcpConfig(homeDir),
-      ensureOpenClawMcpConfig(homeDir),
-      ensureCodexMcpConfig(homeDir, env),
-      ensureHermesMcpConfig(homeDir),
-    ];
-    for (const r of userConfigs) {
-      if (r) results.push(r);
+  // Run inside withForcedResolve so brainclawMcpEntry overwrites existing
+  // absolute paths in user configs (the whole point of the patch pass).
+  const results = withForcedResolve<AutoConfigWriteResult[]>(() => {
+    const acc: AutoConfigWriteResult[] = [];
+    for (const [agentName, descriptor] of Object.entries(AGENT_WIRING_REGISTRY)) {
+      const agentResults = runAgentWriters(descriptor, ctx, agentName, {
+        skipUserIfNotInstalled: true,
+        kindFilter: 'mcp',
+      });
+      for (const r of agentResults) acc.push(r);
     }
-  } finally {
-    // Always reset force-resolve mode
-    _forceResolve = false;
+    return acc;
+  });
+
+  // Dedupe by filePath — claude-code and claude-sonnet share writers; running
+  // each one twice would emit duplicate "Updated …/.mcp.json" lines.
+  const seen = new Set<string>();
+  const deduped: AutoConfigWriteResult[] = [];
+  for (const r of results) {
+    if (seen.has(r.filePath)) continue;
+    seen.add(r.filePath);
+    deduped.push(r);
   }
 
-  return results.filter(r => r.created || r.updated);
+  return deduped.filter((r) => r.created || r.updated);
 }

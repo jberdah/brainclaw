@@ -1382,6 +1382,42 @@ export const MCP_HEADLESS_AUTO_TOOL_NAMES: string[] = ALL_TOOLS
 type McpToolTier = 'facade' | 'standard' | 'advanced';
 
 /**
+ * Narrow "canonical grammar" tool set — the read-side facade entries
+ * (session + context) plus the five memory verbs (find / get / create /
+ * update / transition). Consumed by writers (e.g. Hermes' tools.include)
+ * that want a minimal advertised surface rather than the full headless-auto
+ * catalog. Coordination facades (dispatch, coordinate, loop) are excluded
+ * because narrow-surface agents shouldn't be routing work.
+ *
+ * Derivation rule (no hand-curated array):
+ *   - tier=facade AND category in {session, context} AND headlessApproval=auto
+ *   - OR name in the canonical memory verbs
+ *
+ * Adding a new memory grammar verb is the only edit that requires touching
+ * this file; everything else propagates from ALL_TOOLS annotations (pln#546 step 2).
+ */
+const _CANONICAL_GRAMMAR_MEMORY_VERBS = new Set([
+  'bclaw_find',
+  'bclaw_get',
+  'bclaw_create',
+  'bclaw_update',
+  'bclaw_transition',
+]);
+export const MCP_CANONICAL_GRAMMAR_TOOL_NAMES: string[] = ALL_TOOLS
+  .filter((tool) => {
+    const ann = (tool as { annotations?: { tier?: string; category?: string; headlessApproval?: string } }).annotations ?? {};
+    if (
+      ann.tier === 'facade'
+      && (ann.category === 'session' || ann.category === 'context')
+      && ann.headlessApproval === 'auto'
+    ) {
+      return true;
+    }
+    return _CANONICAL_GRAMMAR_MEMORY_VERBS.has(tool.name);
+  })
+  .map((tool) => tool.name);
+
+/**
  * Tools removed from the MCP surface at the v1.0 cut (Phase 3 slice 3i).
  * Handlers remain in place defensively, but these names are hidden from
  * every `tools/list` response — including `catalog: "all"`. Callers

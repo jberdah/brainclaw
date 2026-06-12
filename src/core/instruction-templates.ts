@@ -14,6 +14,7 @@
 
 import type { AgentCapabilityProfile } from './agent-capability.js';
 import type { State, Constraint, Decision, Trap, PlanItem, Claim, Candidate, Handoff } from './schema.js';
+import { resolveExportTarget } from './agent-files.js';
 
 export interface InstructionTemplateInput {
   profile: AgentCapabilityProfile;
@@ -488,19 +489,12 @@ function priorityOrder(priority?: string): number {
   }
 }
 
+/**
+ * Resolve an agent name to its export format by reading AGENT_EXPORT_REGISTRY.
+ * Was a hand-maintained switch that drifted with every new agent — now derived
+ * from the same registry the export command iterates, so adding an agent in one
+ * place updates every consumer (pln#546 step 2).
+ */
 function formatForAgent(agentName: string): string {
-  switch (agentName) {
-    case 'claude-code': return 'claude-md';
-    case 'cursor': return 'cursor-rules';
-    case 'github-copilot': return 'copilot-instructions';
-    case 'opencode':
-    case 'codex': return 'agents-md';
-    case 'antigravity': return 'gemini-md';
-    case 'windsurf': return 'windsurf';
-    case 'cline': return 'cline';
-    case 'roo': return 'roo';
-    case 'kilocode': return 'kilocode';
-    case 'continue': return 'continue';
-    default: return 'agents-md';
-  }
+  return resolveExportTarget(agentName).format;
 }
