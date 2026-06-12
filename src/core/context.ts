@@ -695,7 +695,13 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   let staleWarnings: StalenessWarning[] | undefined;
   try {
     const pendingCandidatesForStaleness = listCandidates('pending', contextCwd);
-    const runtimeNotesForStaleness = listRuntimeNotes(undefined, contextCwd);
+    // pln#564 step A — reuse the runtime notes already loaded above (line ~316)
+    // instead of a second unfiltered full scan of the runtime-note tree. On a
+    // store with thousands of notes that 2nd scan dominated buildContext cost
+    // (readAgentNotes ~11s / 6166 files, trp_439fec51). The earlier list is the
+    // broader one (honours options.host/allHosts), so staleness is at least as
+    // complete as before.
+    const runtimeNotesForStaleness = runtimeNotes;
     const staleReport = detectStaleness(
       state.plan_items,
       state.known_traps,

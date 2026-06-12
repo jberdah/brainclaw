@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { compact } from '../../src/core/gc-semantic.js';
+import { compact, enforceRuntimeNoteRetention } from '../../src/core/gc-semantic.js';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 
@@ -126,5 +126,82 @@ describe('gc-semantic — pln#436 extensions', () => {
     assert.equal(result.dry_run, true);
     assert.equal(result.claims_archived, 1, 'dry-run still reports count');
     assert.equal(fs.existsSync(path.join(claimsDir, 'clm_old.json')), true, 'file preserved under dry-run');
+  });
+});
+
+describe('gc-semantic — pln#564 runtime-note retention', () => {
+  let dir: string;
+  beforeEach(() => { dir = createStore(); });
+  afterEach(() => { cleanup(dir); });
+
+  const runtimeFile = (d: string, agent: string, id: string): string =>
+    path.join(d, '.brainclaw', 'coordination', 'runtime', agent, `${id}.json`);
+
+  function seedSessionNotes(agent: string, count: number): void {
+    for (let i = 0; i < count; i++) {
+      writeJson(runtimeFile(dir, agent, `rtn_sess_${agent}_${i}`), {
+        id: `rtn_sess_${agent}_${i}`, agent, schema_version: 2,
+        text: 'Session ended', created_at: new Date(Date.now() - i * 60_000).toISOString(),
+        tags: ['session'], visibility: 'shared', note_type: i % 2 === 0 ? 'session_end' : 'session_start',
+      });
+    }
+  }
+
+  it('keeps the newest N session/lifecycle notes per agent and all observations', () => {
+    seedSessionNotes('claude-code', 50);
+    // lifecycle telemetry (carries event_type, no 'session' tag)
+    for (let i = 0; i < 40; i++) {
+      writeJson(runtimeFile(dir, 'agent-runtime', `evt_${i}`), {
+        id: `evt_${i}`, agent: 'agent-runtime', event_type: 'run_running',
+        text: 'health check', created_at: new Date(Date.now() - i * 1000).toISOString(),
+        tags: ['agent-runtime', 'run'],
+      });
+    }
+    // genuine observations — must all survive
+    for (let i = 0; i < 5; i++) {
+      writeJson(runtimeFile(dir, 'claude-code', `rtn_obs_${i}`), {
+        id: `rtn_obs_${i}`, agent: 'claude-code', schema_version: 2,
+        text: `real finding ${i}`, created_at: olderThan(1), tags: ['dogfooding'], note_type: 'observation',
+      });
+    }
+
+    const result = enforceRuntimeNoteRetention({ cwd: dir, keepPerAgent: 20 });
+
+    assert.equal(result.by_class.session, 50);
+    assert.equal(result.by_class.lifecycle, 40);
+    assert.equal(result.by_class.observation, 5);
+    // kept = 20 session + 20 lifecycle + 5 observations
+    assert.equal(result.kept, 45);
+    assert.equal(result.archived, 50, '30 session + 20 lifecycle over the cap');
+    // observations untouched
+    for (let i = 0; i < 5; i++) {
+      assert.equal(fs.existsSync(runtimeFile(dir, 'claude-code', `rtn_obs_${i}`)), true);
+    }
+    // newest session note kept, oldest archived
+    assert.equal(fs.existsSync(runtimeFile(dir, 'claude-code', 'rtn_sess_claude-code_0')), true, 'newest kept');
+    assert.equal(fs.existsSync(runtimeFile(dir, 'claude-code', 'rtn_sess_claude-code_49')), false, 'oldest archived');
+  });
+
+  it('archives fakehome/Temp-scoped test leakage unconditionally and parks a backup', () => {
+    writeJson(runtimeFile(dir, 'claude-code', 'rtn_leak'), {
+      id: 'rtn_leak', agent: 'claude-code', schema_version: 2, text: 'leak',
+      created_at: olderThan(1), tags: ['session'], note_type: 'session_end',
+      scope: 'C:\\Users\\x\\AppData\\Local\\Temp\\bclaw-fakehome-abc\\.brainclaw\\worktrees\\deadbeef',
+    });
+
+    const result = enforceRuntimeNoteRetention({ cwd: dir, keepPerAgent: 20 });
+
+    assert.equal(result.by_class.fakehome, 1);
+    assert.equal(result.archived, 1, 'fakehome leakage archived even under the cap');
+    assert.equal(fs.existsSync(runtimeFile(dir, 'claude-code', 'rtn_leak')), false);
+    assert.ok(result.backup_path && fs.existsSync(result.backup_path), 'park-don\'t-delete backup exists');
+  });
+
+  it('dry-run reports the same counts without deleting', () => {
+    seedSessionNotes('codex', 30);
+    const result = enforceRuntimeNoteRetention({ cwd: dir, keepPerAgent: 10, dryRun: true });
+    assert.equal(result.by_class.session, 30);
+    assert.equal(result.archived, 20);
+    assert.equal(fs.existsSync(runtimeFile(dir, 'codex', 'rtn_sess_codex_29')), true, 'dry-run preserves files');
   });
 });

@@ -496,6 +496,146 @@ function archiveSessionNotes(cwd: string, minAgeDays: number, dryRun: boolean): 
 }
 
 /**
+ * pln#564 step B — autonomous runtime-note retention.
+ *
+ * The runtime-note tree (`coordination/runtime/<agent>/*.json`) is fully
+ * scanned by buildContext on every read (trp_439fec51). It accumulates
+ * unbounded because the only existing GC (archiveSessionNotes) runs solely
+ * inside the LLM-driven compaction phase, which is rarely triggered — so
+ * 1000s of write-only lifecycle notes bury the real signal and drive a ~11s
+ * read. This pass runs cheaply on session-start (full maintenance) with NO
+ * LLM gate, capping the redundant classes while preserving genuine captures.
+ *
+ * Classification (priority order):
+ *  - `fakehome`     — scope points at a Temp/bclaw-fakehome worktree: test
+ *                     leakage referencing dead paths. Archived unconditionally.
+ *  - `lifecycle`    — carries an `event_type` (run_, assignment_, lane_ …):
+ *                     dispatch telemetry already in the event journal.
+ *  - `session`      — note_type session_start/session_end or tagged `session`:
+ *                     session markers already in the audit log + journal.
+ *  - `observation`  — genuine human/agent capture. NEVER archived.
+ *
+ * `session` and `lifecycle` are capped to the newest `keepPerAgent` per agent;
+ * the rest are parked (backed up to gc-backups, then unlinked).
+ */
+const RUNTIME_FAKEHOME_RE = /bclaw-fakehome|[\\/]Temp[\\/]/i;
+const DEFAULT_RUNTIME_NOTE_KEEP_PER_AGENT = 20;
+
+type RuntimeNoteClass = 'observation' | 'session' | 'lifecycle' | 'fakehome';
+
+export interface RuntimeNoteRetentionOptions {
+  cwd?: string;
+  /** Keep the newest N session/lifecycle notes per agent. Default 20. */
+  keepPerAgent?: number;
+  dryRun?: boolean;
+}
+
+export interface RuntimeNoteRetentionResult {
+  scanned: number;
+  archived: number;
+  kept: number;
+  by_class: Record<RuntimeNoteClass, number>;
+  backup_path?: string;
+}
+
+function classifyRuntimeNote(parsed: Record<string, unknown>): RuntimeNoteClass {
+  const scope = typeof parsed.scope === 'string' ? parsed.scope : '';
+  if (scope && RUNTIME_FAKEHOME_RE.test(scope)) return 'fakehome';
+  if (typeof parsed.event_type === 'string' && parsed.event_type.length > 0) return 'lifecycle';
+  const noteType = parsed.note_type;
+  const tags = Array.isArray(parsed.tags) ? parsed.tags : [];
+  if (noteType === 'session_start' || noteType === 'session_end' || tags.includes('session')) {
+    return 'session';
+  }
+  return 'observation';
+}
+
+/**
+ * Enforce runtime-note retention across all agent dirs. Best-effort and
+ * idempotent: archiving older/excess notes is safe against a concurrent
+ * reader (it just sees fewer notes) and every removed file is parked under
+ * `.brainclaw/gc-backups/` first, so nothing is lost.
+ */
+export function enforceRuntimeNoteRetention(options: RuntimeNoteRetentionOptions = {}): RuntimeNoteRetentionResult {
+  const cwd = options.cwd ?? process.cwd();
+  const keepPerAgent = options.keepPerAgent ?? DEFAULT_RUNTIME_NOTE_KEEP_PER_AGENT;
+  const dryRun = options.dryRun ?? false;
+  const by_class: Record<RuntimeNoteClass, number> = { observation: 0, session: 0, lifecycle: 0, fakehome: 0 };
+  const result: RuntimeNoteRetentionResult = { scanned: 0, archived: 0, kept: 0, by_class };
+
+  const runtimeDir = path.join(cwd, '.brainclaw', 'coordination', 'runtime');
+  if (!fs.existsSync(runtimeDir)) return result;
+
+  const toArchive: Array<{ filePath: string; content: string }> = [];
+
+  for (const agent of fs.readdirSync(runtimeDir)) {
+    const agentDir = path.join(runtimeDir, agent);
+    let isDir = false;
+    try { isDir = fs.statSync(agentDir).isDirectory(); } catch { /* skip */ }
+    if (!isDir) continue;
+
+    // Capped classes are grouped per agent so we keep the newest N each.
+    const capped: Record<'session' | 'lifecycle', Array<{ filePath: string; content: string; createdAt: string }>> = {
+      session: [],
+      lifecycle: [],
+    };
+
+    for (const file of fs.readdirSync(agentDir)) {
+      if (!file.endsWith('.json')) continue;
+      const filePath = path.join(agentDir, file);
+      let content: string;
+      let parsed: Record<string, unknown>;
+      try {
+        content = fs.readFileSync(filePath, 'utf-8');
+        parsed = JSON.parse(content) as Record<string, unknown>;
+      } catch {
+        continue; // unparseable — leave it alone
+      }
+      result.scanned += 1;
+      const cls = classifyRuntimeNote(parsed);
+      by_class[cls] += 1;
+      if (cls === 'observation') {
+        result.kept += 1;
+        continue;
+      }
+      if (cls === 'fakehome') {
+        toArchive.push({ filePath, content });
+        continue;
+      }
+      const createdAt = typeof parsed.created_at === 'string' ? parsed.created_at : '';
+      capped[cls].push({ filePath, content, createdAt });
+    }
+
+    for (const cls of ['session', 'lifecycle'] as const) {
+      const entries = capped[cls];
+      entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); // newest first
+      result.kept += Math.min(entries.length, keepPerAgent);
+      for (const extra of entries.slice(keepPerAgent)) {
+        toArchive.push({ filePath: extra.filePath, content: extra.content });
+      }
+    }
+  }
+
+  if (dryRun || toArchive.length === 0) {
+    result.archived = toArchive.length;
+    return result;
+  }
+
+  const timestamp = nowISO().replace(/[:.]/g, '-');
+  const backupPath = path.join(cwd, '.brainclaw', 'gc-backups', `runtime-note-retention-${timestamp}.jsonl`);
+  fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+  for (const { filePath, content } of toArchive) {
+    try {
+      fs.appendFileSync(backupPath, content.trim() + '\n', 'utf-8');
+      fs.unlinkSync(filePath);
+      result.archived += 1;
+    } catch { /* best-effort: a failed unlink just leaves the note in place */ }
+  }
+  result.backup_path = backupPath;
+  return result;
+}
+
+/**
  * Deduplicate auto-generated session-end handoffs. These carry the same
  * commits list when several sessions close on the same project state, so the
  * board ends up with N near-identical handoff rows. Group by a signature

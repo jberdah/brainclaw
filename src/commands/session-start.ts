@@ -15,7 +15,7 @@ import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
-import { checkMemoryPressure, type MemoryPressureResult } from '../core/gc-semantic.js';
+import { checkMemoryPressure, enforceRuntimeNoteRetention, type MemoryPressureResult } from '../core/gc-semantic.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
 import { pullSignalsFromCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
 import { materializeFederationSignal } from '../core/federation-materialize.js';
@@ -240,6 +240,14 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
       }
       if (lines.length > 0) inventoryAdvisory = lines;
     } catch { /* non-fatal — inventory scan failure should not block session start */ }
+
+    // pln#564 step B — cap the runtime-note tree on session start (no LLM gate,
+    // unlike the compaction-phase archiveSessionNotes). Keeps the newest N
+    // session/lifecycle notes per agent + all genuine observations, parks the
+    // rest. Bounds the buildContext read-path scan (trp_439fec51). Best-effort.
+    try {
+      enforceRuntimeNoteRetention({ cwd: options.cwd });
+    } catch { /* non-fatal — retention sweep must never block session start */ }
   }
 
   // Shared checkout detection: warn if other active sessions share the same worktree
