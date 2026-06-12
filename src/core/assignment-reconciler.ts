@@ -14,6 +14,7 @@
  * import cycle (loops/store → assignments for the cascade; this → both).
  */
 import { listAssignments, convergeAssignmentToTerminal } from './assignments.js';
+import type { Assignment } from './schema.js';
 import { getLoop } from './loops/store.js';
 
 /** review-loop:lop_xxx → the loop id. */
@@ -27,16 +28,30 @@ const LOOP_TERMINAL = new Set(['completed', 'cancelled', 'blocked']);
  * found (the steady state is zero writes).
  */
 export function reconcileOrphanedLoopAssignments(cwd?: string): number {
-  let converged = 0;
-  for (const a of listAssignments(cwd)) {
+  return reconcileOrphanedLoopAssignmentsFromList(listAssignments(cwd), cwd).length;
+}
+
+/**
+ * Same reconciliation as reconcileOrphanedLoopAssignments, but reuses an
+ * already-loaded assignment list. This keeps open_work context building from
+ * doing a second full assignment directory scan just to clean loop orphans.
+ */
+export function reconcileOrphanedLoopAssignmentsFromList(assignments: Assignment[], cwd?: string): string[] {
+  const convergedIds: string[] = [];
+  const loopCache = new Map<string, ReturnType<typeof getLoop>>();
+  for (const a of assignments) {
     const match = a.scope?.match(LOOP_SCOPE_RE);
     if (!match) continue;
-    const loop = getLoop(match[1], cwd);
+    let loop = loopCache.get(match[1]);
+    if (!loopCache.has(match[1])) {
+      loop = getLoop(match[1], cwd);
+      loopCache.set(match[1], loop);
+    }
     if (!loop || !LOOP_TERMINAL.has(loop.status)) continue;
     const terminal = loop.status === 'completed' ? 'completed' : 'cancelled';
     if (convergeAssignmentToTerminal(a.id, terminal, `loop ${match[1]} ${loop.status} (lazy reconcile)`, cwd)) {
-      converged += 1;
+      convergedIds.push(a.id);
     }
   }
-  return converged;
+  return convergedIds;
 }

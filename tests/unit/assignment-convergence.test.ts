@@ -5,6 +5,7 @@ import {
   convergeAssignmentToTerminal,
 } from '../../src/core/assignments.js';
 import { openLoop, closeLoop } from '../../src/core/loops/store.js';
+import { add_artifact, advance } from '../../src/core/loops/verbs.js';
 import { reconcileOrphanedLoopAssignments } from '../../src/core/assignment-reconciler.js';
 import type { AssignmentStatus } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -21,12 +22,15 @@ function mkAssignment(scope: string, status: AssignmentStatus, id?: string): str
 }
 
 describe('assignment convergence — force transition + helper (pln#563)', () => {
-  it('transitionAssignment offered→completed THROWS without force, SUCCEEDS with force', () => {
+  it('transitionAssignment offered→completed rejects even when callers pass force-like data', () => {
     const id = mkAssignment('review-loop:lop_a', 'offered');
     assert.throws(() => transitionAssignment(id, 'completed', { actor: 'system' }, ws.dir), /Invalid transition/);
-    const r = transitionAssignment(id, 'completed', { actor: 'system', force: true }, ws.dir);
-    assert.equal(r.assignment.status, 'completed');
-    assert.ok(r.assignment.completed_at);
+    const forceLikeOptions = { actor: 'system', force: true } as unknown as Parameters<typeof transitionAssignment>[2];
+    assert.throws(
+      () => transitionAssignment(id, 'completed', forceLikeOptions, ws.dir),
+      /Invalid transition/,
+    );
+    assert.equal(loadAssignment(id, ws.dir)!.status, 'offered');
   });
 
   it('convergeAssignmentToTerminal converges a stuck offered assignment', () => {
@@ -91,6 +95,29 @@ describe('assignment convergence — closeLoop cascade (pln#563 layer A)', () =>
     }, ws.dir);
     closeLoop({ id: loop.id, final_status: 'completed', reason: 'x', actor: 'tester' }, ws.dir);
     assert.equal(loadAssignment(asgnId, ws.dir)!.status, 'failed');
+  });
+
+  it('advance auto-close also converges slot assignments', () => {
+    const asgnId = mkAssignment('review-loop:placeholder', 'offered');
+    const loop = openLoop({
+      kind: 'review',
+      title: 'r',
+      created_by: 'bclaw_coordinate',
+      phases: [{ name: 'findings' }],
+      stop_condition: { kind: 'artifact_produced', phase: 'findings', type: 'verdict' },
+      slots: [{ role: 'reviewer', agent: 'claude-code', assignment_id: asgnId, status: 'assigned' }],
+    }, ws.dir);
+    add_artifact({
+      id: loop.id,
+      actor: 'tester',
+      artifact: { phase: 'findings', type: 'verdict', body: 'accepted' },
+    }, ws.dir);
+
+    const result = advance({ id: loop.id, actor: 'tester' }, ws.dir);
+
+    assert.equal(result.auto_closed, true);
+    assert.equal(result.loop.status, 'completed');
+    assert.equal(loadAssignment(asgnId, ws.dir)!.status, 'completed');
   });
   void openReviewLoopWithAssignment; // (helper kept for readability of intent)
 });

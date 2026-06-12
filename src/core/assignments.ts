@@ -164,14 +164,15 @@ export interface TransitionOptions {
   /** Actor performing the transition (agent name or dispatcher). */
   actor?: string;
   actor_id?: string;
+}
+
+interface InternalTransitionOptions extends TransitionOptions {
   /**
-   * Bypass FSM validation for a SYSTEM convergence (pln#563). The loop-close
-   * cascade and the lazy reconciler fast-forward a stuck `offered`/`accepted`/
-   * `started` assignment straight to a terminal state — a transition the
-   * normal worker-driven FSM forbids. Only system callers set this; the audit
-   * entry still records the jump.
+   * Bypass FSM validation only for the narrow pln#563 system convergence path.
+   * Kept out of the public TransitionOptions surface so arbitrary callers
+   * cannot opt out of the assignment FSM.
    */
-  force?: boolean;
+  systemConvergence?: true;
 }
 
 export interface TransitionResult {
@@ -194,6 +195,15 @@ export function transitionAssignment(
   options: TransitionOptions,
   cwd?: string,
 ): TransitionResult {
+  return transitionAssignmentInternal(id, newStatus, options, cwd);
+}
+
+function transitionAssignmentInternal(
+  id: string,
+  newStatus: AssignmentStatus,
+  options: InternalTransitionOptions,
+  cwd?: string,
+): TransitionResult {
   const assignment = loadAssignment(id, cwd);
   if (!assignment) {
     throw new Error(`Assignment not found: ${id}`);
@@ -208,7 +218,12 @@ export function transitionAssignment(
     return { assignment, previous_status: newStatus, idempotent: true };
   }
 
-  if (!options.force) {
+  if (options.systemConvergence) {
+    const validation = validateSystemConvergence(assignment.status, newStatus, options.actor);
+    if (!validation.valid) {
+      throw new Error(validation.reason);
+    }
+  } else {
     const validation = validateTransition(assignment.status, newStatus);
     if (!validation.valid) {
       throw new Error(validation.reason);
@@ -420,6 +435,20 @@ const TERMINAL_STATUSES = new Set<AssignmentStatus>(['completed', 'cancelled', '
  */
 const CONVERGEABLE_STATUSES = new Set<AssignmentStatus>(['offered', 'accepted', 'started']);
 
+function validateSystemConvergence(
+  from: AssignmentStatus,
+  to: AssignmentStatus,
+  actor?: string,
+): TransitionValidation {
+  if (actor !== 'system') {
+    return { valid: false, reason: 'System convergence must be performed by actor=system' };
+  }
+  if (!CONVERGEABLE_STATUSES.has(from) || (to !== 'completed' && to !== 'cancelled')) {
+    return { valid: false, reason: `Invalid system convergence: ${from} → ${to}` };
+  }
+  return { valid: true };
+}
+
 /**
  * Force a stuck assignment to a terminal status as a SYSTEM convergence
  * (pln#563). No-op (returns false) if the assignment is missing or not in a
@@ -434,7 +463,11 @@ export function convergeAssignmentToTerminal(
 ): boolean {
   const assignment = loadAssignment(id, cwd);
   if (!assignment || !CONVERGEABLE_STATUSES.has(assignment.status)) return false;
-  transitionAssignment(id, terminal, { actor: 'system', status_reason: reason, force: true }, cwd);
+  transitionAssignmentInternal(id, terminal, {
+    actor: 'system',
+    status_reason: reason,
+    systemConvergence: true,
+  }, cwd);
   return true;
 }
 

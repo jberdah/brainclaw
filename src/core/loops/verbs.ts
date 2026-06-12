@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { nowISO } from '../ids.js';
+import { convergeAssignmentToTerminal } from '../assignments.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import {
   appendEvent,
@@ -48,6 +49,25 @@ function loadLoopOrThrow(id: string, cwd?: string): LoopThread {
   const loop = getLoop(id, cwd);
   if (!loop) throw new Error(`unknown loop_id ${id}`);
   return loop;
+}
+
+function convergeSlotAssignmentsForClosedLoop(
+  thread: LoopThread,
+  finalStatus: Exclude<LoopStatus, 'open' | 'paused'>,
+  cwd?: string,
+): void {
+  const assignmentTerminal = finalStatus === 'completed' ? 'completed' : 'cancelled';
+  for (const slot of thread.slots) {
+    if (!slot.assignment_id) continue;
+    try {
+      convergeAssignmentToTerminal(
+        slot.assignment_id,
+        assignmentTerminal,
+        `loop ${thread.id} closed (${finalStatus})`,
+        cwd,
+      );
+    } catch { /* never block loop close on assignment convergence */ }
+  }
 }
 
 /* ========================= Stop-condition evaluator ======================= */
@@ -485,6 +505,7 @@ function commitClosedTransition(
     cwd,
   );
   writeThreadFile(next, cwd);
+  convergeSlotAssignmentsForClosedLoop(next, final_status, cwd);
   return next;
 }
 
@@ -1336,6 +1357,9 @@ export function provideInput(input: ProvideInputInput, cwd?: string): ProvideInp
   }
 
   writeThreadFile(next, cwd);
+  if (fileApplyResolution !== undefined) {
+    convergeSlotAssignmentsForClosedLoop(next, 'completed', cwd);
+  }
   assertOpenQuestionsInvariant(next, 'provide_input');
   return { thread: next, artifact_id: newArtifact.artifact_id, duplicate: false };
 }

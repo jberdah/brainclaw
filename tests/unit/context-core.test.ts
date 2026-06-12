@@ -11,6 +11,8 @@ import { runSessionStart } from '../../src/commands/session-start.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { saveState } from '../../src/core/state.js';
 import { saveOperationalTrap } from '../../src/core/traps.js';
+import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { closeLoop, openLoop } from '../../src/core/loops/store.js';
 import type { Candidate, RuntimeNote, State } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -900,5 +902,30 @@ describe('core/context', () => {
       if (previousAgent === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
       else process.env.BRAINCLAW_AGENT_NAME = previousAgent;
     }
+  });
+
+  it('reconciles closed review-loop assignments without exposing stale active work', () => {
+    const loop = openLoop({
+      kind: 'review',
+      title: 'stale review',
+      created_by: workspace.currentAgent.agent_name,
+      mode: 'symmetric',
+      slots: [{ role: 'reviewer', agent: workspace.currentAgent.agent_name }],
+    }, workspace.dir);
+    const assignment = createAssignment({
+      claim_id: 'clm_context_reconcile',
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      dispatcher_agent: 'bclaw_coordinate',
+      scope: `review-loop:${loop.id}`,
+      description: 'stale review assignment',
+    }, workspace.dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'bclaw_coordinate' }, workspace.dir);
+    closeLoop({ id: loop.id, final_status: 'completed', reason: 'done', actor: workspace.currentAgent.agent_name }, workspace.dir);
+
+    const result = buildContext({ agent: workspace.currentAgent.agent_name, cwd: workspace.dir });
+
+    assert.equal(loadAssignment(assignment.id, workspace.dir)?.status, 'completed');
+    assert.ok(!result.open_work?.active_assignments.some((item) => item.id === assignment.id));
   });
 });
