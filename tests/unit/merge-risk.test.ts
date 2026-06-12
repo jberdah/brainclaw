@@ -126,4 +126,55 @@ describe('merge-risk: pre-merge conflict detection (pln#396)', () => {
     assert.equal(report.has_risk, false);
     assert.match(report.summary, /No parallel worktree lanes/);
   });
+
+  it('delete-vs-edit on the same file is an overlap (delete is a real merge conflict)', () => {
+    // A merge of "delete shared" + "edit shared" is git's modify/delete
+    // conflict, not a clean drop — it MUST surface as an overlap.
+    const wtA = path.join(repo.worktreesRoot, 'laneA');
+    git(['worktree', 'add', '-q', '-b', 'laneA', wtA], repo.main);
+    git(['rm', '-q', 'src/a.ts'], wtA);
+    git(['commit', '-q', '-m', 'delete a'], wtA);
+    addLane(repo.main, repo.worktreesRoot, 'laneB', { 'src/a.ts': 'export const a = 99;\n' });
+
+    const report = analyzeMergeRisk(repo.main, { baseRef: 'master' });
+    assert.ok(report.overlaps.some(o => o.file === 'src/a.ts' && o.branches.includes('laneA') && o.branches.includes('laneB')),
+      `expected delete-vs-edit overlap, got: ${JSON.stringify(report.overlaps)}`);
+  });
+
+  it('a committed rename old→new in one lane overlaps with an edit-of-old in another', () => {
+    // Default rename detection would emit only `new` for laneA, missing the
+    // rename-vs-modify conflict against laneB editing `old`. --no-renames
+    // surfaces both source and destination so the overlap fires.
+    addLane(repo.main, repo.worktreesRoot, 'laneB', { 'src/a.ts': 'export const a = 1234;\n' });
+    const wtA = path.join(repo.worktreesRoot, 'laneA');
+    git(['worktree', 'add', '-q', '-b', 'laneA', wtA], repo.main);
+    git(['mv', 'src/a.ts', 'src/a-renamed.ts'], wtA);
+    git(['commit', '-q', '-m', 'rename a'], wtA);
+
+    const report = analyzeMergeRisk(repo.main, { baseRef: 'master' });
+    const laneA = report.lanes.find(l => l.branch === 'laneA')!;
+    assert.ok(laneA.changed_files.includes('src/a.ts'), `laneA must report the rename source: ${laneA.changed_files.join(',')}`);
+    assert.ok(laneA.changed_files.includes('src/a-renamed.ts'), `laneA must report the rename destination: ${laneA.changed_files.join(',')}`);
+    assert.ok(report.overlaps.some(o => o.file === 'src/a.ts' && o.branches.includes('laneA') && o.branches.includes('laneB')),
+      `expected rename-vs-edit overlap on src/a.ts, got: ${JSON.stringify(report.overlaps)}`);
+  });
+
+  it('no merge base (orphan branch) over-reports rather than silently returning empty', () => {
+    // Create an orphan branch via a separate worktree to avoid touching the main worktree's HEAD.
+    const wtA = path.join(repo.worktreesRoot, 'laneA');
+    git(['worktree', 'add', '-q', '--detach', wtA], repo.main);
+    git(['checkout', '-q', '--orphan', 'laneA'], wtA);
+    // Wipe the index so the orphan starts clean (orphan keeps the working tree from previous HEAD).
+    git(['rm', '-rqf', '.'], wtA);
+    write(wtA, 'src/orphan.ts', 'export const o = 1;\n');
+    git(['add', '-A'], wtA);
+    git(['commit', '-q', '-m', 'orphan root'], wtA);
+
+    const report = analyzeMergeRisk(repo.main, { baseRef: 'master' });
+    const laneA = report.lanes.find(l => l.branch === 'laneA')!;
+    // The fallback two-arg diff yields the union of touched paths; the orphan's
+    // unique file MUST show up, proving we did not silently return empty.
+    assert.ok(laneA.changed_files.includes('src/orphan.ts'),
+      `orphan lane must over-report its unique file, got: ${laneA.changed_files.join(',')}`);
+  });
 });
