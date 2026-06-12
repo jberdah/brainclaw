@@ -113,16 +113,20 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
     const N = 4;
     const journalUrl = new URL('../../src/core/events/journal.js', import.meta.url).href;
 
-    // Each child appends in a tight unbounded loop (fsync per append) so it is
-    // certainly mid-write somewhere when the parent SIGKILLs it — the crash
-    // lands at an arbitrary point relative to the framed append (§2.6).
+    // Each child appends in a tight unbounded loop (fsync per append), writing a
+    // marker file after its FIRST committed append so the parent can kill on a
+    // deterministic signal (commit happened) rather than a racy wall-clock delay
+    // — node ESM cold-start under variable load made a fixed timeout flaky.
+    const markerPath = (i: number) => path.join(dir, `child-${i}.committed`);
     const childScript = (child: number) => `
+      import fs from 'node:fs';
       import { forceAppendJournalRecords } from ${JSON.stringify(journalUrl)};
       for (let k = 0; k < 100000; k++) {
         forceAppendJournalRecords([{
           action: 'create', item_type: 'decision',
           item_id: 'dec_k${child}_' + k, agent: 'killable-${child}',
         }], ${JSON.stringify(dir)});
+        if (k === 0) fs.writeFileSync(${JSON.stringify(markerPath(child))}, 'ok');
       }
     `;
 
@@ -132,10 +136,17 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
       }),
     );
 
-    // Let them commit a bunch, then hard-kill all mid-flight. The delay must
-    // clear node's ESM cold-start (~300-500ms) + first lock acquisition before
-    // any append lands, so 2s guarantees committed records exist to reason about.
-    await new Promise((r) => setTimeout(r, 2000));
+    // Wait until every child has committed at least once (deterministic), then
+    // hard-kill them all mid-flight. Generous timeout absorbs slow cold-starts.
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (Array.from({ length: N }, (_, i) => markerPath(i)).every((p) => fs.existsSync(p))) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(
+      Array.from({ length: N }, (_, i) => markerPath(i)).every((p) => fs.existsSync(p)),
+      'all children should have committed at least once before the kill',
+    );
     for (const c of children) c.kill('SIGKILL');
     await Promise.all(children.map(waitForChild));
 
