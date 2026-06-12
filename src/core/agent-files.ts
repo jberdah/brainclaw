@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'yaml';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';
@@ -1797,15 +1797,13 @@ export function ensureMistralVibeMcpConfig(cwd: string): AutoConfigWriteResult {
   };
 }
 
-const HERMES_BRAINCLAW_MCP_TOOLS = [
-  'bclaw_work',
-  'bclaw_context',
-  'bclaw_find',
-  'bclaw_get',
-  'bclaw_create',
-  'bclaw_update',
-  'bclaw_transition',
-];
+// Hermes' MCP `tools.include` array — narrow canonical-grammar surface. Derived
+// from MCP_CANONICAL_GRAMMAR_TOOL_NAMES (which is itself ALL_TOOLS-derived) so
+// new facade tools or canonical grammar verbs propagate without a manual edit
+// here (pln#546 step 2). REMOVED_IN_V1_TOOLS are stripped so deprecated names
+// don't reappear in user-facing configs.
+const HERMES_BRAINCLAW_MCP_TOOLS: string[] = MCP_CANONICAL_GRAMMAR_TOOL_NAMES
+  .filter((name) => !REMOVED_IN_V1_TOOLS.has(name));
 
 export function ensureHermesMcpConfig(homeDir: string | undefined, workspacePath?: string): AutoConfigWriteResult | undefined {
   if (!homeDir) return undefined;
