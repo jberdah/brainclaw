@@ -164,6 +164,14 @@ export interface TransitionOptions {
   /** Actor performing the transition (agent name or dispatcher). */
   actor?: string;
   actor_id?: string;
+  /**
+   * Bypass FSM validation for a SYSTEM convergence (pln#563). The loop-close
+   * cascade and the lazy reconciler fast-forward a stuck `offered`/`accepted`/
+   * `started` assignment straight to a terminal state — a transition the
+   * normal worker-driven FSM forbids. Only system callers set this; the audit
+   * entry still records the jump.
+   */
+  force?: boolean;
 }
 
 export interface TransitionResult {
@@ -200,9 +208,11 @@ export function transitionAssignment(
     return { assignment, previous_status: newStatus, idempotent: true };
   }
 
-  const validation = validateTransition(assignment.status, newStatus);
-  if (!validation.valid) {
-    throw new Error(validation.reason);
+  if (!options.force) {
+    const validation = validateTransition(assignment.status, newStatus);
+    if (!validation.valid) {
+      throw new Error(validation.reason);
+    }
   }
 
   const previous_status = assignment.status;
@@ -400,6 +410,33 @@ export function createAssignment(options: CreateAssignmentOptions, cwd?: string)
 
 /** Statuses that indicate a finished assignment (no longer active). */
 const TERMINAL_STATUSES = new Set<AssignmentStatus>(['completed', 'cancelled', 'expired', 'rerouted']);
+
+/**
+ * Statuses a file-based worker leaves an assignment stuck in — it never calls
+ * bclaw_assignment_update, so the assignment never advances past these (pln#563).
+ * These are the only states a system convergence (loop-close cascade / lazy
+ * reconciler) fast-forwards; failed/blocked/timed_out carry real signal and are
+ * left alone.
+ */
+const CONVERGEABLE_STATUSES = new Set<AssignmentStatus>(['offered', 'accepted', 'started']);
+
+/**
+ * Force a stuck assignment to a terminal status as a SYSTEM convergence
+ * (pln#563). No-op (returns false) if the assignment is missing or not in a
+ * convergeable state, so callers can fire it best-effort. Used by the loop-close
+ * cascade and the lazy orphan reconciler.
+ */
+export function convergeAssignmentToTerminal(
+  id: string,
+  terminal: 'completed' | 'cancelled',
+  reason: string,
+  cwd?: string,
+): boolean {
+  const assignment = loadAssignment(id, cwd);
+  if (!assignment || !CONVERGEABLE_STATUSES.has(assignment.status)) return false;
+  transitionAssignment(id, terminal, { actor: 'system', status_reason: reason, force: true }, cwd);
+  return true;
+}
 
 /**
  * Return the most recently created non-terminal assignment for the given agent.

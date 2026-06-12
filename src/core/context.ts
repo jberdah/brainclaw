@@ -22,6 +22,7 @@ import { readAuditLog, type AuditAction, type AuditEntry } from './audit.js';
 import { listCandidates } from './candidates.js';
 import { listClaims, isClaimExpired, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
 import { listAssignments } from './assignments.js';
+import { reconcileOrphanedLoopAssignments } from './assignment-reconciler.js';
 import { listRuntimeNotes } from './runtime.js';
 import { isTrapActive, listOperationalTraps } from './traps.js';
 import { buildEstimationReport } from '../commands/estimation-report.js';
@@ -599,6 +600,11 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   const currentSession = loadCurrentSession(contextCwd);
   if (currentAgentIdentity || agent) {
     const claimPlanIds = new Set(myClaims.map((c) => c.plan_id).filter(Boolean) as string[]);
+    // pln#563 layer B: converge review-loop assignments orphaned in offered/started
+    // whose loop is already terminal, before listing — so closed-loop orphans
+    // stop showing as active work. Best-effort (swallow errors); steady state is
+    // zero writes (only fires when a stuck assignment is found).
+    try { reconcileOrphanedLoopAssignments(contextCwd); } catch { /* read path must not break on reconcile */ }
     const activeAssignments = listAssignments(contextCwd, { agent: agentName }).filter((assignment) =>
       !['completed', 'failed', 'cancelled', 'expired', 'rerouted', 'timed_out'].includes(assignment.status),
     );

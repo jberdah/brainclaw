@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
+import { convergeAssignmentToTerminal } from '../assignments.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 import {
@@ -541,6 +542,21 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     cwd,
   );
   writeThreadFile(next, cwd);
+
+  // pln#563: converge slot assignments so they don't fossilize in `offered`.
+  // A review-loop assignment exists only to drive the turn; closing the loop is
+  // the authoritative end of that work. File-based / sandboxed workers never
+  // report a terminal status themselves, and the coordinator can't cross-update
+  // a worker-owned assignment (trp#291) — so the loop close (a system action)
+  // is the right place. Best-effort: a missing or already-terminal assignment
+  // must never block the close.
+  const assignmentTerminal = input.final_status === 'completed' ? 'completed' : 'cancelled';
+  for (const slot of next.slots) {
+    if (!slot.assignment_id) continue;
+    try {
+      convergeAssignmentToTerminal(slot.assignment_id, assignmentTerminal, `loop ${input.id} closed (${input.final_status})`, cwd);
+    } catch { /* never block loop close on assignment convergence */ }
+  }
 
   return next;
 }
