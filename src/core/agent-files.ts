@@ -8,6 +8,7 @@ import { MCP_HEADLESS_AUTO_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/m
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';
+import { isAgentInstalledPerInventory } from './agent-inventory.js';
 
 /**
  * Resolve the brainclaw command for MCP configs.
@@ -2537,88 +2538,268 @@ export function ensureOpenClawMcpConfig(homeDir: string | undefined): AutoConfig
   };
 }
 
+// ── Per-agent writer descriptors (pln#546) ────────────────────────────────
+//
+// AGENT_WIRING_REGISTRY collapses what used to be three divergent dispatch
+// tables — writeDetectedAgentAutoConfig (init/setup), writeExportCompanionFiles
+// (export), and patchAllMcpConfigs (upgrade/doctor) — into a single per-agent
+// descriptor. Each writer receives a uniform context (cwd / homeDir / env /
+// optional workspacePath) and returns one or more AutoConfigWriteResult. The
+// three orchestrators below just iterate this registry; adding a new agent N+1
+// is a data entry, not a 3-table cross-edit.
+//
+// Writer grouping:
+//   - workspaceWriters: project-scoped configs (cwd) — MCP, rules, skills, hooks
+//   - userWriters: machine-scoped configs (homeDir) — fabricated only when the
+//     agent is installed per agents-inventory (avoids polluting unrelated
+//     machines with user-level config stubs)
+//   - hookWriters: subset of workspace writers that target hook configs
+//     (kept as a separate array so doctor / status can surface "wired with
+//     hooks" vs "wired without hooks" without re-running every writer)
+
+export interface AgentWriterContext {
+  cwd: string;
+  homeDir: string | undefined;
+  env: NodeJS.ProcessEnv;
+  /** Workspace path passed to writers that embed it (e.g. Hermes external_dirs). */
+  workspacePath?: string;
+}
+
+export type AgentWriterFn = (ctx: AgentWriterContext) => AutoConfigWriteResult | AutoConfigWriteResult[] | undefined | null;
+
+export interface AgentWriterDescriptor {
+  workspaceWriters: AgentWriterFn[];
+  userWriters: AgentWriterFn[];
+  hookWriters: AgentWriterFn[];
+}
+
+// Shared writer builders — referenced across multiple agents.
+const writeUniversalSkill: AgentWriterFn = (ctx) => ensureUniversalBrainclawSkill(ctx.cwd);
+const writeProtocolSkills: AgentWriterFn = (ctx) => ensureProtocolSkills(ctx.cwd);
+const writeVscodeExtensionRec: AgentWriterFn = (ctx) => ensureVscodeExtensionRecommendation(ctx.cwd);
+
+/**
+ * Per-agent writer wiring. The keys are canonical agent names from
+ * `AgentName` (see agent-capability.ts) — keep in sync with AGENT_EXPORT_REGISTRY.
+ * Agents missing from this map yield an empty writer list (no-op detection),
+ * which the drift test below guards against.
+ */
+export const AGENT_WIRING_REGISTRY: Record<string, AgentWriterDescriptor> = {
+  'claude-code': {
+    // .claude/settings.local.json bundles permissions + session/Stop/PostToolUse
+    // hooks in one file, so it lives in workspaceWriters — not duplicated in
+    // hookWriters (which would double-count the result).
+    workspaceWriters: [
+      (ctx) => ensureClaudeCodeMcpConfig(ctx.cwd),
+      (ctx) => ensureClaudeCodeCommand(ctx.cwd),
+      (ctx) => ensureClaudeCodeSettings(ctx.cwd),
+      writeVscodeExtensionRec,
+      (ctx) => ensureProjectDevDependency(ctx.cwd),
+    ],
+    userWriters: [
+      (ctx) => ensureClaudeCodeUserSettings(ctx.homeDir, ctx.env),
+      (ctx) => ensureClaudeCodeUserCommand(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+  cline: {
+    workspaceWriters: [(ctx) => ensureClineMcpConfig(ctx.cwd)],
+    userWriters: [],
+    hookWriters: [],
+  },
+  windsurf: {
+    workspaceWriters: [(ctx) => ensureWindsurfModernRules(ctx.cwd)],
+    userWriters: [(ctx) => ensureWindsurfMcpConfig(ctx.homeDir)],
+    hookWriters: [],
+  },
+  'github-copilot': {
+    workspaceWriters: [
+      (ctx) => ensureCopilotMcpConfig(ctx.cwd),
+      (ctx) => ensureCopilotSkill(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+      writeVscodeExtensionRec,
+    ],
+    userWriters: [],
+    hookWriters: [(ctx) => ensureCopilotHooks(ctx.cwd)],
+  },
+  cursor: {
+    workspaceWriters: [
+      (ctx) => ensureCursorMdc(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureCursorMcpConfig(ctx.homeDir)],
+    hookWriters: [(ctx) => ensureCursorHooks(ctx.cwd)],
+  },
+  roo: {
+    workspaceWriters: [
+      (ctx) => ensureRooMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  kilocode: {
+    workspaceWriters: [
+      (ctx) => ensureKilocodeMcpConfig(ctx.cwd),
+      (ctx) => ensureKilocodeConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  'mistral-vibe': {
+    workspaceWriters: [
+      (ctx) => ensureMistralVibeMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  hermes: {
+    workspaceWriters: [
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureHermesMcpConfig(ctx.homeDir, ctx.workspacePath ?? ctx.cwd)],
+    hookWriters: [],
+  },
+  codex: {
+    workspaceWriters: [
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [(ctx) => ensureCodexMcpConfig(ctx.homeDir, ctx.env)],
+    hookWriters: [],
+  },
+  continue: {
+    workspaceWriters: [(ctx) => ensureContinueMcpConfig(ctx.cwd)],
+    userWriters: [
+      (ctx) => ensureContinueUserMcpConfig(ctx.homeDir),
+      (ctx) => ensureContinueUserPermissions(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+  opencode: {
+    workspaceWriters: [
+      (ctx) => ensureOpenCodeMcpConfig(ctx.cwd),
+      writeUniversalSkill,
+      writeProtocolSkills,
+    ],
+    userWriters: [],
+    hookWriters: [],
+  },
+  antigravity: {
+    workspaceWriters: [],
+    userWriters: [(ctx) => ensureAntigravityMcpConfig(ctx.homeDir)],
+    // Antigravity hook config lives under the user home — keep it in
+    // hookWriters (semantic grouping) but skip with the inventory gate like
+    // the other user-level fabricators.
+    hookWriters: [(ctx) => ensureAntigravityHooks(ctx.homeDir)],
+  },
+  openclaw: {
+    workspaceWriters: [],
+    userWriters: [(ctx) => ensureOpenClawMcpConfig(ctx.homeDir)],
+    hookWriters: [],
+  },
+  // Pure SKILL.md surfaces — nanoclaw/nemoclaw/picoclaw/zeroclaw have no MCP
+  // config and their instruction file is written by the export pipeline.
+  nanoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  nemoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  picoclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  zeroclaw: { workspaceWriters: [], userWriters: [], hookWriters: [] },
+  // claude-sonnet: shares CLAUDE.md surface with claude-code; the workspace
+  // and user wiring is identical, so detection should reuse claude-code's
+  // descriptor rather than duplicate it.
+  'claude-sonnet': {
+    workspaceWriters: [
+      (ctx) => ensureClaudeCodeMcpConfig(ctx.cwd),
+      (ctx) => ensureClaudeCodeCommand(ctx.cwd),
+      (ctx) => ensureClaudeCodeSettings(ctx.cwd),
+      writeVscodeExtensionRec,
+      (ctx) => ensureProjectDevDependency(ctx.cwd),
+    ],
+    userWriters: [
+      (ctx) => ensureClaudeCodeUserSettings(ctx.homeDir, ctx.env),
+      (ctx) => ensureClaudeCodeUserCommand(ctx.homeDir),
+    ],
+    hookWriters: [],
+  },
+};
+
+/**
+ * Drain a writer's return value into the result list (skip null/undefined,
+ * flatten arrays from writers like ensureProtocolSkills).
+ */
+function pushWriterResult(
+  results: AutoConfigWriteResult[],
+  value: AutoConfigWriteResult | AutoConfigWriteResult[] | undefined | null,
+): void {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    for (const r of value) results.push(r);
+  } else {
+    results.push(value);
+  }
+}
+
+/**
+ * Run a descriptor's writers against the given context. The `skipUserIfNotInstalled`
+ * flag consults `isAgentInstalledPerInventory` and drops user-level writers when
+ * the agent isn't present on this machine — preventing init from fabricating
+ * `~/.codex/config.toml` (etc.) on machines that never had codex installed.
+ */
+function runAgentWriters(
+  descriptor: AgentWriterDescriptor,
+  ctx: AgentWriterContext,
+  agentName: string,
+  opts: { skipUserIfNotInstalled?: boolean; kindFilter?: AutoConfigWriteResult['kind'] } = {},
+): AutoConfigWriteResult[] {
+  const out: AutoConfigWriteResult[] = [];
+
+  for (const fn of descriptor.workspaceWriters) pushWriterResult(out, fn(ctx));
+  for (const fn of descriptor.hookWriters) pushWriterResult(out, fn(ctx));
+
+  // User-level writers fabricate machine-wide config. When agents-inventory is
+  // available and reports the agent as NOT installed, skip them — see the
+  // brief's "consult agent-inventory before fabricating user-level configs".
+  const installed = opts.skipUserIfNotInstalled
+    ? isAgentInstalledPerInventory(agentName)
+    : undefined;
+  const skipUser = opts.skipUserIfNotInstalled && installed === false;
+  if (!skipUser) {
+    for (const fn of descriptor.userWriters) pushWriterResult(out, fn(ctx));
+  }
+
+  if (opts.kindFilter) {
+    return out.filter((r) => r.kind === opts.kindFilter);
+  }
+  return out;
+}
+
 export function writeDetectedAgentAutoConfig(
   agentName: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
-  switch (agentName) {
-    case 'claude-code': {
-      const results: AutoConfigWriteResult[] = [
-        ensureClaudeCodeMcpConfig(cwd),
-        ensureClaudeCodeCommand(cwd),
-        ensureClaudeCodeSettings(cwd),
-        ensureVscodeExtensionRecommendation(cwd),
-      ];
-      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
-      if (userSettings) results.push(userSettings);
-      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
-      if (userCmd) results.push(userCmd);
-      const dep = ensureProjectDevDependency(cwd);
-      if (dep) results.push(dep);
-      return results;
-    }
-    case 'cline':
-      return [ensureClineMcpConfig(cwd)];
-    case 'windsurf': {
-      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
-      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'github-copilot':
-      return [ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd), ensureVscodeExtensionRecommendation(cwd)];
-    case 'cursor': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'roo':
-      return [ensureRooMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'mistral-vibe':
-      return [ensureMistralVibeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'hermes': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const mcp = ensureHermesMcpConfig(resolveHomeDir(env), cwd);
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'codex': {
-      const results: AutoConfigWriteResult[] = [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-      const result = ensureCodexMcpConfig(resolveHomeDir(env), env);
-      if (result) results.push(result);
-      return results;
-    }
-    case 'continue': {
-      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const homeDir = resolveHomeDir(env);
-      const userMcp = ensureContinueUserMcpConfig(homeDir);
-      if (userMcp) results.push(userMcp);
-      const perms = ensureContinueUserPermissions(homeDir);
-      if (perms) results.push(perms);
-      return results;
-    }
-    case 'opencode':
-      return [ensureOpenCodeMcpConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'antigravity': {
-      const homeDir = resolveHomeDir(env);
-      const results: AutoConfigWriteResult[] = [];
-      const mcp = ensureAntigravityMcpConfig(homeDir);
-      if (mcp) results.push(mcp);
-      const hooks = ensureAntigravityHooks(homeDir);
-      if (hooks) results.push(hooks);
-      return results;
-    }
-    case 'openclaw': {
-      const result = ensureOpenClawMcpConfig(resolveHomeDir(env));
-      return result ? [result] : [];
-    }
-    default:
-      return [];
-  }
+  const descriptor = AGENT_WIRING_REGISTRY[agentName];
+  if (!descriptor) return [];
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
+  return runAgentWriters(descriptor, ctx, agentName);
+}
+
+/**
+ * Map an ExportFormat to the agent whose wiring should run. For formats shared
+ * by multiple agents (e.g. agents-md is reused by codex / opencode / mistral /
+ * hermes), the registry order in AGENT_EXPORT_REGISTRY determines the winner —
+ * matching the existing dedupe behaviour in `brainclaw export --all`.
+ */
+function resolveAgentForFormat(format: ExportFormat): string | undefined {
+  return AGENT_EXPORT_REGISTRY.find((t) => t.format === format)?.agentName;
 }
 
 export function writeExportCompanionFiles(
@@ -2626,72 +2807,24 @@ export function writeExportCompanionFiles(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AutoConfigWriteResult[] {
-  switch (format) {
-    case 'claude-md': {
-      const results: AutoConfigWriteResult[] = [
-        ensureClaudeCodeMcpConfig(cwd),
-        ensureClaudeCodeCommand(cwd),
-        ensureClaudeCodeSettings(cwd),
-      ];
-      const userSettings = ensureClaudeCodeUserSettings(resolveHomeDir(env));
-      if (userSettings) results.push(userSettings);
-      const userCmd = ensureClaudeCodeUserCommand(resolveHomeDir(env));
-      if (userCmd) results.push(userCmd);
-      const dep = ensureProjectDevDependency(cwd);
-      if (dep) results.push(dep);
-      return results;
-    }
-    case 'cline':
-      return [ensureClineMcpConfig(cwd)];
-    case 'windsurf': {
-      const results: AutoConfigWriteResult[] = [ensureWindsurfModernRules(cwd)];
-      const mcp = ensureWindsurfMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'copilot-instructions':
-      return [ensureVscodeMcpConfig(cwd), ensureCopilotMcpConfig(cwd), ensureCopilotSkill(cwd), ensureCopilotHooks(cwd)];
-    case 'cursor-rules': {
-      const results: AutoConfigWriteResult[] = [ensureCursorMdc(cwd), ensureCursorHooks(cwd)];
-      const mcp = ensureCursorMcpConfig(resolveHomeDir(env));
-      if (mcp) results.push(mcp);
-      return results;
-    }
-    case 'roo':
-      return [ensureRooMcpConfig(cwd)];
-    case 'kilocode':
-      return [ensureKilocodeMcpConfig(cwd), ensureKilocodeConfig(cwd), ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    case 'continue': {
-      const results: AutoConfigWriteResult[] = [ensureContinueMcpConfig(cwd)];
-      const homeDir = resolveHomeDir(env);
-      const userMcp = ensureContinueUserMcpConfig(homeDir);
-      if (userMcp) results.push(userMcp);
-      const perms = ensureContinueUserPermissions(homeDir);
-      if (perms) results.push(perms);
-      return results;
-    }
-    case 'gemini-md': {
-      const homeDir = resolveHomeDir(env);
-      const results: AutoConfigWriteResult[] = [];
-      const mcp = ensureAntigravityMcpConfig(homeDir);
-      if (mcp) results.push(mcp);
-      const hooks = ensureAntigravityHooks(homeDir);
-      if (hooks) results.push(hooks);
-      return results;
-    }
-    case 'agents-md':
-      return [ensureUniversalBrainclawSkill(cwd), ...ensureProtocolSkills(cwd)];
-    default:
-      return [];
-  }
+  const agentName = resolveAgentForFormat(format);
+  if (!agentName) return [];
+  const descriptor = AGENT_WIRING_REGISTRY[agentName];
+  if (!descriptor) return [];
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
+  // Export is "I want this surface even if the agent isn't installed yet" —
+  // the user explicitly asked for it, so we don't gate on the inventory.
+  return runAgentWriters(descriptor, ctx, agentName);
 }
 
 /**
  * Patch all MCP config files to use the currently resolved brainclaw binary.
  *
  * Called after upgrade / version --publish-local to fix stale paths.
- * Re-resolves the brainclaw command, then re-runs all ensure*McpConfig()
- * functions with forceResolve=true so existing absolute paths are overwritten.
+ * Re-resolves the brainclaw command, then iterates AGENT_WIRING_REGISTRY with
+ * force-resolve enabled, filtering writer output to `kind: 'mcp'`. Agents that
+ * aren't installed on this machine skip their user-level writers (avoids
+ * minting unrelated user configs as a side effect of an upgrade).
  *
  * Returns the list of configs that were actually updated (not just created).
  */
@@ -2706,38 +2839,29 @@ export function patchAllMcpConfigs(
   _forceResolve = true;
 
   const results: AutoConfigWriteResult[] = [];
-  const homeDir = resolveHomeDir(env);
+  const ctx: AgentWriterContext = { cwd, homeDir: resolveHomeDir(env), env, workspacePath: cwd };
 
   try {
-    // Workspace-level configs
-    results.push(ensureClaudeCodeMcpConfig(cwd));
-    results.push(ensureVscodeMcpConfig(cwd));
-    results.push(ensureVscodeExtensionRecommendation(cwd));
-    results.push(ensureCopilotMcpConfig(cwd));
-    results.push(ensureClineMcpConfig(cwd));
-    results.push(ensureRooMcpConfig(cwd));
-    results.push(ensureContinueMcpConfig(cwd));
-    results.push(ensureOpenCodeMcpConfig(cwd));
-
-    // Machine-level configs (in ~ or platform-specific)
-    const userConfigs = [
-      ensureClaudeCodeUserSettings(homeDir, env),
-      ensureCursorMcpConfig(homeDir),
-      ensureWindsurfMcpConfig(homeDir),
-      ensureContinueUserMcpConfig(homeDir),
-      ensureContinueUserPermissions(homeDir),
-      ensureAntigravityMcpConfig(homeDir),
-      ensureOpenClawMcpConfig(homeDir),
-      ensureCodexMcpConfig(homeDir, env),
-      ensureHermesMcpConfig(homeDir),
-    ];
-    for (const r of userConfigs) {
-      if (r) results.push(r);
+    for (const [agentName, descriptor] of Object.entries(AGENT_WIRING_REGISTRY)) {
+      const agentResults = runAgentWriters(descriptor, ctx, agentName, {
+        skipUserIfNotInstalled: true,
+        kindFilter: 'mcp',
+      });
+      for (const r of agentResults) results.push(r);
     }
   } finally {
-    // Always reset force-resolve mode
     _forceResolve = false;
   }
 
-  return results.filter(r => r.created || r.updated);
+  // Dedupe by filePath — claude-code and claude-sonnet share writers; running
+  // each one twice would emit duplicate "Updated …/.mcp.json" lines.
+  const seen = new Set<string>();
+  const deduped: AutoConfigWriteResult[] = [];
+  for (const r of results) {
+    if (seen.has(r.filePath)) continue;
+    seen.add(r.filePath);
+    deduped.push(r);
+  }
+
+  return deduped.filter((r) => r.created || r.updated);
 }
