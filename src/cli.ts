@@ -1508,7 +1508,7 @@ program
   .option('--reflect-handoff', 'Materialize an open handoff from git commits since session start')
   .option('--dispatch-review', 'When used with --reflect-handoff, auto-dispatch a code review if the handoff is reviewable')
   .option('--reviewer <name>', 'Explicit reviewer to route the reflected handoff review to')
-  .option('--reflect', 'Include structured reflection questions for the agent to answer')
+  .option('--no-reflect', 'Suppress the dogfooding reflection prompt (project + your surfaces/skills/tools), shown by default')
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     await runSessionEnd({

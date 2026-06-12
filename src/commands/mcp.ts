@@ -781,7 +781,7 @@ const MCP_WRITE_TOOLS = [
         reflectHandoff: { type: 'boolean', description: 'Materialize an open handoff from git commits since session start.' },
         dispatchReview: { type: 'boolean', description: 'When used with reflectHandoff, auto-dispatch a code review if the reflected handoff is reviewable.' },
         reviewer: { type: 'string', description: 'Explicit reviewer for the reflected handoff review dispatch.' },
-        reflect: { type: 'boolean', description: 'Include structured reflection questions. Answer via bclaw_write_note with tag [reflection].' },
+        reflect: { type: 'boolean', description: 'Emit the dogfooding reflection prompt (project + your surfaces/skills/tools). Default true — pass false to suppress on a trivial session. Capture actionable findings via bclaw_quick_capture.' },
       },
     },
   },

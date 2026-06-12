@@ -59,10 +59,13 @@ export interface SessionEndOptions {
 }
 
 export const REFLECTION_QUESTIONS = [
-  'What was the biggest time waste in this session, and how could it have been avoided?',
-  'What should have been done differently (design, process, or approach)?',
-  'What should brainclaw itself improve based on this session?',
+  'Dogfooding the project — using brainclaw to do real work this session, what friction did you hit (slow reads, confusing surfaces, missing affordances, awkward workflows)? What concrete change to the project would have removed it?',
+  'Your surfaces, skills & tools — did your generated surface files (CLAUDE.md / agent surface), skills (SKILL.md), or tools (MCP / CLI) help or get in the way? Name at least one concrete edit that would make them serve you better next time.',
+  'What was the biggest time waste this session, and how could it have been avoided?',
 ] as const;
+
+export const REFLECTION_INSTRUCTION =
+  'Take a short reflection pass before you stop. For each question, capture anything ACTIONABLE as durable memory with bclaw_quick_capture (type "trap" for a sharp edge to avoid, "decision"/"note" for an improvement idea) so it enters the improvement backlog — improvements to the project AND to your own brainclaw surfaces/skills/tools both count. Use bclaw_write_note with tags ["reflection", "session:<id>"] for free-form narrative. Skipping is fine if the session was trivial.';
 
 export interface SessionEndResult {
   session_id: string;
@@ -450,10 +453,14 @@ export async function endSession(options: SessionEndOptions = {}): Promise<Sessi
     ...(reflectedHandoff ? { handoff: reflectedHandoff } : {}),
   };
 
-  if (options.reflect) {
+  // pln#564 — session_end pushes the agent into a short dogfooding reflection
+  // by DEFAULT (opt-out via reflect:false). The session_end runtime note is the
+  // natural trigger to ask "did the tooling serve me, and what should improve?"
+  // — both for the project worked on and for the agent's own brainclaw surfaces.
+  if (options.reflect !== false) {
     result.reflection_prompt = {
       questions: [...REFLECTION_QUESTIONS],
-      instruction: `Please reflect on this session and answer each question. Write your answers using bclaw_write_note with tags ["reflection", "session:${sessionId}"]. One note per question, or a single combined note.`,
+      instruction: REFLECTION_INSTRUCTION.replace('session:<id>', `session:${sessionId}`),
     };
   }
 
