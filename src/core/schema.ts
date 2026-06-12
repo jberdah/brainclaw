@@ -1652,6 +1652,17 @@ export const ConfigSchema = z.object({
     journal: z.object({
       mode: z.enum(['off', 'dual', 'primary', 'registryPrimary']).optional(),
       fsync: z.enum(['mutation', 'never']).optional(),
+      /**
+       * Phase-3 per-capability sub-flags (pln#566). Each ships + soaks GREEN
+       * independently before its capability is trusted; all default off so a
+       * bare `mode: primary` changes nothing until a capability is enabled.
+       */
+      primary: z.object({
+        checkpointRead: z.boolean().optional(),
+        readReconcile: z.boolean().optional(),
+        tombstoneDelete: z.boolean().optional(),
+        perEntityPatch: z.boolean().optional(),
+      }).optional(),
     }).optional(),
   }).optional(),
 });

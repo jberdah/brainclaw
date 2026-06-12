@@ -24,7 +24,7 @@ import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
 import { isTaskLifecycleRuntimeEvent, listRuntimeEvents } from '../core/events.js';
-import { verifyProjectionsAgainstJournal } from '../core/events/materialize.js';
+import { verifyProjectionsAgainstJournal } from '../core/events/verify.js';
 import { resolveJournalMode } from '../core/events/journal.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';

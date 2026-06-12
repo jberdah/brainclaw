@@ -16,7 +16,6 @@
  * tombstone removes the entity; a later `create` revives it.
  */
 import { ACTION_CLASS_BY_ACTION, readJournalRecords, type EventActionV2, type JournalRecord } from './journal.js';
-import { loadState } from '../state.js';
 import {
   ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema,
   type State, type Constraint, type Decision, type Trap, type Handoff, type PlanItem,
@@ -71,7 +70,7 @@ export function materializeEntitiesFromJournal(cwd?: string): Map<string, Materi
   return applyRecordsToLive(readJournalRecords(cwd), new Map());
 }
 
-const MEMORY_FAMILIES: Array<{
+export const MEMORY_FAMILIES: Array<{
   itemType: string;
   schema: ZodType<{ id: string; created_at: string }, unknown>;
   collection: keyof Pick<State, 'active_constraints' | 'recent_decisions' | 'known_traps' | 'open_handoffs' | 'plan_items'>;
@@ -117,48 +116,11 @@ export function materializeMemoryStateFromJournal(cwd?: string): State {
   return projectLiveToState(materializeEntitiesFromJournal(cwd));
 }
 
-export type DriftKind = 'missing_in_journal' | 'missing_in_projection' | 'mismatch';
-
-export interface ProjectionDrift {
-  item_type: string;
-  item_id: string;
-  kind: DriftKind;
-}
-
-function stable(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      return Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
-    }
-    return v;
-  });
-}
-
-/**
- * Compare projection-read state (the truth in dual mode) against the
- * journal-materialized state. Empty drift = the dual-write is faithful and
- * the journal can be trusted as a read substrate. This is the step-5
- * cutover gate, exposed for a doctor check and the step-3 tests.
- */
-export function verifyProjectionsAgainstJournal(cwd?: string): ProjectionDrift[] {
-  const projection = loadState(cwd);
-  const journal = materializeMemoryStateFromJournal(cwd);
-  const drift: ProjectionDrift[] = [];
-
-  for (const { itemType, collection } of MEMORY_FAMILIES) {
-    const projItems = new Map((projection[collection] as Array<{ id: string }>).map(i => [i.id, i]));
-    const jrnItems = new Map((journal[collection] as Array<{ id: string }>).map(i => [i.id, i]));
-    for (const [id, projItem] of projItems) {
-      const jrnItem = jrnItems.get(id);
-      if (!jrnItem) drift.push({ item_type: itemType, item_id: id, kind: 'missing_in_journal' });
-      else if (stable(projItem) !== stable(jrnItem)) drift.push({ item_type: itemType, item_id: id, kind: 'mismatch' });
-    }
-    for (const id of jrnItems.keys()) {
-      if (!projItems.has(id)) drift.push({ item_type: itemType, item_id: id, kind: 'missing_in_projection' });
-    }
-  }
-  return drift;
-}
+// verifyProjectionsAgainstJournal moved to events/verify.ts (pln#566 Inc0 s2)
+// to break the materialize -> state import edge: the checkpoint read path
+// imports materialize, and state imports checkpoint, so a materialize -> state
+// edge would form a state <-> checkpoint <-> materialize cycle (TDZ class,
+// trp_187e42e9). verify.ts is imported by doctor/tests, never by state.
 
 // Re-export for callers that want the raw replay (recovery tooling, step 4).
 export type { JournalRecord };

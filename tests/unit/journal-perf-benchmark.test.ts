@@ -18,7 +18,7 @@ import {
 } from '../../src/core/state.js';
 import { DecisionSchema, type Decision } from '../../src/core/schema.js';
 import { runGenesisMigration } from '../../src/core/events/genesis.js';
-import { verifyProjectionsAgainstJournal } from '../../src/core/events/materialize.js';
+import { verifyProjectionsAgainstJournal } from '../../src/core/events/verify.js';
 
 function tmpDir(): string { return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-perf-')); }
 function decision(i: number): Decision {

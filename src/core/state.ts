@@ -6,7 +6,8 @@ import { memoryDir, ensureMemoryDir, resolveEntityDir, writeFileAtomic } from '.
 import { mutate } from './mutation-pipeline.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent, type EventItemType } from './event-log.js';
-import { appendJournalRecords, resolveJournalMode, type JournalAppendInput } from './events/journal.js';
+import { appendJournalRecords, resolveJournalMode, resolveCheckpointRead, type JournalAppendInput } from './events/journal.js';
+import { materializeStateFromCheckpoint } from './events/checkpoint.js';
 import { loadVersionedJsonFile, serializeVersionedJson, preparePersistedDocument, type VersionedDocumentType } from './migration.js';
 import { rebuildProjectMd } from './markdown.js';
 import { refreshLiveCompanions } from '../commands/export.js';
@@ -116,6 +117,24 @@ export function findLoadValidationWarning(entity: string, id: string, cwd?: stri
 export function loadState(cwd?: string): State {
   // Load from entity-aligned directories (with legacy fallback)
   const effectiveCwd = cwd ?? process.cwd();
+
+  // pln#566 Inc0 s2 — checkpointRead fast path. OFF by default (dual/off mode):
+  // projection files remain the read substrate. When the capability is enabled
+  // (primary soak) AND a verified journal-derived checkpoint exists, serve from
+  // checkpoint + sealed tail instead of reading every projection file. ANY
+  // failure (no checkpoint, failed verification, replay error) falls through to
+  // the projection read below — the checkpoint is never the sole truth.
+  if (resolveCheckpointRead(effectiveCwd)) {
+    try {
+      const fast = materializeStateFromCheckpoint(effectiveCwd);
+      // Merge over emptyState so the served State carries the same envelope
+      // fields (version/write_version) a projection read produces; the
+      // checkpoint only materializes the 5 entity collections. Already sorted
+      // by projectLiveToState.
+      if (fast) return { ...emptyState(), ...fast };
+    } catch { /* fall through to projection read */ }
+  }
+
   const state = emptyState();
 
   state.active_constraints = loadDirectoryItems(resolveEntityDir('constraints', effectiveCwd, 'read'), ConstraintSchema, 'constraint');

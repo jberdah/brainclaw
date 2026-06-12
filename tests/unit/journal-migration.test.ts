@@ -6,7 +6,7 @@ import path from 'node:path';
 import { emptyState, persistState } from '../../src/core/state.js';
 import { DecisionSchema, PlanItemSchema, type Decision, type PlanItem } from '../../src/core/schema.js';
 import { readJournalRecords, journalDir } from '../../src/core/events/journal.js';
-import { verifyProjectionsAgainstJournal } from '../../src/core/events/materialize.js';
+import { verifyProjectionsAgainstJournal } from '../../src/core/events/verify.js';
 import { runGenesisMigration, rollbackJournal, hasGenesis } from '../../src/core/events/genesis.js';
 
 function tmpDir(): string { return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-genesis-')); }
