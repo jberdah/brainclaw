@@ -70,6 +70,20 @@ function sha256(s: string): string {
   return crypto.createHash('sha256').update(s).digest('hex');
 }
 
+/**
+ * pln#566 F4 guard: materialize (the reducer behind both checkpoint build and
+ * checkpoint+tail replay) only consumes inline `rec.payload`; it does NOT yet
+ * dereference `payload_ref`. So if ANY journal record externalized its payload,
+ * a checkpoint built/served from the journal would silently DROP that entity.
+ * Until payload_ref dereference lands, refuse to build or serve a checkpoint
+ * when externalized payloads exist — the read path falls back to projection
+ * files, which always carry the full content. Conservative (whole-journal, not
+ * just memory-tier) and cheap.
+ */
+function journalHasExternalizedPayload(records: JournalRecord[]): boolean {
+  return records.some(r => r.payload_ref != null);
+}
+
 /** Identity of a record for journal-lineage binding: stable across reads, changes if the head record changes. */
 function recordIdentity(rec: JournalRecord): string {
   return sha256(`${rec.seq}|${rec.writer}|${rec.ts}|${rec.action}|${rec.item_type}|${rec.item_id ?? ''}`);
@@ -112,6 +126,9 @@ export function createCheckpoint(cwd?: string, capabilities: CheckpointCapabilit
   const records = readJournalRecords(cwd);
   const head = headRecord(records);
   if (!head) return { created: false, reason: 'empty journal — nothing to checkpoint' };
+  if (journalHasExternalizedPayload(records)) {
+    return { created: false, reason: 'journal has externalized payload_ref records; materialize cannot dereference them yet (pln#566 F4)' };
+  }
 
   const live = applyRecordsToLive(records, new Map());
   const entities = [...live.values()];
@@ -197,12 +214,16 @@ export function materializeStateFromCheckpoint(cwd?: string): State | null {
   }
   if (!verifyCheckpoint(manifest, snapshotRaw, cwd).valid) return null;
 
+  // F4 guard: if any record (snapshot-era or tail) externalized its payload,
+  // materialize would drop it — refuse to serve, fall back to projections.
+  const records = readJournalRecords(cwd);
+  if (journalHasExternalizedPayload(records)) return null;
+
   const entities = JSON.parse(snapshotRaw) as MaterializedEntity[];
   const live = new Map<string, MaterializedEntity>();
   for (const e of entities) live.set(`${e.item_type}:${e.item_id}`, e);
 
   // Replay only the sealed tail (head_seq+1..end) — the gap since the checkpoint.
-  const tail = readJournalRecords(cwd).filter(r => r.seq > manifest.head_seq);
-  applyRecordsToLive(tail, live);
+  applyRecordsToLive(records.filter(r => r.seq > manifest.head_seq), live);
   return projectLiveToState(live);
 }
