@@ -188,6 +188,13 @@ export function cleanupStaleCandidates(options: CleanupStaleCandidatesOptions = 
   mutate({ cwd: options.cwd }, () => {
     const store = candidateStore('pending', options.cwd);
     for (const candidate of candidates) {
+      emitRegistryTombstone('candidate', candidate.id, {
+        agent: candidate.author,
+        agent_id: candidate.author_id,
+        session_id: candidate.session_id,
+        cwd: options.cwd,
+      });
+      registryFaultPoint('after_registry_journal');
       store.delete(candidate.id);
     }
     try { refreshLiveCompanions(options.cwd); } catch { /* best-effort */ }

@@ -5,7 +5,7 @@ import { generateIdWithLabel, nowISO } from './ids.js';
 import { resolveEntityDir } from './io.js';
 import { SequenceItemSchema, SequenceSchema, type Sequence, type SequenceItem, type SequenceItemInput, type SequenceStatus } from './schema.js';
 import { refreshLiveCompanions } from '../commands/export.js';
-import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { emitRegistryPostImage, emitRegistryTombstone, registryFaultPoint } from './events/registry-post-image.js';
 
 function sequencesDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('sequences', cwd ?? process.cwd(), mode);
@@ -138,6 +138,8 @@ export function deleteSequence(id: string, cwd?: string): { id: string; name: st
     if (!current) {
       throw new Error(`Sequence not found: ${id}`);
     }
+    emitRegistryTombstone('sequence', current.id, { agent: current.author, agent_id: current.author_id, session_id: current.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
     store.delete(current.id);
     return { id: current.id, name: current.name };
   });
@@ -163,7 +165,7 @@ export function updateSequence(input: UpdateSequenceInput, cwd?: string): Sequen
       tags: input.tags ?? current.tags,
       updated_at: nowISO(),
     };
-    store.save(SequenceSchema.parse(next));
+    saveSequence(SequenceSchema.parse(next), cwd);
     return next;
   });
 }

@@ -16,12 +16,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { acquireClaimScope, listClaims, releaseClaim } from '../../src/core/claims.js';
-import { createAssignment } from '../../src/core/assignments.js';
+import { createAssignment, deleteAssignment } from '../../src/core/assignments.js';
 import { createAgentRun } from '../../src/core/agentruns.js';
 import { createActionRequired } from '../../src/core/actions.js';
-import { saveCandidate, archiveCandidate } from '../../src/core/candidates.js';
-import { saveRuntimeNote } from '../../src/core/runtime.js';
-import { createSequence } from '../../src/core/sequence.js';
+import { saveCandidate, archiveCandidate, cleanupStaleCandidates } from '../../src/core/candidates.js';
+import { saveRuntimeNote, deleteRuntimeNote } from '../../src/core/runtime.js';
+import { createSequence, deleteSequence, updateSequence } from '../../src/core/sequence.js';
 import { readJournalRecords } from '../../src/core/events/journal.js';
 import { materializeRegistryFromJournal } from '../../src/core/events/materialize.js';
 import { verifyRegistryAgainstJournal } from '../../src/core/events/verify.js';
@@ -100,7 +100,9 @@ describe('registry post-images (pln#568 slice 1)', () => {
 
   it('suppresses the legacy envelope-only lifecycle record (post-images only in the v2 journal)', () => {
     const dir = ws!.dir;
-    seedCoordinationEntities(dir);
+    const { assignmentId } = seedCoordinationEntities(dir);
+    assert.equal(deleteAssignment(assignmentId, dir), true, 'assignment deletion tombstoned before projection delete');
+    assert.equal((materializeRegistryFromJournal(dir).get('assignment') ?? []).some((e) => e.item_id === assignmentId), false);
 
     const records = readJournalRecords(dir);
     for (const itemType of ['claim', 'assignment', 'agent_run']) {
@@ -193,33 +195,58 @@ describe('registry post-images — remaining families (pln#568 slice 2)', () => 
     archiveCandidate({ ...cand, status: 'accepted' }, 'accepted', dir);
     candidates = materializeRegistryFromJournal(dir).get('candidate') ?? [];
     assert.equal(candidates.length, 0, 'archived candidate is tombstoned out of the journal live set');
+
+    const stale = { ...minimalCandidate('cand_stale'), source: 'auto' as const, created_at: '2020-01-01T00:00:00.000Z' };
+    saveCandidate(stale, dir);
+    assert.equal((materializeRegistryFromJournal(dir).get('candidate') ?? []).length, 1, 'stale pending candidate journaled');
+    const cleanup = cleanupStaleCandidates({ cwd: dir, maxAgeDays: 1, source: 'auto' });
+    assert.equal(cleanup.deleted, 1);
+    assert.equal((materializeRegistryFromJournal(dir).get('candidate') ?? []).length, 0, 'cleanup delete emits a tombstone');
   });
 
-  it('journals a sequence post-image', () => {
+  it('journals sequence create/update post-images and tombstones deletion', () => {
     const dir = ws!.dir;
     const { id } = createSequence({ name: 'lane-seq', owner: 'tester', author: 'tester' }, dir);
-    const sequences = materializeRegistryFromJournal(dir).get('sequence') ?? [];
+    let sequences = materializeRegistryFromJournal(dir).get('sequence') ?? [];
     assert.equal(sequences.length, 1);
     assert.equal(sequences[0].item_id, id);
     assert.equal(sequences[0].payload['name'], 'lane-seq');
+
+    updateSequence({ id, name: 'lane-seq-updated' }, dir);
+    sequences = materializeRegistryFromJournal(dir).get('sequence') ?? [];
+    assert.equal(sequences.length, 1);
+    assert.equal(sequences[0].payload['name'], 'lane-seq-updated');
+
+    deleteSequence(id, dir);
+    sequences = materializeRegistryFromJournal(dir).get('sequence') ?? [];
+    assert.equal(sequences.length, 0, 'deleted sequence is tombstoned out of the journal live set');
   });
 
   it('journals SHARED runtime notes but never private ones (visibility boundary)', () => {
     const dir = ws!.dir;
-    saveRuntimeNote(sharedNote('rn_shared'), dir);
+    const shared = sharedNote('rn_shared');
+    saveRuntimeNote(shared, dir);
     saveRuntimeNote({ ...sharedNote('rn_private'), visibility: 'private' } as RuntimeNote, dir);
 
-    const notes = materializeRegistryFromJournal(dir).get('runtime_note') ?? [];
-    const ids = notes.map((n) => n.item_id);
+    let notes = materializeRegistryFromJournal(dir).get('runtime_note') ?? [];
+    let ids = notes.map((n) => n.item_id);
     assert.ok(ids.includes('rn_shared'), 'shared note journaled');
     assert.ok(!ids.includes('rn_private'), 'private note must NOT enter the shared journal');
+
+    assert.equal(deleteRuntimeNote(shared, dir), true);
+    notes = materializeRegistryFromJournal(dir).get('runtime_note') ?? [];
+    ids = notes.map((n) => n.item_id);
+    assert.ok(!ids.includes('rn_shared'), 'shared note delete emits a tombstone');
+    assert.ok(!ids.includes('rn_private'), 'private note still never enters the shared journal');
   });
 
   it('reports zero verify drift across every wired family', () => {
     const dir = ws!.dir;
     const { claim } = acquireClaimScope({ scope: 'src/v', agent: 'tester', description: 'p' }, dir);
-    createAssignment({ claim_id: claim!.id, agent: 'worker', dispatcher_agent: 'tester', scope: 'src/v', description: 'work' }, dir);
+    const assignment = createAssignment({ claim_id: claim!.id, agent: 'worker', dispatcher_agent: 'tester', scope: 'src/v', description: 'work' }, dir);
+    createActionRequired({ assignment_id: assignment.id, agent: 'worker', kind: 'approval', title: 'approve?', prompt: 'ok?' }, dir);
     saveCandidate(minimalCandidate('cand_v'), dir);
+    saveRuntimeNote(sharedNote('rn_v'), dir);
     createSequence({ name: 'seq-v', owner: 'tester', author: 'tester' }, dir);
     assert.deepEqual(verifyRegistryAgainstJournal(dir), []);
   });

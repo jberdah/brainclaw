@@ -11,15 +11,19 @@
  *
  * @module
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadState } from '../state.js';
 import { MEMORY_FAMILIES, materializeMemoryStateFromJournal, materializeRegistryFromJournal, type MaterializedEntity } from './materialize.js';
 import { listClaims } from '../claims.js';
 import { listAssignments } from '../assignments.js';
 import { listAgentRuns } from '../agentruns.js';
+import { listActionRequired } from '../actions.js';
 import { listCandidates } from '../candidates.js';
 import { listSequences } from '../sequence.js';
 import { REGISTRY_FAMILIES, type RegistryFamily } from './registry-post-image.js';
-import { preparePersistedDocument } from '../migration.js';
+import { loadVersionedJsonFile, preparePersistedDocument } from '../migration.js';
+import { resolveEntityDir } from '../io.js';
 
 export type DriftKind = 'missing_in_journal' | 'missing_in_projection' | 'mismatch';
 
@@ -36,6 +40,26 @@ function stable(value: unknown): string {
     }
     return v;
   });
+}
+
+function listSharedJournaledRuntimeNotes(cwd?: string): Array<{ id: string }> {
+  const root = resolveEntityDir('runtime', cwd ?? process.cwd(), 'read');
+  if (!fs.existsSync(root)) return [];
+
+  const notes: Array<{ id: string }> = [];
+  for (const entry of fs.readdirSync(root).sort()) {
+    if (entry === 'agent-runtime') continue;
+    const agentDir = path.join(root, entry);
+    if (!fs.existsSync(agentDir) || !fs.statSync(agentDir).isDirectory()) continue;
+    for (const file of fs.readdirSync(agentDir).filter((name) => name.endsWith('.json')).sort()) {
+      try {
+        notes.push(loadVersionedJsonFile<{ id: string }>('runtime_note', path.join(agentDir, file)).document);
+      } catch {
+        /* mirror listRuntimeNotes' tolerant read */
+      }
+    }
+  }
+  return notes.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /**
@@ -68,16 +92,19 @@ export function verifyProjectionsAgainstJournal(cwd?: string): ProjectionDrift[]
  * The registry / coordination families covered by the registry verification
  * (pln#568). Each maps its `RegistryFamily` (→ journal item_type + doc type) to
  * the projection reader. Scoped to the coordination-class families wired in
- * slice 1; the remaining families (action/candidate/runtime_note/sequence) join
- * as their persist paths are wired.
+ * slice 1 plus the remaining pln#568-wired families. Runtime notes are scoped
+ * to shared visibility because private/machine notes deliberately do not enter
+ * the shared journal.
  */
 const VERIFIED_REGISTRY_FAMILIES: Array<{ family: RegistryFamily; list: (cwd?: string) => Array<{ id: string }> }> = [
   { family: 'claim', list: listClaims },
   { family: 'assignment', list: listAssignments },
   { family: 'agent_run', list: listAgentRuns },
+  { family: 'action', list: listActionRequired },
   // Only PENDING candidates are journaled (archive emits a tombstone, pln#568),
   // so verify compares the pending projection against the journal live set.
   { family: 'candidate', list: (cwd) => listCandidates('pending', cwd) },
+  { family: 'runtime_note', list: listSharedJournaledRuntimeNotes },
   { family: 'sequence', list: listSequences },
 ];
 

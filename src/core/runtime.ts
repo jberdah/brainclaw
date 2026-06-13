@@ -8,7 +8,7 @@ import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent } from './event-log.js';
-import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
+import { emitRegistryPostImage, emitRegistryTombstone, registryFaultPoint } from './events/registry-post-image.js';
 
 export interface RuntimeListOptions {
   agent?: string;
@@ -93,6 +93,15 @@ export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
     const filepath = runtimeNotePath(note, cwd);
     if (!fs.existsSync(filepath)) {
       return false;
+    }
+    if ((note.visibility ?? 'shared') === 'shared') {
+      emitRegistryTombstone('runtime_note', note.id, {
+        agent: note.agent,
+        agent_id: note.agent_id,
+        session_id: note.session_id,
+        cwd,
+      });
+      registryFaultPoint('after_registry_journal');
     }
     fs.unlinkSync(filepath);
     return true;
