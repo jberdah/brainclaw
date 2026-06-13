@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { sanitizedProcessEnv } from '../helpers/workspace.js';
+import { loadConfig } from '../../src/core/config.js';
 
 const CLI_PATH = path.resolve(import.meta.dirname, '..', '..', '..', 'dist', 'cli.js');
 const NODE = process.execPath;
@@ -60,6 +61,14 @@ describe('init onboarding preflight', () => {
     assert.match(result.stdout, /Onboarding: /);
     assert.match(result.stdout, /bootstrap-loop|preset='bootstrap'|preset="bootstrap"/);
     assert.doesNotMatch(result.stdout, /Onboarding preflight:/);
+  });
+
+  it('turns the event journal ON by default (mode=dual) for a project created via init (pln#567)', () => {
+    const result = runInit(dir, homeDir);
+    assert.equal(result.exitCode, 0, result.stderr);
+    // Read the written config directly (no env dependency): init must default
+    // the journal to dual, unlike a bare defaultConfig store (which tests use).
+    assert.equal(loadConfig(dir).store?.journal?.mode, 'dual');
   });
 
   it('prints detected native instruction files for an existing workspace', () => {

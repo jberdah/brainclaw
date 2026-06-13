@@ -689,6 +689,16 @@ function buildInitConfig(input: {
     };
   }
 
+  // pln#567 (decision A) — the event journal is ON by default for projects
+  // created or repaired through init. Set HERE, never in defaultConfig:
+  // createTestWorkspace builds its config straight from defaultConfig, so a dual
+  // default there would make the whole core suite dual-write (trp_65176454).
+  // The `undefined` guard preserves an explicit mode merged in from an existing
+  // store (mergeConfigWithDefaults), so an opt-out (`mode: off`) survives --force.
+  if (config.store?.journal?.mode === undefined) {
+    config.store = { ...config.store, journal: { ...config.store?.journal, mode: 'dual' } };
+  }
+
   return config;
 }
 

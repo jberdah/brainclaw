@@ -1926,9 +1926,10 @@ program
   .command('migrate')
   .description('Migrate memory items between stores (e.g. promote machine-scoped items to user store)')
   .option('--promote-machine-items', 'Move items with scope:machine from project store to user store (~/.brainclaw/)')
-  .option('--dry-run', 'Show what would be moved without actually moving')
+  .option('--enable-journal', 'Turn on the event journal (mode=dual) for this existing store and backfill it (pln#567)')
+  .option('--dry-run', 'Show what would be done without writing')
   .action((options) => {
-    runMigrate({ promoteMachineItems: options.promoteMachineItems, dryRun: options.dryRun });
+    runMigrate({ promoteMachineItems: options.promoteMachineItems, enableJournal: options.enableJournal, dryRun: options.dryRun });
   });
 
 program
