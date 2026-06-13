@@ -21,6 +21,7 @@ import { JsonStore } from './json-store.js';
 import { appendAuditEntry } from './audit.js';
 import { appendEvent } from './event-log.js';
 import { createRuntimeEvent } from './events.js';
+import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 import { findLatestAgentRunForAssignment, recordAgentRunProgress, syncAgentRunFromAssignmentTransition } from './agentruns.js';
 
 // ── Directory / Store ────────────────────────────────────────
@@ -56,7 +57,12 @@ export function saveAssignment(assignment: Assignment, cwd?: string): void {
       getId: (a) => a.id,
       sort: (a, b) => a.created_at.localeCompare(b.created_at),
     });
-    store.save(AssignmentSchema.parse(assignment));
+    const parsed = AssignmentSchema.parse(assignment);
+    // pln#568 (I2): journal the post-image BEFORE the projection write.
+    const created = !store.exists(parsed.id);
+    emitRegistryPostImage('assignment', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
+    store.save(parsed);
   });
 }
 

@@ -15,6 +15,7 @@ import { JsonStore } from './json-store.js';
 import { appendAuditEntry } from './audit.js';
 import { appendEvent } from './event-log.js';
 import { createRuntimeEvent } from './events.js';
+import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 
 function agentRunsDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('runs', cwd, mode);
@@ -49,7 +50,12 @@ export function saveAgentRun(run: AgentRun, cwd?: string): void {
       getId: (item) => item.id,
       sort: (a, b) => a.created_at.localeCompare(b.created_at),
     });
-    store.save(AgentRunSchema.parse(run));
+    const parsed = AgentRunSchema.parse(run);
+    // pln#568 (I2): journal the post-image BEFORE the projection write.
+    const created = !store.exists(parsed.id);
+    emitRegistryPostImage('agent_run', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
+    store.save(parsed);
   });
 }
 

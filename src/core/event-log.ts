@@ -5,6 +5,7 @@ import { nowISO } from './ids.js';
 import { logger } from './logger.js';
 import { isObserverMode } from './observer-mode.js';
 import { appendJournalRecords, resolveJournalMode } from './events/journal.js';
+import { REGISTRY_POST_IMAGE_ITEM_TYPES } from './events/registry-post-image.js';
 
 const EVENT_LOG_FILE = 'events.jsonl';
 const CURSORS_DIR = '.cursors';
@@ -149,6 +150,13 @@ function dualWriteToJournal(event: Partial<MemoryEvent> & { action: EventAction;
       }], cwd);
       return;
     }
+    // pln#568 — registry/coordination families now journal full entity-state
+    // post-images on their persist chokepoint (emitRegistryPostImage). Their
+    // legacy envelope-only dual-write here would be redundant noise (a
+    // registry-lifecycle record materialize ignores), so suppress it: in the v2
+    // journal these families appear ONLY as post-images. events.jsonl (above)
+    // still records the v1 lifecycle event for existing consumers.
+    if (REGISTRY_POST_IMAGE_ITEM_TYPES.has(event.item_type)) return;
     appendJournalRecords([{
       ...base,
       action: event.action,

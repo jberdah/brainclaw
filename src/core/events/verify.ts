@@ -12,7 +12,12 @@
  * @module
  */
 import { loadState } from '../state.js';
-import { MEMORY_FAMILIES, materializeMemoryStateFromJournal } from './materialize.js';
+import { MEMORY_FAMILIES, materializeMemoryStateFromJournal, materializeRegistryFromJournal, type MaterializedEntity } from './materialize.js';
+import { listClaims } from '../claims.js';
+import { listAssignments } from '../assignments.js';
+import { listAgentRuns } from '../agentruns.js';
+import { REGISTRY_FAMILIES, type RegistryFamily } from './registry-post-image.js';
+import { preparePersistedDocument } from '../migration.js';
 
 export type DriftKind = 'missing_in_journal' | 'missing_in_projection' | 'mismatch';
 
@@ -52,6 +57,48 @@ export function verifyProjectionsAgainstJournal(cwd?: string): ProjectionDrift[]
     }
     for (const id of jrnItems.keys()) {
       if (!projItems.has(id)) drift.push({ item_type: itemType, item_id: id, kind: 'missing_in_projection' });
+    }
+  }
+  return drift;
+}
+
+/**
+ * The registry / coordination families covered by the registry verification
+ * (pln#568). Each maps its `RegistryFamily` (→ journal item_type + doc type) to
+ * the projection reader. Scoped to the coordination-class families wired in
+ * slice 1; the remaining families (action/candidate/runtime_note/sequence) join
+ * as their persist paths are wired.
+ */
+const VERIFIED_REGISTRY_FAMILIES: Array<{ family: RegistryFamily; list: (cwd?: string) => Array<{ id: string }> }> = [
+  { family: 'claim', list: listClaims },
+  { family: 'assignment', list: listAssignments },
+  { family: 'agent_run', list: listAgentRuns },
+];
+
+/**
+ * Compare the registry projections (the dual-mode source of truth) against the
+ * journal-materialized registry post-images (pln#568). Empty drift = the
+ * registry dual-write is faithful and the observer can trust the journal for
+ * these families — the registry half of the cutover gate, mirroring
+ * {@link verifyProjectionsAgainstJournal} for the memory families. The
+ * comparison runs both sides through `preparePersistedDocument` so a projection
+ * item and its journal payload (which is exactly that) compare like-for-like.
+ */
+export function verifyRegistryAgainstJournal(cwd?: string): ProjectionDrift[] {
+  const journal = materializeRegistryFromJournal(cwd);
+  const drift: ProjectionDrift[] = [];
+
+  for (const { family, list } of VERIFIED_REGISTRY_FAMILIES) {
+    const spec = REGISTRY_FAMILIES[family];
+    const projItems = new Map(list(cwd).map((i) => [i.id, preparePersistedDocument(spec.docType, i) as Record<string, unknown>]));
+    const jrnItems = new Map((journal.get(spec.journalItemType) ?? ([] as MaterializedEntity[])).map((e) => [e.item_id, e.payload]));
+    for (const [id, projItem] of projItems) {
+      const jrnItem = jrnItems.get(id);
+      if (!jrnItem) drift.push({ item_type: spec.journalItemType, item_id: id, kind: 'missing_in_journal' });
+      else if (stable(projItem) !== stable(jrnItem)) drift.push({ item_type: spec.journalItemType, item_id: id, kind: 'mismatch' });
+    }
+    for (const id of jrnItems.keys()) {
+      if (!projItems.has(id)) drift.push({ item_type: spec.journalItemType, item_id: id, kind: 'missing_in_projection' });
     }
   }
   return drift;
