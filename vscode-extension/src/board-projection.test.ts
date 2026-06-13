@@ -84,10 +84,13 @@ describe('board adapters (pln#560 s2 slice2)', () => {
     assert.equal(att.total, 5);
   });
 
-  it('isAutoCandidate also excludes session-end origin candidates', () => {
+  it('candidate source resolution mirrors board_summary exactly', () => {
     const proj: Projection = new Map();
-    put(proj, 'candidate', 'c1', { id: 'c1', status: 'pending', origin: 'session-end-harvest' });
-    assert.equal(attentionRequired(projectBoard(proj)).pending_human_candidates, 0);
+    put(proj, 'candidate', 'c1', { id: 'c1', status: 'pending', origin: 'session-end:harvest' });
+    put(proj, 'candidate', 'c2', { id: 'c2', status: 'pending', origin: 'session-end-harvest' });
+    put(proj, 'candidate', 'c3', { id: 'c3', status: 'pending', origin: 'runtime-note:agent:note' });
+    const att = attentionRequired(projectBoard(proj));
+    assert.equal(att.pending_human_candidates, 2, 'only session-end: resolves to auto in board_summary');
   });
 
   it('counts: plans=in_progress+todo, claims=active, actions=attention, agents/sessions=0', () => {
@@ -118,10 +121,22 @@ describe('board adapters (pln#560 s2 slice2)', () => {
     assert.equal(counts.failedRuns, 0);
   });
 
-  it('failedRuns counts only failed runs', () => {
+  it('failedRuns mirrors summary-mode stale_runs', () => {
     const proj: Projection = new Map();
     put(proj, 'agent_run', 'r1', { id: 'r1', status: 'failed' });
-    put(proj, 'agent_run', 'r2', { id: 'r2', status: 'running' });
-    assert.equal(projectCounts(proj).failedRuns, 1);
+    put(proj, 'agent_run', 'r2', { id: 'r2', status: 'waiting_input' });
+    put(proj, 'agent_run', 'r3', { id: 'r3', status: 'blocked' });
+    put(proj, 'agent_run', 'r4', { id: 'r4', status: 'running' });
+    assert.equal(projectCounts(proj).failedRuns, 3);
+  });
+
+  it('skips malformed non-object payloads without throwing', () => {
+    const proj = new Map<string, any>();
+    proj.set('plan:p1', { item_type: 'plan', item_id: 'p1', payload: null });
+    proj.set('state:a1', { item_type: 'state', item_id: 'a1', payload: 'bad' });
+    proj.set('sequence:s1', { item_type: 'sequence', item_id: 's1', payload: 42 });
+    assert.doesNotThrow(() => projectBoard(proj as Projection));
+    assert.doesNotThrow(() => projectCounts(proj as Projection));
+    assert.equal(projectBoard(proj as Projection).active_plans.length, 0);
   });
 });
