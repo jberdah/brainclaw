@@ -286,6 +286,10 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('brainclaw.refreshIntervalMs')
           || event.affectsConfiguration('brainclaw.observerMode')) {
+          if (event.affectsConfiguration('brainclaw.observerMode')) {
+            treeProvider.syncWatches();
+            void treeProvider.refresh();
+          }
           scheduleRefresh();
         }
       }),

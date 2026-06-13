@@ -422,12 +422,16 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     setTimeout(() => {
       void this.refresh();
-      this._startWatches();
+      this._syncWatches();
     }, 0);
   }
 
   public async refresh(): Promise<void> {
     await this._refreshBoards();
+  }
+
+  public syncWatches(): void {
+    this._syncWatches();
   }
 
   /**
@@ -1000,6 +1004,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       client.dispose();
     }
     this._mcpClients.clear();
+    this._observers.clear();
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
     for (const disposable of this._disposables) {
       disposable.dispose();
@@ -1069,28 +1074,46 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
   }
 
+  private _syncWatches(): void {
+    if (!this._observerEnabled()) {
+      for (const [key, watcher] of [...this._watchers.entries()]) {
+        if (!key.endsWith('::events')) continue;
+        try { watcher.close(); } catch { /* ignore */ }
+        this._watchers.delete(key);
+      }
+    }
+    this._startWatches();
+  }
+
   private _startWatch(projectPath: string): void {
     const normalizedPath = this._normalizePath(projectPath);
-    if (this._watchers.has(normalizedPath)) return;
 
     const brainclawDir = path.join(normalizedPath, '.brainclaw');
     if (!fs.existsSync(brainclawDir)) return;
 
-    try {
-      const watcher = fs.watch(brainclawDir, (_eventType, filename) => {
-        if (filename && (filename === 'events.jsonl' || String(filename).endsWith('events.jsonl'))) {
-          this._debouncedRefresh();
-        }
-      });
-      watcher.on('error', () => {
-        this._watchers.delete(normalizedPath);
-      });
-      watcher.on('close', () => {
-        this._watchers.delete(normalizedPath);
-      });
-      this._watchers.set(normalizedPath, watcher);
-    } catch {
-      // Ignore watch startup failures for individual projects.
+    if (!this._watchers.has(normalizedPath)) {
+      try {
+        const watcher = fs.watch(brainclawDir, (_eventType, filename) => {
+          const name = filename ? String(filename) : '';
+          if (name === 'events' && this._observerEnabled()) {
+            this._syncWatches();
+            this._debouncedRefresh();
+            return;
+          }
+          if (name === 'events.jsonl' || name.endsWith('events.jsonl')) {
+            this._debouncedRefresh();
+          }
+        });
+        watcher.on('error', () => {
+          this._watchers.delete(normalizedPath);
+        });
+        watcher.on('close', () => {
+          this._watchers.delete(normalizedPath);
+        });
+        this._watchers.set(normalizedPath, watcher);
+      } catch {
+        // Ignore watch startup failures for individual projects.
+      }
     }
 
     // pln#560 slice2 — in observerMode also watch the v2 journal directory
@@ -1133,8 +1156,10 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     // board_summary is the lock-free seed (observer-protocol §6.1, pln#558). It
     // provides the degraded-family counts the journal cannot today (claims,
-    // assignments, runs, the attention badge, agents, sessions).
+    // assignments, runs, the attention badge, agents, sessions) AND the plan
+    // count fallback for when the journal is off/absent (§9).
     const seed: SeedCounts = {
+      plans: (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0),
       claims: (raw['in_progress'] as number | undefined) ?? 0,
       assignments: 0,
       runs: 0,
@@ -1145,22 +1170,24 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       sessions: (raw['sessions'] as number | undefined) ?? 0,
       failedRuns: ((raw['attention_breakdown'] as any) ?? {}).stale_runs ?? 0,
     };
-    const summaryPlans = (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0);
 
     // pln#560 slice2 — in observerMode, tail the journal and merge: `plans` comes
     // from the (journal-driven) projection, everything else from the lock-free
-    // seed (trp_2a89ae97). Off mode keeps the pure board_summary counts.
+    // seed (trp_2a89ae97). When the journal dir is absent (journal off / not
+    // migrated, §9) the projection is empty, so fall back to the seed plan count
+    // rather than render 0. Off mode keeps the pure board_summary counts.
     let counts: BoardSummaryCounts;
     if (this._observerEnabled()) {
       const observer = this._getObserver(projectPath, (raw['project_id'] as string | undefined) ?? '');
       if (observer) {
         observer.ingest();
-        counts = mergeCounts(observer.counts(), seed);
+        const journalActive = fs.existsSync(path.join(this._normalizePath(projectPath), '.brainclaw', 'events'));
+        counts = mergeCounts(observer.counts(), seed, journalActive);
       } else {
-        counts = { plans: summaryPlans, ...seed, failedRuns: seed.failedRuns ?? 0 };
+        counts = { ...seed, failedRuns: seed.failedRuns ?? 0 };
       }
     } else {
-      counts = { plans: summaryPlans, ...seed, failedRuns: seed.failedRuns ?? 0 };
+      counts = { ...seed, failedRuns: seed.failedRuns ?? 0 };
     }
 
     return {

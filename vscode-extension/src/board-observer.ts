@@ -44,6 +44,9 @@ export interface CursorMemento {
  * Field names mirror board-tree's `BoardSummaryCounts`.
  */
 export interface SeedCounts {
+  /** board_summary plan count (in_progress + todo) — the fallback when the
+   *  journal is off/absent (observer-protocol §9), see {@link mergeCounts}. */
+  plans: number;
   claims: number;
   assignments: number;
   runs: number;
@@ -68,16 +71,19 @@ export interface MergedCounts {
 /**
  * Merge the journal-derived counts with the MCP `board_summary` seed.
  *
- * `plans` is taken from the JOURNAL (live, watch-driven — `plan` is journaled
- * with payloads). Every other family is taken from the SEED, because it is not
- * journaled with a payload today and the journal therefore reports 0
- * (trp_2a89ae97). This split is the whole reason the badge does not regress to
- * 0 in observer mode. When the writer starts journaling a family, flip its
- * line here from `seed` to `journal` — no other code changes.
+ * `plans` is taken from the JOURNAL when the journal is active (`journalActive`,
+ * the default) — `plan` is journaled with payloads, so the projection is the
+ * live source. When the journal is off/absent (observer-protocol §9), the
+ * projection is empty and would report 0 plans even though the store has them,
+ * so we fall back to the seed's board_summary plan count. Every other family is
+ * always taken from the SEED, because it is not journaled with a payload today
+ * and the journal therefore reports 0 (trp_2a89ae97). This split is the whole
+ * reason the badge/counts do not regress to 0 in observer mode. When the writer
+ * starts journaling a family, flip its line here from `seed` to `journal`.
  */
-export function mergeCounts(journal: ProjectedCounts, seed: SeedCounts): MergedCounts {
+export function mergeCounts(journal: ProjectedCounts, seed: SeedCounts, journalActive = true): MergedCounts {
   return {
-    plans: journal.plans,            // journal-driven (reliable today)
+    plans: journalActive ? journal.plans : seed.plans,  // journal-driven, seed fallback when journal off (§9)
     claims: seed.claims,             // envelope-only in journal → seed
     assignments: seed.assignments,   // payload-less in journal → seed
     runs: seed.runs,                 // payload-less in journal → seed
@@ -98,6 +104,7 @@ export class BoardObserver {
   /** In-memory board projection, grown by successive {@link ingest} calls. */
   readonly projection: Projection = new Map();
   private readonly _cursorKey: string;
+  private _bootstrapped = false;
 
   /**
    * @param eventsDir absolute path to `<project>/.brainclaw/events`.
@@ -117,7 +124,12 @@ export class BoardObserver {
   private loadCursor(): ObserverCursor {
     const stored = this.memento.get<ObserverCursor>(this._cursorKey);
     if (stored && Number.isSafeInteger(stored.seq) && stored.seq >= 0) {
-      return { seq: stored.seq, checkpoint_seq: stored.checkpoint_seq ?? 0 };
+      const checkpointSeq = Number.isSafeInteger(stored.checkpoint_seq)
+        && stored.checkpoint_seq >= 0
+        && stored.checkpoint_seq <= stored.seq
+        ? stored.checkpoint_seq
+        : 0;
+      return { seq: stored.seq, checkpoint_seq: checkpointSeq };
     }
     return { seq: 0, checkpoint_seq: 0 };
   }
@@ -130,9 +142,17 @@ export class BoardObserver {
    * consumer skips bad lines and an absent dir yields zero records.
    */
   ingest(): Set<string> {
-    const cursor = this.loadCursor();
+    const storedCursor = this.loadCursor();
+    // The seq watermark is valid only together with the in-memory projection it
+    // advanced. On a fresh extension process the projection is empty, so replay
+    // from the checkpoint floor (0 today; checkpoints are not emitted yet) and
+    // then use the persisted seq for warm tails in this process.
+    const cursor = this._bootstrapped
+      ? storedCursor
+      : { seq: storedCursor.checkpoint_seq, checkpoint_seq: storedCursor.checkpoint_seq };
     const result = applyTail(this.projection, this.eventsDir, cursor);
-    if (result.cursor.seq !== cursor.seq) {
+    this._bootstrapped = true;
+    if (result.cursor.seq !== storedCursor.seq || result.cursor.checkpoint_seq !== storedCursor.checkpoint_seq) {
       void this.memento.update(this._cursorKey, result.cursor);
     }
     return result.affectedTypes;
