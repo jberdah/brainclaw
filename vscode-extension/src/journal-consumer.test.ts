@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  applyRecord, applyTail, tailRecords, classifyAction, projectSections,
+  applyRecord, applyTail, tailRecords, tailStartIndex, classifyAction, projectSections,
   type Projection, type JournalRecord,
 } from './journal-consumer.js';
 
@@ -108,6 +108,56 @@ describe('observer journal consumer (pln#560 s2)', () => {
     const sections = projectSections(proj);
     assert.equal(sections.get('decision')!.length, 2);
     assert.equal(sections.get('trap')!.length, 1);
+  });
+
+  it('trims oversized payload fields for the projection (memory cap) but keeps small fields intact', () => {
+    const proj: Projection = new Map();
+    applyRecord(proj, { v: 2, seq: 1, action: 'create', item_type: 'handoff', item_id: 'h1', entity_rev: 9, payload: {
+      id: 'h1', from: 'a', to: 'b', status: 'open',
+      text: 'x'.repeat(50_000),                       // giant narrative → truncated
+      related_paths: Array.from({ length: 600 }, (_, i) => `p${i}`), // debris array → capped
+      tags: ['t1', 't2'],                              // small array → untouched
+      snapshot: { huge: 'y'.repeat(100_000), nested: { a: 1 } }, // nested object → dropped
+      count: 7, done: false, parent: null,             // scalars → kept (incl. null)
+    }});
+    const entry = proj.get('handoff:h1')!;
+    assert.equal(entry.entity_rev, 9, 'entity_rev is preserved outside the trimmed payload');
+    const p = entry.payload as any;
+    assert.equal(p.from, 'a'); assert.equal(p.to, 'b'); assert.equal(p.status, 'open');
+    assert.equal(p.text.length, 4096, 'long string truncated to the cap');
+    assert.equal(p.related_paths.length, 100, 'large array capped');
+    assert.deepEqual(p.tags, ['t1', 't2'], 'small array untouched');
+    assert.equal('snapshot' in p, false, 'nested object field dropped (never rendered)');
+    assert.equal(p.count, 7); assert.equal(p.done, false); assert.equal(p.parent, null);
+  });
+
+  it('tailStartIndex skips fully-applied rolled segments (reads from the segment holding fromSeq+1)', () => {
+    const segs = ['seg-00000001.jsonl', 'seg-00000876.jsonl']; // ranges 1..875, 876..
+    assert.equal(tailStartIndex(segs, 0), 0, 'cold start reads all segments');
+    assert.equal(tailStartIndex(segs, 874), 0, 'fromSeq inside seg1 (needs 875) reads from seg1');
+    assert.equal(tailStartIndex(segs, 875), 1, 'fromSeq at seg1 boundary (next is 876) skips seg1');
+    assert.equal(tailStartIndex(segs, 1475), 1, 'fromSeq deep in active segment skips the rolled seg1');
+    assert.equal(tailStartIndex([], 5), 0, 'no segments → 0');
+    assert.equal(tailStartIndex(['seg-00000001.jsonl'], 875), 0, 'single active segment is always read');
+  });
+
+  it('warm tail past a rolled segment does not re-read it, yet stays correct', () => {
+    const ev = tmpEvents(); cleanup.push(ev + '/x');
+    writeSeg(ev, 1, [rec(1, 'create', 'plan', 'p1', { id: 'p1' }), rec(2, 'create', 'plan', 'p2', { id: 'p2' })]);
+    writeSeg(ev, 3, [rec(3, 'create', 'plan', 'p3', { id: 'p3' })]);
+    // Cursor past the first (rolled) segment: only seg-3's record is returned,
+    // and the start index proves seg-1 is skipped entirely.
+    assert.equal(tailStartIndex(['seg-00000001.jsonl', 'seg-00000003.jsonl'], 2), 1);
+    const tail = tailRecords(ev, 2);
+    assert.deepEqual(tail.map((r) => r.item_id), ['p3']);
+  });
+
+  it('warm tail reads a freshly rolled active segment whose first seq is the next wanted seq', () => {
+    const ev = tmpEvents(); cleanup.push(ev + '/x');
+    writeSeg(ev, 1, [rec(1, 'create', 'plan', 'p1', { id: 'p1' }), rec(2, 'create', 'plan', 'p2', { id: 'p2' })]);
+    writeSeg(ev, 3, [rec(3, 'create', 'plan', 'p3', { id: 'p3' }), rec(4, 'create', 'plan', 'p4', { id: 'p4' })]);
+    assert.equal(tailStartIndex(['seg-00000001.jsonl', 'seg-00000003.jsonl'], 2), 1);
+    assert.deepEqual(tailRecords(ev, 2).map((r) => r.seq), [3, 4]);
   });
 
   it('multi-segment tail in (segment, file-line) order', () => {

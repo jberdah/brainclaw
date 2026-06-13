@@ -70,6 +70,53 @@ export function cursorKey(projectId: string): string {
   return `bclaw.observer.cursor.${projectId}`;
 }
 
+// Display-projection field caps (pln#560 step3, trp_2ca4b87b). The observability
+// surface renders short scalar fields + text truncated to ~80 chars; it never
+// renders the large narrative/array fields some records carry (e.g. auto-handoff
+// `text` dumps + `related_paths` / released-claim lists, which drove the
+// projection heap to +218 MB for <900 entities). These caps are generous enough
+// that every rendered field is untouched (text sliced to 80, tags are tiny), and
+// only debris fields are bounded. The STORE keeps the full post-image — this is a
+// display projection, not the source of truth.
+const MAX_PROJECTION_STRING = 4096;
+const MAX_PROJECTION_ARRAY = 100;
+
+/** Shallow-trim a payload to bound per-entity memory (see caps above). Returns a
+ *  copy so the large parsed original is released; small payloads pass through
+ *  field-for-field (the trim is a no-op for plans/traps/decisions/etc.).
+ *
+ *  Top-level NESTED-OBJECT fields are DROPPED: the board tree renders only scalar
+ *  fields, text (truncated), and small arrays for journal-driven entities — never
+ *  a nested object — yet handoffs carry a full state `snapshot` object (~450 KB
+ *  each) that dominated the projection heap (trp_2ca4b87b). Dropping object
+ *  fields is safe for the current renderers and the entity PREVIEW (which fetches
+ *  the full record from the store, not this projection). */
+function trimForProjection(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key in payload) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) { continue; }
+    const value = payload[key];
+    if (typeof value === 'string') {
+      // Buffer round-trip forces a FLAT independent copy. A bare `slice()` would
+      // return a V8 SlicedString that pins the whole 50 KB+ parent in memory —
+      // defeating the cap (the parent never gets freed). Encoding the sliced
+      // prefix and decoding it back materialises a standalone string so the
+      // giant original is GC-eligible.
+      out[key] = value.length > MAX_PROJECTION_STRING
+        ? Buffer.from(value.slice(0, MAX_PROJECTION_STRING), 'utf8').toString('utf8')
+        : value;
+    } else if (Array.isArray(value)) {
+      out[key] = value.length > MAX_PROJECTION_ARRAY ? value.slice(0, MAX_PROJECTION_ARRAY) : value;
+    } else if (value !== null && typeof value === 'object') {
+      // Nested object (e.g. handoff.snapshot) — never rendered; drop it.
+      continue;
+    } else {
+      out[key] = value; // number / boolean / null
+    }
+  }
+  return out;
+}
+
 /**
  * Apply ONE record to the projection by class (§2). Returns the affected
  * item_type when the record changed state (for section-scoped refresh), else
@@ -89,7 +136,7 @@ export function applyRecord(projection: Projection, rec: JournalRecord): string 
   const upsertClass = cls === 'entity-state' || cls === 'registry-lifecycle' || cls === undefined;
   // Inline payload-object check so TS narrows rec.payload to a defined object.
   if (upsertClass && rec.payload && typeof rec.payload === 'object' && !Array.isArray(rec.payload)) {
-    projection.set(key, { item_type: rec.item_type, item_id: rec.item_id, entity_rev: rec.entity_rev, payload: rec.payload });
+    projection.set(key, { item_type: rec.item_type, item_id: rec.item_id, entity_rev: rec.entity_rev, payload: trimForProjection(rec.payload) });
     return rec.item_type;
   }
   // observability, journal-meta, payload-less registry signals → activity only.
@@ -109,14 +156,43 @@ export function listSegments(eventsDir: string): string[] {
   return entries.filter((f) => SEGMENT_RE.test(f)).sort(); // 8-digit zero-pad => lex sort == numeric (protocol §2)
 }
 
+/** First seq encoded in a `seg-<firstSeq>.jsonl` filename (NaN if malformed). */
+function segmentFirstSeq(name: string): number {
+  const m = /^seg-(\d{8})\.jsonl$/.exec(name);
+  return m ? Number(m[1]) : NaN;
+}
+
+/**
+ * The index of the first segment a tail from `fromSeq` must read: the last
+ * segment whose firstSeq ≤ fromSeq+1 (the one CONTAINING the next wanted record
+ * fromSeq+1), so all earlier — fully-applied, immutable — rolled segments are
+ * skipped. Segments are seq-ordered, so every record in a skipped segment is
+ * ≤ fromSeq (already applied); this is the §5 "binary-search the segment, stream
+ * forward" rule that turns a warm tail from O(whole journal) into O(active
+ * segment). Defaults to 0 (read all) on a cold start (fromSeq 0) — pln#560 step3
+ * fix for the 855ms-per-refresh whole-journal re-read (trp_2ca4b87b).
+ */
+export function tailStartIndex(segments: string[], fromSeq: number): number {
+  const target = fromSeq + 1;
+  let start = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const first = segmentFirstSeq(segments[i]);
+    if (Number.isSafeInteger(first) && first <= target) { start = i; }
+  }
+  return start;
+}
+
 /**
  * Tail every record with seq > fromSeq across segments in (segment, file-line)
  * order. Torn/unparseable lines (crash residue mid-write) are SKIPPED, never
- * thrown on (§5). Records below/at fromSeq are ignored (already applied).
+ * thrown on (§5). Records below/at fromSeq are ignored (already applied), and
+ * fully-applied rolled segments below the cursor are not even read ({@link
+ * tailStartIndex}).
  */
 export function tailRecords(eventsDir: string, fromSeq: number): JournalRecord[] {
   const out: JournalRecord[] = [];
-  for (const seg of listSegments(eventsDir)) {
+  const segments = listSegments(eventsDir);
+  for (const seg of segments.slice(tailStartIndex(segments, fromSeq))) {
     let content: string;
     try { content = fs.readFileSync(path.join(eventsDir, seg), 'utf-8'); } catch { continue; }
     for (const line of content.split('\n')) {

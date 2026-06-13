@@ -63,6 +63,9 @@ const heapBefore = process.memoryUsage().heapUsed;
 // 1) Cold bootstrap = activation path (full replay from seq 0).
 const projection = new Map();
 const cold = timed('cold bootstrap (full replay)', () => applyTail(projection, eventsDir, { seq: 0, checkpoint_seq: 0 }));
+// Collect transient parse garbage so the delta reflects the RETAINED projection,
+// not the 55 MB of intermediate strings the replay churned through.
+if (global.gc) { global.gc(); global.gc(); }
 const heapAfter = process.memoryUsage().heapUsed;
 console.log(`\n[1] ${BUDGETS.activation.label}`);
 console.log(`    ${fmt(cold.ms)}  | applied ${cold.r.applied} records | projection entities: ${projection.size}`);
@@ -73,8 +76,9 @@ const warm = timed('warm tail (no new records)', () => applyTail(projection, eve
 console.log(`\n[2] ${BUDGETS.refresh.label} (re-tail, 0 new records)`);
 console.log(`    ${fmt(warm.ms)}  | applied ${warm.r.applied} records`);
 console.log(`    budget ${BUDGETS.refresh.target}/${BUDGETS.refresh.hard} ms -> ${verdict(warm.ms, BUDGETS.refresh)}`);
-console.log(`    NOTE: tailRecords reads+parses EVERY segment each call (no segment seek / byte offset, §5 unimplemented),`);
-console.log(`          so this cost recurs on every journal-growth refresh, independent of how few records are new.`);
+console.log(`    NOTE: tailRecords now skips fully-applied rolled segments (tailStartIndex, §5), so a warm tail reads`);
+console.log(`          only the active segment (<= the ${(10).toFixed(0)} MB roll cap). The residual is one active-segment`);
+console.log(`          parse per refresh; a byte-offset incremental read would cut it further if the roll cap grows.`);
 
 // 3) Warm expand = build the board / counts from the in-memory projection.
 const board = timed('projectBoard', () => projectBoard(projection));
