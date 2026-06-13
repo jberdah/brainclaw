@@ -16,6 +16,7 @@ import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
 import { checkMemoryPressure, enforceRuntimeNoteRetention, type MemoryPressureResult } from '../core/gc-semantic.js';
+import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
 import { pullSignalsFromCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
 import { materializeFederationSignal } from '../core/federation-materialize.js';
@@ -248,6 +249,14 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     try {
       enforceRuntimeNoteRetention({ cwd: options.cwd });
     } catch { /* non-fatal — retention sweep must never block session start */ }
+
+    // pln#566 Inc0 — keep a recent journal-derived checkpoint available off the
+    // hot path so the (capability-gated, OFF by default) checkpointRead read
+    // path has something to serve once enabled. Gated by a growth threshold so
+    // it only builds occasionally; journal-derived (F6). Best-effort.
+    try {
+      maybeCreateCheckpoint(options.cwd);
+    } catch { /* non-fatal — checkpoint build must never block session start */ }
   }
 
   // Shared checkout detection: warn if other active sessions share the same worktree
