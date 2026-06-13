@@ -256,7 +256,12 @@
           "type": "number",
           "default": 30000,
           "minimum": 0,
-          "description": "Polling interval for refreshing the Brainclaw board summary. Set to 0 to disable polling."
+          "description": "Polling interval for refreshing the Brainclaw board summary. Set to 0 to disable polling. Ignored when brainclaw.observerMode is enabled (the journal file-watch drives refresh instead)."
+        },
+        "brainclaw.observerMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental (pln#560): drive board refresh from the append-only event journal (.brainclaw/events) via a file-watch instead of the polling timer, and maintain an in-memory projection. The attention badge and claims/actions counts are still seeded from a single lock-free board_summary read (those families are not journaled with payloads yet). Off by default."
         }
       }
     }
@@ -264,7 +269,7 @@
   "scripts": {
     "compile": "tsc -p ./tsconfig.json",
     "watch": "tsc -watch -p ./tsconfig.json",
-    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js out/project-discovery.test.js out/acceptance-bar.test.js out/content-provider.test.js out/refresh-diff.test.js out/journal-consumer.test.js out/board-projection.test.js"
+    "test": "tsc -p ./tsconfig.json && node --test out/tree-helpers.test.js out/project-discovery.test.js out/acceptance-bar.test.js out/content-provider.test.js out/refresh-diff.test.js out/journal-consumer.test.js out/board-projection.test.js out/board-observer.test.js"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
