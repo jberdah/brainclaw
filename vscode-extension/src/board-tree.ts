@@ -14,6 +14,7 @@ import {
   type Freshness,
 } from './tree-helpers';
 import type { OpenEntityArgs, SupportedEntity } from './content-provider';
+import { BoardObserver, mergeCounts, type CursorMemento, type SeedCounts } from './board-observer';
 
 export interface BoardProject {
   path: string;
@@ -391,17 +392,23 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private _refreshTimer?: ReturnType<typeof setTimeout>;
   private _fileDecoRefresh?: () => void;
   private _statusUpdate?: (summary: BrainclawStatusSummary) => void;
+  // pln#560 slice2 — per-project journal observers (created lazily when
+  // observerMode is on). Each owns an in-memory projection + persisted cursor.
+  private readonly _observers = new Map<string, BoardObserver>();
+  private readonly _workspaceState?: CursorMemento;
 
   constructor(
     workspaceRoot: string,
     projects: BoardProject[],
     fileDecoRefresh?: () => void,
     statusUpdate?: (summary: BrainclawStatusSummary) => void,
+    workspaceState?: CursorMemento,
   ) {
     this._workspaceRoot = this._normalizePath(workspaceRoot);
     this._projects = this._dedupeProjects(projects);
     this._fileDecoRefresh = fileDecoRefresh;
     this._statusUpdate = statusUpdate;
+    this._workspaceState = workspaceState;
     for (const project of this._projects) {
       this._projectIndex.set(project.path, project);
     }
@@ -999,6 +1006,27 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
   }
 
+  /** pln#560 slice2 — observerMode gate. Off by default; needs workspaceState
+   *  for the cursor (observer-protocol §3), so absent state disables it too. */
+  private _observerEnabled(): boolean {
+    return this._workspaceState !== undefined
+      && vscode.workspace.getConfiguration('brainclaw').get<boolean>('observerMode', false) === true;
+  }
+
+  /** Lazily create the per-project journal observer. `projectId` keys the
+   *  cursor (the board_summary project_id, else the normalized path). */
+  private _getObserver(projectPath: string, projectId: string): BoardObserver | undefined {
+    if (!this._workspaceState) return undefined;
+    const normalizedPath = this._normalizePath(projectPath);
+    let observer = this._observers.get(normalizedPath);
+    if (!observer) {
+      const eventsDir = path.join(normalizedPath, '.brainclaw', 'events');
+      observer = new BoardObserver(eventsDir, projectId || normalizedPath, this._workspaceState);
+      this._observers.set(normalizedPath, observer);
+    }
+    return observer;
+  }
+
   private async _getMcpClient(projectPath: string): Promise<McpClient | null> {
     const normalizedPath = this._normalizePath(projectPath);
     const existing = this._mcpClients.get(normalizedPath);
@@ -1064,6 +1092,31 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     } catch {
       // Ignore watch startup failures for individual projects.
     }
+
+    // pln#560 slice2 — in observerMode also watch the v2 journal directory
+    // (.brainclaw/events) for segment/meta growth; that growth signal is what
+    // drives the projection tail + section refresh (observer-protocol §4),
+    // replacing the polling timer. The .brainclaw watch above is non-recursive
+    // and lives one level up, so the events/ subdir needs its own watch.
+    if (this._observerEnabled()) {
+      const eventsDir = path.join(normalizedPath, '.brainclaw', 'events');
+      const eventsKey = `${normalizedPath}::events`;
+      if (!this._watchers.has(eventsKey) && fs.existsSync(eventsDir)) {
+        try {
+          const evWatcher = fs.watch(eventsDir, (_eventType, filename) => {
+            const name = filename ? String(filename) : '';
+            if (name.endsWith('.jsonl') || name === 'meta.json') {
+              this._debouncedRefresh();
+            }
+          });
+          evWatcher.on('error', () => { this._watchers.delete(eventsKey); });
+          evWatcher.on('close', () => { this._watchers.delete(eventsKey); });
+          this._watchers.set(eventsKey, evWatcher);
+        } catch {
+          // Ignore — degrade to the .brainclaw watch + manual refresh.
+        }
+      }
+    }
   }
 
   private async _runAgentBoard(projectPath: string): Promise<BoardData> {
@@ -1077,6 +1130,39 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const plans = (raw['plans'] as Record<string, number> | undefined) ?? {};
     const sequences = (raw['sequences'] as Record<string, unknown> | undefined) ?? {};
     const activeSequenceName = typeof sequences['active_name'] === 'string' ? sequences['active_name'] as string : undefined;
+
+    // board_summary is the lock-free seed (observer-protocol §6.1, pln#558). It
+    // provides the degraded-family counts the journal cannot today (claims,
+    // assignments, runs, the attention badge, agents, sessions).
+    const seed: SeedCounts = {
+      claims: (raw['in_progress'] as number | undefined) ?? 0,
+      assignments: 0,
+      runs: 0,
+      // pln#559 step 3 — composite attention_required (pending actions +
+      // non-auto candidates + blocked + stale runs) = what the Attention header shows.
+      actions: (raw['attention_required'] as number | undefined) ?? 0,
+      agents: (raw['agents'] as number | undefined) ?? 0,
+      sessions: (raw['sessions'] as number | undefined) ?? 0,
+      failedRuns: ((raw['attention_breakdown'] as any) ?? {}).stale_runs ?? 0,
+    };
+    const summaryPlans = (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0);
+
+    // pln#560 slice2 — in observerMode, tail the journal and merge: `plans` comes
+    // from the (journal-driven) projection, everything else from the lock-free
+    // seed (trp_2a89ae97). Off mode keeps the pure board_summary counts.
+    let counts: BoardSummaryCounts;
+    if (this._observerEnabled()) {
+      const observer = this._getObserver(projectPath, (raw['project_id'] as string | undefined) ?? '');
+      if (observer) {
+        observer.ingest();
+        counts = mergeCounts(observer.counts(), seed);
+      } else {
+        counts = { plans: summaryPlans, ...seed, failedRuns: seed.failedRuns ?? 0 };
+      }
+    } else {
+      counts = { plans: summaryPlans, ...seed, failedRuns: seed.failedRuns ?? 0 };
+    }
+
     return {
       active_plans: [],
       active_claims: [],
@@ -1088,22 +1174,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       other_agents: [],
       active_sequence: activeSequenceName ? { name: activeSequenceName, status: 'active', items: [] } : undefined,
       summary: true,
-      _counts: {
-        plans: (plans['in_progress'] ?? 0) + (plans['todo'] ?? 0),
-        claims: (raw['in_progress'] as number | undefined) ?? 0,
-        assignments: 0,
-        runs: 0,
-        // pln#559 step 3 — the server now returns a composite attention_required
-        // (pending actions + non-auto candidates + blocked + stale runs) so this
-        // value already matches what the Attention section header displays.
-        actions: (raw['attention_required'] as number | undefined) ?? 0,
-        agents: (raw['agents'] as number | undefined) ?? 0,
-        sessions: (raw['sessions'] as number | undefined) ?? 0,
-        // failedRuns is best-effort from the summary path (the lightweight
-        // endpoint doesn't return it yet); aggregator + Live activity load
-        // populate the real count when the full section is fetched.
-        failedRuns: ((raw['attention_breakdown'] as any) ?? {}).stale_runs ?? 0,
-      },
+      _counts: counts,
     };
   }
 

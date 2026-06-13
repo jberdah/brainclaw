@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Board Tree Provider — always register to avoid "no data provider" error
   const treeProvider = cwd
-    ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh(), handleStatusSummary)
+    ? new BrainclawBoardProvider(cwd, projects, () => fileDecoProvider?.refresh(), handleStatusSummary, context.workspaceState)
     : undefined;
   // pln#558 step 4 — share the BoardProvider's MCP client pool with the file
   // decoration provider. Previously each provider spawned its own
@@ -268,6 +268,10 @@ export function activate(context: vscode.ExtensionContext) {
     };
     const scheduleRefresh = () => {
       clearRefreshTimer();
+      // pln#560 slice2 — in observer mode the journal file-watch drives refresh;
+      // the blind polling timer is exactly the "polling timer against the MCP
+      // server for display" the observer protocol §1 forbids, so disable it.
+      if (isObserverMode()) return;
       const intervalMs = getRefreshIntervalMs();
       if (intervalMs <= 0) return;
       refreshTimer = setTimeout(async () => {
@@ -280,7 +284,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       { dispose: clearRefreshTimer },
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration('brainclaw.refreshIntervalMs')) {
+        if (event.affectsConfiguration('brainclaw.refreshIntervalMs')
+          || event.affectsConfiguration('brainclaw.observerMode')) {
           scheduleRefresh();
         }
       }),
@@ -310,6 +315,10 @@ function getRefreshIntervalMs(): number {
   if (!Number.isFinite(configured)) return 30_000;
   if (configured <= 0) return 0;
   return Math.max(1_000, Math.floor(configured));
+}
+
+function isObserverMode(): boolean {
+  return vscode.workspace.getConfiguration('brainclaw').get<boolean>('observerMode', false) === true;
 }
 
 function getNotificationMode(): 'urgent' | 'all' | 'none' {
