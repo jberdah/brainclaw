@@ -260,8 +260,8 @@
         },
         "brainclaw.observerMode": {
           "type": "boolean",
-          "default": false,
-          "description": "Experimental (pln#560): drive board refresh from the append-only event journal (.brainclaw/events) via a file-watch instead of the polling timer, and maintain an in-memory projection. The attention badge and claims/actions counts are still seeded from a single lock-free board_summary read (those families are not journaled with payloads yet). Off by default."
+          "default": true,
+          "description": "Drive board refresh from the append-only event journal (.brainclaw/events) via a file-watch instead of the polling timer, and maintain an in-memory projection (pln#560). When the journal is off/absent the surface degrades gracefully to a single lock-free board_summary read driven by the legacy event watch. The attention badge and claims/actions counts are seeded from board_summary until those families are journaled with payloads (phase 1.5). Set to false to force the legacy polling timer."
         }
       }
     }
