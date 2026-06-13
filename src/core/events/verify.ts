@@ -16,6 +16,8 @@ import { MEMORY_FAMILIES, materializeMemoryStateFromJournal, materializeRegistry
 import { listClaims } from '../claims.js';
 import { listAssignments } from '../assignments.js';
 import { listAgentRuns } from '../agentruns.js';
+import { listCandidates } from '../candidates.js';
+import { listSequences } from '../sequence.js';
 import { REGISTRY_FAMILIES, type RegistryFamily } from './registry-post-image.js';
 import { preparePersistedDocument } from '../migration.js';
 
@@ -73,6 +75,10 @@ const VERIFIED_REGISTRY_FAMILIES: Array<{ family: RegistryFamily; list: (cwd?: s
   { family: 'claim', list: listClaims },
   { family: 'assignment', list: listAssignments },
   { family: 'agent_run', list: listAgentRuns },
+  // Only PENDING candidates are journaled (archive emits a tombstone, pln#568),
+  // so verify compares the pending projection against the journal live set.
+  { family: 'candidate', list: (cwd) => listCandidates('pending', cwd) },
+  { family: 'sequence', list: listSequences },
 ];
 
 /**

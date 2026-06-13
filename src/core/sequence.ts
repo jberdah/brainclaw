@@ -5,6 +5,7 @@ import { generateIdWithLabel, nowISO } from './ids.js';
 import { resolveEntityDir } from './io.js';
 import { SequenceItemSchema, SequenceSchema, type Sequence, type SequenceItem, type SequenceItemInput, type SequenceStatus } from './schema.js';
 import { refreshLiveCompanions } from '../commands/export.js';
+import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 
 function sequencesDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('sequences', cwd ?? process.cwd(), mode);
@@ -70,7 +71,13 @@ export interface UpdateSequenceInput {
 export function saveSequence(sequence: Sequence, cwd?: string): void {
   mutate({ cwd }, () => {
     ensureSequencesDir(cwd);
-    sequenceStore(cwd, 'write').save(SequenceSchema.parse(sequence));
+    const store = sequenceStore(cwd, 'write');
+    const parsed = SequenceSchema.parse(sequence);
+    // pln#568 (I2): journal the post-image BEFORE the projection write.
+    const created = !store.exists(parsed.id);
+    emitRegistryPostImage('sequence', parsed, { created, agent: parsed.author, agent_id: parsed.author_id, session_id: parsed.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
+    store.save(parsed);
     // Auto-refresh live companions after sequence changes (non-fatal)
     try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });

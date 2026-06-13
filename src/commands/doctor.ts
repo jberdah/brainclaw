@@ -24,7 +24,7 @@ import { listRuntimeNotes } from '../core/runtime.js';
 import { isTrapExpired, listOperationalTraps } from '../core/traps.js';
 import { scanText } from '../core/security.js';
 import { isTaskLifecycleRuntimeEvent, listRuntimeEvents } from '../core/events.js';
-import { verifyProjectionsAgainstJournal } from '../core/events/verify.js';
+import { verifyProjectionsAgainstJournal, verifyRegistryAgainstJournal } from '../core/events/verify.js';
 import { resolveJournalMode } from '../core/events/journal.js';
 import { resolveEventSessionId } from '../core/identity.js';
 import { detectContradictions } from '../core/contradictions.js';
@@ -803,7 +803,11 @@ function runJournalVerification(options: DoctorOptions): void {
 
   const mode = resolveJournalMode(options.cwd);
   const t0 = Date.now();
-  const drift = verifyProjectionsAgainstJournal(options.cwd);
+  // pln#568 — the gate now covers BOTH the memory families and the registry /
+  // coordination families (claim/assignment/agent_run/candidate/sequence), so
+  // sustained zero drift authorizes trusting the journal for the observer's
+  // attention inputs too, not just memory.
+  const drift = [...verifyProjectionsAgainstJournal(options.cwd), ...verifyRegistryAgainstJournal(options.cwd)];
   const elapsed_ms = Date.now() - t0;
 
   if (options.json) {

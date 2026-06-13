@@ -18,9 +18,14 @@ import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js
 import { acquireClaimScope, listClaims, releaseClaim } from '../../src/core/claims.js';
 import { createAssignment } from '../../src/core/assignments.js';
 import { createAgentRun } from '../../src/core/agentruns.js';
+import { createActionRequired } from '../../src/core/actions.js';
+import { saveCandidate, archiveCandidate } from '../../src/core/candidates.js';
+import { saveRuntimeNote } from '../../src/core/runtime.js';
+import { createSequence } from '../../src/core/sequence.js';
 import { readJournalRecords } from '../../src/core/events/journal.js';
 import { materializeRegistryFromJournal } from '../../src/core/events/materialize.js';
 import { verifyRegistryAgainstJournal } from '../../src/core/events/verify.js';
+import { CandidateSchema, RuntimeNoteSchema, type Candidate, type RuntimeNote } from '../../src/core/schema.js';
 
 let ws: TestWorkspace | undefined;
 let savedMode: string | undefined;
@@ -146,5 +151,76 @@ describe('registry post-images (pln#568 slice 1)', () => {
     } finally {
       process.env.BRAINCLAW_JOURNAL_MODE = 'dual';
     }
+  });
+});
+
+function minimalCandidate(id: string): Candidate {
+  return CandidateSchema.parse({
+    id, type: 'trap', text: 'candidate probe', created_at: '2026-06-14T00:00:00.000Z',
+    author: 'tester', status: 'pending', tags: [],
+  });
+}
+
+function sharedNote(id: string): RuntimeNote {
+  return RuntimeNoteSchema.parse({
+    id, agent: 'tester', text: 'shared note probe', created_at: '2026-06-14T00:00:00.000Z',
+    tags: [], visibility: 'shared', note_type: 'observation',
+  });
+}
+
+describe('registry post-images — remaining families (pln#568 slice 2)', () => {
+  it('journals an action_required post-image under item_type "state"', () => {
+    const dir = ws!.dir;
+    const { claim } = acquireClaimScope({ scope: 'src/a', agent: 'tester', description: 'p' }, dir);
+    const assignment = createAssignment({ claim_id: claim!.id, agent: 'worker', dispatcher_agent: 'tester', scope: 'src/a', description: 'work' }, dir);
+    const action = createActionRequired({ assignment_id: assignment.id, agent: 'worker', kind: 'approval', title: 'approve?', prompt: 'ok?' }, dir);
+
+    const states = materializeRegistryFromJournal(dir).get('state') ?? [];
+    const journaled = states.find((e) => e.item_id === action.id);
+    assert.ok(journaled, 'action_required journaled under item_type state');
+    assert.equal(journaled!.payload['kind'], 'approval');
+    assert.equal(journaled!.payload['status'], 'pending');
+  });
+
+  it('journals a pending candidate, then tombstones it on archive', () => {
+    const dir = ws!.dir;
+    const cand = minimalCandidate('cand_probe');
+    saveCandidate(cand, dir);
+    let candidates = materializeRegistryFromJournal(dir).get('candidate') ?? [];
+    assert.equal(candidates.length, 1, 'pending candidate journaled');
+    assert.equal(candidates[0].payload['text'], 'candidate probe');
+
+    archiveCandidate({ ...cand, status: 'accepted' }, 'accepted', dir);
+    candidates = materializeRegistryFromJournal(dir).get('candidate') ?? [];
+    assert.equal(candidates.length, 0, 'archived candidate is tombstoned out of the journal live set');
+  });
+
+  it('journals a sequence post-image', () => {
+    const dir = ws!.dir;
+    const { id } = createSequence({ name: 'lane-seq', owner: 'tester', author: 'tester' }, dir);
+    const sequences = materializeRegistryFromJournal(dir).get('sequence') ?? [];
+    assert.equal(sequences.length, 1);
+    assert.equal(sequences[0].item_id, id);
+    assert.equal(sequences[0].payload['name'], 'lane-seq');
+  });
+
+  it('journals SHARED runtime notes but never private ones (visibility boundary)', () => {
+    const dir = ws!.dir;
+    saveRuntimeNote(sharedNote('rn_shared'), dir);
+    saveRuntimeNote({ ...sharedNote('rn_private'), visibility: 'private' } as RuntimeNote, dir);
+
+    const notes = materializeRegistryFromJournal(dir).get('runtime_note') ?? [];
+    const ids = notes.map((n) => n.item_id);
+    assert.ok(ids.includes('rn_shared'), 'shared note journaled');
+    assert.ok(!ids.includes('rn_private'), 'private note must NOT enter the shared journal');
+  });
+
+  it('reports zero verify drift across every wired family', () => {
+    const dir = ws!.dir;
+    const { claim } = acquireClaimScope({ scope: 'src/v', agent: 'tester', description: 'p' }, dir);
+    createAssignment({ claim_id: claim!.id, agent: 'worker', dispatcher_agent: 'tester', scope: 'src/v', description: 'work' }, dir);
+    saveCandidate(minimalCandidate('cand_v'), dir);
+    createSequence({ name: 'seq-v', owner: 'tester', author: 'tester' }, dir);
+    assert.deepEqual(verifyRegistryAgainstJournal(dir), []);
   });
 });

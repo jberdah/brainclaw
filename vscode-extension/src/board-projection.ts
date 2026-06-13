@@ -18,25 +18,27 @@
  * comes out empty; when the writer starts journaling it with payloads these
  * adapters light it up with no code change.
  *
- * ── EMPIRICAL COVERAGE (verified against a live store 2026-06-13, NOT the
- * narrower gap observer-protocol §6.1 documents) ──────────────────────────
- * Only FIVE item_types reach the journal with a payload today (the families
- * `persistState` emits per-entity diffs for — src/core/state.ts
- * `planStateDirectories`): **plan, constraint, decision, trap, handoff**.
- * Every other family is empty in a pure-journal projection right now:
- *   - `claim`, `assignment`, `agent_run`, `runtime_note`, `sequence` are
- *     journaled but ENVELOPE-ONLY (no payload) → not upserted by the consumer;
- *   - `candidate` and `state` (action_required) are NOT journaled at all
- *     (actions.ts writes only an audit entry; candidates have no journal emit).
+ * ── COVERAGE (updated pln#568, phase 1.5) ─────────────────────────────────
+ * Originally (verified against a live store 2026-06-13) only FIVE item_types
+ * reached the journal with a payload — plan, constraint, decision, trap,
+ * handoff (the families src/core/state.ts `planStateDirectories` diffs). The
+ * registry / coordination families were envelope-only or absent (trp#559).
  *
- * Consequence the slice-2 wiring MUST honour: {@link attentionRequired} and
- * the `claims`/`actions` fields of {@link projectCounts} are **0 in
- * pure-journal mode today** — actions and candidates (the dominant attention
- * inputs, pln#559) never reach the journal. The caller therefore CANNOT make
- * the attention badge or the claims/actions counts journal-driven yet; it must
- * overlay them from a single observer-flagged `board_summary` MCP read (the §6
- * mapping table is forward-looking, not today's reality). This module stays
- * unchanged when the writer closes the gap — only the caller's seed shrinks.
+ * pln#568 closed that gap on the WRITER side: claim, assignment, agent_run,
+ * candidate, sequence, and action_required (journaled under item_type `state`)
+ * now emit full entity-state post-images on their persist chokepoint
+ * (src/core/events/registry-post-image.ts), and runtime_note for SHARED notes.
+ * So these slots now light up for real when this module is fed a journal that
+ * carries them — exactly the forward-compatibility this module was built for.
+ *
+ * REMAINING (cutover signal O2 — not yet wired here): the caller
+ * (board-tree.ts) still overlays `claims`/`actions`/attention from the
+ * observer-flagged `board_summary` MCP seed as the floor, because trusting the
+ * journal as AUTHORITATIVE for those counts requires (a) a cutover signal the
+ * observer can read and (b) a registry genesis backfill so EVERY pre-existing
+ * registry entity has a post-image (a partial journal would undercount the
+ * badge — the trp#559 regression). Until that lands, the seed stays the floor;
+ * this module is unchanged either way — only the caller's seed shrinks.
  *
  * @module
  */
