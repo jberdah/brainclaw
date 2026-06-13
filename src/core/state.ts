@@ -288,7 +288,9 @@ function planSyncDirectory<T extends { id: string }>(
  * must happen AFTER the journal append+fsync). Returns the dirty result. */
 function applySyncPlan<T extends { id: string }>(plan: SyncPlan<T>): SyncResult<T> {
   const result: SyncResult<T> = { written: [], deleted: [] };
-  if (plan.writes.length > 0 && !fs.existsSync(plan.dirPath)) {
+  // Create the entity dir unconditionally (matches the pre-split syncDirectory,
+  // which always ensured the dir even for an empty/unchanged collection).
+  if (!fs.existsSync(plan.dirPath)) {
     fs.mkdirSync(plan.dirPath, { recursive: true });
   }
   for (const { filepath, desired, item, created } of plan.writes) {

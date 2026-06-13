@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { ensureMemoryDir } from '../../src/core/io.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
 import { forceAppendJournalRecords, journalDir, readJournalRecords } from '../../src/core/events/journal.js';
@@ -101,6 +102,24 @@ describe('journal-derived checkpoints (pln#566 Inc0 s1)', () => {
     const manifest = loadLatestCheckpointManifest(dir)!;
     assert.equal(verifyCheckpoint(manifest, fs.readFileSync(snapPath, 'utf-8'), dir).valid, false, 'tampered snapshot must fail verification');
     assert.equal(materializeStateFromCheckpoint(dir), null, 'tampered checkpoint → null (caller falls back)');
+  });
+
+  it('rejects a sha-valid snapshot whose SHAPE is not MaterializedEntity[] (no throw)', () => {
+    const dir = tmpStore();
+    cleanupDirs.push(dir);
+    for (let i = 1; i <= 2; i++) appendCreate(dir, i);
+    createCheckpoint(dir);
+    const manifest = loadLatestCheckpointManifest(dir)!;
+    const snapPath = path.join(journalDir(dir), 'checkpoints', `${String(manifest.head_seq).padStart(12, '0')}.snapshot.json`);
+    const manPath = path.join(journalDir(dir), 'checkpoints', `${String(manifest.head_seq).padStart(12, '0')}.manifest.json`);
+
+    // valid JSON but wrong shape, with a MATCHING sha (so only shape validation can catch it)
+    const badSnap = JSON.stringify({ not: 'an array' });
+    fs.writeFileSync(snapPath, badSnap);
+    fs.writeFileSync(manPath, JSON.stringify({ ...manifest, snapshot_sha256: crypto.createHash('sha256').update(badSnap).digest('hex') }));
+
+    assert.equal(verifyCheckpoint(loadLatestCheckpointManifest(dir)!, badSnap, dir).valid, false, 'wrong-shape snapshot must fail verification');
+    assert.equal(materializeStateFromCheckpoint(dir), null, 'wrong-shape snapshot → null, never throws');
   });
 
   it('rejects a checkpoint bound to a different store_id', () => {

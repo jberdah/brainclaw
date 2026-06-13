@@ -152,15 +152,20 @@ export function createCheckpoint(cwd?: string, capabilities: CheckpointCapabilit
   return { created: true, manifest };
 }
 
-/** Highest-head_seq manifest on disk, or undefined if none. */
+/**
+ * Highest-head_seq manifest on disk, or undefined if none. Selects by NUMERIC
+ * head_seq parsed from the filename — lexicographic order on the 12-zero-pad
+ * breaks once seq exceeds 12 digits (codex review LOW).
+ */
 export function loadLatestCheckpointManifest(cwd?: string): CheckpointManifest | undefined {
   const dir = checkpointsDir(cwd);
   if (!fs.existsSync(dir)) return undefined;
-  const manifests = fs.readdirSync(dir).filter(f => f.endsWith('.manifest.json')).sort();
-  for (let i = manifests.length - 1; i >= 0; i--) {
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.manifest.json'))
+    .sort((a, b) => (parseInt(b, 10) || 0) - (parseInt(a, 10) || 0)); // numeric desc on the seq prefix
+  for (const f of files) {
     try {
-      return JSON.parse(fs.readFileSync(path.join(dir, manifests[i]!), 'utf-8')) as CheckpointManifest;
-    } catch { /* skip corrupt manifest, try the next-oldest */ }
+      return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as CheckpointManifest;
+    } catch { /* skip corrupt manifest, try the next */ }
   }
   return undefined;
 }
@@ -170,38 +175,73 @@ export interface CheckpointVerification {
   reason?: string;
 }
 
+function isMaterializedEntityArray(v: unknown): v is MaterializedEntity[] {
+  return Array.isArray(v) && v.every(e =>
+    !!e && typeof e === 'object'
+    && typeof (e as MaterializedEntity).item_type === 'string'
+    && typeof (e as MaterializedEntity).item_id === 'string'
+    && !!(e as MaterializedEntity).payload && typeof (e as MaterializedEntity).payload === 'object');
+}
+
+interface CheckpointVerificationInternal extends CheckpointVerification {
+  /** The validated snapshot entities, so the caller need not re-parse unchecked bytes. */
+  entities?: MaterializedEntity[];
+}
+
 /**
- * Verify a checkpoint is trustworthy WITHOUT reading projection files (F3):
- * snapshot integrity (sha256), store binding, journal-lineage binding (the
- * covered head record still exists in the journal with the same identity), and
- * schema support. Returns valid:false (never throws) so callers fall back.
+ * Verify a checkpoint against an ALREADY-READ record set — never throws,
+ * validates snapshot SHAPE (not just sha256), and binds to the SAME journal
+ * view the caller will serve from (no verify/serve TOCTOU). WITHOUT reading
+ * projection files (F3). Returns the parsed entities when valid.
+ */
+function verifyCheckpointAgainstRecords(
+  manifest: CheckpointManifest, snapshotRaw: string, records: JournalRecord[], cwd?: string,
+): CheckpointVerificationInternal {
+  try {
+    if (manifest.schema_version !== CHECKPOINT_SCHEMA_VERSION) {
+      return { valid: false, reason: `unsupported checkpoint schema_version ${manifest.schema_version}` };
+    }
+    if (sha256(snapshotRaw) !== manifest.snapshot_sha256) {
+      return { valid: false, reason: 'snapshot sha256 mismatch (corrupt/tampered blob)' };
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(snapshotRaw); } catch { return { valid: false, reason: 'snapshot is not valid JSON' }; }
+    if (!isMaterializedEntityArray(parsed)) return { valid: false, reason: 'snapshot is not a MaterializedEntity[]' };
+    const expectedStore = loadConfig(cwd).project_id ?? 'unknown';
+    if (manifest.store_id !== expectedStore) {
+      return { valid: false, reason: `store_id mismatch (manifest ${manifest.store_id} vs ${expectedStore}) — copied/wrong-branch checkpoint` };
+    }
+    const head = records.find(r => r.seq === manifest.head_seq);
+    if (!head) return { valid: false, reason: `head_seq ${manifest.head_seq} not found in journal` };
+    if (recordIdentity(head) !== manifest.head_identity) {
+      return { valid: false, reason: 'head record identity mismatch — journal lineage diverged from checkpoint' };
+    }
+    return { valid: true, entities: parsed };
+  } catch (err) {
+    return { valid: false, reason: `verification error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
+ * Public no-throw verification: snapshot integrity + shape, store binding, and
+ * journal-lineage binding. Reads the journal once. Returns valid:false on any
+ * failure (never throws) so callers fall back.
  */
 export function verifyCheckpoint(manifest: CheckpointManifest, snapshotRaw: string, cwd?: string): CheckpointVerification {
-  if (manifest.schema_version !== CHECKPOINT_SCHEMA_VERSION) {
-    return { valid: false, reason: `unsupported checkpoint schema_version ${manifest.schema_version}` };
+  let records: JournalRecord[];
+  try { records = readJournalRecords(cwd); } catch (err) {
+    return { valid: false, reason: `journal read failed: ${err instanceof Error ? err.message : String(err)}` };
   }
-  if (sha256(snapshotRaw) !== manifest.snapshot_sha256) {
-    return { valid: false, reason: 'snapshot sha256 mismatch (corrupt/tampered blob)' };
-  }
-  const expectedStore = loadConfig(cwd).project_id ?? 'unknown';
-  if (manifest.store_id !== expectedStore) {
-    return { valid: false, reason: `store_id mismatch (manifest ${manifest.store_id} vs ${expectedStore}) — copied/wrong-branch checkpoint` };
-  }
-  // Journal-lineage binding: the covered head record must still be present with the same identity.
-  const head = readJournalRecords(cwd).find(r => r.seq === manifest.head_seq);
-  if (!head) return { valid: false, reason: `head_seq ${manifest.head_seq} not found in journal` };
-  if (recordIdentity(head) !== manifest.head_identity) {
-    return { valid: false, reason: 'head record identity mismatch — journal lineage diverged from checkpoint' };
-  }
-  return { valid: true };
+  const r = verifyCheckpointAgainstRecords(manifest, snapshotRaw, records, cwd);
+  return { valid: r.valid, reason: r.reason };
 }
 
 /**
  * Materialize state from the latest VERIFIED checkpoint + the sealed tail
  * (records with seq > head_seq), using the same reducer + projector as
- * full-journal materialization. Returns null when there is no verified
- * checkpoint (caller falls back to a full journal replay or projection files).
- * This is the substrate for the cold-read fast path (later slice).
+ * full-journal materialization. Reads the journal exactly ONCE and uses that
+ * single view for verification, the F4 payload_ref guard, and the tail replay
+ * (no TOCTOU). Returns null on any failure (caller falls back to projections).
  */
 export function materializeStateFromCheckpoint(cwd?: string): State | null {
   const manifest = loadLatestCheckpointManifest(cwd);
@@ -212,18 +252,18 @@ export function materializeStateFromCheckpoint(cwd?: string): State | null {
   } catch {
     return null; // orphan manifest without a readable snapshot
   }
-  if (!verifyCheckpoint(manifest, snapshotRaw, cwd).valid) return null;
+  let records: JournalRecord[];
+  try { records = readJournalRecords(cwd); } catch { return null; }
 
-  // F4 guard: if any record (snapshot-era or tail) externalized its payload,
-  // materialize would drop it — refuse to serve, fall back to projections.
-  const records = readJournalRecords(cwd);
+  const verdict = verifyCheckpointAgainstRecords(manifest, snapshotRaw, records, cwd);
+  if (!verdict.valid || !verdict.entities) return null;
+  // F4 guard: an externalized payload (which materialize can't deref) means the
+  // checkpoint/tail would drop entities — refuse to serve, fall back.
   if (journalHasExternalizedPayload(records)) return null;
 
-  const entities = JSON.parse(snapshotRaw) as MaterializedEntity[];
   const live = new Map<string, MaterializedEntity>();
-  for (const e of entities) live.set(`${e.item_type}:${e.item_id}`, e);
-
-  // Replay only the sealed tail (head_seq+1..end) — the gap since the checkpoint.
+  for (const e of verdict.entities) live.set(`${e.item_type}:${e.item_id}`, e);
+  // Replay only the sealed tail (head_seq+1..end) from the SAME record view.
   applyRecordsToLive(records.filter(r => r.seq > manifest.head_seq), live);
   return projectLiveToState(live);
 }
