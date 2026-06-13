@@ -19,6 +19,7 @@ import { forceAppendJournalRecords, journalDir, readJournalRecords } from '../..
 import { materializeMemoryStateFromJournal } from '../../src/core/events/materialize.js';
 import {
   createCheckpoint, verifyCheckpoint, loadLatestCheckpointManifest, materializeStateFromCheckpoint,
+  maybeCreateCheckpoint,
 } from '../../src/core/events/checkpoint.js';
 
 /** Append a raw v2 record line carrying an externalized payload_ref (the API
@@ -33,6 +34,12 @@ function appendPayloadRefRecord(dir: string): void {
     payload_ref: { sha256: 'a'.repeat(64), bytes: 123 },
   };
   fs.appendFileSync(path.join(segDir, seg), JSON.stringify(rec) + '\n');
+  // Bump meta.next_seq so the record counts as COMMITTED (within journalHeadSeq);
+  // otherwise the committed-head cap would correctly exclude it as not-yet-durable.
+  const metaP = path.join(segDir, 'meta.json');
+  const meta = JSON.parse(fs.readFileSync(metaP, 'utf-8'));
+  meta.next_seq = nextSeq + 1;
+  fs.writeFileSync(metaP, JSON.stringify(meta));
 }
 
 function tmpStore(): string {
@@ -132,6 +139,25 @@ describe('journal-derived checkpoints (pln#566 Inc0 s1)', () => {
 
     const forged = { ...manifest, store_id: 'prj_SOMEONE_ELSE' };
     assert.equal(verifyCheckpoint(forged, snap, dir).valid, false, 'wrong store_id must fail');
+  });
+
+  it('maybeCreateCheckpoint only builds once the journal grows past the interval', () => {
+    const dir = tmpStore();
+    cleanupDirs.push(dir);
+    for (let i = 1; i <= 3; i++) appendCreate(dir, i);
+
+    // below interval → no build
+    assert.equal(maybeCreateCheckpoint(dir, 10).created, false, 'gap < interval → no checkpoint');
+    assert.equal(loadLatestCheckpointManifest(dir), undefined);
+
+    // grow past the interval → builds
+    for (let i = 4; i <= 12; i++) appendCreate(dir, i);
+    const r = maybeCreateCheckpoint(dir, 5);
+    assert.equal(r.created, true, 'gap >= interval → checkpoint built');
+    assert.ok(loadLatestCheckpointManifest(dir));
+
+    // immediately after, the gap resets → no rebuild
+    assert.equal(maybeCreateCheckpoint(dir, 5).created, false, 'gap reset after build → no rebuild');
   });
 
   it('F4 guard: refuses to build or serve a checkpoint when the journal has externalized payload_ref', () => {

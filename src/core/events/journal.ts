@@ -341,6 +341,24 @@ function saveMeta(dir: string, meta: JournalMeta): void {
   writeFileAtomic(path.join(dir, 'meta.json'), JSON.stringify(meta));
 }
 
+/**
+ * Highest DURABLE seq present in the journal, cheaply — META-CACHE ONLY (no
+ * rebuild). meta.next_seq is published AFTER the append fsync, so next_seq-1 is
+ * the last committed record. Returns 0 on absent/corrupt/invalid meta — never
+ * falls back to a full segment scan (the whole point: the "should I checkpoint
+ * yet?" gate must stay O(1), pln#566 Inc0; codex review MED). Callers that need
+ * exact recovery use loadOrRebuildMeta on the writer/status path instead.
+ */
+export function journalHeadSeq(cwd?: string): number {
+  try {
+    const raw = JSON.parse(fs.readFileSync(metaPath(cwd), 'utf-8')) as Partial<JournalMeta>;
+    if (typeof raw.next_seq === 'number' && Number.isFinite(raw.next_seq) && raw.next_seq >= 1) {
+      return raw.next_seq - 1;
+    }
+  } catch { /* absent/corrupt/unreadable meta → 0 (no scan) */ }
+  return 0;
+}
+
 // --- Tail validation + torn-tail adjudication (§2.2, §2.6) ---
 
 interface TailInspection {

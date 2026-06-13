@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { journalDir, readJournalRecords, type JournalRecord } from './journal.js';
+import { journalDir, readJournalRecords, journalHeadSeq, type JournalRecord } from './journal.js';
 import { applyRecordsToLive, projectLiveToState, type MaterializedEntity } from './materialize.js';
 import { loadConfig } from '../config.js';
 import { writeFileAtomic } from '../io.js';
@@ -123,7 +123,12 @@ export interface CreateCheckpointResult {
  * write path.
  */
 export function createCheckpoint(cwd?: string, capabilities: CheckpointCapabilityVector = BASELINE_CAPABILITIES): CreateCheckpointResult {
-  const records = readJournalRecords(cwd);
+  // Cap to the COMMITTED head (meta.next_seq-1, published after fsync). The
+  // raw segment read is lock-free, so a concurrent append may have written —
+  // but not yet fsync'd/published — records beyond the committed head; excluding
+  // them keeps the manifest bound to durable journal state (codex review MED).
+  const committedHead = journalHeadSeq(cwd);
+  const records = readJournalRecords(cwd).filter(r => r.seq <= committedHead);
   const head = headRecord(records);
   if (!head) return { created: false, reason: 'empty journal — nothing to checkpoint' };
   if (journalHasExternalizedPayload(records)) {
@@ -150,6 +155,34 @@ export function createCheckpoint(cwd?: string, capabilities: CheckpointCapabilit
   writeFileAtomic(snapshotPath(cwd, head.seq), snapshot);
   writeFileAtomic(manifestPath(cwd, head.seq), JSON.stringify(manifest));
   return { created: true, manifest };
+}
+
+/** Default: create a fresh checkpoint once the journal has grown this many
+ *  records past the last checkpoint head. Bounds the sealed tail so
+ *  checkpointRead's gap-replay stays cheap, without checkpointing every persist. */
+export const DEFAULT_CHECKPOINT_INTERVAL = 500;
+
+export interface MaybeCheckpointResult {
+  created: boolean;
+  /** Records the journal grew since the last checkpoint (drove the decision). */
+  gap: number;
+  reason?: string;
+}
+
+/**
+ * Create a checkpoint ONLY if the journal has grown >= interval records past
+ * the last checkpoint head (cheap head-seq check; no full scan unless building).
+ * Intended for off-hot-path callers (session-start maintenance). Journal-derived
+ * (F6). No-op when the journal is off/empty or hasn't grown enough.
+ */
+export function maybeCreateCheckpoint(cwd?: string, interval = DEFAULT_CHECKPOINT_INTERVAL): MaybeCheckpointResult {
+  const head = journalHeadSeq(cwd);
+  if (head === 0) return { created: false, gap: 0, reason: 'journal empty/off' };
+  const last = loadLatestCheckpointManifest(cwd)?.head_seq ?? 0;
+  const gap = head - last;
+  if (gap < interval) return { created: false, gap, reason: `gap ${gap} < interval ${interval}` };
+  const res = createCheckpoint(cwd);
+  return { created: res.created, gap, reason: res.reason };
 }
 
 /**
@@ -253,7 +286,12 @@ export function materializeStateFromCheckpoint(cwd?: string): State | null {
     return null; // orphan manifest without a readable snapshot
   }
   let records: JournalRecord[];
-  try { records = readJournalRecords(cwd); } catch { return null; }
+  // Same committed-head cap as the build path: only durable records (seq <=
+  // meta.next_seq-1) drive verification, the F4 guard, and the tail replay.
+  try {
+    const committedHead = journalHeadSeq(cwd);
+    records = readJournalRecords(cwd).filter(r => r.seq <= committedHead);
+  } catch { return null; }
 
   const verdict = verifyCheckpointAgainstRecords(manifest, snapshotRaw, records, cwd);
   if (!verdict.valid || !verdict.entities) return null;
