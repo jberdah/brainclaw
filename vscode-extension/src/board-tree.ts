@@ -354,6 +354,15 @@ const REFRESHABLE_SECTION_IDS: readonly string[] = [
   SECTION.SYSTEM,
 ];
 
+// pln#560 slice3 — sections whose ENTIRE content is journal-driven (plans /
+// traps / handoffs all reach the journal with payloads, trp_2a89ae97). In
+// observerMode these render from the in-memory projection with zero MCP calls.
+// Mixed/degraded sections (ATTENTION, IN_PROGRESS, SYSTEM, SPRINTS) keep their
+// MCP fetch because claims/actions/candidates/runs/sequence are not journaled.
+const JOURNAL_DRIVEN_SECTIONS: ReadonlySet<string> = new Set([
+  SECTION.BACKLOG, SECTION.PLANS, SECTION.TRAPS, SECTION.HANDOFFS,
+]);
+
 const COMMAND = {
   RETRY_PROJECT_BOARD: 'brainclaw.retryProjectBoard',
 } as const;
@@ -1096,6 +1105,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         const watcher = fs.watch(brainclawDir, (_eventType, filename) => {
           const name = filename ? String(filename) : '';
           if (name === 'events' && this._observerEnabled()) {
+            this._clearJournalDrivenSectionCache(normalizedPath);
             this._syncWatches();
             this._debouncedRefresh();
             return;
@@ -1129,6 +1139,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
           const evWatcher = fs.watch(eventsDir, (_eventType, filename) => {
             const name = filename ? String(filename) : '';
             if (name.endsWith('.jsonl') || name === 'meta.json') {
+              this._clearJournalDrivenSectionCache(normalizedPath);
               this._debouncedRefresh();
             }
           });
@@ -1586,6 +1597,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     }
   }
 
+  private _clearJournalDrivenSectionCache(projectPath: string): void {
+    const normalizedPath = this._normalizePath(projectPath);
+    for (const sectionId of JOURNAL_DRIVEN_SECTIONS) {
+      this._sectionBoards.delete(this._sectionCacheKey(normalizedPath, sectionId));
+    }
+  }
+
   private _emptyBoard(): BoardData {
     return {
       active_plans: [],
@@ -1695,6 +1713,27 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 
   private async _runSectionBoardLoad(projectPath: string, sectionId: string): Promise<BoardData> {
+    // pln#560 slice3 — serve fully journal-driven sections from the in-memory
+    // projection (zero MCP) when observerMode is on AND the journal is actually
+    // present. The observer is created by _runAgentBoard (board loads before any
+    // section expands), so we only READ the cached one here — never create it
+    // with a path-keyed cursor that would diverge from the project_id-keyed one.
+    // When the journal is off/absent (§9) the projection is empty, so fall
+    // through to the MCP fetch rather than render an empty section.
+    if (this._observerEnabled() && JOURNAL_DRIVEN_SECTIONS.has(sectionId)) {
+      const normalizedPath = this._normalizePath(projectPath);
+      const observer = this._observers.get(normalizedPath);
+      if (observer && fs.existsSync(path.join(normalizedPath, '.brainclaw', 'events'))) {
+        observer.ingest();
+        const projected = observer.board();
+        const board = this._cloneBoard(this._getBoardForPath(projectPath));
+        board.active_plans = projected.active_plans;
+        board.known_traps = projected.known_traps;
+        board.open_handoffs = projected.open_handoffs;
+        return board;
+      }
+    }
+
     const client = await this._getMcpClient(projectPath);
     if (!client) {
       throw new Error(`No brainclaw command found for ${projectPath}`);
