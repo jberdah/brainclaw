@@ -87,4 +87,32 @@ describe('init front-door (pln#556 steps 3-5)', () => {
     assert.deepEqual(reloaded.governance?.curators, ['lead-curator', 'second-curator']);
     assert.equal(reloaded.governance?.review_sla_hours, 12);
   });
+
+  it('--force preserves an explicit journal opt-out and journal subfields', async () => {
+    await runInit({ yes: true, skipMachinePrereqs: true });
+
+    const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+    const raw = yaml.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    raw.store = { journal: { mode: 'off', fsync: 'never' } };
+    fs.writeFileSync(configPath, yaml.stringify(raw), 'utf-8');
+
+    await runInit({ yes: true, force: true, skipMachinePrereqs: true });
+
+    const reloaded = loadConfig(dir);
+    assert.equal(reloaded.store?.journal?.mode, 'off');
+    assert.equal(reloaded.store?.journal?.fsync, 'never');
+  });
+
+  it('--force does not silently enable the journal for a legacy existing store with no mode', async () => {
+    await runInit({ yes: true, skipMachinePrereqs: true });
+
+    const configPath = path.join(dir, '.brainclaw', 'config.yaml');
+    const raw = yaml.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    delete raw.store;
+    fs.writeFileSync(configPath, yaml.stringify(raw), 'utf-8');
+
+    await runInit({ yes: true, force: true, skipMachinePrereqs: true });
+
+    assert.equal(loadConfig(dir).store?.journal?.mode, undefined);
+  });
 });

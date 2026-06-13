@@ -3,10 +3,14 @@ import { memoryExists } from '../core/io.js';
 import { resolveTargetStore } from '../core/store-resolution.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
+import { loadConfig, saveConfig } from '../core/config.js';
+import { runGenesisMigration } from '../core/events/genesis.js';
 import type { Constraint, Decision, Trap } from '../core/schema.js';
 
 export interface MigrateOptions {
   promoteMachineItems?: boolean;
+  /** pln#567 — enable the event journal (mode=dual) on this store + backfill it. */
+  enableJournal?: boolean;
   dryRun?: boolean;
   cwd?: string;
 }
@@ -19,12 +23,47 @@ export function runMigrate(options: MigrateOptions = {}): void {
     process.exit(1);
   }
 
-  if (options.promoteMachineItems) {
+  if (options.enableJournal) {
+    enableJournalMode(cwd, options.dryRun ?? false);
+  } else if (options.promoteMachineItems) {
     promoteMachineItems(cwd, options.dryRun ?? false);
   } else {
-    console.log('Usage: brainclaw migrate --promote-machine-items [--dry-run]');
-    console.log('');
-    console.log('Moves items tagged scope:machine from project store to user store (~/.brainclaw/).');
+    console.log('Usage:');
+    console.log('  brainclaw migrate --promote-machine-items [--dry-run]');
+    console.log('      Move items tagged scope:machine from project store to user store (~/.brainclaw/).');
+    console.log('  brainclaw migrate --enable-journal [--dry-run]');
+    console.log('      Turn on the event journal (mode=dual) for this existing store and backfill it (pln#567).');
+  }
+}
+
+/**
+ * pln#567 (decision A+D) — enable the event journal on an EXISTING store. New
+ * stores get this from `init`; this is the explicit opt-in for stores created
+ * before the cutover. Sets `store.journal.mode=dual` (an explicit user action,
+ * so it overrides a prior off) THEN runs genesis so the journal carries the
+ * full history rather than only mutations from now on (idempotent — a second
+ * run no-ops once a genesis note exists).
+ */
+function enableJournalMode(cwd: string, dryRun: boolean): void {
+  const config = loadConfig(cwd);
+  const currentMode = config.store?.journal?.mode ?? 'unset';
+
+  if (dryRun) {
+    const planned = runGenesisMigration({ cwd, dryRun: true });
+    console.log(`(dry-run) Would set store.journal.mode=dual (currently ${currentMode}) and backfill ${planned.backfilled} entit(y/ies) into the journal.`);
+    return;
+  }
+
+  config.store = { ...config.store, journal: { ...config.store?.journal, mode: 'dual' } };
+  saveConfig(config, cwd);
+
+  // Config is written first so genesis (which checks resolveJournalMode) seeds
+  // under dual and the journal stays consistent with subsequent dual-writes.
+  const result = runGenesisMigration({ cwd });
+  if (result.status === 'already_present') {
+    console.log(`✔ store.journal.mode=dual. Journal already seeded (genesis present) — no backfill needed.`);
+  } else {
+    console.log(`✔ store.journal.mode=dual and seeded: ${result.backfilled} entit(y/ies) backfilled across ${Object.keys(result.per_family ?? {}).length} families.`);
   }
 }
 

@@ -206,6 +206,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     // discovered when feedback_no_init_force was promoted from a memory
     // habit to a tracked regression.
     existingConfig,
+    defaultJournalMode: !projectMemoryExists,
     compact: options.compact === true,
   });
   if (detectedAi && isAgentIntegrationName(detectedAi.name)) {
@@ -640,6 +641,7 @@ function buildInitConfig(input: {
   topology: TopologyMode;
   ignoreStrategy: IgnoreStrategy;
   existingConfig?: Config;
+  defaultJournalMode?: boolean;
   compact: boolean;
 }): Config {
   const fallbackConfig = defaultConfig(input.projectName, {
@@ -687,6 +689,17 @@ function buildInitConfig(input: {
       compact_mode: true,
       max_items_per_section: Math.min(markdown.max_items_per_section, 20),
     };
+  }
+
+  // pln#567 (decision A) — the event journal is ON by default for projects
+  // created through init. Set HERE, never in defaultConfig:
+  // createTestWorkspace builds its config straight from defaultConfig, so a dual
+  // default there would make the whole core suite dual-write (trp_65176454).
+  // Existing stores keep their current value, including unset legacy configs:
+  // `migrate --enable-journal` is the explicit path that turns them on and
+  // backfills genesis before future dual-writes depend on the journal.
+  if (input.defaultJournalMode === true && config.store?.journal?.mode === undefined) {
+    config.store = { ...config.store, journal: { ...config.store?.journal, mode: 'dual' } };
   }
 
   return config;
