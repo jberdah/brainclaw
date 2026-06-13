@@ -1105,6 +1105,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         const watcher = fs.watch(brainclawDir, (_eventType, filename) => {
           const name = filename ? String(filename) : '';
           if (name === 'events' && this._observerEnabled()) {
+            this._clearJournalDrivenSectionCache(normalizedPath);
             this._syncWatches();
             this._debouncedRefresh();
             return;
@@ -1138,6 +1139,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
           const evWatcher = fs.watch(eventsDir, (_eventType, filename) => {
             const name = filename ? String(filename) : '';
             if (name.endsWith('.jsonl') || name === 'meta.json') {
+              this._clearJournalDrivenSectionCache(normalizedPath);
               this._debouncedRefresh();
             }
           });
@@ -1592,6 +1594,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       if (key.startsWith(prefix)) {
         this._sectionBoards.delete(key);
       }
+    }
+  }
+
+  private _clearJournalDrivenSectionCache(projectPath: string): void {
+    const normalizedPath = this._normalizePath(projectPath);
+    for (const sectionId of JOURNAL_DRIVEN_SECTIONS) {
+      this._sectionBoards.delete(this._sectionCacheKey(normalizedPath, sectionId));
     }
   }
 
