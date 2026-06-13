@@ -116,6 +116,34 @@ export function materializeMemoryStateFromJournal(cwd?: string): State {
   return projectLiveToState(materializeEntitiesFromJournal(cwd));
 }
 
+/**
+ * Journal item_types of the registry / coordination families (pln#568). Their
+ * post-images are entity-state records (emitRegistryPostImage) the reducer
+ * already upserts, so no reducer change is needed to project them. NOTE
+ * action_required journals under item_type `state` (the slot board-projection
+ * reserved for it), not `action`.
+ */
+export const REGISTRY_ITEM_TYPES = ['claim', 'assignment', 'agent_run', 'state', 'candidate', 'runtime_note', 'sequence'] as const;
+
+/**
+ * Materialize the registry / coordination families from the journal: the latest
+ * post-image per id (tombstones removed), grouped by journal item_type. Drives
+ * registry verification (verify.ts) and journal-only recovery of these
+ * families. The memory store-marker (`journal_note`, no item_id) never enters
+ * the live map, so a `state` group here is purely action_required post-images.
+ */
+export function materializeRegistryFromJournal(cwd?: string): Map<string, MaterializedEntity[]> {
+  const registry = new Set<string>(REGISTRY_ITEM_TYPES);
+  const byType = new Map<string, MaterializedEntity[]>();
+  for (const entity of materializeEntitiesFromJournal(cwd).values()) {
+    if (!registry.has(entity.item_type)) continue;
+    const group = byType.get(entity.item_type);
+    if (group) group.push(entity);
+    else byType.set(entity.item_type, [entity]);
+  }
+  return byType;
+}
+
 // verifyProjectionsAgainstJournal moved to events/verify.ts (pln#566 Inc0 s2)
 // to break the materialize -> state import edge: the checkpoint read path
 // imports materialize, and state imports checkpoint, so a materialize -> state

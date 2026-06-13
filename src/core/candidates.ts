@@ -7,6 +7,7 @@ import { mutate } from './mutation-pipeline.js';
 import { nowISO, getNextShortLabel } from './ids.js';
 import { JsonStore } from './json-store.js';
 import { refreshLiveCompanions } from '../commands/export.js';
+import { emitRegistryPostImage, emitRegistryTombstone, registryFaultPoint } from './events/registry-post-image.js';
 
 export interface ListCandidatesFilter {
   /** Filter by a specific source value. */
@@ -97,7 +98,13 @@ function candidateStore(dest: 'pending' | 'accepted' | 'rejected' = 'pending', c
 export function saveCandidate(candidate: Candidate, cwd?: string): void {
   mutate({ cwd }, () => {
     ensureInboxDirs(cwd);
-    candidateStore('pending', cwd).save(CandidateSchema.parse(candidate));
+    const store = candidateStore('pending', cwd);
+    const parsed = CandidateSchema.parse(candidate);
+    // pln#568 (I2): journal the pending post-image BEFORE the projection write.
+    const created = !store.exists(parsed.id);
+    emitRegistryPostImage('candidate', parsed, { created, agent: parsed.author, agent_id: parsed.author_id, session_id: parsed.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
+    store.save(parsed);
     // Auto-refresh live companions after candidate changes (non-fatal)
     try { refreshLiveCompanions(cwd); } catch { /* best-effort */ }
   });
@@ -134,6 +141,12 @@ function applySourceFilter(candidates: Candidate[], filter?: ListCandidatesFilte
 export function archiveCandidate(candidate: Candidate, dest: 'accepted' | 'rejected', cwd?: string): void {
   mutate({ cwd }, () => {
     ensureInboxDirs(cwd);
+    // pln#568 (I2): the candidate leaves the pending inbox — tombstone it in the
+    // journal BEFORE the projection delete, so the journal-materialized live set
+    // (and the observer's pending view) drops it. The accepted/rejected archive
+    // dirs are not journaled (the observer only tracks pending candidates).
+    emitRegistryTombstone('candidate', candidate.id, { agent: candidate.author, agent_id: candidate.author_id, session_id: candidate.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
     candidateStore(dest, cwd).save(CandidateSchema.parse(candidate));
     candidateStore('pending', cwd).delete(candidate.id);
     // Auto-refresh live companions after candidate archive (non-fatal)
@@ -175,6 +188,13 @@ export function cleanupStaleCandidates(options: CleanupStaleCandidatesOptions = 
   mutate({ cwd: options.cwd }, () => {
     const store = candidateStore('pending', options.cwd);
     for (const candidate of candidates) {
+      emitRegistryTombstone('candidate', candidate.id, {
+        agent: candidate.author,
+        agent_id: candidate.author_id,
+        session_id: candidate.session_id,
+        cwd: options.cwd,
+      });
+      registryFaultPoint('after_registry_journal');
       store.delete(candidate.id);
     }
     try { refreshLiveCompanions(options.cwd); } catch { /* best-effort */ }

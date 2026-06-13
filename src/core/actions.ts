@@ -13,6 +13,7 @@ import {
 } from './schema.js';
 import { saveVersionedJsonFile } from './migration.js';
 import { appendAuditEntry } from './audit.js';
+import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 import { createRuntimeEvent } from './events.js';
 import { loadAssignment, transitionAssignment } from './assignments.js';
 import { loadAgentRun, transitionAgentRun } from './agentruns.js';
@@ -154,7 +155,13 @@ function saveActionRequired(action: ActionRequired, cwd?: string): void {
   mutate({ cwd }, () => {
     ensureActionsDir(cwd);
     const filepath = path.join(actionsDir(cwd, 'write'), `${action.id}.json`);
-    saveVersionedJsonFile('action_required', filepath, ActionRequiredSchema.parse(action));
+    const parsed = ActionRequiredSchema.parse(action);
+    // pln#568 (I2): journal the post-image BEFORE the projection write. The
+    // action family journals under item_type 'state' (the observer's slot).
+    const created = !fs.existsSync(filepath);
+    emitRegistryPostImage('action', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+    registryFaultPoint('after_registry_journal');
+    saveVersionedJsonFile('action_required', filepath, parsed);
   });
 }
 

@@ -13,6 +13,7 @@ import { refreshLiveCompanions } from '../commands/export.js';
 import { loadSessionById } from './identity.js';
 import { loadState, persistState } from './state.js';
 import { createRuntimeEvent } from './events.js';
+import { emitRegistryPostImage, registryFaultPoint } from './events/registry-post-image.js';
 
 /** Parse duration string like '4h', '30m' to ms. */
 function parseTtl(value: string): number {
@@ -67,7 +68,14 @@ function loadClaimFromAnyDir(id: string, cwd?: string): Claim {
 
 function saveClaimUnlocked(claim: Claim, cwd?: string, options?: { refreshCompanions?: boolean }): void {
   ensureClaimsDir(cwd);
-  writeClaimStore(cwd).save(ClaimSchema.parse(claim));
+  const store = writeClaimStore(cwd);
+  const parsed = ClaimSchema.parse(claim);
+  // pln#568 (I2): journal the post-image BEFORE the projection write, so a
+  // crash can only leave the journal ahead of the projection, never behind.
+  const created = !store.exists(parsed.id);
+  emitRegistryPostImage('claim', parsed, { created, agent: parsed.agent, agent_id: parsed.agent_id, session_id: parsed.session_id, cwd });
+  registryFaultPoint('after_registry_journal');
+  store.save(parsed);
   const writeDir = claimsDir(cwd, 'write');
   for (const dirPath of claimDirs(cwd)) {
     if (dirPath === writeDir) continue;

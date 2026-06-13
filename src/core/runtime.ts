@@ -8,6 +8,7 @@ import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { RuntimeNoteSchema, type MemoryVisibility, type RuntimeNote } from './schema.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent } from './event-log.js';
+import { emitRegistryPostImage, emitRegistryTombstone, registryFaultPoint } from './events/registry-post-image.js';
 
 export interface RuntimeListOptions {
   agent?: string;
@@ -64,7 +65,16 @@ export function saveRuntimeNote(note: RuntimeNote, cwd?: string): void {
     const filepath = visibility === 'shared'
       ? path.join(sharedAgentDir(note.agent, cwd, 'write'), `${note.id}.json`)
       : path.join(hostAgentDir(visibility, hostId!, note.agent, cwd, 'write'), `${note.id}.json`);
-    saveVersionedJsonFile('runtime_note', filepath, RuntimeNoteSchema.parse(persistedNote));
+    const parsed = RuntimeNoteSchema.parse(persistedNote);
+    // pln#568 (I2): journal the post-image BEFORE the projection write — but
+    // SHARED notes only. Private/machine-visibility notes must not leak their
+    // payload into the shared journal (the observer's board shows shared notes).
+    if (visibility === 'shared') {
+      const created = !fs.existsSync(filepath);
+      emitRegistryPostImage('runtime_note', parsed, { created, agent: note.agent, agent_id: note.agent_id, session_id: note.session_id, cwd });
+      registryFaultPoint('after_registry_journal');
+    }
+    saveVersionedJsonFile('runtime_note', filepath, parsed);
     appendEvent({ action: 'create', item_type: 'runtime_note', item_id: note.id, agent: note.agent, agent_id: note.agent_id }, cwd);
     commitMemoryChange(`runtime note: ${note.note_type ?? 'note'} (${note.agent})`, cwd);
   });
@@ -83,6 +93,15 @@ export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
     const filepath = runtimeNotePath(note, cwd);
     if (!fs.existsSync(filepath)) {
       return false;
+    }
+    if ((note.visibility ?? 'shared') === 'shared') {
+      emitRegistryTombstone('runtime_note', note.id, {
+        agent: note.agent,
+        agent_id: note.agent_id,
+        session_id: note.session_id,
+        cwd,
+      });
+      registryFaultPoint('after_registry_journal');
     }
     fs.unlinkSync(filepath);
     return true;
