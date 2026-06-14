@@ -27,6 +27,7 @@ import {
   updateEntity,
   type EntityFilter,
 } from '../core/entity-operations.js';
+import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
 import { generateClaimId, listClaims, loadClaim, releaseClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
@@ -6920,13 +6921,21 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const getBudgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
         const getCharBudget = getBudgetTokens ? Math.min(getBudgetTokens * 4, DEFAULT_FIND_CHAR_BUDGET) : DEFAULT_FIND_CHAR_BUDGET;
         if (entity === 'handoff' && item && typeof item === 'object') {
-          const snapshot = (item as { snapshot?: { diff?: string } }).snapshot;
+          const snapshot = (item as { snapshot?: { diff?: string; diff_digest?: { full_bytes: number; sha256: string; truncated: boolean } } }).snapshot;
           if (snapshot?.diff && snapshot.diff.length > getCharBudget) {
             diffTruncated = true;
             boundedItem = {
               ...(item as Record<string, unknown>),
               snapshot: { ...snapshot, diff: `${snapshot.diff.slice(0, getCharBudget)}\n… [diff truncated to ${getCharBudget} chars]` },
             };
+          } else {
+            const note = handoffDiffPreviewNote(snapshot);
+            if (snapshot?.diff && note) {
+              boundedItem = {
+                ...(item as Record<string, unknown>),
+                snapshot: { ...snapshot, diff: `${snapshot.diff}\n${note}` },
+              };
+            }
           }
         }
         return {

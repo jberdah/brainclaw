@@ -307,6 +307,17 @@ export const HandoffSchema = z.object({
   review: HandoffReviewSchema.optional(),
   snapshot: z.object({
     diff: z.string().optional(),
+    /**
+     * pln#569 — digest of the FULL uncommitted diff when `diff` holds only a
+     * capped preview (auto-handoffs). Lets a reader know the inline diff is a
+     * prefix (and verify a re-fetched full diff) without storing the whole
+     * ~450 KB on the handoff. Absent ⇒ `diff` is complete.
+     */
+    diff_digest: z.object({
+      full_bytes: z.number().int().nonnegative(),
+      sha256: z.string(),
+      truncated: z.boolean(),
+    }).optional(),
   }).optional(),
   provenance: ProvenancePassthroughSchema,
   /**

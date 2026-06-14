@@ -53,6 +53,7 @@ import { resolveEffectiveCwd, resolveStoreChain } from '../core/store-resolution
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';
+import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
 import type { ActionRequiredKind, ActionRequiredStatus, AssignmentStatus, BootstrapInterviewAnswer, PlanStatus, PlanType, RuntimeEventType, SequenceStatus } from '../core/schema.js';
 import {
@@ -305,6 +306,10 @@ export function handleMcpReadToolCall(
 
     if (boundedHandoff.snapshot?.diff) {
       lines.push('', 'Uncommitted Git Diff:', boundedHandoff.snapshot.diff);
+      // pln#569 — the inline diff is a capped preview when a digest is present;
+      // tell the reader the full diff lives on the worktree branch.
+      const note = handoffDiffPreviewNote(boundedHandoff.snapshot);
+      if (!diffTruncated && note) lines.push(note);
     }
 
     return {

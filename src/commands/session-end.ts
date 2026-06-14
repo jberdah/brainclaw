@@ -37,6 +37,7 @@ import { appendAuditEntry, readAuditLog, type AuditAction, type AuditEntry } fro
 import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 import { loadSessionSnapshot } from '../commands/session-start.js';
 import { extractFilesFromDiff } from '../commands/handoff.js';
+import { capHandoffDiff } from '../core/handoff-snapshot.js';
 import { suggestCompaction } from '../core/memory-compactor.js';
 import { dispatchReview } from '../core/dispatcher.js';
 
@@ -503,7 +504,10 @@ function materializeSessionHandoff(input: {
           linked_plans: input.linkedPlans.length > 0 ? input.linkedPlans : undefined,
         }
       : undefined,
-    snapshot: input.fullDiff ? { diff: input.fullDiff } : undefined,
+    // pln#569 — cap the inline diff to a preview + digest (the full ~450 KB
+    // uncommitted diff bloated auto-handoffs to 53 MB of the journal; no consumer
+    // reads past a bounded prefix and the worktree branch carries the full diff).
+    snapshot: capHandoffDiff(input.fullDiff),
   });
   persistState(state, cwd);
   return { handoff_id: id, plan_id: input.planId };
