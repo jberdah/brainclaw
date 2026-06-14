@@ -305,6 +305,12 @@ export function handleMcpReadToolCall(
 
     if (boundedHandoff.snapshot?.diff) {
       lines.push('', 'Uncommitted Git Diff:', boundedHandoff.snapshot.diff);
+      // pln#569 — the inline diff is a capped preview when a digest is present;
+      // tell the reader the full diff lives on the worktree branch.
+      const digest = boundedHandoff.snapshot.diff_digest;
+      if (!diffTruncated && digest?.truncated) {
+        lines.push(`… [preview — full diff is ${digest.full_bytes} bytes on the worktree branch]`);
+      }
     }
 
     return {
