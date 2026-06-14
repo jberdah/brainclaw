@@ -17,13 +17,21 @@ function run(args: string[], cwd: string): { stdout: string; stderr: string; exi
   const result = spawnSync(NODE, [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 10000,
+    // Brainclaw CLI cold-start can take several seconds (large eager import
+    // graph) and each test spawns multiple processes; 10s was too tight under
+    // CI load and produced false failures (pln#572).
+    timeout: 30000,
     env: {
       ...sanitizedProcessEnv(),
       BRAINCLAW_SKIP_SETUP_REQUIREMENT: '1',
       USERNAME: 'testuser',
       USER: 'testuser',
       BRAINCLAW_STORE_BOUNDARY: cwd,
+      // Identity resolves from BRAINCLAW_AGENT_NAME (config.current_agent is
+      // intentionally not used for resolution — agent-registry.ts:376). The
+      // matching agent is registered in beforeEach so reflect/import write
+      // paths resolve a contributor identity (pln#572).
+      BRAINCLAW_AGENT_NAME: 'copilot',
     },
   });
   return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitCode: result.status ?? 1 };
@@ -41,6 +49,10 @@ describe('Security: strict mode on automated imports', () => {
   beforeEach(() => {
     dir = tmpDir();
     run(['init', '-y'], dir);
+    // reflect/import write paths require a registered contributor identity
+    // (pln#572); without one the batch path used to swallow the identity
+    // error and silently skip events instead of enforcing the security scan.
+    run(['register-agent', 'copilot', '--kind', 'agent', '--set-current'], dir);
   });
 
   afterEach(() => {
@@ -148,6 +160,7 @@ describe('Security: install-hooks', () => {
   beforeEach(() => {
     dir = tmpDir();
     run(['init', '-y'], dir);
+    run(['register-agent', 'copilot', '--kind', 'agent', '--set-current'], dir);
   });
 
   afterEach(() => {
@@ -174,7 +187,10 @@ describe('Security: install-hooks', () => {
 
     const content = fs.readFileSync(hookPath, 'utf-8');
     assert.ok(content.includes('brainclaw'), 'hook should reference brainclaw');
-    assert.ok(content.includes('doctor --json'), 'hook should call doctor --json');
+    assert.ok(
+      content.includes('check-constraints --staged'),
+      'hook should run the staged constraint check',
+    );
   });
 
   it('refuses to overwrite without --force', () => {

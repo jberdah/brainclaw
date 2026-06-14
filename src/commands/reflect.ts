@@ -91,30 +91,36 @@ function runReflectBatchFromFile(filepath: string, baseOptions: ReflectOptions):
 
   let created = 0;
   for (const rawEvent of rawEvents) {
+    // Only event-shape parse errors are skippable here. Errors raised by
+    // createCandidateFromInput (identity resolution, strict security blocks)
+    // MUST propagate: swallowing them silently dropped sensitive content and
+    // exited 0, defeating strict-import enforcement (pln#572).
+    let event: ReturnType<typeof RuntimeEventSchema.parse>;
     try {
-      const event = RuntimeEventSchema.parse(rawEvent);
-      if (!isReflectableRuntimeEvent(event)) {
-        continue;
-      }
-      const candidateType = event.candidate_type ?? mapEventTypeToCandidateType(event.event_type);
-      createCandidateFromInput(event.text, candidateType, {
-        ...baseOptions,
-        type: candidateType,
-        tag: event.tags.length ? event.tags : baseOptions.tag,
-        authorId: baseOptions.authorId ?? event.agent_id,
-        projectId: baseOptions.projectId ?? event.project_id,
-        hostId: baseOptions.hostId ?? event.host_id,
-        sessionId: baseOptions.sessionId ?? event.session_id,
-        source: baseOptions.source ?? event.agent,
-        severity: baseOptions.severity ?? event.severity,
-        from: baseOptions.from ?? event.from,
-        to: baseOptions.to ?? event.to,
-        path: baseOptions.path ?? event.related_paths?.[0],
-      }, false, true, true);
-      created++;
+      event = RuntimeEventSchema.parse(rawEvent);
     } catch {
       // skip malformed event records
+      continue;
     }
+    if (!isReflectableRuntimeEvent(event)) {
+      continue;
+    }
+    const candidateType = event.candidate_type ?? mapEventTypeToCandidateType(event.event_type);
+    createCandidateFromInput(event.text, candidateType, {
+      ...baseOptions,
+      type: candidateType,
+      tag: event.tags.length ? event.tags : baseOptions.tag,
+      authorId: baseOptions.authorId ?? event.agent_id,
+      projectId: baseOptions.projectId ?? event.project_id,
+      hostId: baseOptions.hostId ?? event.host_id,
+      sessionId: baseOptions.sessionId ?? event.session_id,
+      source: baseOptions.source ?? event.agent,
+      severity: baseOptions.severity ?? event.severity,
+      from: baseOptions.from ?? event.from,
+      to: baseOptions.to ?? event.to,
+      path: baseOptions.path ?? event.related_paths?.[0],
+    }, false, true, true);
+    created++;
   }
 
   console.log(`✔ Created ${created} candidate(s) from batch file`);
