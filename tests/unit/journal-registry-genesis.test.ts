@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { acquireClaimScope } from '../../src/core/claims.js';
-import { createAssignment } from '../../src/core/assignments.js';
+import { createAssignment, loadAssignment, transitionAssignment } from '../../src/core/assignments.js';
+import { createAgentRun, loadAgentRun } from '../../src/core/agentruns.js';
+import { createActionRequired, loadActionRequired } from '../../src/core/actions.js';
 import { createSequence } from '../../src/core/sequence.js';
 import { runMigrate } from '../../src/commands/migrate.js';
 import { hasRegistryGenesis, runRegistryGenesisSupplement } from '../../src/core/events/genesis.js';
@@ -107,6 +109,51 @@ describe('registry genesis supplement (pln#568 slice 3)', () => {
 
     assert.equal(loadConfig(dir).store?.journal?.mode, 'dual');
     assert.equal(hasRegistryGenesis(dir), true, 'enable-journal ran the registry supplement');
+    assert.deepEqual(verifyRegistryAgainstJournal(dir), []);
+  });
+
+  it('snapshots assignments and runs after stale actions are swept', () => {
+    ws = createTestWorkspace({ prefix: 'bclaw-reg-genesis-', projectId: 'prj_rg5', currentAgent: 'tester' });
+    const dir = ws.dir;
+    delete process.env.BRAINCLAW_JOURNAL_MODE; // legacy entities have no post-images
+
+    const { claim } = acquireClaimScope({ scope: 'src/stale', agent: 'tester', description: 'legacy' }, dir);
+    const assignment = createAssignment({ claim_id: claim!.id, agent: 'worker', dispatcher_agent: 'tester', scope: 'src/stale', description: 'blocked work' }, dir);
+    transitionAssignment(assignment.id, 'offered', { actor: 'tester', syncAgentRun: false }, dir);
+    transitionAssignment(assignment.id, 'accepted', { actor: 'tester', syncAgentRun: false }, dir);
+    transitionAssignment(assignment.id, 'started', { actor: 'tester', syncAgentRun: false }, dir);
+    transitionAssignment(assignment.id, 'blocked', { actor: 'tester', syncAgentRun: false }, dir);
+    const run = createAgentRun({
+      assignment_id: assignment.id,
+      claim_id: claim!.id,
+      agent: 'worker',
+      transport: 'manual_command',
+      status: 'waiting_input',
+      scope: 'src/stale',
+      description: 'waiting for input',
+    }, dir);
+    const action = createActionRequired({
+      assignment_id: assignment.id,
+      run_id: run.id,
+      claim_id: claim!.id,
+      agent: 'worker',
+      kind: 'user_input',
+      scope: 'src/stale',
+      title: 'stale prompt',
+      prompt: 'respond',
+      ttl_ms: -1000,
+    }, dir);
+
+    process.env.BRAINCLAW_JOURNAL_MODE = 'dual';
+    const dryRun = runRegistryGenesisSupplement({ cwd: dir, dryRun: true });
+    assert.equal(dryRun.status, 'dry_run');
+    assert.equal(hasRegistryGenesis(dir), false, 'dry-run emitted no marker');
+    assert.equal(loadActionRequired(action.id, dir)?.status, 'pending', 'dry-run did not expire the action');
+    assert.equal(loadAssignment(assignment.id, dir)?.status, 'blocked', 'dry-run did not fail the assignment');
+    assert.equal(loadAgentRun(run.id, dir)?.status, 'waiting_input', 'dry-run did not time out the run');
+
+    const result = runRegistryGenesisSupplement({ cwd: dir });
+    assert.equal(result.status, 'migrated');
     assert.deepEqual(verifyRegistryAgainstJournal(dir), []);
   });
 });

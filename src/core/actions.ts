@@ -49,6 +49,10 @@ export interface ListActionRequiredFilter {
   sequence_id?: string;
 }
 
+export interface ListActionRequiredOptions {
+  expireStale?: boolean;
+}
+
 export function loadActionRequired(id: string, cwd?: string): ActionRequired | undefined {
   return actionStore(cwd).load(id);
 }
@@ -136,10 +140,16 @@ function expireStaleActions(actions: ActionRequired[], cwd?: string): ActionRequ
   return actions;
 }
 
-export function listActionRequired(cwd?: string, filter: ListActionRequiredFilter = {}): ActionRequired[] {
+export function listActionRequired(
+  cwd?: string,
+  filter: ListActionRequiredFilter = {},
+  options: ListActionRequiredOptions = {},
+): ActionRequired[] {
   let actions = actionStore(cwd).list();
   // Sweep-on-read: expire stale pending actions
-  actions = expireStaleActions(actions, cwd);
+  if (options.expireStale !== false) {
+    actions = expireStaleActions(actions, cwd);
+  }
   if (filter.status) actions = actions.filter((action) => action.status === filter.status);
   if (filter.kind) actions = actions.filter((action) => action.kind === filter.kind);
   if (filter.agent) actions = actions.filter((action) => action.agent === filter.agent);

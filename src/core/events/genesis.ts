@@ -165,11 +165,16 @@ export function runGenesisMigration(options: GenesisOptions = {}): GenesisResult
  * --verify-journal` with zero registry drift. Runtime notes are shared-only
  * (private/machine never enter the shared journal, pln#568).
  */
-const REGISTRY_GENESIS_FAMILIES: Array<{ family: RegistryFamily; list: (cwd?: string) => Array<{ id: string }> }> = [
+const REGISTRY_GENESIS_FAMILIES: Array<{ family: RegistryFamily; list: (cwd: string, options: GenesisOptions) => Array<{ id: string }> }> = [
   { family: 'claim', list: listClaims },
-  { family: 'assignment', list: listAssignments },
-  { family: 'agent_run', list: listAgentRuns },
-  { family: 'action', list: listActionRequired },
+  // listActionRequired performs the server's sweep-on-read expiration, which can
+  // update dependent assignments/runs. Run it before snapshotting those families
+  // so the supplement cannot append stale assignment/run post-images after the
+  // sweep's fresh journal records. Dry-run disables the sweep to honor the
+  // no-write contract.
+  { family: 'action', list: (cwd, options) => listActionRequired(cwd, {}, { expireStale: !options.dryRun }) },
+  { family: 'assignment', list: (cwd) => listAssignments(cwd) },
+  { family: 'agent_run', list: (cwd) => listAgentRuns(cwd) },
   { family: 'candidate', list: (cwd) => listCandidates('pending', cwd) },
   { family: 'runtime_note', list: listSharedJournaledRuntimeNotes },
   { family: 'sequence', list: listSequences },
@@ -210,7 +215,7 @@ export function runRegistryGenesisSupplement(options: GenesisOptions = {}): Regi
   const backfill: JournalAppendInput[] = [];
   for (const { family, list } of REGISTRY_GENESIS_FAMILIES) {
     const spec = REGISTRY_FAMILIES[family];
-    const items = list(cwd);
+    const items = list(cwd, options);
     perFamily[spec.journalItemType] = items.length;
     for (const item of items) {
       backfill.push({
@@ -237,7 +242,7 @@ export function runRegistryGenesisSupplement(options: GenesisOptions = {}): Regi
     agent: 'system',
     payload: { kind: 'registry_genesis', backfill_count: total, per_family: perFamily, at: nowISO() },
   };
-  forceAppendJournalRecords([marker, ...backfill], cwd);
+  forceAppendJournalRecords([...backfill, marker], cwd);
   logger.debug(`registry genesis: ${total} registry entities backfilled, cutover marker emitted`);
   return { status: 'migrated', backfilled: total, per_family: perFamily };
 }
