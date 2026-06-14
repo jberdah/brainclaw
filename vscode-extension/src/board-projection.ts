@@ -31,14 +31,14 @@
  * So these slots now light up for real when this module is fed a journal that
  * carries them — exactly the forward-compatibility this module was built for.
  *
- * REMAINING (cutover signal O2 — not yet wired here): the caller
- * (board-tree.ts) still overlays `claims`/`actions`/attention from the
- * observer-flagged `board_summary` MCP seed as the floor, because trusting the
- * journal as AUTHORITATIVE for those counts requires (a) a cutover signal the
- * observer can read and (b) a registry genesis backfill so EVERY pre-existing
- * registry entity has a post-image (a partial journal would undercount the
- * badge — the trp#559 regression). Until that lands, the seed stays the floor;
- * this module is unchanged either way — only the caller's seed shrinks.
+ * CUTOVER (pln#568 slice 3 — wired): the caller (board-tree.ts) now switches
+ * `claims`/`assignments`/`runs`/`actions` from the `board_summary` MCP seed to
+ * THESE journal-derived counts once the journal carries the `registry_genesis`
+ * marker — `BoardObserver.registryAuthoritative()` gates it, and a registry
+ * genesis backfill (`brainclaw migrate --enable-journal`) guarantees every
+ * pre-existing entity has a post-image first, so the badge cannot undercount
+ * (trp#559). Until a store runs the supplement, the seed stays the floor. This
+ * module is unchanged either way — it always projected these slots faithfully.
  *
  * @module
  */

@@ -11,8 +11,6 @@
  *
  * @module
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { loadState } from '../state.js';
 import { MEMORY_FAMILIES, materializeMemoryStateFromJournal, materializeRegistryFromJournal, type MaterializedEntity } from './materialize.js';
 import { listClaims } from '../claims.js';
@@ -21,9 +19,9 @@ import { listAgentRuns } from '../agentruns.js';
 import { listActionRequired } from '../actions.js';
 import { listCandidates } from '../candidates.js';
 import { listSequences } from '../sequence.js';
+import { listSharedJournaledRuntimeNotes } from '../runtime.js';
 import { REGISTRY_FAMILIES, type RegistryFamily } from './registry-post-image.js';
-import { loadVersionedJsonFile, preparePersistedDocument } from '../migration.js';
-import { resolveEntityDir } from '../io.js';
+import { preparePersistedDocument } from '../migration.js';
 
 export type DriftKind = 'missing_in_journal' | 'missing_in_projection' | 'mismatch';
 
@@ -40,26 +38,6 @@ function stable(value: unknown): string {
     }
     return v;
   });
-}
-
-function listSharedJournaledRuntimeNotes(cwd?: string): Array<{ id: string }> {
-  const root = resolveEntityDir('runtime', cwd ?? process.cwd(), 'read');
-  if (!fs.existsSync(root)) return [];
-
-  const notes: Array<{ id: string }> = [];
-  for (const entry of fs.readdirSync(root).sort()) {
-    if (entry === 'agent-runtime') continue;
-    const agentDir = path.join(root, entry);
-    if (!fs.existsSync(agentDir) || !fs.statSync(agentDir).isDirectory()) continue;
-    for (const file of fs.readdirSync(agentDir).filter((name) => name.endsWith('.json')).sort()) {
-      try {
-        notes.push(loadVersionedJsonFile<{ id: string }>('runtime_note', path.join(agentDir, file)).document);
-      } catch {
-        /* mirror listRuntimeNotes' tolerant read */
-      }
-    }
-  }
-  return notes.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /**

@@ -4,7 +4,7 @@ import { resolveTargetStore } from '../core/store-resolution.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig, saveConfig } from '../core/config.js';
-import { runGenesisMigration } from '../core/events/genesis.js';
+import { runGenesisMigration, runRegistryGenesisSupplement } from '../core/events/genesis.js';
 import type { Constraint, Decision, Trap } from '../core/schema.js';
 
 export interface MigrateOptions {
@@ -50,7 +50,8 @@ function enableJournalMode(cwd: string, dryRun: boolean): void {
 
   if (dryRun) {
     const planned = runGenesisMigration({ cwd, dryRun: true });
-    console.log(`(dry-run) Would set store.journal.mode=dual (currently ${currentMode}) and backfill ${planned.backfilled} entit(y/ies) into the journal.`);
+    const plannedRegistry = runRegistryGenesisSupplement({ cwd, dryRun: true });
+    console.log(`(dry-run) Would set store.journal.mode=dual (currently ${currentMode}), backfill ${planned.backfilled} memory entit(y/ies) and ${plannedRegistry.backfilled} registry entit(y/ies), and emit the registry cutover marker (pln#568).`);
     return;
   }
 
@@ -61,9 +62,21 @@ function enableJournalMode(cwd: string, dryRun: boolean): void {
   // under dual and the journal stays consistent with subsequent dual-writes.
   const result = runGenesisMigration({ cwd });
   if (result.status === 'already_present') {
-    console.log(`✔ store.journal.mode=dual. Journal already seeded (genesis present) — no backfill needed.`);
+    console.log(`✔ store.journal.mode=dual. Memory journal already seeded (genesis present).`);
   } else {
-    console.log(`✔ store.journal.mode=dual and seeded: ${result.backfilled} entit(y/ies) backfilled across ${Object.keys(result.per_family ?? {}).length} families.`);
+    console.log(`✔ store.journal.mode=dual and seeded: ${result.backfilled} memory entit(y/ies) backfilled across ${Object.keys(result.per_family ?? {}).length} families.`);
+  }
+
+  // pln#568 slice 3 — registry cutover: backfill the registry/coordination
+  // families and emit the `registry_genesis` marker so the observer can trust
+  // the journal as authoritative for claims/assignments/runs/actions (drop the
+  // board_summary MCP seed). Incremental + idempotent; safe to re-run to upgrade
+  // a store that was journal-enabled before this slice landed.
+  const registry = runRegistryGenesisSupplement({ cwd });
+  if (registry.status === 'already_present') {
+    console.log(`✔ Registry cutover marker already present — observer authority unchanged.`);
+  } else {
+    console.log(`✔ Registry cutover: ${registry.backfilled} registry entit(y/ies) backfilled, observer can now trust the journal for coordination counts (pln#568).`);
   }
 }
 

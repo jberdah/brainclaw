@@ -1193,7 +1193,11 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       if (observer) {
         observer.ingest();
         const journalActive = fs.existsSync(path.join(this._normalizePath(projectPath), '.brainclaw', 'events'));
-        counts = mergeCounts(observer.counts(), seed, journalActive);
+        // pln#568 slice 3 — once the journal carries the registry_genesis cutover
+        // marker, the registry/coordination counts (claims/assignments/runs/
+        // actions, the attention badge) come from the journal instead of the MCP
+        // seed. Until then mergeCounts keeps them seed-backed (no badge regression).
+        counts = mergeCounts(observer.counts(), seed, journalActive, observer.registryAuthoritative());
       } else {
         counts = { ...seed, failedRuns: seed.failedRuns ?? 0 };
       }

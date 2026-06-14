@@ -108,6 +108,31 @@ export function deleteRuntimeNote(note: RuntimeNote, cwd?: string): boolean {
   });
 }
 
+/**
+ * The shared runtime notes that are journaled as post-images (pln#568): notes
+ * under `runtime/<agent>/*.json`, EXCLUDING `runtime/agent-runtime/` (which
+ * holds runtime EVENT files `evt_*.json`, not saveRuntimeNote post-images —
+ * they would otherwise be parsed as notes and report false drift). Single
+ * source of truth for the journaled-shared-note set, shared by the registry
+ * verifier (verify.ts) and the registry genesis backfill (genesis.ts).
+ */
+export function listSharedJournaledRuntimeNotes(cwd?: string): RuntimeNote[] {
+  const root = sharedRuntimeDir(cwd, 'read');
+  if (!fs.existsSync(root)) return [];
+  const notes: RuntimeNote[] = [];
+  for (const entry of fs.readdirSync(root).sort()) {
+    if (entry === 'agent-runtime') continue;
+    const agentDir = path.join(root, entry);
+    if (!fs.existsSync(agentDir) || !fs.statSync(agentDir).isDirectory()) continue;
+    for (const file of fs.readdirSync(agentDir).filter((name) => name.endsWith('.json')).sort()) {
+      try {
+        notes.push(loadVersionedJsonFile<RuntimeNote>('runtime_note', path.join(agentDir, file)).document);
+      } catch { /* mirror listRuntimeNotes' tolerant read */ }
+    }
+  }
+  return notes.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 function readAgentNotes(dir: string, agent?: string): RuntimeNote[] {
   if (!fs.existsSync(dir)) return [];
 

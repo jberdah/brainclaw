@@ -26,6 +26,14 @@ import {
   forceAppendJournalRecords, journalDir, readJournalRecords, resolveJournalMode,
   type JournalAppendInput, type EventItemTypeV2,
 } from './journal.js';
+import { REGISTRY_FAMILIES, type RegistryFamily } from './registry-post-image.js';
+import { listClaims } from '../claims.js';
+import { listAssignments } from '../assignments.js';
+import { listAgentRuns } from '../agentruns.js';
+import { listActionRequired } from '../actions.js';
+import { listCandidates } from '../candidates.js';
+import { listSequences } from '../sequence.js';
+import { listSharedJournaledRuntimeNotes } from '../runtime.js';
 
 const MEMORY_FAMILIES: Array<{ collection: 'active_constraints' | 'recent_decisions' | 'known_traps' | 'open_handoffs' | 'plan_items'; itemType: EventItemTypeV2 }> = [
   { collection: 'active_constraints', itemType: 'constraint' },
@@ -146,6 +154,97 @@ export function runGenesisMigration(options: GenesisOptions = {}): GenesisResult
   logger.debug(`journal genesis: ${total} entities backfilled at seq ${genesisSeq}, backup ${backupPath}`);
 
   return { status: 'migrated', genesis_seq: genesisSeq, backfilled: total, backup_path: backupPath, per_family: perFamily };
+}
+
+// ── Registry genesis supplement (pln#568 slice 3 — cutover signal O2) ──────
+
+/**
+ * The registry / coordination families backfilled by the registry genesis
+ * supplement, each mapped to its projection reader. Mirrors verify.ts's
+ * VERIFIED_REGISTRY_FAMILIES so a supplemented store passes `doctor
+ * --verify-journal` with zero registry drift. Runtime notes are shared-only
+ * (private/machine never enter the shared journal, pln#568).
+ */
+const REGISTRY_GENESIS_FAMILIES: Array<{ family: RegistryFamily; list: (cwd: string, options: GenesisOptions) => Array<{ id: string }> }> = [
+  { family: 'claim', list: listClaims },
+  // listActionRequired performs the server's sweep-on-read expiration, which can
+  // update dependent assignments/runs. Run it before snapshotting those families
+  // so the supplement cannot append stale assignment/run post-images after the
+  // sweep's fresh journal records. Dry-run disables the sweep to honor the
+  // no-write contract.
+  { family: 'action', list: (cwd, options) => listActionRequired(cwd, {}, { expireStale: !options.dryRun }) },
+  { family: 'assignment', list: (cwd) => listAssignments(cwd) },
+  { family: 'agent_run', list: (cwd) => listAgentRuns(cwd) },
+  { family: 'candidate', list: (cwd) => listCandidates('pending', cwd) },
+  { family: 'runtime_note', list: listSharedJournaledRuntimeNotes },
+  { family: 'sequence', list: listSequences },
+];
+
+export interface RegistryGenesisResult {
+  status: 'migrated' | 'already_present' | 'dry_run';
+  backfilled: number;
+  per_family: Record<string, number>;
+}
+
+/** True once a `journal_note` kind `registry_genesis` exists — the cutover
+ *  signal (O2) the observer reads to trust the journal as AUTHORITATIVE for the
+ *  registry families (drop the board_summary MCP seed). */
+export function hasRegistryGenesis(cwd?: string): boolean {
+  return readJournalRecords(cwd).some(
+    r => r.action === 'journal_note' && (r.payload as { kind?: string } | undefined)?.kind === 'registry_genesis',
+  );
+}
+
+/**
+ * Backfill the registry / coordination families into the journal and emit the
+ * `registry_genesis` cutover marker (pln#568 slice 3). INCREMENTAL by design:
+ * it appends to the existing journal (preserving the memory genesis + all
+ * accumulated post-image history) rather than parking/re-seeding — a re-genesis
+ * would reset seq to 1 and break live observers' seq cursors. Idempotent: a
+ * second run no-ops once the marker is present.
+ *
+ * The marker is the safe authority signal: an observer must not switch a
+ * registry family from the MCP seed to the journal until EVERY pre-existing
+ * entity has a post-image, else it undercounts (the trp#559 badge regression).
+ * This backfill establishes that guarantee, then the marker announces it.
+ */
+export function runRegistryGenesisSupplement(options: GenesisOptions = {}): RegistryGenesisResult {
+  const cwd = options.cwd ?? process.cwd();
+
+  const perFamily: Record<string, number> = {};
+  const backfill: JournalAppendInput[] = [];
+  for (const { family, list } of REGISTRY_GENESIS_FAMILIES) {
+    const spec = REGISTRY_FAMILIES[family];
+    const items = list(cwd, options);
+    perFamily[spec.journalItemType] = items.length;
+    for (const item of items) {
+      backfill.push({
+        action: 'backfill',
+        item_type: spec.journalItemType,
+        item_id: item.id,
+        agent: 'system',
+        payload: preparePersistedDocument(spec.docType, item) as Record<string, unknown>,
+      });
+    }
+  }
+  const total = backfill.length;
+
+  if (options.dryRun) {
+    return { status: 'dry_run', backfilled: total, per_family: perFamily };
+  }
+  if (hasRegistryGenesis(cwd)) {
+    return { status: 'already_present', backfilled: 0, per_family: perFamily };
+  }
+
+  const marker: JournalAppendInput = {
+    action: 'journal_note',
+    item_type: 'journal',
+    agent: 'system',
+    payload: { kind: 'registry_genesis', backfill_count: total, per_family: perFamily, at: nowISO() },
+  };
+  forceAppendJournalRecords([...backfill, marker], cwd);
+  logger.debug(`registry genesis: ${total} registry entities backfilled, cutover marker emitted`);
+  return { status: 'migrated', backfilled: total, per_family: perFamily };
 }
 
 /**
