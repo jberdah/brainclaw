@@ -213,11 +213,23 @@ export function tailRecords(eventsDir: string, fromSeq: number): JournalRecord[]
   return out;
 }
 
+/** True for the `registry_genesis` cutover marker (pln#568 slice 3) — the
+ *  journal_note that announces every registry/coordination entity now has a
+ *  post-image, so the observer may trust the journal as AUTHORITATIVE for those
+ *  families instead of the board_summary MCP seed (observer-protocol O2). */
+export function isRegistryGenesisMarker(rec: JournalRecord): boolean {
+  return rec.action === 'journal_note'
+    && !!rec.payload
+    && (rec.payload as { kind?: string }).kind === 'registry_genesis';
+}
+
 export interface TailResult {
   applied: number;
   cursor: ObserverCursor;
   /** item_types whose section changed — drives section-scoped refresh (slice 2). */
   affectedTypes: Set<string>;
+  /** True if this tail observed the registry_genesis cutover marker (pln#568). */
+  registryGenesisSeen: boolean;
 }
 
 /**
@@ -230,12 +242,14 @@ export function applyTail(projection: Projection, eventsDir: string, cursor: Obs
   const records = tailRecords(eventsDir, cursor.seq);
   const affectedTypes = new Set<string>();
   let maxSeq = cursor.seq;
+  let registryGenesisSeen = false;
   for (const rec of records) {
     const affected = applyRecord(projection, rec);
     if (affected) { affectedTypes.add(affected); }
+    if (isRegistryGenesisMarker(rec)) { registryGenesisSeen = true; }
     if (rec.seq > maxSeq) { maxSeq = rec.seq; }
   }
-  return { applied: records.length, cursor: { seq: maxSeq, checkpoint_seq: cursor.checkpoint_seq }, affectedTypes };
+  return { applied: records.length, cursor: { seq: maxSeq, checkpoint_seq: cursor.checkpoint_seq }, affectedTypes, registryGenesisSeen };
 }
 
 /** Group the projection into board sections keyed by item_type (for the tree). */

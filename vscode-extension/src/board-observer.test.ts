@@ -24,6 +24,10 @@ function rec(seq: number, action: string, item_type: string, item_id: string, pa
 function writeSeg(eventsDir: string, firstSeq: number, lines: string[]): void {
   fs.writeFileSync(path.join(eventsDir, `seg-${String(firstSeq).padStart(8, '0')}.jsonl`), lines.join('\n') + '\n');
 }
+/** The registry_genesis cutover marker line (journal_note, no item_id). */
+function registryGenesisMarker(seq: number): string {
+  return JSON.stringify({ v: 2, seq, action: 'journal_note', item_type: 'journal', payload: { kind: 'registry_genesis', backfill_count: 0 } });
+}
 function appendSeg(eventsDir: string, firstSeq: number, lines: string[]): void {
   fs.appendFileSync(path.join(eventsDir, `seg-${String(firstSeq).padStart(8, '0')}.jsonl`), lines.join('\n') + '\n');
 }
@@ -128,5 +132,60 @@ describe('board observer (pln#560 s2 slice2)', () => {
     const obs = new BoardObserver(ev, 'prj_test', mem);
     obs.ingest();
     assert.equal(obs.board().active_plans.length, 1, 'cold-started despite corrupt cursor');
+  });
+
+  // ── pln#568 slice 3 — registry cutover authority ─────────────────────────
+
+  it('mergeCounts: registry families come from the journal ONLY when authoritative', () => {
+    const journal: ProjectedCounts = { plans: 0, claims: 5, assignments: 4, runs: 3, actions: 8, agents: 0, sessions: 0, failedRuns: 2 };
+    const seed: SeedCounts = { plans: 0, claims: 1, assignments: 1, runs: 1, actions: 1, agents: 5, sessions: 6, failedRuns: 0 };
+
+    // Not authoritative → registry counts stay seed-backed (no badge regression).
+    const seeded = mergeCounts(journal, seed, true, false);
+    assert.equal(seeded.claims, 1);
+    assert.equal(seeded.actions, 1, 'badge from seed until the cutover marker is present');
+
+    // Authoritative → registry counts come from the journal.
+    const authoritative = mergeCounts(journal, seed, true, true);
+    assert.equal(authoritative.claims, 5);
+    assert.equal(authoritative.assignments, 4);
+    assert.equal(authoritative.runs, 3);
+    assert.equal(authoritative.actions, 8, 'attention badge is now journal-driven');
+    assert.equal(authoritative.failedRuns, 2);
+    assert.equal(authoritative.agents, 5, 'agents/sessions are never journaled → always seed');
+    assert.equal(authoritative.sessions, 6);
+  });
+
+  it('mergeCounts: registryAuthoritative is ignored when the journal is inactive (§9)', () => {
+    const journal: ProjectedCounts = { ...ZERO_JOURNAL, claims: 5 };
+    const seed: SeedCounts = { ...ZERO_SEED, claims: 1 };
+    assert.equal(mergeCounts(journal, seed, false, true).claims, 1, 'journal off → seed even if marker was seen');
+  });
+
+  it('observer.registryAuthoritative flips true after ingesting the registry_genesis marker', () => {
+    const ev = tmpEvents(); cleanup.push(ev + '/x');
+    writeSeg(ev, 1, [rec(1, 'create', 'claim', 'clm_1', { id: 'clm_1', status: 'active' })]);
+    const mem = memento();
+    const obs = new BoardObserver(ev, 'prj_test', mem);
+    obs.ingest();
+    assert.equal(obs.registryAuthoritative(), false, 'not authoritative before the marker');
+
+    appendSeg(ev, 1, [registryGenesisMarker(2)]);
+    obs.ingest();
+    assert.equal(obs.registryAuthoritative(), true, 'authoritative once the marker is ingested');
+  });
+
+  it('a fresh observer re-derives registry authority by replaying from the floor', () => {
+    const ev = tmpEvents(); cleanup.push(ev + '/x');
+    writeSeg(ev, 1, [
+      registryGenesisMarker(1),
+      rec(2, 'backfill', 'claim', 'clm_1', { id: 'clm_1', status: 'active' }),
+    ]);
+    const mem = memento();
+    // Simulate a warm cursor from a prior process that already passed the marker.
+    mem.store.set('bclaw.observer.cursor.prj_test', { seq: 2, checkpoint_seq: 0 });
+    const obs = new BoardObserver(ev, 'prj_test', mem);
+    obs.ingest(); // cold start replays from checkpoint floor (0) → re-sees the marker
+    assert.equal(obs.registryAuthoritative(), true, 'cold start re-derives authority from the journal');
   });
 });

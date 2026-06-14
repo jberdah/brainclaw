@@ -13,14 +13,16 @@
  * journal is read from a directory path (a tmp dir in tests, exactly like the
  * slice-1 consumer tests).
  *
- * COVERAGE CONTRACT (see board-projection.ts module header + trp_2a89ae97):
- * only plan/constraint/decision/trap/handoff reach the journal with a payload
- * today, so the journal-derived counts are reliable ONLY for `plans`. The
- * attention badge and the claims/actions/assignments/runs counts must come
- * from a single lock-free `board_summary` MCP seed until the writer journals
- * those families. {@link mergeCounts} encodes exactly that split, so the
- * caller can hand it (journalCounts, seed) and get the value the status bar /
- * activity-bar badge should display without re-deriving the rule.
+ * COVERAGE CONTRACT (updated pln#568 — see board-projection.ts header):
+ * the memory families (plan/constraint/decision/trap/handoff) are journal-driven.
+ * The registry / coordination families (claims/assignments/runs/actions) are
+ * journaled with post-images since pln#568, but the observer trusts the journal
+ * for them ONLY once {@link BoardObserver.registryAuthoritative} is set (the
+ * `registry_genesis` cutover marker is present); until then they come from the
+ * lock-free `board_summary` MCP seed so a partial journal cannot undercount the
+ * attention badge (trp#559). {@link mergeCounts} encodes exactly that split, so
+ * the caller hands it (journalCounts, seed, journalActive, registryAuthoritative)
+ * and gets the value the status bar / activity-bar badge should display.
  *
  * @module
  */
@@ -75,22 +77,33 @@ export interface MergedCounts {
  * the default) — `plan` is journaled with payloads, so the projection is the
  * live source. When the journal is off/absent (observer-protocol §9), the
  * projection is empty and would report 0 plans even though the store has them,
- * so we fall back to the seed's board_summary plan count. Every other family is
- * always taken from the SEED, because it is not journaled with a payload today
- * and the journal therefore reports 0 (trp_2a89ae97). This split is the whole
- * reason the badge/counts do not regress to 0 in observer mode. When the writer
- * starts journaling a family, flip its line here from `seed` to `journal`.
+ * so we fall back to the seed's board_summary plan count.
+ *
+ * The registry / coordination families (claims, assignments, runs, actions)
+ * are journaled with full post-images since pln#568, but the observer only
+ * trusts the journal for them once `registryAuthoritative` is set — i.e. the
+ * journal carries the `registry_genesis` cutover marker, which guarantees EVERY
+ * pre-existing registry entity has a post-image. Until then they come from the
+ * SEED, so a partially-journaled store cannot undercount the attention badge
+ * (the trp#559 regression). `agents`/`sessions` are never journaled (identity
+ * registry + session files) → always seed.
  */
-export function mergeCounts(journal: ProjectedCounts, seed: SeedCounts, journalActive = true): MergedCounts {
+export function mergeCounts(
+  journal: ProjectedCounts,
+  seed: SeedCounts,
+  journalActive = true,
+  registryAuthoritative = false,
+): MergedCounts {
+  const registry = journalActive && registryAuthoritative;
   return {
     plans: journalActive ? journal.plans : seed.plans,  // journal-driven, seed fallback when journal off (§9)
-    claims: seed.claims,             // envelope-only in journal → seed
-    assignments: seed.assignments,   // payload-less in journal → seed
-    runs: seed.runs,                 // payload-less in journal → seed
-    actions: seed.actions,           // not journaled → seed (the attention badge)
+    claims: registry ? journal.claims : seed.claims,
+    assignments: registry ? journal.assignments : seed.assignments,
+    runs: registry ? journal.runs : seed.runs,
+    actions: registry ? journal.actions : seed.actions,       // the attention badge
     agents: seed.agents,             // identity registry, never journaled → seed
     sessions: seed.sessions,         // session files, never journaled → seed
-    failedRuns: seed.failedRuns ?? 0,
+    failedRuns: registry ? journal.failedRuns : (seed.failedRuns ?? 0),
   };
 }
 
@@ -105,6 +118,10 @@ export class BoardObserver {
   readonly projection: Projection = new Map();
   private readonly _cursorKey: string;
   private _bootstrapped = false;
+  /** Sticky: set once the registry_genesis cutover marker is observed (pln#568
+   *  slice 3). Re-derived on every cold start because ingest replays from the
+   *  checkpoint floor (0 today), so the marker is always re-seen. */
+  private _registryAuthoritative = false;
 
   /**
    * @param eventsDir absolute path to `<project>/.brainclaw/events`.
@@ -152,6 +169,7 @@ export class BoardObserver {
       : { seq: storedCursor.checkpoint_seq, checkpoint_seq: storedCursor.checkpoint_seq };
     const result = applyTail(this.projection, this.eventsDir, cursor);
     this._bootstrapped = true;
+    if (result.registryGenesisSeen) { this._registryAuthoritative = true; }
     if (result.cursor.seq !== storedCursor.seq || result.cursor.checkpoint_seq !== storedCursor.checkpoint_seq) {
       void this.memento.update(this._cursorKey, result.cursor);
     }
@@ -163,8 +181,18 @@ export class BoardObserver {
     return projectBoard(this.projection);
   }
 
-  /** The journal-derived counts (only `plans` reliable today — see {@link mergeCounts}). */
+  /** The journal-derived counts (see {@link mergeCounts}). */
   counts(): ProjectedCounts {
     return projectCounts(this.projection);
+  }
+
+  /**
+   * Whether the journal carries the registry_genesis cutover marker (pln#568
+   * slice 3) — i.e. the observer may trust the journal as authoritative for the
+   * registry/coordination counts. Pass to {@link mergeCounts}. False until the
+   * marker is ingested (a store that ran `brainclaw migrate --enable-journal`).
+   */
+  registryAuthoritative(): boolean {
+    return this._registryAuthoritative;
   }
 }

@@ -191,7 +191,29 @@ contradicted terminals), matching what the server-side composite returns — the
 surface must not under-count by reading "actions only" (the pln#559 fix, now in
 the projection rule).
 
-### 6.1 Dual-mode coverage gap (today, until pln#543 phase 1.5)
+### 6.1 Dual-mode coverage gap (CLOSED by pln#568 phase 1.5)
+
+> **Status (pln#568):** the writer-side gap below is **closed**. The
+> registry / coordination families (claim, assignment, agent_run,
+> action_required [journaled under item_type `state`], candidate, sequence,
+> and SHARED runtime_note) now emit full entity-state **post-images** on their
+> persist chokepoint (`src/core/events/registry-post-image.ts`), and the
+> observer materializer projects them (`board-projection.ts` ARRAY_SLOT).
+>
+> **Cutover signal (O2, resolved):** an observer switches a registry family
+> from the MCP `board_summary` seed to the journal only once the journal
+> carries the `journal_note` kind **`registry_genesis`** marker — emitted by
+> `runRegistryGenesisSupplement` (run via `brainclaw migrate --enable-journal`)
+> after it backfills every pre-existing registry entity. The marker is the
+> safety gate: without a complete backfill a partially-journaled store would
+> undercount the attention badge (trp#559). `BoardObserver.registryAuthoritative()`
+> tracks the marker (sticky, re-derived on cold start by replaying from the
+> checkpoint floor); `mergeCounts(journal, seed, journalActive, registryAuthoritative)`
+> takes claims/assignments/runs/actions from the journal when it is set, and
+> from the seed otherwise. `agents`/`sessions` are never journaled → always seed.
+> A store that has NOT run the supplement keeps the seed (no regression).
+>
+> The historical (pre-pln#568) description below is kept for context.
 
 The journal classifies records into five classes (§2). In phase 1 / `dual`
 mode — what runs today after pln#543 step 4 — **registry-lifecycle records
@@ -333,7 +355,7 @@ be answered before the JetBrains plugin (Kotlin) ships.
 | # | Sev | Question |
 |---|---|---|
 | O1 | MED | **Shared `ACTION_CLASS_BY_ACTION` manifest.** §2 says implementations MUST mirror the table "or fetch it from a shared manifest." Today only the TS version exists (`src/core/events/journal.ts:66`); a Kotlin implementer would re-type 42 entries by hand and silently drift on the 43rd. Should this ship as a generated JSON next to `event-log-store.md` (single source of truth, both runtimes load it) or as part of a versioned schema bundle? Recommend the generated JSON — the table is small and changes per spec revision, not per release. |
-| O2 | MED | **Phase-1.5 cutover signal for §6.1.** When registry-lifecycle records start carrying payloads, observers must know to drop the "live-view degraded" badge and stop the MCP seed for worker rows. How is the cutover signaled — a new `journal_note` kind (`registry_primary_at: <seq>`), a config flag the observer reads, or version bump in `meta.json`? Today no signal exists; designing one before the cutover beats discovering one observer didn't notice. |
+| O2 | RESOLVED (pln#568) | **Phase-1.5 cutover signal for §6.1.** Resolved with a `journal_note` kind **`registry_genesis`** marker emitted by `runRegistryGenesisSupplement` after it backfills every pre-existing registry entity (`brainclaw migrate --enable-journal`). Observers detect it (`BoardObserver.registryAuthoritative()`, sticky + re-derived on cold start) and switch the registry counts from the MCP seed to the journal via `mergeCounts(..., registryAuthoritative)`. Chosen over a `meta.json` version bump because meta is a rebuildable cache (§2.3) — the marker is a durable journal record, the source of truth, and survives a meta rebuild. Open follow-up: when checkpoints start emitting (today `checkpoint_seq=0`), the checkpoint must encode the capability so a cold start past the marker's segment still re-derives authority. |
 | O3 | LOW | **`bclaw_dispatch_status` enrichment scope.** §6 + §7 allow it "per visible terminal row" but the wording is ambiguous between "terminal-state row" (Recently terminal) and "row currently visible in the terminal UI" (every IN_PROGRESS row). Settle: probably the first (only failed/silent_death rows want the evidence digest) — but the contract must say so, otherwise an implementor renders an O(workers) burst on every refresh. |
 | O4 | LOW | **Segment pad-width upgrade path.** §2 pins 8-digit decimal padding; the writer is 8-digit too (`src/core/events/journal.ts:214 SEGMENT_PAD=8`). At ~17k events historical, the 1e8 ceiling is decades out — but a future widen would require coordinated writer + every observer roll-out. Carry the migration recipe (pad-width in `meta.json`?) here so a future maintainer doesn't have to rediscover it. |
 | O5 | LOW | **File watch semantics on Windows network mounts.** §4 falls back to a "long-interval stat" when the watcher is unavailable. VS Code's `FileSystemWatcher` on a junction-linked worktree (the brainclaw dispatch substrate) may fire on the link target's mtime but not the source-of-truth segment writes from another process; verify against the dispatch worktree machinery (`pln#498` junctions) before declaring the watch path universal. |
