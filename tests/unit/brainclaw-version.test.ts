@@ -135,8 +135,14 @@ describe('core/brainclaw-version', () => {
         version: '0.6.1',
         type: 'module',
         files: ['index.js'],
+        scripts: {
+          'build:release': 'node build-release.mjs',
+          'pack:check': 'node pack-check.mjs',
+        },
       }, null, 2), 'utf-8');
       fs.writeFileSync(path.join(dir, 'index.js'), 'export const value = 1;\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'build-release.mjs'), 'import fs from "node:fs"; fs.writeFileSync("build-release.marker", "ok\\n");\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'pack-check.mjs'), 'import fs from "node:fs"; fs.writeFileSync("pack-check.marker", "ok\\n");\n', 'utf-8');
 
       const result = publishLocalBrainclawRelease(dir, {
         releaseNotes: 'Local self-update build.',
@@ -148,6 +154,8 @@ describe('core/brainclaw-version', () => {
       assert.ok(result.artifact_path.endsWith('.tgz'));
       assert.ok(fs.existsSync(path.join(dir, '.releases', 'brainclaw-local.json')));
       assert.ok(fs.existsSync(path.join(dir, result.artifact_path.replace(/^\.\//, '').replace(/\//g, path.sep))));
+      assert.ok(fs.existsSync(path.join(dir, 'build-release.marker')));
+      assert.ok(fs.existsSync(path.join(dir, 'pack-check.marker')));
 
       const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.releases', 'brainclaw-local.json'), 'utf-8'));
       assert.equal(manifest.latest_installable_version, '0.6.1');
@@ -166,8 +174,14 @@ describe('core/brainclaw-version', () => {
         version: '0.6.2',
         type: 'module',
         files: ['index.js'],
+        scripts: {
+          'build:release': 'node build-release.mjs',
+          'pack:check': 'node pack-check.mjs',
+        },
       }, null, 2), 'utf-8');
       fs.writeFileSync(path.join(dir, 'index.js'), 'export const value = 1;\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'build-release.mjs'), 'import fs from "node:fs"; fs.writeFileSync("build-release.marker", "ok\\n");\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'pack-check.mjs'), 'import fs from "node:fs"; fs.writeFileSync("pack-check.marker", "ok\\n");\n', 'utf-8');
 
       const arn = {
         summary: 'Adds worktree isolation for multi-agent sessions.',

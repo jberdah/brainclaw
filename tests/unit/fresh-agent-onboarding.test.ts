@@ -128,18 +128,14 @@ describe('fresh-agent onboarding e2e (Codex P5)', () => {
     }
   });
 
-  it('generated files declare the current brainclaw version (no stale managed-by banners)', () => {
+  it('generated files carry a stable managed-by banner without npm semver drift', () => {
     captureStdio(() => runExport({ all: true, write: true, cwd: workspace.dir }));
 
     const surfaces = ['AGENTS.md', 'CLAUDE.md', '.cursor/rules/brainclaw.md'];
     for (const rel of surfaces) {
       const content = fs.readFileSync(path.join(workspace.dir, rel), 'utf-8');
-      // Banner shape: "Managed by brainclaw v<MAJOR>.<MINOR>.<PATCH>"
-      assert.match(
-        content,
-        /Managed by brainclaw v\d+\.\d+\.\d+/,
-        `${rel} must carry a current "Managed by brainclaw vX.Y.Z" banner so a fresh agent knows the file is live`,
-      );
+      assert.match(content, /Managed by brainclaw\b/, `${rel} must declare Brainclaw ownership`);
+      assert.doesNotMatch(content, /Managed by brainclaw v\d+\.\d+\.\d+/, `${rel} must not pin the npm package version`);
     }
   });
 });

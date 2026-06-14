@@ -5,6 +5,27 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-06-14
+
+Release hardening for npm publishing and agent-surface coherence.
+
+### Added
+
+- **Release package gate** — CI now builds the CLI, builds the optional VS Code extension, runs the extension tests, verifies the release tarball contents, and requires the bundled `dist/brainclaw-vscode.vsix` for release builds.
+- **Packaging tests** — local release publishing now executes `build:release` and `pack:check` before `npm pack`, with tests covering that path.
+
+### Changed
+
+- **Agent surfaces no longer pin the npm semver** — generated instruction headers use a stable `Managed by brainclaw` banner to avoid stale version drift across files.
+- **VS Code extension positioning** — the `.vsix` is bundled as an optional IDE companion, not a requirement for CLI/MCP use. Local development builds skip it when extension dependencies are absent; release builds remain strict.
+- **`.brainclaw/project.md` clarified as legacy derived output** — the canonical durable project vision is root `PROJECT.md`; live claims, plans, handoffs, and runtime state belong in `agent-board`, MCP context, and structured store files.
+
+### Fixed
+
+- **Strict claim isolation** — creating a second active claim for the same exact scope now fails inside the mutation lock instead of creating an advisory conflict.
+- **JsonStore path safety** — entity IDs are validated before resolving file paths, preventing malformed IDs from escaping the store directory.
+- **Integration docs** — Roo, Continue, Windsurf, Copilot, OpenClaw, quickstart, and agent integration docs now match the current export formats and setup behavior.
+
 ## [1.8.0] — 2026-06-09
 
 Multi-agent dispatch convergence — the "new frontier", driven by a real

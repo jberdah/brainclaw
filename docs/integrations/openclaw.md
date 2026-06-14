@@ -41,8 +41,9 @@ This copies the brainclaw skill to `~/.openclaw/workspace/skills/brainclaw/`.
 Or manually:
 
 ```bash
+brainclaw export --format openclaw --output /tmp/brainclaw-openclaw-skill.md
 mkdir -p ~/.openclaw/workspace/skills/brainclaw
-cp "$(npm root -g)/brainclaw/skills/openclaw/SKILL.md" ~/.openclaw/workspace/skills/brainclaw/
+cp /tmp/brainclaw-openclaw-skill.md ~/.openclaw/workspace/skills/brainclaw/SKILL.md
 ```
 
 ### Initialize a project

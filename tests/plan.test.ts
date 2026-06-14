@@ -99,15 +99,16 @@ describe('Shared plan', () => {
     assert.equal(plan.assignee, 'alice');
   });
 
-  it('includes active plans in project.md and status output', () => {
+  it('keeps live plans out of legacy project.md while status reports them', () => {
     run(['plan', 'Document plan integration', '--priority', 'high'], dir);
 
     const status = run(['status'], dir);
     assert.ok(status.stdout.includes('Plans       : 1'));
 
     const markdown = fs.readFileSync(path.join(dir, '.brainclaw', 'project.md'), 'utf-8');
-    assert.ok(markdown.includes('## Shared plan'));
-    assert.ok(markdown.includes('Document plan integration'));
+    assert.ok(markdown.includes('Legacy derived summary'));
+    assert.ok(!markdown.includes('## Shared plan'));
+    assert.ok(!markdown.includes('Document plan integration'));
   });
 
   it('includes active plans in context output', () => {

@@ -156,7 +156,7 @@ describe('instruction-templates', () => {
     });
   });
 
-  describe('hook-capable agents keep lightweight stable instructions', () => {
+  describe('tier A agents keep lightweight stable instructions', () => {
     for (const agent of ['cursor', 'windsurf', 'cline', 'codex', 'github-copilot']) {
       it(`${agent} is now tier A`, () => {
         const result = renderBrainclawSection(makeInput(agent));
@@ -167,7 +167,7 @@ describe('instruction-templates', () => {
     }
   });
 
-  describe('live companions for hook-capable parity agents', () => {
+  describe('live companions for native-file parity agents', () => {
     for (const agent of ['cursor', 'windsurf', 'cline', 'github-copilot']) {
       it(`${agent} gets a Tier B-shaped live companion`, () => {
         const state = makeState({
@@ -448,9 +448,10 @@ describe('instruction-templates', () => {
       }
     });
 
-    it('header includes brainclaw version', () => {
+    it('header omits npm package version to avoid stale surface drift', () => {
       const result = renderBrainclawSection(makeInput('roo', { brainclawVersion: '1.2.3' }));
-      assert.ok(result.content.includes('v1.2.3'));
+      assert.ok(result.content.includes('Managed by brainclaw'));
+      assert.ok(!result.content.includes('v1.2.3'));
     });
 
     it('empty state produces no optional sections', () => {

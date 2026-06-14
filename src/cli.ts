@@ -1568,7 +1568,7 @@ program
 program
   .command('export')
   .description('Export memory as instructions for IDE/AI tools')
-  .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, gemini-md, windsurf, cline, roo, continue')
+  .option('--format <format>', 'Format: copilot-instructions, cursor-rules, agents-md, claude-md, gemini-md, windsurf, cline, roo, continue, openclaw, nanoclaw, nemoclaw, picoclaw, zeroclaw')
   .option('--detect', 'Auto-detect agent environment and write to its native file')
   .option('--all', 'Write all known agent instruction files at once (claude-md, agents-md, copilot-instructions, cursor-rules, etc.)')
   .option('--write', 'Write to canonical file path instead of stdout (when --format is given); local files are gitignored by default')

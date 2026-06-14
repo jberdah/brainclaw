@@ -349,6 +349,9 @@ export function publishLocalBrainclawRelease(
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
 
+  runNpmScript(cwd, 'build:release');
+  runNpmScript(cwd, 'pack:check');
+
   const packResult = spawnSync(resolveNpmCommand(), resolveNpmPackArgs(outputDir), {
     cwd,
     encoding: 'utf-8',
@@ -647,6 +650,30 @@ function resolveNpmPackArgs(outputDir: string): string[] {
   }
 
   return ['pack', '--json', '--pack-destination', outputDir];
+}
+
+function resolveNpmRunArgs(scriptName: string): string[] {
+  if (process.platform === 'win32') {
+    return ['/d', '/s', '/c', 'npm', 'run', scriptName];
+  }
+
+  return ['run', scriptName];
+}
+
+function runNpmScript(cwd: string, scriptName: string): void {
+  const result = spawnSync(resolveNpmCommand(), resolveNpmRunArgs(scriptName), {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 300000,
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to run npm run ${scriptName}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const message = firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `npm run ${scriptName} failed`;
+    throw new Error(message);
+  }
 }
 
 function resolveNpmViewArgs(packageName: string): string[] {

@@ -7,7 +7,7 @@ brainclaw is local-first and workspace-centric.
 ```text
 .brainclaw/
   config.yaml                    ← Project configuration
-  project.md                     ← Derived readable view (best-effort, regenerable)
+  project.md                     ← Legacy derived readable view (best-effort, regenerable)
   events.jsonl                   ← Append-only event log (agent notifications)
   audit.log                      ← Append-only audit trail (before/after snapshots)
   memory/
@@ -42,7 +42,9 @@ Benefits:
 - isolated corruption (one bad file does not affect others)
 
 ### Derived views are best-effort
-`project.md` is a **derived view** regenerated from canonical state via `rebuildProjectMd()`. It is not a write target — it can always be rebuilt from the JSON files using `brainclaw rebuild`.
+`.brainclaw/project.md` is a **legacy derived view** regenerated from canonical state via `rebuildProjectMd()`. It is not a write target and no longer carries live claims, plans, handoffs, or runtime state — use `brainclaw agent-board`, `brainclaw context`, or MCP board/context tools for that operational data.
+
+Root `PROJECT.md` is different: it is the durable project vision and should contain stable product, architecture, and contribution guidance that does not expire every session.
 
 Failures to regenerate `project.md` are logged but never block mutations. If it gets stale, `brainclaw doctor` detects the drift.
 

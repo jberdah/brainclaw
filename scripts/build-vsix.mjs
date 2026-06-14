@@ -1,7 +1,10 @@
 /**
- * Build the VS Code extension .vsix and copy it into dist/ for npm distribution.
- * Requires: vscode-extension/ to have been compiled (tsc) already.
- * Uses @vscode/vsce programmatically to avoid global install dependency.
+ * Build the optional VS Code extension .vsix and copy it into dist/.
+ *
+ * Default mode is release-strict: missing extension dependencies or packaging
+ * failures fail the command because package.json declares the VSIX in the npm
+ * tarball. Pass --optional for local CLI builds where VS Code support is not
+ * required.
  */
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -11,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 const extDir = join(root, 'vscode-extension');
+const optional = process.argv.includes('--optional');
 // Read the current extension version from its package.json so rebuilds pick
 // up bumps automatically. Previously this was hardcoded to 0.1.0, which made
 // `dist/brainclaw-vscode.vsix` stale by silently copying the oldest build on
@@ -20,11 +24,17 @@ const outVsix = join(extDir, `brainclaw-vscode-${extPkg.version}.vsix`);
 const destDir = join(root, 'dist');
 const destVsix = join(destDir, 'brainclaw-vscode.vsix');
 
-// Skip gracefully when vscode-extension deps are not installed (e.g. CI)
+// Skip gracefully only for local optional builds. Release builds must be
+// deterministic: CI/prepublish install vscode-extension dependencies first.
 const hasVscodeDeps = existsSync(join(extDir, 'node_modules', '@types', 'vscode'));
 if (!hasVscodeDeps) {
-  console.log('⚠ Skipping vsix build — vscode-extension/node_modules not installed (run npm install in vscode-extension/ to enable)');
-  process.exit(0);
+  const message = 'vscode-extension/node_modules not installed. Run `npm ci --prefix vscode-extension` before release builds.';
+  if (optional) {
+    console.log(`⚠ Skipping optional vsix build — ${message}`);
+    process.exit(0);
+  }
+  console.error(`Error: ${message}`);
+  process.exit(1);
 }
 
 // 1. Compile extension TypeScript

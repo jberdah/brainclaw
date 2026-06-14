@@ -905,8 +905,14 @@ describe('brainclaw CLI', () => {
         version: '0.6.1',
         type: 'module',
         files: ['index.js'],
+        scripts: {
+          'build:release': 'node build-release.mjs',
+          'pack:check': 'node pack-check.mjs',
+        },
       }, null, 2), 'utf-8');
       fs.writeFileSync(path.join(dir, 'index.js'), 'export const ready = true;\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'build-release.mjs'), 'import fs from "node:fs"; fs.writeFileSync("build-release.marker", "ok\\n");\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'pack-check.mjs'), 'import fs from "node:fs"; fs.writeFileSync("pack-check.marker", "ok\\n");\n', 'utf-8');
       run(['init', '-y'], dir);
 
       const res = run(['version', '--publish-local', '--release-notes', 'Local self-update candidate.'], dir, {
@@ -915,6 +921,8 @@ describe('brainclaw CLI', () => {
       assert.equal(res.exitCode, 0);
       assert.ok(res.stdout.includes('Local release published: 0.6.1'));
       assert.ok(fs.existsSync(path.join(dir, '.releases', 'brainclaw-local.json')));
+      assert.ok(fs.existsSync(path.join(dir, 'build-release.marker')));
+      assert.ok(fs.existsSync(path.join(dir, 'pack-check.marker')));
 
       const releaseFiles = fs.readdirSync(path.join(dir, '.releases'));
       assert.ok(releaseFiles.some((file) => /^brainclaw-0\.6\.1.*\.tgz$/.test(file)));

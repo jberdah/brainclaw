@@ -71,16 +71,16 @@ The agent cannot call brainclaw tools at all. The instruction file or SKILL.md b
 | Agent | MCP | Instruction file | Hooks | Auto-approve | Skills |
 |---|---|---|---|---|---|
 | **Claude Code** | ✔ project + global | CLAUDE.md | ✔ pre-prompt + stop | ✔ permissions | ✔ /brainclaw |
-| **Cursor** | ✔ global | .cursor/rules/ + MDC | ◐ alwaysApply MDC | — | — |
-| **Windsurf** | ✔ global | .windsurfrules | ◐ session trigger | — | — |
+| **Cursor** | ✔ global | .cursor/rules/ + MDC | ✔ workspace hooks | — | ✔ universal skills |
+| **Windsurf** | ✔ global | .windsurfrules + .windsurf/rules/ | — | ✔ alwaysAllow | — |
 | **Cline** | ✔ project | .clinerules/ | — | ✔ autoApprove | — |
 | **Roo** | ✔ project | .roo/rules/ | — | ✔ alwaysAllow | — |
-| **Continue** | ✔ both | .continue/rules/ | — | — | — |
-| **Kilocode** | ✔ both | .kilo/rules/ + AGENTS.md | — | ✔ alwaysAllow | — |
-| **OpenCode** | ✔ project | AGENTS.md | — | — | — |
-| **Codex** | ✔ global | AGENTS.md | — | — | — |
+| **Continue** | ✔ both | .continue/rules/ | — | ✔ permissions.yaml | — |
+| **Kilocode** | ✔ both | .kilo/rules/ + AGENTS.md | — | ✔ alwaysAllow | ✔ universal skills |
+| **OpenCode** | ✔ project | AGENTS.md | — | — | ✔ universal skills |
+| **Codex** | ✔ global | AGENTS.md | — | — | ✔ universal skills |
 | **Gemini CLI** | ✔ global | GEMINI.md | — | — | — |
-| **GitHub Copilot** | ✔ global + project | .github/copilot-instructions.md | — | manual (per-call) | ✔ brainclaw-context |
+| **GitHub Copilot** | ✔ project | .github/copilot-instructions.md | ✔ workspace hooks | manual (per-call) | ✔ brainclaw-context + universal skills |
 | **Mistral Vibe** | ✔ project + user (TOML) | AGENTS.md | — | `--auto-approve` flag | ✔ universal skill |
 | **Hermes** | ✔ global (YAML) | AGENTS.md | — | — | ✔ universal skill |
 | **OpenClaw** | — | — | — | — | ✔ brainclaw skill |

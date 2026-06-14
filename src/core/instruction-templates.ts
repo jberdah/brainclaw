@@ -7,7 +7,7 @@
  *   LIVE (gitignored, frequent refresh) — plans, claims, traps, decisions, sequences
  *
  * Tier delivery:
- *   Tier A (MCP + hooks): stable file only — live context via hooks/MCP
+ *   Tier A (managed MCP/native surface): stable file only — live context via MCP or native runtime surfaces
  *   Tier B (MCP, no hooks): stable file + live companion file
  *   Tier C (no MCP): stable file + live companion file (richer, only source)
  */
@@ -251,7 +251,7 @@ function renderVisionSection(input: InstructionTemplateInput): string | undefine
 
 function renderHeader(input: InstructionTemplateInput): string {
   return [
-    `> Managed by brainclaw v${input.brainclawVersion} — do not edit manually.`,
+    `> Managed by brainclaw — do not edit manually.`,
     `> Regenerate: brainclaw export --format ${formatForAgent(input.profile.name)} --write`,
   ].join('\n');
 }

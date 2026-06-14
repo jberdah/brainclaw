@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "bin": {
@@ -26,14 +26,15 @@
     "clean:build": "node scripts/clean-build.mjs dist dist-test",
     "clean:dist": "node scripts/clean-build.mjs dist",
     "clean:dist-test": "node scripts/clean-build.mjs dist-test",
-    "build": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node scripts/build-vsix.mjs",
+    "build": "npm run build:cli && node scripts/build-vsix.mjs --optional",
     "build:cli": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs",
+    "build:release": "npm run build:cli && node scripts/emit-site-facts.mjs && node scripts/build-vsix.mjs",
     "emit:facts": "npm run build:cli && node scripts/emit-site-facts.mjs",
     "dev": "npm run clean:dist && tsc && node scripts/copy-default-profiles.mjs && node dist/cli.js",
     "dev:mcp": "tsc && node scripts/copy-default-profiles.mjs",
     "build:mcp-schemas": "npm run clean:dist && tsc && node scripts/build-mcp-schemas.mjs",
     "dev:link": "npm link && echo 'Symlink created: global brainclaw → local repo. MCP agents now use dist/ directly.'",
-    "build:test": "npm run build && npm run clean:dist-test && tsc -p tsconfig.test.json",
+    "build:test": "npm run build:cli && npm run clean:dist-test && tsc -p tsconfig.test.json",
     "pack:check": "node scripts/check-pack.mjs",
     "test": "npm run build:test && node scripts/run-tests.mjs default",
     "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
@@ -43,7 +44,7 @@
     "test:cross": "npm run build:test && node scripts/test-cross.mjs default",
     "test:coverage": "npm run build:test && c8 --all --src dist-test/src --reporter=text-summary --reporter=lcov --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
     "test:coverage:check": "npm run build:test && c8 --all --check-coverage --lines 55 --functions 60 --branches 65 --statements 55 --src dist-test/src --reporter=text-summary --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
-    "prepublishOnly": "npm run build && node scripts/emit-site-facts.mjs && npm run pack:check"
+    "prepublishOnly": "npm run build:release && npm run pack:check"
   },
   "keywords": [
     "cli",

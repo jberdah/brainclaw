@@ -59,7 +59,7 @@ describe('claim commands', () => {
     workspace.cleanup();
   });
 
-  it('creates a claim, links it to a plan, and updates project markdown', () => {
+  it('creates a claim, links it to a plan, and keeps live claims out of legacy project markdown', () => {
     const state = loadState(workspace.dir);
     state.plan_items.push({
       id: 'pln_auth_claim',
@@ -103,7 +103,8 @@ describe('claim commands', () => {
       assert.equal(updatedState.plan_items[0].status, 'in_progress');
 
       const markdown = fs.readFileSync(path.join(workspace.dir, '.brainclaw', 'project.md'), 'utf-8');
-      assert.ok(markdown.includes('Taking auth rollout'));
+      assert.ok(markdown.includes('Legacy derived summary'));
+      assert.ok(!markdown.includes('Taking auth rollout'));
     } finally {
       if (previousSession === undefined) {
         delete process.env.BRAINCLAW_SESSION_ID;
@@ -184,7 +185,7 @@ describe('claim commands', () => {
     assert.equal(updatedState.plan_items[0].assignee, undefined);
   });
 
-  it('warns when creating overlapping active claims on the same scope', () => {
+  it('rejects overlapping active claims on the same scope', () => {
     saveClaim({
       id: 'clm_existing',
       agent: 'claude',
@@ -195,15 +196,14 @@ describe('claim commands', () => {
       status: 'active',
     }, workspace.dir);
 
-    const captured = captureConsole(() => {
-      runClaim('Competing auth work', {
-        agent: 'copilot',
-        scope: 'src/auth/',
-        cwd: workspace.dir,
+    assert.throws(() => {
+      captureConsole(() => {
+        runClaim('Competing auth work', {
+          agent: 'copilot',
+          scope: 'src/auth/',
+          cwd: workspace.dir,
+        });
       });
-    });
-
-    assert.ok(captured.warns.some((line) => line.includes('Active claim(s) already exist')));
-    assert.ok(captured.logs[0].includes('Claim created'));
+    }, /Active claim already exists for scope "src\/auth\/"/);
   });
 });

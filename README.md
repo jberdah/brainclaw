@@ -65,17 +65,17 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 | Logo | Agent | Tier | What brainclaw configures |
 |---|---|---|---|
 | [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | A | MCP + CLAUDE.md + hooks + auto-approve + permissions + /brainclaw skill |
-| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | A | MCP + AGENTS.md + hooks + skills |
+| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | A | MCP + AGENTS.md + skills |
 | [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US) | **[Cursor](https://cursor.com/en-US)** | A | MCP (machine) + .cursor/rules/ + hooks + skills |
-| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | A | MCP (machine) + .windsurfrules + hooks + skills |
-| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | A | MCP + auto-approve + .clinerules/ + hooks + skills |
+| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | A | MCP (machine) + .windsurfrules + .windsurf/rules/ |
+| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | A | MCP + auto-approve + .clinerules/ |
 | [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | A | MCP + copilot-instructions.md + hooks + skills |
 | [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code) | **[Roo](https://github.com/RooCodeInc/Roo-Code)** | B | MCP + auto-approve + .roo/rules/ |
 | [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | B | MCP + .continue/rules/ |
 | [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode) | **[OpenCode](https://github.com/opencode-ai/opencode)** | B | MCP + AGENTS.md |
 | [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | B | MCP + GEMINI.md |
 
-**Tier A** = MCP + hooks + skills (context injected dynamically, lightweight instruction files). **Tier B** = MCP only, no hooks (richer static instruction files with architecture + top traps). Tier can degrade at runtime if integration surfaces are missing.
+**Tier A** = strongest supported integration for that agent family (usually MCP plus native files, and hooks/skills where the agent exposes them). **Tier B** = MCP/native-file integration with fewer automation surfaces. Tier can degrade at runtime if integration surfaces are missing.
 
 ### Autonomous Agents
 
@@ -232,7 +232,7 @@ Still sharp:
 1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
 2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
 3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
-4. **Live state for hook-less agents** — Tier B/C agents without lifecycle hooks (Cursor, Cline, Windsurf, Copilot, Continue, Kilocode, Mistral Vibe, Hermes) get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
+4. **Live state for hook-less agents** — supported hook-less file surfaces such as Cline, Windsurf, Continue, Antigravity/Gemini CLI, and Mistral Vibe can get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
 Recommended use today:
 
@@ -335,7 +335,8 @@ Contributor note: the commands below are for developing Brainclaw itself, not fo
 
 ```bash
 npm test                   # unit + smoke (fast path)
-npm run test:e2e           # full suite
+npm run test:e2e           # end-to-end suite
+npm run test:all           # full suite
 npm run test:coverage      # with coverage report
 ```
 
@@ -459,7 +460,7 @@ For older releases (v0.x and the early v1.0 launch series), `git log` on `master
 
 ### v1.1.0
 
-- **Node 20+ baseline** (pln#485) — `engines.node` is now `>=20.0.0` (Node 18 reached EOL in April 2025). CI matrix runs Node 20, 22, and 24 on Linux; Windows on Node 24.
+- **Node 20+ baseline** (pln#485) — `engines.node` is now `>=20.0.0` (Node 18 reached EOL in April 2025). CI matrix runs Node 22 and 24 on Linux; Windows on Node 24. Node 20 remains the minimum installable runtime but is no longer CI-verified.
 - **commander 13 → 14** (requires Node 20+).
 - **@types/node 22 → 24** (LTS-aligned).
 

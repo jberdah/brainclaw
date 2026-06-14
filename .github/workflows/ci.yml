@@ -91,3 +91,37 @@ jobs:
 
       - name: Run e2e tests
         run: node scripts/run-tests.mjs e2e
+
+  release-package:
+    name: Release Package Check (Linux, Node 24)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            vscode-extension/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install VS Code extension dependencies
+        run: npm ci --prefix vscode-extension
+
+      - name: Test VS Code extension
+        run: npm test --prefix vscode-extension
+
+      - name: Build release artifacts
+        run: npm run build:release
+
+      - name: Check npm package contents
+        run: npm run pack:check

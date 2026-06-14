@@ -1,6 +1,6 @@
 # Codex Integration
 
-brainclaw integrates with OpenAI's Codex CLI through MCP tools and shared instruction files. Codex is a Tier A agent — full MCP access, lifecycle hooks, skills support, and headless CLI spawn capability.
+brainclaw integrates with OpenAI's Codex CLI through MCP tools and shared instruction files. Codex has MCP access, universal skills support, and headless CLI spawn capability, but no native lifecycle hook surface.
 
 ## Auto-setup
 
@@ -61,7 +61,7 @@ Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started
 |-------|-------|
 | Tier | A |
 | MCP | yes |
-| Hooks | yes |
+| Hooks | no |
 | Auto-approve | manual (per-tool approval) |
 | Skills | yes |
 | CLI spawnable | yes |

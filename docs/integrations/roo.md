@@ -7,7 +7,7 @@ brainclaw integrates with Roo through MCP tools and project-scoped rules, provid
 `brainclaw init` detects Roo and writes `.roo/rules/brainclaw.md` automatically. Or manually:
 
 ```bash
-brainclaw export --format roo-rules --write
+brainclaw export --format roo --write
 ```
 
 ## MCP configuration

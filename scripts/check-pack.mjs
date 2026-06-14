@@ -1,6 +1,17 @@
 import { spawnSync } from 'node:child_process';
 
-const requiredPaths = ['LICENSE', 'README.md', 'dist/cli.js'];
+const requiredPaths = [
+  'LICENSE',
+  'README.md',
+  'dist/cli.js',
+  'dist/facts.js',
+  'dist/facts.json',
+  'dist/brainclaw-vscode.vsix',
+];
+const requiredPrefixes = [
+  'dist/core/default-profiles/',
+  'docs/',
+];
 const forbiddenPrefixes = [
   '.github/',
   '.vscode/',
@@ -54,7 +65,12 @@ const forbidden = paths.filter((path) =>
   || forbiddenExactPaths.includes(path)
   || forbiddenSuffixes.some((suffix) => path.endsWith(suffix))
 );
-const missing = requiredPaths.filter((path) => !paths.includes(path));
+const missing = [
+  ...requiredPaths.filter((path) => !paths.includes(path)),
+  ...requiredPrefixes
+    .filter((prefix) => !paths.some((path) => path.startsWith(prefix)))
+    .map((prefix) => `${prefix}*`),
+];
 
 if (forbidden.length > 0 || missing.length > 0) {
   if (forbidden.length > 0) {

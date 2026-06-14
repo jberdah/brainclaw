@@ -225,11 +225,11 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.equal(claim.session_id, 'sess_claim_1');
     });
 
-    it('warns on overlapping scope claims', () => {
+    it('rejects overlapping scope claims', () => {
       run(['claim', 'First claim', '--agent', 'copilot', '--scope', 'src/auth/'], dir);
       const res = run(['claim', 'Second claim', '--agent', 'claude', '--scope', 'src/auth/'], dir);
-      assert.equal(res.exitCode, 0); // advisory, not blocking
-      assert.ok(res.stderr.includes('Active claim') || res.stdout.includes('Active claim'));
+      assert.notEqual(res.exitCode, 0);
+      assert.ok(res.stderr.includes('Active claim already exists'));
     });
 
     it('increments claim IDs', () => {
@@ -603,9 +603,25 @@ describe('Git-backed Collaboration (Phase 2)', () => {
       assert.ok(res.stdout.includes('Runtime notes: 1'));
     });
 
-    it('warns on duplicate scope claims', () => {
-      run(['claim', 'First', '--agent', 'a', '--scope', 'src/auth/'], dir);
-      run(['claim', 'Second', '--agent', 'b', '--scope', 'src/auth/'], dir);
+    it('warns on duplicate scope claims already present on disk', () => {
+      const claimsDir = path.join(dir, '.brainclaw', 'coordination', 'claims');
+      fs.mkdirSync(claimsDir, { recursive: true });
+      const createdAt = new Date().toISOString();
+      for (const [id, agent, description] of [
+        ['clm_dup_a', 'a', 'First'],
+        ['clm_dup_b', 'b', 'Second'],
+      ] as const) {
+        fs.writeFileSync(path.join(claimsDir, `${id}.json`), JSON.stringify({
+          schema_version: 2,
+          id,
+          agent,
+          scope: 'src/auth/',
+          description,
+          created_at: createdAt,
+          status: 'active',
+        }, null, 2), 'utf-8');
+      }
+
       const res = run(['doctor'], dir);
       assert.ok(res.stdout.includes('Multiple active claims') || res.stderr.includes('Multiple active claims'));
     });

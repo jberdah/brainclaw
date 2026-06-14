@@ -57,16 +57,6 @@ export function runClaim(description: string, options: ClaimOptions): void {
     process.exit(1);
   }
 
-  // Check for overlapping active claims on the same scope
-  const existing = listClaims(options.cwd).filter(c => c.status === 'active' && c.scope === options.scope);
-  if (existing.length > 0) {
-    console.warn(`⚠ Active claim(s) already exist for scope "${options.scope}":`);
-    for (const c of existing) {
-      console.warn(`  [${c.id}] by ${c.agent}: ${c.description}`);
-    }
-    console.warn('  Proceeding anyway (advisory only).');
-  }
-
   const state = loadState(options.cwd);
   const plan = options.plan ? state.plan_items.find((item) => item.id === options.plan) : undefined;
   if (options.plan && !plan) {
@@ -92,21 +82,31 @@ export function runClaim(description: string, options: ClaimOptions): void {
     model: resolveCurrentModel(options.cwd),
   };
 
-  mutate({ cwd: options.cwd }, () => {
-    if (plan) {
-      if (!plan.assignee) {
-        plan.assignee = actor.agent;
+  try {
+    mutate({ cwd: options.cwd }, () => {
+      const existing = listClaims(options.cwd).find(c => c.status === 'active' && c.scope === options.scope);
+      if (existing) {
+        throw new Error(`Active claim already exists for scope "${options.scope}": [${existing.id}] by ${existing.agent}: ${existing.description}`);
       }
-      if (plan.status === 'todo') {
-        plan.status = 'in_progress';
-      }
-      plan.updated_at = nowISO();
-      saveState(state, options.cwd);
-    }
 
-    saveClaim(claim, options.cwd);
-    rebuildProjectMd(plan ? state : loadState(options.cwd), options.cwd);
-  });
+      if (plan) {
+        if (!plan.assignee) {
+          plan.assignee = actor.agent;
+        }
+        if (plan.status === 'todo') {
+          plan.status = 'in_progress';
+        }
+        plan.updated_at = nowISO();
+        saveState(state, options.cwd);
+      }
+
+      saveClaim(claim, options.cwd);
+      rebuildProjectMd(plan ? state : loadState(options.cwd), options.cwd);
+    });
+  } catch (error: unknown) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
   const planInfo = claim.plan_id ? ` [plan ${claim.plan_id}]` : '';
   const ttlInfo = claim.expires_at ? ` (expires ${claim.expires_at.slice(0, 16).replace('T', ' ')})` : '';
   const storeLabel = options.store && options.store !== 'local' ? ` [store:${options.store}]` : '';

@@ -7,7 +7,9 @@ brainclaw integrates with GitHub Copilot through MCP tools, instruction files, a
 `brainclaw init` detects Copilot (`gh copilot` or `copilot` CLI installed) and writes:
 
 - `.github/copilot-instructions.md` — instruction file Copilot reads automatically on each prompt
-- MCP registration at `~/.copilot/mcp-config.json` (machine-level fallback) and/or project-level `.github/copilot/mcp-config.json`
+- `.vscode/settings.json` and `.vscode/mcp.json` — project-level MCP registration used by VS Code/Copilot surfaces
+- `.github/copilot/hooks.json` — session lifecycle hooks where supported
+- `.github/skills/brainclaw-context/SKILL.md` and `.agents/skills/brainclaw/SKILL.md` — Copilot and cross-agent skill discovery
 
 Manual regeneration:
 
@@ -18,11 +20,11 @@ brainclaw export --format copilot-instructions --write --include-live
 
 ## MCP configuration
 
-Copilot reads MCP servers from `~/.copilot/mcp-config.json`:
+VS Code/Copilot reads project MCP configuration from `.vscode/settings.json` and `.vscode/mcp.json`:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "brainclaw": {
       "command": "npx",
       "args": ["-y", "brainclaw@latest", "mcp"]

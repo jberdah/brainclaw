@@ -5,6 +5,8 @@
  * One instance per project directory.
  */
 import * as cp from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -149,7 +151,7 @@ export class McpClient {
     await this._request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'brainclaw-vscode', version: '0.1.0' },
+      clientInfo: { name: 'brainclaw-vscode', version: readExtensionVersion() },
     });
 
     this._sendNotification('notifications/initialized', {});
@@ -231,5 +233,15 @@ export class McpClient {
     // Strip wrapping quotes from paths like `"/path/to/brainclaw"`
     const bin = cmd.replace(/^"|"$/g, '');
     return [bin, 'mcp'];
+  }
+}
+
+function readExtensionVersion(): string {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: unknown };
+    return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : 'unknown';
+  } catch {
+    return 'unknown';
   }
 }

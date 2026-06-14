@@ -112,7 +112,8 @@ brainclaw plan create "Implement auth module" --priority high
 brainclaw plan list
 brainclaw claim list
 brainclaw context --for src/auth/routes.ts
-brainclaw export --detect --write    # regenerate all instruction files
+brainclaw export --detect --write    # regenerate the detected agent instruction file
+brainclaw export --all               # regenerate all known instruction files
 ```
 
 ## Onboarding an existing project

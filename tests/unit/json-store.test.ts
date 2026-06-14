@@ -88,5 +88,23 @@ describe('core/json-store', () => {
     const store = createStore(dir);
     assert.throws(() => store.load('clm_future'));
   });
+
+  it('rejects IDs that would escape the store directory', () => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-store-path-' });
+    const dir = path.join(workspace.dir, '.brainclaw', 'coordination', 'claims');
+    const store = createStore(dir);
+
+    const claim: Claim = {
+      id: '../escaped',
+      agent: 'copilot',
+      scope: 'src/core',
+      description: 'Escaping claim',
+      created_at: '2026-03-15T10:00:00.000Z',
+      status: 'active',
+    };
+
+    assert.throws(() => store.save(claim), /Invalid claim id/);
+    assert.equal(fs.existsSync(path.join(workspace.dir, '.brainclaw', 'coordination', 'escaped.json')), false);
+  });
 });
 

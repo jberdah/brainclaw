@@ -61,18 +61,15 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
     ],
     'windsurf': [
       { kind: 'instructions', location: 'workspace', path: '.windsurfrules' },
-      { kind: 'hook',         location: 'workspace', path: '.windsurfrules' },
       { kind: 'mcp',          location: 'machine',   path: '.codeium/windsurf/mcp_config.json' },
       { kind: 'rule',         location: 'workspace', path: '.windsurf/rules/brainclaw.md' },
     ],
     'cline': [
       { kind: 'instructions', location: 'workspace', path: '.clinerules/brainclaw.md' },
-      { kind: 'hook',         location: 'workspace', path: '.clinerules/brainclaw.md' },
       { kind: 'mcp',          location: 'workspace', path: '.vscode/cline_mcp_settings.json' },
     ],
     'codex': [
       { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
-      { kind: 'hook',         location: 'workspace', path: 'AGENTS.md' },
       { kind: 'mcp',          location: 'machine',   path: '.codex/config.toml' },
       { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],

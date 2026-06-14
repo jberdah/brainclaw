@@ -41,12 +41,11 @@ describe('agent-capability', () => {
   });
 
   describe('template tiers', () => {
-    it('tier A = agents with MCP + hooks (full integration)', () => {
+    it('tier A = agents with managed MCP/native surfaces', () => {
       const tierA = getAgentsByTier('A');
       assert.ok(tierA.length >= 1);
       for (const p of tierA) {
         assert.ok(p.hasMcp, `${p.name} in tier A should have MCP`);
-        assert.ok(p.hasHooks, `${p.name} in tier A should have hooks`);
       }
     });
 
@@ -93,12 +92,20 @@ describe('agent-capability', () => {
       assert.equal(profile.mcpConfigScope, 'machine');
     });
 
-    it('all reclassified agents are tier A with hooks', () => {
-      for (const name of ['cursor', 'windsurf', 'cline', 'codex', 'github-copilot']) {
+    it('tier A agent surfaces are factual per agent', () => {
+      const expected = new Map<string, { hooks: boolean; skills: boolean }>([
+        ['cursor', { hooks: true, skills: true }],
+        ['windsurf', { hooks: false, skills: false }],
+        ['cline', { hooks: false, skills: false }],
+        ['codex', { hooks: false, skills: true }],
+        ['github-copilot', { hooks: true, skills: true }],
+      ]);
+
+      for (const [name, surfaces] of expected) {
         const profile = getAgentCapabilityProfile(name)!;
         assert.equal(profile.templateTier, 'A', `${name} should be tier A`);
-        assert.ok(profile.hasHooks, `${name} should have hooks`);
-        assert.ok(profile.hasSkills, `${name} should have skills`);
+        assert.equal(profile.hasHooks, surfaces.hooks, `${name} hook support should match its native surface`);
+        assert.equal(profile.hasSkills, surfaces.skills, `${name} skill support should match its writer surface`);
       }
     });
 

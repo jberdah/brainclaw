@@ -75,6 +75,16 @@ export class JsonStore<T> {
   }
 
   private pathFor(id: string): string {
-    return path.join(this.dirPath, `${id}.json`);
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+      throw new Error(`Invalid ${this.documentType} id '${id}'`);
+    }
+
+    const root = path.resolve(this.dirPath);
+    const filepath = path.resolve(root, `${id}.json`);
+    const relative = path.relative(root, filepath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`Invalid ${this.documentType} id '${id}'`);
+    }
+    return filepath;
   }
 }

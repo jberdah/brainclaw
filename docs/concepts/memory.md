@@ -30,7 +30,7 @@ Shared project knowledge worth keeping.
 
 Examples: constraints, decisions, traps, completed plans, handoffs.
 
-Shared traps now have a lifecycle too: `active`, `resolved`, or `expired`. Active views such as generated context, status, and `project.md` prioritize only active traps so old machine-setup issues stop polluting the current working set, while the canonical memory still keeps resolved traps for audit and search.
+Shared traps now have a lifecycle too: `active`, `resolved`, or `expired`. Active views such as generated context and status prioritize only active traps so old machine-setup issues stop polluting the current working set, while the canonical memory still keeps resolved traps for audit and search.
 
 These live as individual JSON files under `.brainclaw/memory/` (constraints, decisions, traps, instructions) and `.brainclaw/coordination/` (plans, claims, handoffs). They are versioned in `.brainclaw/.git` and shared via Git.
 
@@ -60,7 +60,8 @@ brainclaw makes this context visible and versionable.
 brainclaw keeps:
 
 - canonical structured JSON as the source of truth (individual files under `.brainclaw/memory/` and `.brainclaw/coordination/`)
-- a derived readable view (`project.md`) regenerated best-effort from canonical state
+- a legacy derived readable view (`.brainclaw/project.md`) regenerated best-effort from canonical state
+- root `PROJECT.md` as the stable project vision when present
 - native agent instruction files (`CLAUDE.md`, `.cursor/rules/brainclaw.md`, etc.) generated via `brainclaw export`
 
 This balances machine reliability with human readability.

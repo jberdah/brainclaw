@@ -7,7 +7,7 @@ brainclaw integrates with Windsurf through MCP tools and instruction rules, prov
 `brainclaw init` detects Windsurf and writes `.windsurfrules` automatically. Or manually:
 
 ```bash
-brainclaw export --format windsurfrules --write
+brainclaw export --format windsurf --write
 ```
 
 ## MCP configuration
@@ -49,14 +49,14 @@ Windsurf supports `alwaysAllow` as an array on each MCP server entry:
 }
 ```
 
-brainclaw does not yet emit `alwaysAllow` for Windsurf automatically.
+`brainclaw setup-machine` emits the Windsurf MCP config with `alwaysAllow` for the Brainclaw tool surface.
 
 ## Instruction files
 
 - `.windsurf/rules/*.md` — modern format (recommended), multiple rule files
 - `.windsurfrules` — legacy single-file format (still supported)
 
-brainclaw currently emits the legacy format. Modern `.windsurf/rules/` support is planned.
+`brainclaw export --format windsurf --write` writes the legacy `.windsurfrules` instruction file. Project setup also writes `.windsurf/rules/brainclaw.md` when Windsurf is selected, so modern rule discovery is covered.
 
 ## SKILL.md discovery
 
@@ -77,7 +77,7 @@ Windsurf does not offer a headless CLI. It runs as a Docker-based environment �
 
 - **Machine-scoped MCP**: The config at `~/.codeium/windsurf/mcp_config.json` is global, not per-project. All projects share the same server list.
 - **No hooks**: Cascade Hooks exist but are limited to logging — no pre-prompt injection.
-- **Legacy format**: brainclaw currently writes `.windsurfrules` (single file). Modern `.windsurf/rules/` multi-file support is planned (P5).
+- **Two rule paths**: `.windsurfrules` remains the portable export target; `.windsurf/rules/brainclaw.md` is written during project setup for modern Windsurf rule discovery.
 - **No headless**: Cannot be used as a brainclaw dispatch target.
 - **Plan Mode**: Windsurf's "megaplan" mode is separate from brainclaw plans — they don't conflict but don't interoperate.
 - **Windows/Linux**: Works on all platforms via the Windsurf IDE.

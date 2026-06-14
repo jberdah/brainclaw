@@ -1,6 +1,6 @@
 # Cline Integration
 
-brainclaw integrates with Cline through MCP tools, instruction rules, and lifecycle hooks. Cline is a Tier A agent — full MCP access, hooks, auto-approve support, skills, and CLI spawn capability for parallel lanes.
+brainclaw integrates with Cline through MCP tools, instruction rules, auto-approval, and CLI spawn capability for parallel lanes. Cline does not currently expose a Brainclaw-managed lifecycle hook surface.
 
 ## Auto-setup
 
@@ -53,7 +53,7 @@ Cline supports per-server `alwaysAllow` for auto-approving specific tools:
 
 ## SKILL.md discovery
 
-Cline auto-discovers skills from `.clinerules/`, `.claude/skills/`, and `.agents/skills/`. brainclaw writes a single `.agents/skills/brainclaw/SKILL.md` that Cline picks up automatically.
+Cline may discover skills from agent-specific directories depending on the installed extension/version. Brainclaw's current Cline writer configures MCP and `.clinerules/brainclaw.md`; it does not write a Cline-specific SKILL.md.
 
 ## Headless invocation
 
@@ -71,9 +71,9 @@ The `-y` flag (YOLO mode) disables interactive approval prompts so the spawned w
 |-------|-------|
 | Tier | A |
 | MCP | yes |
-| Hooks | yes |
+| Hooks | no |
 | Auto-approve | yes (`alwaysAllow` per server, `-y` per session) |
-| Skills | yes |
+| Skills | no Brainclaw-specific writer |
 | CLI spawnable | yes |
 | Max concurrent tasks | 3 |
 | Workflow model | interactive |
@@ -82,7 +82,6 @@ The `-y` flag (YOLO mode) disables interactive approval prompts so the spawned w
 
 ## Caveats
 
-- **Hook support varies by platform**: Cline hooks are reliable on macOS/Linux but the Windows path is less exercised. brainclaw generates hooks that gracefully degrade when the runtime doesn't honour them — the templateTier stays A regardless.
 - **Cline / Roo / Kilocode family**: Cline shares its config-pattern lineage with Roo Code and Kilocode. The directory names differ (`.clinerules/` vs `.roo/rules/` vs `.kilo/rules/`) but the auto-discovery model is the same.
 - **Project-scoped MCP**: unlike machine-scoped agents (Cursor, Windsurf), Cline's MCP config lives in the repo. Each repo gets its own brainclaw registration.
 - **Long prompts**: inline arg supports up to 8000 chars before falling back to inbox-structured delivery. Briefs longer than that should arrive via inbox.

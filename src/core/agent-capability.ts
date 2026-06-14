@@ -4,14 +4,12 @@
  * integration depth, and pressure level accordingly.
  *
  * Three profile tiers drive instruction file templates:
- *   A (full)    — MCP + hooks → lightweight instructions (context via hooks/MCP)
- *   B (standard) — MCP, no hooks → working rules + architecture + top traps
- *   C (limited) — no MCP → rich static content (plans, traps, decisions)
+ *   A (full)      — managed MCP/native surfaces → lightweight instructions
+ *   B (standard)  — MCP with fewer automation surfaces → more directive rules
+ *   C (limited)   — no MCP → rich static content (plans, traps, decisions)
  *
- * Tier A agents (as of 2026-04): Claude Code, Copilot, Codex, Cursor,
- * Windsurf (12 hooks!), Cline (macOS/Linux only).
- * Note: Cline hooks don't work on Windows — but templateTier stays A
- * because brainclaw generates hooks that gracefully degrade.
+ * Hook support is declared separately through `hasHooks` and `runtime.hooks`.
+ * Do not infer hooks from `templateTier`.
  */
 
 import os from 'node:os';
@@ -192,20 +190,20 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   },
   windsurf: {
     name: 'windsurf', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: false, hasRules: true,
     instructionFile: '.windsurfrules', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: false, canSpawnOtherCli: false, inbox: false },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: false, canSpawnOtherCli: false, inbox: false },
     max_concurrent_tasks: 1,
     prompt_delivery: { methods: ['inbox_structured'], preferred: 'inbox_structured' },
     execution_env: { surface: 'ide' },
   },
   cline: {
     name: 'cline', category: 'code-agent', workflowModel: 'interactive',
-    hasMcp: true, hasHooks: true, hasAutoApprove: true, hasSkills: true, hasRules: true,
+    hasMcp: true, hasHooks: false, hasAutoApprove: true, hasSkills: false, hasRules: true,
     instructionFile: '.clinerules/brainclaw.md', sharedInstructionFile: false, mcpConfigScope: 'project', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 3,
     prompt_delivery: { methods: ['inline_arg', 'inbox_structured'], preferred: 'inline_arg', max_inline_length: 8000 },
     execution_env: { surface: 'extension' },
@@ -258,10 +256,10 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   // worktree. The coordinator then syncs them via bclaw_harvest_candidates.
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
-    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
+    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 5,
     // pln#475: prefer stdin_pipe to avoid Windows cmd.exe arg-parsing breaking
     // long prompts. codex.cmd resolves through cmd shell, where embedded

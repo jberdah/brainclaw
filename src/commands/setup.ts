@@ -661,9 +661,18 @@ function resolveVsixPath(): string | undefined {
   const distVsix = path.join(thisDir, '..', 'brainclaw-vscode.vsix');
   if (fs.existsSync(distVsix)) return distVsix;
 
-  // 2. Dev mode: vscode-extension/ directory
-  const devVsix = path.join(thisDir, '..', '..', 'vscode-extension', 'brainclaw-vscode-0.1.0.vsix');
-  if (fs.existsSync(devVsix)) return devVsix;
+  // 2. Dev mode: pick the newest locally packaged extension.
+  const devDir = path.join(thisDir, '..', '..', 'vscode-extension');
+  if (fs.existsSync(devDir)) {
+    const candidates = fs.readdirSync(devDir)
+      .filter((name) => /^brainclaw-vscode-\d+\.\d+\.\d+\.vsix$/.test(name))
+      .map((name) => {
+        const filePath = path.join(devDir, name);
+        return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    if (candidates[0]) return candidates[0].filePath;
+  }
 
   return undefined;
 }

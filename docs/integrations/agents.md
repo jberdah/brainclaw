@@ -83,7 +83,7 @@ The agent can use `bclaw_setup` to walk through the process interactively.
 brainclaw enable-agent claude-code
 brainclaw enable-agent cursor
 brainclaw export --format claude-md --write
-brainclaw export --detect --write          # auto-detect and write all formats
+brainclaw export --detect --write          # auto-detect and write the current agent format
 ```
 
 ### Regenerating after changes
