@@ -104,8 +104,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:21fa9544977a3754`
-  (updated 2026-06-11b: observability surfaces — composite
+- MCP public surface fingerprint: `sha256:b1d3c6a00a224509`
+  (updated 2026-06-14: journal ON by default + `migrate --enable-journal`,
+  registry post-image families + verify gate, and capped auto-handoff diff
+  preview on `bclaw_get`; pln#567/#568/#569.
+  Previous: `sha256:21fa9544977a3754`,
+  updated 2026-06-11b: observability surfaces — composite
   `attention_required` in board_summary, observer-mode read flags,
   `bootstrap_verdict` in FacadeResponse; pln#557/#558/#559.
   Previous: `sha256:8f86d3998f8a24e3`,
