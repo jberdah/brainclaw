@@ -8,8 +8,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { executeMcpToolCall, handleMcpReadToolCall } from '../../src/commands/mcp.js';
 import { capHandoffDiff, HANDOFF_DIFF_PREVIEW_CHARS } from '../../src/core/handoff-snapshot.js';
+import { saveState } from '../../src/core/state.js';
 import { HandoffSchema } from '../../src/core/schema.js';
+import { createTestWorkspace } from '../helpers/workspace.js';
 
 describe('capHandoffDiff (pln#569)', () => {
   it('returns undefined for an absent/empty diff', () => {
@@ -21,7 +24,7 @@ describe('capHandoffDiff (pln#569)', () => {
     const diff = 'diff --git a/x b/x\n+small change\n';
     const snap = capHandoffDiff(diff);
     assert.deepEqual(snap, { diff });
-    assert.equal(snap?.diff_digest, undefined, 'a complete inline diff carries no digest');
+    assert.equal('diff_digest' in (snap ?? {}), false, 'a complete inline diff carries no digest');
   });
 
   it('caps a large diff to the preview and records a verifiable digest', () => {
@@ -43,6 +46,14 @@ describe('capHandoffDiff (pln#569)', () => {
     assert.equal(snap!.diff_digest, undefined);
   });
 
+  it('does not split surrogate pairs when flattening the preview', () => {
+    const full = `${'a'.repeat(HANDOFF_DIFF_PREVIEW_CHARS - 1)}😀tail`;
+    const snap = capHandoffDiff(full);
+    assert.equal(snap!.diff, full.slice(0, HANDOFF_DIFF_PREVIEW_CHARS - 1));
+    assert.equal(snap!.diff?.includes('\uFFFD'), false);
+    assert.equal(snap!.diff_digest?.sha256, crypto.createHash('sha256').update(full, 'utf8').digest('hex'));
+  });
+
   it('produces a snapshot the HandoffSchema accepts (digest round-trips)', () => {
     const snap = capHandoffDiff('z'.repeat(HANDOFF_DIFF_PREVIEW_CHARS + 100));
     const handoff = HandoffSchema.parse({
@@ -51,5 +62,45 @@ describe('capHandoffDiff (pln#569)', () => {
     });
     assert.equal(handoff.snapshot?.diff_digest?.truncated, true);
     assert.equal(handoff.snapshot?.diff?.length, HANDOFF_DIFF_PREVIEW_CHARS);
+  });
+
+  it('marks capped snapshots as previews on both handoff read surfaces', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-handoff-diff-cap-' });
+    try {
+      const snap = capHandoffDiff('q'.repeat(HANDOFF_DIFF_PREVIEW_CHARS + 100));
+      saveState({
+        version: 1,
+        write_version: 1,
+        active_constraints: [],
+        recent_decisions: [],
+        known_traps: [],
+        plan_items: [],
+        open_handoffs: [{
+          id: 'hnd_preview',
+          from: 'worker',
+          to: 'reviewer',
+          text: 'review capped diff',
+          created_at: '2026-06-14T00:00:00.000Z',
+          author: 'worker',
+          status: 'open',
+          tags: ['auto-handoff'],
+          snapshot: snap,
+        }],
+      }, workspace.dir);
+
+      const read = handleMcpReadToolCall('bclaw_read_handoff', { id: 'hnd_preview' }, { cwd: workspace.dir });
+      assert.match(read.content[0].text, /preview — full diff is \d+ bytes on the worktree branch/);
+
+      const get = await executeMcpToolCall({
+        name: 'bclaw_get',
+        args: { entity: 'handoff', id: 'hnd_preview' },
+        cwd: workspace.dir,
+      });
+      const result = get.response.structuredContent as { item?: { snapshot?: { diff?: string; diff_digest?: { truncated?: boolean } } } };
+      assert.equal(result.item?.snapshot?.diff_digest?.truncated, true);
+      assert.match(result.item?.snapshot?.diff ?? '', /preview — full diff is \d+ bytes on the worktree branch/);
+    } finally {
+      workspace.cleanup();
+    }
   });
 });

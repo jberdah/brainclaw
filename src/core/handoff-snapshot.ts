@@ -31,6 +31,13 @@ export const HANDOFF_DIFF_PREVIEW_CHARS = 16_384;
 
 export type HandoffSnapshot = NonNullable<Handoff['snapshot']>;
 
+function safePreviewEnd(fullDiff: string): number {
+  const end = HANDOFF_DIFF_PREVIEW_CHARS;
+  const last = fullDiff.charCodeAt(end - 1);
+  const next = fullDiff.charCodeAt(end);
+  return last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? end - 1 : end;
+}
+
 /**
  * Build a handoff `snapshot` from a full diff: keep an inline preview, and when
  * the diff exceeds the preview cap, record a digest of the FULL diff
@@ -47,7 +54,7 @@ export function capHandoffDiff(fullDiff: string | undefined): HandoffSnapshot | 
   // V8 SlicedString that pins the whole ~450 KB parent in memory, defeating the
   // cap (the parent never gets freed) — the same trap trimForProjection hit
   // (trp_2ca4b87b).
-  const preview = Buffer.from(fullDiff.slice(0, HANDOFF_DIFF_PREVIEW_CHARS), 'utf8').toString('utf8');
+  const preview = Buffer.from(fullDiff.slice(0, safePreviewEnd(fullDiff)), 'utf8').toString('utf8');
   return {
     diff: preview,
     diff_digest: {
@@ -56,4 +63,10 @@ export function capHandoffDiff(fullDiff: string | undefined): HandoffSnapshot | 
       truncated: true,
     },
   };
+}
+
+export function handoffDiffPreviewNote(snapshot: HandoffSnapshot | undefined): string | undefined {
+  const digest = snapshot?.diff_digest;
+  if (!digest?.truncated) return undefined;
+  return `… [preview — full diff is ${digest.full_bytes} bytes on the worktree branch]`;
 }
