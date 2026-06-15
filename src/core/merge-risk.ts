@@ -12,6 +12,7 @@
  * costs the trp_merge_wipes_node_modules / parasitic-deletion class of pain.
  */
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { listWorktrees, type WorktreeInfo } from './worktree.js';
 import { listClaims } from './claims.js';
 import { logger } from './logger.js';
@@ -183,6 +184,18 @@ function normalizePath(p: string): string {
   // win32: POSIX filesystems are case-sensitive, so lowercasing `/Users/Foo`
   // and `/users/foo` would collapse two genuinely distinct directories and
   // mis-attribute a claim to the wrong lane.
-  const normalized = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  // Resolve to the canonical real path when it exists, so a stored
+  // worktree_path in Windows 8.3 short form (e.g. C:\Users\RUNNER~1\…, as
+  // GitHub runners' TEMP expands) reconciles with the long-form path that
+  // `git worktree list` reports. Without this the claim never matches its lane
+  // on Windows CI (pln#576). Falls back to the literal path for stale claims
+  // whose worktree has been removed.
+  let resolved = p;
+  try {
+    resolved = fs.realpathSync.native(p);
+  } catch {
+    // Path no longer exists — keep the literal value.
+  }
+  const normalized = resolved.replace(/\\/g, '/').replace(/\/+$/, '');
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
