@@ -56,9 +56,14 @@ const groups = {
 };
 
 const perFileTimeoutMs = {
-  unit: 180000,
+  // CLI cold-start is several seconds (large eager import graph) and each e2e
+  // test spawns multiple processes; under loaded CI runners 90s/180s produced
+  // false file-level TIMEOUTs on slow-but-correct files (agent-first, cli,
+  // collaboration, mcp, reflective, journal-concurrency). Raised to absorb
+  // cold-start variance — these files are slow, not hung (pln#573).
+  unit: 300000,
   smoke: 60000,
-  e2e: 90000,
+  e2e: 300000,
 };
 
 function getTestKind(filepath) {

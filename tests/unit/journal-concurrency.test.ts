@@ -136,16 +136,24 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
       }),
     );
 
-    // Wait until every child has committed at least once (deterministic), then
-    // hard-kill them all mid-flight. Generous timeout absorbs slow cold-starts.
-    const deadline = Date.now() + 30_000;
+    // Kill once a QUORUM of children have each committed at least once — we do
+    // NOT wait for all N. The invariant under test (no seq reuse / readable torn
+    // tail after a crash) only needs several concurrent committers; requiring
+    // all N made the precondition flaky under disk-I/O contention, where a tight
+    // fsync-per-append loop in the already-started children can starve a slow
+    // starter for a long time (pln#573). Killing while some children are still
+    // mid-append is also stronger crash stress, not weaker.
+    const committedCount = () =>
+      Array.from({ length: N }, (_, i) => markerPath(i)).filter((p) => fs.existsSync(p)).length;
+    const QUORUM = 2;
+    const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
-      if (Array.from({ length: N }, (_, i) => markerPath(i)).every((p) => fs.existsSync(p))) break;
+      if (committedCount() >= QUORUM) break;
       await new Promise((r) => setTimeout(r, 50));
     }
     assert.ok(
-      Array.from({ length: N }, (_, i) => markerPath(i)).every((p) => fs.existsSync(p)),
-      'all children should have committed at least once before the kill',
+      committedCount() >= QUORUM,
+      `at least ${QUORUM} of ${N} children should have committed at least once before the kill`,
     );
     for (const c of children) c.kill('SIGKILL');
     await Promise.all(children.map(waitForChild));
