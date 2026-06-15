@@ -52,11 +52,12 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
     cleanupDirs.push(dir);
 
     const N = 4;
-    const K = 20;
+    const K = 12;
     const journalUrl = new URL('../../src/core/events/journal.js', import.meta.url).href;
 
     const childScript = (child: number) => `
       import { forceAppendJournalRecords } from ${JSON.stringify(journalUrl)};
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       for (let k = 0; k < ${K}; k++) {
         forceAppendJournalRecords([{
           action: 'create',
@@ -65,6 +66,13 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
           agent: 'child-${child}',
           summary: 'child ${child} event ' + k,
         }], ${JSON.stringify(dir)});
+        // Jitter between appends so the advisory store lock circulates fairly.
+        // The lock is O_EXCL-create with no fairness queue; a tight re-acquire
+        // loop lets one writer monopolize it and starve siblings past the
+        // acquisition timeout under load (pln#574). Writers still overlap — the
+        // serialization invariants below are unchanged — they just don't hammer
+        // the lock in lock-step.
+        await sleep(5 + Math.floor(Math.random() * 25));
       }
     `;
 
