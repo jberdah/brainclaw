@@ -346,6 +346,31 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.9.0
+
+- **Release hardening for npm publishing + agent-surface coherence** (pln#571).
+  A dedicated CI **Release Package Check** builds the CLI, builds the optional
+  VS Code extension, runs the extension tests, and verifies the published tarball
+  contents; `version --publish-local`/`prepublishOnly` now run `build:release` +
+  `pack:check` before `npm pack`. The `.vsix` ships as an *optional* IDE
+  companion (local CLI builds skip it; release builds stay strict). Generated
+  agent surfaces no longer pin the npm semver (stable `Managed by brainclaw`
+  banner), and `.brainclaw/project.md` is documented as a legacy derived view —
+  root `PROJECT.md` is the durable project vision; live claims/plans/handoffs
+  live in `agent-board` / MCP context.
+- **Coordination & safety fixes** — strict claim isolation (a duplicate active
+  claim on the same scope now fails inside the mutation lock instead of warning),
+  `JsonStore` entity-id validation to prevent path traversal (pln#571), and
+  `reflect --batch` no longer swallows identity/security errors so a strict
+  import can never silently skip sensitive content (pln#572).
+- **Concurrency & CI robustness** — the journal append waits fairly under
+  contention so a multi-process kill-9 storm converges without seq reuse
+  (pln#573/#574), and `merge-risk` reconciles Windows 8.3 short-name worktree
+  paths so a claim matches its lane on Windows runners (pln#576).
+- **Docs** — Roo, Continue, Windsurf, Copilot, OpenClaw, quickstart, and the
+  agent-integration docs now match the current export formats and setup behavior
+  (pln#571/#575).
+
 ### v1.8.0
 
 - **Multi-agent dispatch convergence — "worktree-as-contract"** (from a real
