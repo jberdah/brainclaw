@@ -305,16 +305,19 @@ describe('MCP server', () => {
       assert.ok(Array.isArray(response.result.tools));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_work'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_coordinate'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_get_context'));
+      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_context'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_session_start'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_session_end'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_claim'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_release_claim'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_plans'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_claims'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_accept'));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_reject'));
+      // Legacy per-entity list/accept/reject tools were removed from the default
+      // discoverable surface in v1.0 (canonical grammar: bclaw_find / bclaw_get /
+      // bclaw_transition). They remain callable as legacy handlers / via catalog=all.
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_plans'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_claims'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_candidates'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_accept'));
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_reject'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_read_inbox'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_quick_capture'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_switch'));
@@ -420,7 +423,9 @@ describe('MCP server', () => {
         method: 'tools/call',
         params: {
           name: 'bclaw_list_plans',
-          arguments: { project: 'auth' },
+          // `project` is now a cross-project ROUTING key (unknown names throw),
+          // not a plan-attribute filter — list within the current store instead.
+          arguments: {},
         },
       });
       assert.equal(plans.result.structuredContent.total, 1);
@@ -432,7 +437,7 @@ describe('MCP server', () => {
         method: 'tools/call',
         params: {
           name: 'bclaw_list_claims',
-          arguments: { agent: 'copilot' },
+          arguments: { agent: 'github-copilot' },
         },
       });
       assert.equal(claims.result.structuredContent.total, 1);
@@ -447,7 +452,7 @@ describe('MCP server', () => {
           arguments: {},
         },
       });
-      assert.ok(agents.result.structuredContent.agents.some((agent: any) => agent.agent_name === 'copilot'));
+      assert.ok(agents.result.structuredContent.agents.some((agent: any) => agent.agent_name === 'github-copilot'));
       assert.equal(agents.result.structuredContent.current_agent, 'testuser');
 
       const instructions = await sendMcpRequest(proc, {
@@ -455,8 +460,11 @@ describe('MCP server', () => {
         id: 104,
         method: 'tools/call',
         params: {
+          // `project` is cross-project routing now (throws on unknown names),
+          // so list the raw active instructions in this store instead of
+          // resolving against a project scope.
           name: 'bclaw_list_instructions',
-          arguments: { resolved: true, project: 'auth', active: true },
+          arguments: { active: true },
         },
       });
       assert.equal(instructions.result.structuredContent.total, 2);
@@ -1076,13 +1084,17 @@ describe('MCP server', () => {
         params: {
           name: 'bclaw_get_agent_board',
           arguments: {
-            agent: 'copilot',
+            // Board reads resolve the agent scope verbatim (no alias
+            // canonicalization on read), and writes store under the canonical
+            // 'github-copilot' (pln#562) — so the board must be queried by the
+            // canonical name to see this agent's data.
+            agent: 'github-copilot',
             path: 'auth',
           },
         },
       });
 
-      assert.ok(response.result.content[0].text.includes('Agent board for copilot (auth)'));
+      assert.ok(response.result.content[0].text.includes('Agent board for github-copilot (auth)'));
       assert.match(response.result.structuredContent.project_id, /^prj_[a-f0-9]+$/);
       assert.match(response.result.structuredContent.agent_id, /^agt_[a-f0-9]+$/);
       assert.ok(Array.isArray(response.result.structuredContent.active_plans));
@@ -1123,7 +1135,7 @@ describe('MCP server', () => {
       assert.ok(response.result.structuredContent.reputation_summary);
       assert.equal(response.result.structuredContent.reputation_summary.enabled, true);
       assert.ok(response.result.structuredContent.agent_reputation);
-      assert.equal(response.result.structuredContent.agent_reputation.agent_name, 'copilot');
+      assert.equal(response.result.structuredContent.agent_reputation.agent_name, 'github-copilot');
     } finally {
       await stopMcp(proc);
     }
@@ -1144,7 +1156,9 @@ describe('MCP server', () => {
         params: {
           name: 'bclaw_get_agent_board',
           arguments: {
-            agent: 'copilot',
+            // Canonical name — machine-local notes are stored under
+            // 'github-copilot' (pln#562); board reads don't canonicalize input.
+            agent: 'github-copilot',
           },
         },
       });
@@ -1255,7 +1269,9 @@ describe('MCP server', () => {
       assert.match(response.result.session_id, /^sess_[a-f0-9]+$/);
       await expectNoMcpMessage(proc, 300);
 
-      const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'copilot');
+      // Notes written via agent 'copilot' are stored under the canonical
+      // 'github-copilot' directory (pln#562 alias normalization on write).
+      const runtimeDir = path.join(dir, '.brainclaw', 'coordination', 'runtime', 'github-copilot');
       const runtimeFiles = fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).filter((file) => file.endsWith('.json')) : [];
       assert.equal(runtimeFiles.length, 1);
 

@@ -197,7 +197,7 @@ describe('Reflective Memory (Phase 1)', () => {
       assert.equal(candidate.text, 'Node is not on PATH on this host');
       assert.equal(candidate.type, 'trap');
       // Provenance preserved in `origin`; `source` is the normalized enum (undefined for runtime-note).
-      assert.equal(candidate.origin, `runtime-note:copilot:${rtnId1}`);
+      assert.equal(candidate.origin, `runtime-note:github-copilot:${rtnId1}`);
       assert.match(candidate.author_id, /^agt_[a-f0-9]+$/);
       assert.match(candidate.project_id, /^prj_[a-f0-9]+$/);
       assert.equal(candidate.host_id, 'host-a');

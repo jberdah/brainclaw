@@ -275,7 +275,7 @@ describe('brainclaw CLI', () => {
       assert.equal(updated.claims.auto_release_after_hours, 72);
     });
 
-    it('resets managed config defaults when init is forced', () => {
+    it('preserves curator config customizations when init is forced', () => {
       run(['init', '-y'], dir, { BRAINCLAW_TEST_MODE: '1' });
       const configPath = path.join(dir, '.brainclaw', 'config.yaml');
       const config = YAML.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, any>;
@@ -285,8 +285,11 @@ describe('brainclaw CLI', () => {
       const res = run(['init', '--force'], dir, { BRAINCLAW_TEST_MODE: '1' });
       assert.equal(res.exitCode, 0, res.stderr);
 
+      // --force rebuilds identity but merges through existing config so curator
+      // personalisations (claims TTL, redaction, governance, …) survive the
+      // reset (init.ts — regression guard behind feedback_no_init_force).
       const updated = readConfig(dir);
-      assert.equal(updated.claims.auto_release_after_hours, 24);
+      assert.equal(updated.claims.auto_release_after_hours, 72);
     });
 
     it('stores explicit multi-project init options', () => {
@@ -591,6 +594,10 @@ describe('brainclaw CLI', () => {
   describe('cleanup-candidates', () => {
     it('removes only stale auto-generated candidates', () => {
       run(['init', '-y'], dir);
+      // Reflect as a contributor (not the default curator) so candidates land
+      // in the inbox instead of being direct-written to memory (reflect.ts
+      // curator write-through, post 2026-06-10 identity audit).
+      run(['register-agent', 'contributor-bot', '--kind', 'agent', '--set-current'], dir);
       const staleAuto = run(['reflect', 'Old auto candidate', '--type', 'decision'], dir);
       const staleHuman = run(['reflect', 'Old human candidate', '--type', 'decision'], dir);
 
@@ -616,6 +623,8 @@ describe('brainclaw CLI', () => {
 
     it('supports dry-run', () => {
       run(['init', '-y'], dir);
+      // Contributor (not curator) so reflect creates an inbox candidate.
+      run(['register-agent', 'contributor-bot', '--kind', 'agent', '--set-current'], dir);
       const staleAuto = run(['reflect', 'Old auto candidate', '--type', 'decision'], dir);
       const staleAutoId = extractId(staleAuto.stdout);
       const staleAutoPath = path.join(dir, '.brainclaw', 'coordination', 'inbox', `${staleAutoId}.json`);
@@ -742,15 +751,17 @@ describe('brainclaw CLI', () => {
 
       const res = run(['register-agent', 'copilot', '--kind', 'agent', '--set-current'], dir);
       assert.equal(res.exitCode, 0);
-      assert.ok(res.stdout.includes('Agent registered: copilot'));
+      // 'copilot' is an alias canonicalized to 'github-copilot' at the registry
+      // level (pln#562 — they are one agent).
+      assert.ok(res.stdout.includes('Agent registered: github-copilot'));
 
       const config = readConfig(dir);
-      assert.equal(config.current_agent, 'copilot');
+      assert.equal(config.current_agent, 'github-copilot');
       assert.match(config.current_agent_id, /^agt_[a-f0-9]+$/);
 
       const agents = readRegisteredAgents(dir);
       assert.equal(agents.length, 2);
-      assert.ok(agents.some((agent) => agent.agent_name === 'copilot' && agent.kind === 'agent'));
+      assert.ok(agents.some((agent) => agent.agent_name === 'github-copilot' && agent.kind === 'agent'));
     });
 
     it('upserts agent capabilities and can generate a fingerprint', () => {
@@ -796,7 +807,7 @@ describe('brainclaw CLI', () => {
       const parsed = JSON.parse(res.stdout);
       assert.equal(parsed.current_agent, 'testuser');
       assert.equal(parsed.agents.length, 2);
-      assert.ok(parsed.agents.some((agent: any) => agent.agent_name === 'copilot'));
+      assert.ok(parsed.agents.some((agent: any) => agent.agent_name === 'github-copilot'));
     });
 
     it('can include bounded reputation summaries in list-agents JSON', () => {
