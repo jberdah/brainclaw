@@ -687,7 +687,10 @@ describe('MCP server', () => {
       scripts: { test: 'npm test' },
     }, null, 2), 'utf-8');
 
-    const proc = startMcp(dir);
+    // This test exercises the real brownfield bootstrap probe, which is skipped
+    // when BRAINCLAW_TEST_MODE=1 (context.ts) — the harness sets that globally,
+    // so it must be turned off here or bootstrap_available is always false.
+    const proc = startMcp(dir, { BRAINCLAW_TEST_MODE: '0' });
     try {
       await initializeMcp(proc);
       const bootstrap = await sendMcpRequest(proc, {
@@ -1084,17 +1087,17 @@ describe('MCP server', () => {
         params: {
           name: 'bclaw_get_agent_board',
           arguments: {
-            // Board reads resolve the agent scope verbatim (no alias
-            // canonicalization on read), and writes store under the canonical
-            // 'github-copilot' (pln#562) — so the board must be queried by the
-            // canonical name to see this agent's data.
+            // Query by the canonical name — writes store under 'github-copilot'
+            // (pln#562) and board reads resolve the agent scope verbatim. No
+            // `project`/`path`: `project` is now a cross-project ROUTING key that
+            // throws on a plain namespace like 'auth', and the "(project)" header
+            // suffix only appears for a routed project, not a plan attribute.
             agent: 'github-copilot',
-            path: 'auth',
           },
         },
       });
 
-      assert.ok(response.result.content[0].text.includes('Agent board for github-copilot (auth)'));
+      assert.ok(response.result.content[0].text.includes('Agent board for github-copilot'));
       assert.match(response.result.structuredContent.project_id, /^prj_[a-f0-9]+$/);
       assert.match(response.result.structuredContent.agent_id, /^agt_[a-f0-9]+$/);
       assert.ok(Array.isArray(response.result.structuredContent.active_plans));
