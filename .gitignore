@@ -165,3 +165,6 @@ kilo.jsonc
 .windsurf/rules/live.md
 .clinerules/live.md
 .continue/live.md
+
+# Cygwin/MSYS bash crash dumps
+*.stackdump
