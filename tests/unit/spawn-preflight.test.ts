@@ -51,6 +51,15 @@ describe('preflightResultFromEntry — pass/block policy', () => {
     assert.match(r.reason, /no CLI spawn template/);
   });
 
+  it('blocks unknown_agent pointing at spelling/case, not the misleading IDE-only message', () => {
+    const r = preflightResultFromEntry(entry({ agent: 'Nope', status: 'unknown_agent' }));
+    assert.equal(r.ok, false);
+    assert.equal(r.status, 'unknown_agent');
+    assert.match(r.reason, /unknown agent/i);
+    assert.match(r.reason, /spelling\/case/i);
+    assert.doesNotMatch(r.reason, /IDE-only/);
+  });
+
   it('blocks a generic failure with the doctor remediation pointer', () => {
     const r = preflightResultFromEntry(entry({ status: 'failed', detail: 'no ack within 8000ms — delivery failed' }));
     assert.equal(r.ok, false);

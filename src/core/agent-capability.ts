@@ -137,9 +137,21 @@ const AGENT_ALIASES: Record<string, AgentName> = {
   'hermes-agent': 'hermes',
 };
 
-/** Resolve an alias to its canonical agent name, or return the input unchanged. */
+/**
+ * Resolve an alias to its canonical agent name (case-insensitive).
+ *
+ * Agent names are case-insensitive: every canonical profile key and every alias
+ * is lowercase, so we trim + lowercase the input before resolving. This is the
+ * single normalization point — registry, messaging, spawn-check and the
+ * coordinate/dispatch pre-flight all route through here, so a target like
+ * "Codex" or "Gemini" resolves identically to "codex" / "gemini". Without it the
+ * dispatch pre-flight collapsed an unresolved name into "no CLI spawn template
+ * (IDE-only?)" and silently dropped the reviewer (github-copilot/Gemini hit this
+ * passing targetAgents=["Codex"]).
+ */
 export function resolveAgentAlias(name: string): string {
-  return AGENT_ALIASES[name] ?? name;
+  const key = name.trim().toLowerCase();
+  return AGENT_ALIASES[key] ?? key;
 }
 
 const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
@@ -437,7 +449,10 @@ const _customProfiles = new Map<string, AgentCapabilityProfile>();
  * Custom profiles take precedence over DEFAULT_CAPABILITY_PROFILES on lookup.
  */
 export function registerCapabilityProfile(profile: AgentCapabilityProfile): void {
-  _customProfiles.set(profile.name, profile);
+  // Key by the normalized (lowercased) name so lookups through the
+  // case-insensitive resolveAgentAlias match regardless of the casing the
+  // registrant used.
+  _customProfiles.set(profile.name.trim().toLowerCase(), profile);
 }
 
 /**

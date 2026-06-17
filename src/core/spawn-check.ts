@@ -33,7 +33,8 @@ export type SpawnCheckStatus =
   | 'delivered_no_completion' // spawned + ack, but never completed within timeout (the silent-death symptom)
   | 'failed'                  // wrapper reported failure, or delivery never happened
   | 'not_installed'           // binary not on PATH — skipped
-  | 'no_template';            // agent has no CLI invoke template
+  | 'no_template'             // known agent, but no CLI invoke template (IDE-only)
+  | 'unknown_agent';          // name resolves to no known/custom profile (often a casing/typo error)
 
 export interface SpawnCheckEntry {
   agent: string;
@@ -98,7 +99,14 @@ function initProbeGitRepo(root: string): void {
 export async function checkAgentSpawn(agent: string, options: SpawnCheckOptions = {}): Promise<SpawnCheckEntry> {
   const start = Date.now();
   const profile = getCapabilityProfile(agent);
-  if (!profile?.invoke_template || !profile?.invoke_binary || !profile.runtime.canBeSpawnedCli) {
+  if (!profile) {
+    // Distinct from no_template: the name didn't resolve to any profile at all
+    // (resolution is case-insensitive, so this is a genuine typo/unknown agent,
+    // not a casing slip). Reported separately so the pre-flight reason points at
+    // the spelling instead of the misleading "IDE-only?" template message.
+    return { agent, status: 'unknown_agent', delivered: false, completed: false, duration_ms: 0, detail: `unknown agent '${agent}' — not a registered brainclaw profile` };
+  }
+  if (!profile.invoke_template || !profile.invoke_binary || !profile.runtime.canBeSpawnedCli) {
     return { agent, status: 'no_template', delivered: false, completed: false, duration_ms: 0, detail: 'no CLI invoke template' };
   }
 
@@ -172,7 +180,7 @@ export async function runSpawnCheck(options: SpawnCheckOptions = {}): Promise<Sp
     }
   }
 
-  const installed = entries.filter((e) => e.status !== 'not_installed' && e.status !== 'no_template');
+  const installed = entries.filter((e) => e.status !== 'not_installed' && e.status !== 'no_template' && e.status !== 'unknown_agent');
   const ok = installed.filter((e) => e.status === 'ok').length;
   const failures = installed.filter((e) => e.status === 'failed' || e.status === 'delivered_no_completion').length;
   const not_installed = entries.filter((e) => e.status === 'not_installed').length;
@@ -249,6 +257,14 @@ export function preflightResultFromEntry(entry: SpawnCheckEntry): PreflightResul
 
   if (entry.status === 'ok' || entry.status === 'delivered_no_completion') {
     return { agent, ok: true, status: entry.status, reason: entry.detail };
+  }
+
+  if (entry.status === 'unknown_agent') {
+    return {
+      agent, ok: false, status: entry.status,
+      reason: `unknown agent '${agent}' — not a registered brainclaw profile (check spelling/case)`,
+      recommended_next_action: `Use a registered agent name (e.g. codex, claude-code, github-copilot). Names are case-insensitive — list installed agents with \`brainclaw doctor --spawn-check\`.`,
+    };
   }
 
   if (entry.status === 'not_installed') {

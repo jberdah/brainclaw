@@ -4,6 +4,8 @@ import {
   getCapabilityProfile,
   getDefaultInvokeTemplate,
   getSpawnableAgents,
+  resolveAgentAlias,
+  isKnownAgent,
 } from '../../src/core/agent-capability.js';
 
 describe('getCapabilityProfile', () => {
@@ -62,6 +64,35 @@ describe('getCapabilityProfile', () => {
       assert.ok(profile, `profile missing for ${name}`);
       assert.equal(profile.name, name);
     }
+  });
+
+  it('resolves canonical names case-insensitively (regression: targetAgents=["Codex"] dropped)', () => {
+    for (const name of ['Codex', 'CODEX', ' codex ', 'CoDeX']) {
+      const profile = getCapabilityProfile(name);
+      assert.ok(profile, `expected a profile for ${JSON.stringify(name)}`);
+      assert.equal(profile.name, 'codex');
+      assert.equal(profile.runtime.canBeSpawnedCli, true);
+    }
+  });
+
+  it('resolves aliases case-insensitively', () => {
+    assert.equal(getCapabilityProfile('Gemini')?.name, 'antigravity');
+    assert.equal(getCapabilityProfile('Copilot')?.name, 'github-copilot');
+    assert.equal(getCapabilityProfile('GH-Copilot')?.name, 'github-copilot');
+  });
+});
+
+describe('resolveAgentAlias / isKnownAgent — case-insensitive', () => {
+  it('normalizes case + whitespace and applies aliases', () => {
+    assert.equal(resolveAgentAlias('Codex'), 'codex');
+    assert.equal(resolveAgentAlias('  CLAUDE-CODE '), 'claude-code');
+    assert.equal(resolveAgentAlias('Gemini'), 'antigravity');
+  });
+
+  it('recognizes known agents regardless of case', () => {
+    assert.equal(isKnownAgent('Codex'), true);
+    assert.equal(isKnownAgent('GITHUB-COPILOT'), true);
+    assert.equal(isKnownAgent('definitely-not-an-agent'), false);
   });
 });
 
