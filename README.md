@@ -18,7 +18,7 @@ brainclaw gives you durable shared state across sessions, agents, and teammates.
 
 Use it two ways — **together or separately**:
 
-- **Active orchestration** — dispatch work in parallel across multiple agent instances. Claims prevent conflicts, sequences manage lane dependencies, the dispatcher routes by capacity.
+- **Active orchestration** — dispatch work in parallel across multiple agent instances. Claims use Git Worktrees to prevent conflicts, sequences manage lane dependencies, the dispatcher routes by capacity.
 - **Async shared state** — when an agent runs out of credits, when you return to a project after weeks, or when teammates work in parallel: the next agent (or you) resumes cleanly with the same context, plans, and constraints.
 
 The same primitives — plans, claims, handoffs, decisions, traps — serve both modes. That's the design point. brainclaw stores everything locally as plain text + JSON, versions it in Git, and asks no opinion about which agent you should use for what.
@@ -32,7 +32,7 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 | | |
 |---|---|
 | **Project memory** | constraints, decisions, traps, handoffs, and layered instructions agents can resume from |
-| **Coordination state** | shared plans, file claims, runtime notes, and board views for active work |
+| **Coordination state** | shared plans, file claims (backed by Git Worktrees), runtime notes, and board views for active work |
 | **Agent-ready context** | compact, prompt-sized context built from real workspace state instead of stale instructions |
 | **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance |
 | **Multi-turn loops** | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see [loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
@@ -192,6 +192,48 @@ brainclaw export --detect --write
 brainclaw status          # see active sessions, claims, plans
 brainclaw agent-board     # see what each agent is doing
 ```
+
+## A Day in the Life of a Brainclaw Agent
+
+Here's how a typical autonomous task progresses using Brainclaw:
+
+```javascript
+// 1. Session start & Context setup
+bclaw_work({ intent: "execute", scope: "src/feature-auth" });
+// (Brainclaw provisions a dedicated Git Worktree and drops the agent inside)
+
+// 2. The agent writes code, tests it, and completes the step...
+// write code, test code
+bclaw_complete_step({ planId: "pln_123", stepId: "stp_456" });
+
+// 3. The agent releases the claim and requests a review from a peer agent
+bclaw_release_claim({ id: "clm_789", planStatus: "done" });
+bclaw_coordinate({ 
+  intent: "review", 
+  open_loop: true, 
+  review_mode: "symmetric", 
+  targetAgents: ["claude-code"] 
+});
+
+// 4. The loop progresses as agents interact and resolve findings
+bclaw_loop({ intent: "advance", loop_id: "lop_abc" });
+```
+
+## The Loop Engine (Multi-Turn Workflows)
+
+Brainclaw's Loop Engine moves beyond manual ping-pong by formalizing multi-turn workflows (review, ideation, testing). It features two distinct review modes:
+- **Asymmetric Mode**: The classic author→reviewer handoff. The reviewer creates findings, and the original author must apply the fixes.
+- **Symmetric Mode**: Eliminates unnecessary round-trips. Both the author and reviewer slots can apply fixes directly, drastically speeding up spec and documentation reviews.
+
+Each loop maintains a structured lifecycle, explicit phases, iteration bounds, and per-phase memory filters, executed seamlessly via `bclaw_loop`.
+
+## Enterprise Ready: Mono-repo & Micro-services
+
+Brainclaw is designed to scale across complex environments. Using the **`project_mode`** setting, Brainclaw seamlessly auto-detects folder boundaries for mono-repos and applies proper environment bootstrapping.
+
+Additionally, **`cross_project_links`** enables inter-project communication:
+- **Signals**: Candidates, handoffs, and runtime notes gracefully flow between sibling or micro-service projects.
+- **Inbox**: Agents can dispatch review/assign tasks to agents operating in completely different projects using unified inbox routing.
 
 ### Multi-agent setup
 

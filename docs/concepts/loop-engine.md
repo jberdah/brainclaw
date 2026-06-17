@@ -509,3 +509,9 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 - pln#394 `feat/loop-engine-mvp`
 - pln#395 `feat/review-loop-protocol`
 - pln#392 `doc/mcp-versioning-and-surface-governance` (prerequisite)
+
+## Building Custom Loops on the fly
+
+Users and agents are not restricted to predefined, named presets (like 'bootstrap'). They can generate custom loop mechanisms on the fly utilizing the MCP API (`CoordinateRequestSchema`). 
+
+An agent can open a new custom workflow by passing their own array of `LoopPhase` (e.g., `write_test`, `fix_code`) and building a tailored `StopCondition` logic that dictates precisely when the loop terminates. This programmatic control enables agents to construct sophisticated, ad-hoc execution state machines beyond the standard templates.
