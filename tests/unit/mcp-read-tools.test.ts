@@ -336,6 +336,59 @@ describe('commands/mcp read tools', () => {
     }
   });
 
+  it('preserves search filters in pagination next_actions', () => {
+    const sinceFilter = iso(10);
+    saveState({
+      version: 1,
+      write_version: 1,
+      active_constraints: [],
+      recent_decisions: [
+        {
+          id: 'dec_search_page_1',
+          text: 'Pagination probe alpha',
+          created_at: iso(1),
+          author: 'copilot',
+          project_id: 'prj_mcp_read_test',
+          tags: ['page'],
+        },
+        {
+          id: 'dec_search_page_2',
+          text: 'Second pagination probe alpha',
+          created_at: iso(2),
+          author: 'copilot',
+          project_id: 'prj_mcp_read_test',
+          tags: ['page'],
+        },
+      ],
+      known_traps: [],
+      open_handoffs: [],
+      plan_items: [],
+    }, workspace.dir);
+
+    const search = handleMcpReadToolCall('bclaw_search', {
+      query: 'pagination alpha',
+      section: 'decisions',
+      since: sinceFilter,
+      limit: 1,
+      budget_tokens: 1000,
+    }, { cwd: workspace.dir });
+    const structured = search.structuredContent as {
+      total: number;
+      has_more?: boolean;
+      next_actions?: Array<{ args?: Record<string, unknown> }>;
+    };
+    assert.equal(structured.total, 2);
+    assert.equal(structured.has_more, true);
+    assert.deepEqual(structured.next_actions?.[0]?.args, {
+      query: 'pagination alpha',
+      offset: 1,
+      limit: 1,
+      section: 'decisions',
+      since: sinceFilter,
+      budget_tokens: 1000,
+    });
+  });
+
   it('reads handoff details, including diff snapshots, and handles missing handoffs', () => {
     saveState({
       version: 1,

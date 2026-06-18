@@ -134,7 +134,7 @@ export function handleMcpReadToolCall(
   const baseCwd = context.cwd ?? process.cwd();
   const effective = name === 'bclaw_switch'
     ? { cwd: baseCwd, active_source: 'cwd' as const, resolved_project: undefined }
-    : resolveEffectiveCwdInfo({ baseCwd, sessionId: context.connectionSessionId });
+    : context.effectiveScope ?? resolveEffectiveCwdInfo({ baseCwd, sessionId: context.connectionSessionId });
   let cwd = effective.cwd;
   let activeSource = effective.active_source;
   let resolvedProject = effective.resolved_project;
@@ -689,7 +689,7 @@ export function handleMcpReadToolCall(
       query,
       section: (args.section ?? args.type) as string | undefined,
       since: args.since as string | undefined,
-      maxResults: offset + limit,
+      maxResults: Number.MAX_SAFE_INTEGER,
       includeLegacy,
       cwd,
     });
@@ -719,6 +719,10 @@ export function handleMcpReadToolCall(
             offset: bounded.next_offset,
             limit,
             ...(args.project ? { project: args.project } : {}),
+            ...(args.section ? { section: args.section } : {}),
+            ...(args.type ? { type: args.type } : {}),
+            ...(args.since ? { since: args.since } : {}),
+            ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}),
             ...(includeLegacy ? { includeLegacy: true } : {}),
           },
           when: 'to fetch the next page',

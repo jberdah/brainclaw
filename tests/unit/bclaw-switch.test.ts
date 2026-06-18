@@ -239,4 +239,94 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     assert.equal(structured.items[0].id, targetConstraint.id);
     assert.notEqual(structured.items[0].id, hostConstraint.id);
   });
+
+  it('preserves session active_source for external linked projects without BRAINCLAW_CWD', async () => {
+    delete process.env.BRAINCLAW_CWD;
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_no_env_anchor',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: 444444,
+    }, workspace.dir);
+
+    const targetConstraint = createEntity('constraint', {
+      text: 'Target without env anchor',
+      author: 'claude-code',
+      category: 'process',
+    }, linkedProject.dir);
+
+    const switched = await executeMcpToolCall({
+      name: 'bclaw_switch',
+      args: { project: 'target-project' },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_no_env_anchor',
+    });
+    assert.equal(switched.response.isError, false);
+
+    const found = await executeMcpToolCall({
+      name: 'bclaw_find',
+      args: { entity: 'constraint' },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_no_env_anchor',
+    });
+    const structured = found.response.structuredContent as {
+      total: number;
+      items: Array<{ id: string }>;
+      active_source?: string;
+      resolved_project?: { path?: string };
+    };
+    assert.equal(structured.active_source, 'session');
+    assert.match(structured.resolved_project?.path ?? '', /bclaw-switch-target-/);
+    assert.equal(structured.total, 1);
+    assert.equal(structured.items[0].id, targetConstraint.id);
+  });
+
+  it('echoes resolved project metadata for canonical writes after a session switch', async () => {
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_write_echo',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: 555555,
+    }, workspace.dir);
+
+    await executeMcpToolCall({
+      name: 'bclaw_switch',
+      args: { project: 'target-project' },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_write_echo',
+    });
+    const created = await executeMcpToolCall({
+      name: 'bclaw_create',
+      args: {
+        entity: 'constraint',
+        data: { text: 'Write echo constraint', category: 'process' },
+      },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_write_echo',
+    });
+    const structured = created.response.structuredContent as {
+      id: string;
+      active_source?: string;
+      resolved_project?: { path?: string };
+    };
+    assert.equal(created.response.isError, false);
+    assert.equal(structured.active_source, 'session');
+    assert.match(structured.resolved_project?.path ?? '', /bclaw-switch-target-/);
+
+    const found = await executeMcpToolCall({
+      name: 'bclaw_find',
+      args: { entity: 'constraint', project: 'target-project' },
+      cwd: workspace.dir,
+    });
+    const foundStructured = found.response.structuredContent as { items: Array<{ id: string }> };
+    assert.ok(foundStructured.items.some((item) => item.id === structured.id));
+  });
 });

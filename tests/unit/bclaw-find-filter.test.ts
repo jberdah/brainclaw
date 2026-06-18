@@ -147,6 +147,33 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       assert.equal(visibleResult.excluded_legacy, 0);
       assert.equal(visibleResult.items[0].id, legacy.id);
     });
+
+    it('reports low-confidence auto_reflect records excluded by the default read filter', async () => {
+      const autoReflect = createEntity('constraint', {
+        text: 'Auto-reflect scoped constraint',
+        author: 'claude-code',
+        category: 'process',
+      }, workspace.dir);
+      const state = loadState(workspace.dir);
+      const item = state.active_constraints.find((constraint) => constraint.id === autoReflect.id);
+      assert.ok(item);
+      item.provenance = { kind: 'auto_reflect', confidence: 0.2 };
+      saveState(state, workspace.dir);
+
+      const hidden = await find(workspace, 'constraint');
+      const hiddenResult = hidden.content as FindResult & {
+        excluded_low_confidence_auto_reflect?: number;
+        total_before_provenance_filter?: number;
+      };
+      assert.equal(hiddenResult.total, 0);
+      assert.equal(hiddenResult.excluded_low_confidence_auto_reflect, 1);
+      assert.equal(hiddenResult.total_before_provenance_filter, 1);
+
+      const visible = await find(workspace, 'constraint', { minAutoReflectConfidence: 0.1 });
+      const visibleResult = visible.content as FindResult;
+      assert.equal(visibleResult.total, 1);
+      assert.equal(visibleResult.items[0].id, autoReflect.id);
+    });
   });
 
   describe('author filter', () => {

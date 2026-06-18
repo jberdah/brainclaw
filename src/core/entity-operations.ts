@@ -128,6 +128,15 @@ function isLegacyProvenance(item: Record<string, unknown>): boolean {
   return (item.provenance as Provenance | undefined)?.kind === 'legacy';
 }
 
+function isLowConfidenceAutoReflect(item: Record<string, unknown>, filter: EntityFilter): boolean {
+  const provenance = item.provenance as Provenance | undefined;
+  if (provenance?.kind !== 'auto_reflect') return false;
+  const threshold = typeof filter.minAutoReflectConfidence === 'number'
+    ? filter.minAutoReflectConfidence
+    : DEFAULT_MIN_AUTO_REFLECT_CONFIDENCE;
+  return (provenance.confidence ?? 0) < threshold;
+}
+
 /** Thrown when a verb is not yet wired for a given entity. */
 export class EntityOperationUnsupportedError extends Error {
   constructor(entity: EntityName, verb: string, hint?: string) {
@@ -181,6 +190,8 @@ export interface ListResult<T = unknown> {
   items: T[];
   /** Matches hidden by the default provenance filter. */
   excluded_legacy?: number;
+  /** Auto-reflect records hidden below minAutoReflectConfidence. */
+  excluded_low_confidence_auto_reflect?: number;
   /** Matches before provenance filtering, after ordinary field filters. */
   total_before_provenance_filter?: number;
 }
@@ -262,6 +273,9 @@ export function listEntities(
   const excludedLegacy = filter.includeLegacy === true
     ? 0
     : fieldFiltered.filter((item) => isLegacyProvenance(item as Record<string, unknown>)).length;
+  const excludedLowConfidenceAutoReflect = fieldFiltered.filter((item) =>
+    isLowConfidenceAutoReflect(item as Record<string, unknown>, filter)
+  ).length;
   const filtered = fieldFiltered.filter((item) => passesProvenanceFilter(item as Record<string, unknown>, filter));
   const paged = applyPaging(filtered, filter);
   return {
@@ -269,6 +283,7 @@ export function listEntities(
     total: filtered.length,
     items: paged,
     excluded_legacy: excludedLegacy,
+    excluded_low_confidence_auto_reflect: excludedLowConfidenceAutoReflect,
     total_before_provenance_filter: fieldFiltered.length,
   };
 }

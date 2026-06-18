@@ -74,7 +74,24 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
   const sessionOnly = options.sessionOnly ?? true;
   let session = options.sessionId ? loadSessionById(options.sessionId, cwd) : loadCurrentSession(cwd);
   if (!session && sessionOnly) {
-    buildOperationalIdentity(undefined, cwd, { sessionId: options.sessionId, persistImplicitSession: true });
+    if (options.sessionId) {
+      const identity = buildOperationalIdentity(undefined, cwd, {
+        sessionId: options.sessionId,
+        persistImplicitSession: false,
+      });
+      saveCurrentSession({
+        session_id: options.sessionId,
+        started_at: now,
+        last_seen_at: now,
+        agent: identity.agent,
+        agent_id: identity.agent_id,
+        host_id: identity.host_id,
+        user: process.env.USER || process.env.USERNAME || undefined,
+        pid: process.pid,
+      }, cwd);
+    } else {
+      buildOperationalIdentity(undefined, cwd, { persistImplicitSession: true });
+    }
     session = options.sessionId ? loadSessionById(options.sessionId, cwd) : loadCurrentSession(cwd);
   }
 
