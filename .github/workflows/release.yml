@@ -1,0 +1,59 @@
+name: Release
+
+# Publishes brainclaw to npm when a GitHub Release is published.
+# Uses npm Trusted Publishing (OIDC) + provenance — no long-lived NPM_TOKEN.
+# One-time setup: register this repo + workflow as a trusted publisher for the
+# `brainclaw` package at https://www.npmjs.com/package/brainclaw/access
+# (Trusted Publisher → GitHub Actions → repo `jberdah/brainclaw`, workflow
+# `release.yml`). Requires npm >= 11.5 (bundled with Node 24).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance + Trusted Publishing (OIDC)
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Release tag '$GITHUB_REF_NAME' (=$TAG) does not match package.json version '$PKG'."
+            exit 1
+          fi
+
+      - name: Build release artifacts
+        run: npm run build:release
+
+      - name: Check npm package contents
+        run: npm run pack:check
+
+      - name: Publish (Trusted Publishing + provenance)
+        run: npm publish --provenance --access public
+        # No NODE_AUTH_TOKEN: Trusted Publishing authenticates via OIDC once the
+        # trusted publisher is registered on npmjs.com (see header). To fall back
+        # to a classic token instead, register a repo secret NPM_TOKEN and add:
+        #   env:
+        #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -49,6 +49,11 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      # Placeholder until a linter is configured: skips cleanly while no `lint`
+      # script exists (today static analysis is covered by `tsc --noEmit` above).
+      - name: Lint
+        run: npm run lint --if-present
+
       - name: Build tests
         run: npm run build:test
 
