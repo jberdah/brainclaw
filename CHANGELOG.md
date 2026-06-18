@@ -5,6 +5,18 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING — minimum Node.js is now 22.12** (`engines.node = ">=22.12.0"`).
+  Node 20/21 and Node 22.0–22.11 are no longer supported. This formalizes the
+  runtime floor already verified in CI (Node 22/24 only since Node 20's April
+  2026 EOL) and is required by the commander 15 upgrade below.
+- **commander 14 → 15** — the CLI argument parser is now ESM-only and requires
+  Node ≥ 22.12. No CLI behavior change: brainclaw's `--no-*` flags are all lone
+  negations, unaffected by v15's positive/negative default-value change.
+
 ## [1.9.1] — 2026-06-18
 
 Maintenance release: monorepo project-scoping fixes, case-insensitive agent

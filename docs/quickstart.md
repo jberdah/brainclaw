@@ -12,7 +12,7 @@ If you're about to cut a release that changes the CLI, MCP, or context surface, 
 npm install -g brainclaw
 ```
 
-Requires Node.js 20+ (`engines.node = ">=20.0.0"`). CI exercises Node 22 (Active LTS) and Node 24 (current LTS) — Node 22 or 24 is the recommended runtime; Node 20 still installs but is no longer CI-verified since its April 2026 EOL. Verify with `brainclaw --version`.
+Requires Node.js 22.12+ (`engines.node = ">=22.12.0"`). CI exercises Node 22 (Active LTS) and Node 24 (current LTS) — Node 22 or 24 is the recommended runtime. Node 20 reached EOL in April 2026 and is no longer supported. Verify with `brainclaw --version`.
 
 ## Step 2: Bootstrap this machine
 
