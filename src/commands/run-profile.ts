@@ -48,8 +48,12 @@ export function runRunProfile(profileName: string, options: RunProfileOptions = 
     }
   }
 
-  // Replace {prompt} placeholder with the profile prompt
-  const command = invoke.replace(/\{prompt\}/g, profile.prompt.replace(/"/g, '\\"'));
+  // Replace {prompt} placeholder with the profile prompt. Escape backslashes
+  // before quotes so a backslash in the prompt can't break out of the quoting.
+  const command = invoke.replace(
+    /\{prompt\}/g,
+    profile.prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"'),
+  );
 
   if (options.dry) {
     console.log(`[dry-run] Profile: ${profile.name}`);
