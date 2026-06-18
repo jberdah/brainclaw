@@ -23,6 +23,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # @types/vscode must track engines.vscode (^1.85.0). Newer typings raise
+      # the minimum VS Code version and fail the Release Package Check build.
+      # Bump this manually only when intentionally raising the VS Code floor.
+      - dependency-name: "@types/vscode"
     groups:
       vscode-extension-dependencies:
         update-types: ["minor", "patch"]
