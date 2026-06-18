@@ -510,8 +510,11 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 - pln#395 `feat/review-loop-protocol`
 - pln#392 `doc/mcp-versioning-and-surface-governance` (prerequisite)
 
-## Building Custom Loops on the fly
+## Loops available today
 
-Users and agents are not restricted to predefined, named presets (like 'bootstrap'). They can generate custom loop mechanisms on the fly utilizing the MCP API (`CoordinateRequestSchema`). 
+The loop surface exposed over MCP is intentionally narrow:
 
-An agent can open a new custom workflow by passing their own array of `LoopPhase` (e.g., `write_test`, `fix_code`) and building a tailored `StopCondition` logic that dictates precisely when the loop terminates. This programmatic control enables agents to construct sophisticated, ad-hoc execution state machines beyond the standard templates.
+- **Review loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="asymmetric"|"symmetric", targetAgents=[…])` opens the loop and dispatches the first turn. Drive subsequent turns with `bclaw_loop(intent="turn"|"complete_turn"|"advance"|"close")`.
+- **Ideation loops** — `bclaw_coordinate(intent="ideate", preset="bootstrap")` opens an ideation loop from a preset.
+
+Custom phase lists (`LoopPhase[]`) and bespoke `StopCondition` logic exist in the loop engine internally, but are **not** exposed through the MCP facade today: `CoordinateRequestSchema` accepts only `open_loop`, `review_mode`, `preflight`, `ref`, and `preset` — no `phases` or `stop_condition` — and the standalone `bclaw_loop` tool does not expose an `open` intent. Programmatic construction of ad-hoc loops is therefore internal / future work until the facade is extended.

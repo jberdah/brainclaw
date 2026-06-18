@@ -6,7 +6,7 @@ This playbook is designed for Manager/Dispatcher AI Agents steering multi-agent 
 
 Before delegating any work, establish a clear and actionable formulation of the required tasks.
 
-- Define a top-level Plan using the canonical `bclaw_create` tool (or via `bclaw_work`).
+- Define a top-level Plan using the canonical `bclaw_create(entity="plan", data={…})` tool. (`bclaw_work` does not create plans — when none is active it returns a `nextActions` hint pointing to `bclaw_create`.)
 - Break down the overarching project goal into manageable sub-steps using the `bclaw_add_step` tool.
 - Ensure that each step has a clear description, expected outcome, and (optionally) an estimated effort. A well-defined plan acts as the ground truth for downstream agents.
 
