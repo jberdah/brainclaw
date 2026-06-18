@@ -5,6 +5,7 @@ import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { loadCurrentSession, loadSessionById, saveCurrentSession } from '../../src/core/identity.js';
 import { addCrossProjectLink } from '../../src/core/cross-project.js';
+import { createEntity } from '../../src/core/entity-operations.js';
 
 /**
  * pln#515 step 4 (seq #40) — bclaw_switch MCP verb.
@@ -186,5 +187,56 @@ describe('bclaw_switch — MCP verb (pln#515 step 4, seq #40)', () => {
     assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_parallel_a');
     process.env.BRAINCLAW_SESSION_ID = 'sess_parallel_b';
     assert.equal(loadCurrentSession(workspace.dir)?.session_id, 'sess_parallel_b');
+  });
+
+  it('routes canonical reads through the connection session active project', async () => {
+    const now = new Date().toISOString();
+    saveCurrentSession({
+      session_id: 'sess_connection_switch',
+      started_at: now,
+      last_seen_at: now,
+      agent: workspace.currentAgent.agent_name,
+      agent_id: workspace.currentAgent.agent_id,
+      host_id: 'host-test',
+      pid: 333333,
+    }, workspace.dir);
+
+    const hostConstraint = createEntity('constraint', {
+      text: 'Host workspace constraint',
+      author: 'claude-code',
+      category: 'process',
+    }, workspace.dir);
+    const targetConstraint = createEntity('constraint', {
+      text: 'Target project constraint',
+      author: 'claude-code',
+      category: 'process',
+    }, linkedProject.dir);
+
+    const switched = await executeMcpToolCall({
+      name: 'bclaw_switch',
+      args: { project: 'target-project' },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_connection_switch',
+    });
+    assert.equal(switched.response.isError, false);
+
+    const found = await executeMcpToolCall({
+      name: 'bclaw_find',
+      args: { entity: 'constraint' },
+      cwd: workspace.dir,
+      connectionSessionId: 'sess_connection_switch',
+    });
+    const structured = found.response.structuredContent as {
+      total: number;
+      items: Array<{ id: string; text: string }>;
+      active_source?: string;
+      resolved_project?: { path?: string };
+    };
+
+    assert.equal(structured.active_source, 'session');
+    assert.match(structured.resolved_project?.path ?? '', /bclaw-switch-target-/);
+    assert.equal(structured.total, 1);
+    assert.equal(structured.items[0].id, targetConstraint.id);
+    assert.notEqual(structured.items[0].id, hostConstraint.id);
   });
 });

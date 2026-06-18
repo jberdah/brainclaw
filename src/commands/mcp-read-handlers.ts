@@ -15,7 +15,7 @@ import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
-import { loadAllSessions, loadCurrentSession, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
+import { loadAllSessions, loadCurrentSession, loadSessionById, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
 import { listArchivedCandidates, listCandidates, resolvedSource } from '../core/candidates.js';
@@ -43,13 +43,13 @@ import { checkPolicy } from '../core/policy.js';
 import { buildGovernanceReport, renderGovernanceMarkdown } from '../core/governance.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { buildReputationSnapshot, toPublicReputationSummary } from '../core/reputation.js';
-import { search } from '../core/search.js';
+import { countLegacySearchMatches, search } from '../core/search.js';
 import { buildEstimationReport } from './estimation-report.js';
 import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
 import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
-import { listAvailableProjects, switchProject } from './switch.js';
-import { resolveEffectiveCwd, resolveStoreChain } from '../core/store-resolution.js';
+import { listAvailableProjectsForSession, switchProject } from './switch.js';
+import { resolveEffectiveCwdInfo, resolveStoreChain } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';
@@ -132,9 +132,12 @@ export function handleMcpReadToolCall(
   context: McpReadToolContext = {},
 ): McpToolResponse {
   const baseCwd = context.cwd ?? process.cwd();
-  let cwd = name === 'bclaw_switch'
-    ? baseCwd
-    : resolveEffectiveCwd({ baseCwd });
+  const effective = name === 'bclaw_switch'
+    ? { cwd: baseCwd, active_source: 'cwd' as const, resolved_project: undefined }
+    : resolveEffectiveCwdInfo({ baseCwd, sessionId: context.connectionSessionId });
+  let cwd = effective.cwd;
+  let activeSource = effective.active_source;
+  let resolvedProject = effective.resolved_project;
 
   // If a project param is provided, resolve it to an actual cwd override.
   // resolveProjectCwd unifies cross_project_links (siblings/peers) AND
@@ -148,6 +151,13 @@ export function handleMcpReadToolCall(
   let projectRoutingApplied = false;
   if (targetProjectArg) {
     cwd = resolveProjectCwd(targetProjectArg, cwd);
+    activeSource = 'explicit';
+    try {
+      const config = loadConfig(cwd);
+      resolvedProject = { path: cwd, name: config.project_name };
+    } catch {
+      resolvedProject = { path: cwd };
+    }
     projectRoutingApplied = true;
   }
 
@@ -674,13 +684,25 @@ export function handleMcpReadToolCall(
     }
     const offset = Math.max(0, Number(args.offset) || 0);
     const limit = typeof args.limit === 'number' ? args.limit : 10;
+    const includeLegacy = args.includeLegacy === true || (typeof args.filter === 'object' && (args.filter as Record<string, unknown>)?.includeLegacy === true);
     const allResults = search({
       query,
       section: (args.section ?? args.type) as string | undefined,
       since: args.since as string | undefined,
       maxResults: offset + limit,
+      includeLegacy,
       cwd,
     });
+    const excludedLegacy = includeLegacy
+      ? 0
+      : countLegacySearchMatches({
+          query,
+          section: (args.section ?? args.type) as string | undefined,
+          since: args.since as string | undefined,
+          maxResults: offset + limit,
+          includeLegacy: true,
+          cwd,
+        });
     const total = allResults.length;
     const page = allResults.slice(offset, offset + limit);
     // trp#449 class — bound the page by size (pln#542). budget_tokens tightens
@@ -690,16 +712,30 @@ export function handleMcpReadToolCall(
     const bounded = boundListResult({ entity: 'search_result', total, items: page }, offset, charBudget);
     const lines = bounded.items.map((result) => `[${result.id}] (${result.section}) score=${result.score.toFixed(2)}: ${result.text.slice(0, 120)}`);
     const nextActions = bounded.has_more
-      ? [{ tool: 'bclaw_search', args: { query, offset: bounded.next_offset, limit }, when: 'to fetch the next page' }]
+      ? [{
+          tool: 'bclaw_search',
+          args: {
+            query,
+            offset: bounded.next_offset,
+            limit,
+            ...(args.project ? { project: args.project } : {}),
+            ...(includeLegacy ? { includeLegacy: true } : {}),
+          },
+          when: 'to fetch the next page',
+        }]
       : [];
+    const legacyNote = excludedLegacy > 0 ? ` (${excludedLegacy} legacy result(s) excluded; pass includeLegacy=true to include them)` : '';
     return {
-      content: [{ type: 'text', text: bounded.items.length > 0 ? lines.join('\n') : 'No results found.' }],
+      content: [{ type: 'text', text: bounded.items.length > 0 ? `${lines.join('\n')}${legacyNote}` : `No results found.${legacyNote}` }],
       structuredContent: {
         total,
         offset,
         limit,
         results: bounded.items,
         returned: bounded.returned,
+        excluded_legacy: excludedLegacy,
+        resolved_project: resolvedProject ?? { path: cwd },
+        active_source: activeSource,
         has_more: bounded.has_more,
         ...(bounded.next_offset !== undefined ? { next_offset: bounded.next_offset } : {}),
         ...(bounded.omitted_for_size ? { omitted_for_size: bounded.omitted_for_size } : {}),
@@ -1524,7 +1560,7 @@ export function handleMcpReadToolCall(
   if (name === 'bclaw_switch') {
     if (args.list === true) {
       try {
-        const result = listAvailableProjects(cwd);
+        const result = listAvailableProjectsForSession(cwd, context.connectionSessionId);
         const lines = result.projects.map(p => {
           const marker = p.active ? '→' : ' ';
           const label = p.name ? `${p.name} (${p.relative_path})` : p.relative_path;
@@ -1541,7 +1577,9 @@ export function handleMcpReadToolCall(
 
     if (args.clear === true) {
       try {
-        const session = loadCurrentSession(cwd);
+        const session = context.connectionSessionId
+          ? loadSessionById(context.connectionSessionId, cwd)
+          : loadCurrentSession(cwd);
         if (session?.active_project) {
           const { active_project: _removed, ...rest } = session;
           saveCurrentSession(rest, cwd);
@@ -1561,7 +1599,7 @@ export function handleMcpReadToolCall(
     }
 
     try {
-      const result = switchProject(projectRef, { cwd, sessionOnly: true });
+      const result = switchProject(projectRef, { cwd, sessionOnly: true, sessionId: context.connectionSessionId });
       const text = `✔ Switched to ${result.name ? `"${result.name}"` : result.path} (${result.scope}-scoped)`;
       return {
         content: [{ type: 'text', text }],

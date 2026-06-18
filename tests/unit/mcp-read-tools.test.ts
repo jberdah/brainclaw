@@ -12,6 +12,7 @@ import { queryRuntimeEvents } from '../../src/core/events.js';
 import { saveRuntimeNote } from '../../src/core/runtime.js';
 import { createSequence } from '../../src/core/sequence.js';
 import { saveState } from '../../src/core/state.js';
+import { addCrossProjectLink } from '../../src/core/cross-project.js';
 import type { State } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -268,6 +269,71 @@ describe('commands/mcp read tools', () => {
     const searchStructured = search.structuredContent as { results: Array<{ id: string }>; total: number };
     assert.ok(searchStructured.total >= 1);
     assert.ok(searchStructured.results.some((item) => item.id === 'pln_mcp' || item.id === 'hnd_mcp'));
+  });
+
+  it('scopes search by project and reports legacy records excluded by default', () => {
+    const linked = createTestWorkspace({
+      prefix: 'bclaw-mcp-read-linked-',
+      projectId: 'prj_mcp_read_linked',
+      currentAgent: 'copilot',
+    });
+    try {
+      addCrossProjectLink({
+        path: linked.dir,
+        name: 'linked-search',
+        cwd: workspace.dir,
+      });
+      saveState({
+        version: 1,
+        write_version: 1,
+        active_constraints: [],
+        recent_decisions: [
+          {
+            id: 'dec_linked_legacy',
+            text: 'Linked lodestar memory target alpha',
+            created_at: iso(1),
+            author: 'copilot',
+            project_id: 'prj_mcp_read_linked',
+            tags: ['lodestar'],
+            provenance: { kind: 'legacy' },
+          },
+        ],
+        known_traps: [],
+        open_handoffs: [],
+        plan_items: [],
+      }, linked.dir);
+
+      const hidden = handleMcpReadToolCall('bclaw_search', {
+        query: 'target alpha',
+        project: 'linked-search',
+      }, { cwd: workspace.dir });
+      const hiddenStructured = hidden.structuredContent as {
+        total: number;
+        excluded_legacy?: number;
+        active_source?: string;
+        resolved_project?: { path?: string };
+      };
+      assert.equal(hiddenStructured.total, 0);
+      assert.equal(hiddenStructured.excluded_legacy, 1);
+      assert.equal(hiddenStructured.active_source, 'explicit');
+      assert.match(hiddenStructured.resolved_project?.path ?? '', /bclaw-mcp-read-linked-/);
+
+      const visible = handleMcpReadToolCall('bclaw_search', {
+        query: 'target alpha',
+        project: 'linked-search',
+        includeLegacy: true,
+      }, { cwd: workspace.dir });
+      const visibleStructured = visible.structuredContent as {
+        total: number;
+        excluded_legacy?: number;
+        results: Array<{ id: string }>;
+      };
+      assert.equal(visibleStructured.total, 1);
+      assert.equal(visibleStructured.excluded_legacy, 0);
+      assert.equal(visibleStructured.results[0].id, 'dec_linked_legacy');
+    } finally {
+      linked.cleanup();
+    }
   });
 
   it('reads handoff details, including diff snapshots, and handles missing handoffs', () => {

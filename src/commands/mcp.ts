@@ -74,7 +74,7 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { buildAgentInventory } from '../core/agent-inventory.js';
-import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
 import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
@@ -144,6 +144,7 @@ export interface McpToolResponse {
 
 export interface McpReadToolContext {
   cwd?: string;
+  connectionSessionId?: string;
 }
 
 export interface McpToolExecutionPayload {
@@ -300,6 +301,8 @@ export const MCP_READ_TOOLS = [
         type: { type: 'string', description: 'Filter by section: decisions, constraints, traps, handoffs, candidates, plans, sequences.' },
         section: { type: 'string', description: 'Filter by section (state, candidates, runtime).' },
         since: { type: 'string', description: 'Filter items created after this ISO date.' },
+        project: { type: 'string', description: 'Optional project name/path to search. Defaults to the active project.' },
+        includeLegacy: { type: 'boolean', description: 'Include records with provenance.kind="legacy" (default false). Response reports excluded_legacy when false.' },
         limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
         offset: { type: 'number', description: 'Number of results to skip (for pagination).' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the result page (~4 chars/token). The page is size-bounded; has_more/next_offset advertise the rest.' },
@@ -2912,6 +2915,9 @@ export { handleMcpReadToolCall };
 
 async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const { name, args, cwd, connectionSessionId } = payload;
+  const scopeInfo = name === 'bclaw_switch'
+    ? { cwd, active_source: 'cwd' as const, resolved_project: undefined }
+    : resolveEffectiveCwdInfo({ baseCwd: cwd, sessionId: connectionSessionId });
 
   try {
     if (isLegacyMcpToolFacadeDisabled(name)) {
@@ -2926,7 +2932,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     if (MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name)) {
       return {
-        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd })), name),
+        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd, connectionSessionId })), name),
       };
     }
 
@@ -6805,6 +6811,16 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const findActiveSource = typeof args.project === 'string' && args.project.trim().length > 0
+          ? 'explicit'
+          : scopeInfo.active_source;
+        let findResolvedProject: { path: string; name?: string };
+        try {
+          const config = loadConfig(targetCwd);
+          findResolvedProject = { path: targetCwd, name: config.project_name };
+        } catch {
+          findResolvedProject = { path: targetCwd };
+        }
         // pln#460 follow-up — some MCP clients (notably Claude Code with a
         // tool schema that declares `filter: { type: 'object' }` without a
         // sub-property schema) stringify the filter object before shipping
@@ -6870,10 +6886,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const bounded = boundListResult(result, offset, charBudget);
         const warnings = collectLoadValidationWarnings(entity, targetCwd);
         const nextActions: Array<Record<string, unknown>> = [
-          { tool: 'bclaw_get', args: { entity, id: '<id from items>' }, when: 'to read one item in full' },
+          { tool: 'bclaw_get', args: { entity, id: '<id from items>', ...(args.project ? { project: args.project } : {}) }, when: 'to read one item in full' },
         ];
         if (bounded.has_more) {
-          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset } }, when: 'to fetch the next page' });
+          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset }, ...(args.project ? { project: args.project } : {}) }, when: 'to fetch the next page' });
         }
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
@@ -6882,10 +6898,19 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // `result.items` arrived as undefined on the client — the root cause
         // of the VS Code Backlog section rendering empty.
         const moreNote = bounded.has_more ? ` (returned ${bounded.returned}; ${result.total - bounded.returned} more — offset ${bounded.next_offset})` : '';
+        const legacyNote = (result.excluded_legacy ?? 0) > 0
+          ? `; ${result.excluded_legacy} legacy item(s) excluded by default (pass filter.includeLegacy=true to include them)`
+          : '';
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}` }],
-            structuredContent: { ...bounded, warnings, next_actions: nextActions },
+            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}${legacyNote}` }],
+            structuredContent: {
+              ...bounded,
+              warnings,
+              resolved_project: findResolvedProject,
+              active_source: findActiveSource,
+              next_actions: nextActions,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7115,9 +7140,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
  */
 export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const baseCwd = payload.cwd;
-  const cwd = payload.name === 'bclaw_switch'
-    ? baseCwd
-    : resolveEffectiveCwd({ baseCwd });
+  const effective = payload.name === 'bclaw_switch'
+    ? { cwd: baseCwd, active_source: 'cwd' as const, resolved_project: undefined }
+    : resolveEffectiveCwdInfo({ baseCwd, sessionId: payload.connectionSessionId });
+  const cwd = effective.cwd;
   const envClaimId = process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined;
 
   // ── Auto-session ────────────────────────────────────────────────────────────

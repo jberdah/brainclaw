@@ -124,6 +124,10 @@ function passesProvenanceFilter(item: Record<string, unknown>, filter: EntityFil
   return true;
 }
 
+function isLegacyProvenance(item: Record<string, unknown>): boolean {
+  return (item.provenance as Provenance | undefined)?.kind === 'legacy';
+}
+
 /** Thrown when a verb is not yet wired for a given entity. */
 export class EntityOperationUnsupportedError extends Error {
   constructor(entity: EntityName, verb: string, hint?: string) {
@@ -175,6 +179,10 @@ export interface ListResult<T = unknown> {
   entity: EntityName;
   total: number;
   items: T[];
+  /** Matches hidden by the default provenance filter. */
+  excluded_legacy?: number;
+  /** Matches before provenance filtering, after ordinary field filters. */
+  total_before_provenance_filter?: number;
 }
 
 export interface CreateResult {
@@ -250,9 +258,19 @@ export function listEntities(
   filter: EntityFilter = {},
 ): ListResult {
   const all = loadAll(name, cwd);
-  const filtered = applyFilter(all, filter);
+  const fieldFiltered = applyFieldFilter(all, filter);
+  const excludedLegacy = filter.includeLegacy === true
+    ? 0
+    : fieldFiltered.filter((item) => isLegacyProvenance(item as Record<string, unknown>)).length;
+  const filtered = fieldFiltered.filter((item) => passesProvenanceFilter(item as Record<string, unknown>, filter));
   const paged = applyPaging(filtered, filter);
-  return { entity: name, total: filtered.length, items: paged };
+  return {
+    entity: name,
+    total: filtered.length,
+    items: paged,
+    excluded_legacy: excludedLegacy,
+    total_before_provenance_filter: fieldFiltered.length,
+  };
 }
 
 export interface BoundedListResult<T = unknown> {
@@ -335,8 +353,13 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
 }
 
 function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
+  return applyFieldFilter(items, filter).filter((item) =>
+    passesProvenanceFilter(item as Record<string, unknown>, filter),
+  );
+}
+
+function applyFieldFilter(items: unknown[], filter: EntityFilter): unknown[] {
   let result = items as Array<Record<string, unknown>>;
-  result = result.filter((item) => passesProvenanceFilter(item, filter));
   if (filter.status) {
     result = result.filter((item) => item.status === filter.status);
   }

@@ -23,6 +23,7 @@ import { executeMcpToolCall } from '../../src/commands/mcp.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { createEntity, transitionEntity } from '../../src/core/entity-operations.js';
 import { createAgentRun } from '../../src/core/agentruns.js';
+import { loadState, saveState } from '../../src/core/state.js';
 
 interface FindResult {
   entity: string;
@@ -115,6 +116,36 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       const ids = result.items.map((i) => i.id);
       assert.ok(ids.includes(a.id));
       assert.ok(ids.includes(b.id));
+    });
+  });
+
+  describe('provenance filter diagnostics', () => {
+    it('reports legacy records excluded by the default read filter', async () => {
+      const legacy = createEntity('constraint', {
+        text: 'Legacy-scoped constraint',
+        author: 'claude-code',
+        category: 'process',
+      }, workspace.dir);
+      const state = loadState(workspace.dir);
+      const item = state.active_constraints.find((constraint) => constraint.id === legacy.id);
+      assert.ok(item);
+      item.provenance = { kind: 'legacy' };
+      saveState(state, workspace.dir);
+
+      const hidden = await find(workspace, 'constraint');
+      const hiddenResult = hidden.content as FindResult & {
+        excluded_legacy?: number;
+        total_before_provenance_filter?: number;
+      };
+      assert.equal(hiddenResult.total, 0);
+      assert.equal(hiddenResult.excluded_legacy, 1);
+      assert.equal(hiddenResult.total_before_provenance_filter, 1);
+
+      const visible = await find(workspace, 'constraint', { includeLegacy: true });
+      const visibleResult = visible.content as FindResult & { excluded_legacy?: number };
+      assert.equal(visibleResult.total, 1);
+      assert.equal(visibleResult.excluded_legacy, 0);
+      assert.equal(visibleResult.items[0].id, legacy.id);
     });
   });
 
