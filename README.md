@@ -97,7 +97,7 @@ brainclaw is most effective today when one agent works at a time in a given chec
 
 ## Platform Support
 
-brainclaw declares support for Node.js 20+ in `package.json` (`engines.node = ">=20.0.0"`). CI actively exercises Node 22 (Active LTS) and Node 24 (current LTS) on Linux; Windows runs on Node 24. Node 20 still works as a minimum runtime but is no longer CI-verified — it reached EOL in April 2026 and was removed from GitHub-hosted runners. The recommended runtime is Node 22 LTS or Node 24 LTS. Real-world support is still not perfectly even yet.
+brainclaw requires Node.js 22.12+ (`engines.node = ">=22.12.0"`). CI exercises Node 22 (Active LTS) and Node 24 (current LTS) on Linux; Windows runs on Node 24. Node 20 reached EOL in April 2026 and is no longer supported — the commander 15 upgrade requires Node ≥22.12. The recommended runtime is Node 22 LTS or Node 24 LTS.
 
 | Logo                                                                                                                                            | Platform                                                          | Status today              | Notes                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
