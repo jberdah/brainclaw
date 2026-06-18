@@ -1,24 +1,38 @@
 version: 2
 updates:
-  # Root package (the published CLI / MCP server)
+  # Root package (the published CLI / MCP server).
+  # Group low-risk bumps into one PR each; majors stay individual so a runtime
+  # breaking change (e.g. commander 14→15, which forced a Node floor bump) gets
+  # its own review instead of riding along in a batch.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
+      production-dependencies:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
       dev-dependencies:
         dependency-type: "development"
+        update-types: ["minor", "patch"]
 
-  # VS Code extension (separate toolchain + lockfile)
+  # VS Code extension (separate toolchain + lockfile).
   - package-ecosystem: "npm"
     directory: "/vscode-extension"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      vscode-extension-dependencies:
+        update-types: ["minor", "patch"]
 
-  # GitHub Actions used by CI + release workflows
+  # GitHub Actions used by CI + release workflows. Action majors are low-risk
+  # (pinned to a maintained action), so batch all update types together.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        update-types: ["minor", "patch", "major"]

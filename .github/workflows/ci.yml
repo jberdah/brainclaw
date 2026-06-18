@@ -62,7 +62,14 @@ jobs:
       - name: Build tests
         run: npm run build:test
 
-      - name: Coverage gate
+      # Coverage thresholds are platform-independent, so enforce them only on
+      # Linux (both Node versions). The `--check-coverage` gate flaked
+      # intermittently on Windows at the threshold boundary — a dependency bump
+      # can't change coverage, yet it repeatedly reddened windows-latest and
+      # stalled Dependabot merges (pln#583 CI thrash). Windows still runs the
+      # full suite below for platform-specific correctness, just without the gate.
+      - name: Coverage gate (Linux)
+        if: runner.os == 'Linux'
         run: >
           npx c8
           --all
@@ -76,6 +83,10 @@ jobs:
           --exclude=dist-test/tests/**
           --exclude=dist-test/scripts/**
           node scripts/run-tests.mjs default
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/run-tests.mjs default
 
   e2e:
     name: E2E Tests (Linux, Node 24)
