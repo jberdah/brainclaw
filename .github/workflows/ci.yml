@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ['**']
 
+# Least-privilege default: CI only reads the repo. No job needs write scopes
+# (publishing lives in release.yml, which sets its own explicit permissions).
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build & Test (${{ matrix.os }}, Node ${{ matrix.node }})

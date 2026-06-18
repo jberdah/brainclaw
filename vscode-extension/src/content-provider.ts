@@ -302,7 +302,12 @@ function mdTable(rows: Array<[string, string]>): string {
 }
 
 function escapeTableCell(value: string): string {
-  return String(value ?? '—').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  // Escape backslashes first so a literal `\` before a `|` can't produce an
+  // unescaped pipe that breaks the Markdown table layout.
+  return String(value ?? '—')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
 }
 
 function formatList(value: unknown): string {

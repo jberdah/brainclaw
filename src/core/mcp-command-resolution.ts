@@ -226,7 +226,9 @@ export function brainclawMcpEntry(agentName: string, existing?: unknown, workspa
 
 export function quoteShellArg(arg: string): string {
   if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) return arg;
-  return `"${arg.replace(/"/g, '\\"')}"`;
+  // Escape backslashes before quotes — otherwise an input like `\"` would
+  // collapse to a quote that breaks out of the quoted argument.
+  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**
