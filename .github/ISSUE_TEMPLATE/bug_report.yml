@@ -1,0 +1,149 @@
+name: Bug report
+description: Report a problem with brainclaw (CLI or MCP server)
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! brainclaw runs across many OSes, agents, and
+        runtimes — **the environment details below are essential to reproduce a
+        bug**. Please fill them all. Tip: `brainclaw doctor` summarizes most of
+        your store/agent/integration state in one go.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug — what you expected vs. what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal commands, MCP tool calls, or actions that trigger it.
+      placeholder: |
+        1. Run `...`
+        2. Call `bclaw_...`
+        3. Observe `...`
+    validations:
+      required: true
+
+  - type: input
+    id: brainclaw-version
+    attributes:
+      label: brainclaw version
+      description: Output of `brainclaw --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - WSL
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version / details
+      placeholder: e.g. Windows 11 26200, macOS 15.1, Ubuntu 24.04
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      description: Which AI coding agent were you driving brainclaw with?
+      options:
+        - Claude Code
+        - Codex
+        - GitHub Copilot
+        - Cursor
+        - Windsurf
+        - Cline
+        - Roo Code
+        - Continue
+        - OpenCode
+        - Kilocode
+        - Mistral Vibe
+        - Hermes
+        - Gemini / Antigravity
+        - None (CLI only / human)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent-surface
+    attributes:
+      label: Agent surface / mode
+      description: How does that agent run?
+      options:
+        - CLI
+        - IDE extension
+        - Desktop app
+        - Other / N/A
+    validations:
+      required: true
+
+  - type: input
+    id: agent-version
+    attributes:
+      label: Agent version
+      placeholder: e.g. Claude Code 2.x, codex-cli 0.130.0, Copilot CLI 1.0.35
+
+  - type: dropdown
+    id: invocation
+    attributes:
+      label: How did you invoke brainclaw?
+      options:
+        - MCP (tools)
+        - CLI
+        - Both
+    validations:
+      required: true
+
+  - type: input
+    id: install
+    attributes:
+      label: Install method
+      placeholder: e.g. npm i -g brainclaw, npx brainclaw, npm link from source
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`brainclaw doctor` output"
+      description: Run `brainclaw doctor` and paste the output (store / agent / integration state).
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: I removed any secrets, tokens, or private paths from the pasted output.
+          required: true
