@@ -225,7 +225,7 @@ export function latestWorktreeFileMtimeMs(worktreePath: string, maxDepth = 4): n
  * file in its worktree. Lets the reconciler / dispatch_status distinguish
  * "no heartbeat BUT fs active" (working — e.g. codex streaming to stderr, or
  * claude -p editing files) from "no heartbeat AND fs inert" (genuinely stalled),
- * fixing the false-`stalled` verdict (debrief LeaseUp P1#1). Returns undefined
+ * fixing the false-`stalled` verdict (field debrief P1#1). Returns undefined
  * when nothing is observable.
  */
 export function latestActivityMs(root: string, assignmentId: string, worktreePath?: string): number | undefined {

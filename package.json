@@ -3,6 +3,14 @@
   "version": "1.9.0",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jberdah/brainclaw.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jberdah/brainclaw/issues"
+  },
+  "homepage": "https://brainclaw.dev",
   "bin": {
     "brainclaw": "dist/cli.js",
     "bclaw": "dist/cli.js"
@@ -13,6 +21,9 @@
     "dist/brainclaw-vscode.vsix",
     "dist/facts.json",
     "docs/**/*.md",
+    "!docs/concepts/*proposal*.md",
+    "!docs/concepts/*critique*.md",
+    "!docs/concepts/*phase0-measurements*.md",
     "README.md",
     "LICENSE"
   ],

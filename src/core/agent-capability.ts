@@ -900,7 +900,7 @@ export function resolveBriefMode(agentName: string): BriefMode {
  * pln#528 — capability matrix DERIVED from the spawn template, so it stays in
  * sync with how each agent is actually invoked (no per-profile duplication).
  *
- * The motivating reality (debrief LeaseUp): codex is spawned with
+ * The motivating reality (a cross-project field debrief): codex is spawned with
  * `--sandbox workspace-write`, which (a) does NOT wire the brainclaw MCP server
  * and (b) puts `.git` outside the sandbox root — so a sandboxed worker can
  * neither call `bclaw_*` nor `git commit`, regardless of the profile's nominal

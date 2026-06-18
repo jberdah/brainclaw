@@ -611,7 +611,7 @@ export function generateBrief(
     parts.push(buildProtocolSection(options));
   }
 
-  // pln#528 — transport-aware addendum (debrief LeaseUp P1#2). When the agent is
+  // pln#528 — transport-aware addendum (field debrief P1#2). When the agent is
   // spawned sandboxed (no MCP + no git commit — e.g. codex --sandbox
   // workspace-write), the MCP lifecycle lines in the Protocol section do NOT
   // apply. Say so explicitly and make the FILE protocol authoritative, so the

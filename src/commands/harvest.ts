@@ -377,7 +377,7 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
 // ─────────────────────────────────────────────────────────────────────────────
 // pln#534 — worktree-as-contract: integrate a worker's lane on its behalf.
 //
-// LEVER #1 from the LeaseUp frontier (can_100f1e8c). The worker's contract is
+// LEVER #1 from a cross-project field session. The worker's contract is
 // reduced to "edit files in this worktree + drop LANE-RESULT.json". brainclaw
 // carries the rest for a worker that cannot (a sandboxed agent whose root
 // excludes `.git`, i.e. dispatchCanCommit=false): it COMMITS the worktree diff

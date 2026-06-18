@@ -219,7 +219,7 @@ export function renderSpawnCheckReport(report: SpawnCheckReport): string {
 // validation spawn so an environment death (config rejected, auth fail, model
 // mismatch) surfaces instantly AND with a clear reason — instead of a generic
 // "did not acknowledge 30000ms" verdict after the loop has already burned a
-// cycle. Field proof (LeaseUp frontier, can_9a3dccbe): codex died 2× at boot
+// cycle. Field proof (a cross-project field session): codex died 2× at boot
 // (service_tier), gemini died at auth (no subscription); both showed only the
 // generic timeout after the loop opened. The fix reuses checkAgentSpawn for the
 // round-trip and recognizeStderrSignature (pln#527 #5) for the human reason.

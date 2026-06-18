@@ -235,7 +235,7 @@ export async function attemptExecution(
   // claim was reused/re-dispatched without one), REFUSE to spawn instead of
   // falling back to options.cwd — which is the integration repo, where the
   // worker would edit the main tree directly (dangerous for an autonomous fleet,
-  // debrief LeaseUp). Return the command for manual, isolated execution.
+  // a cross-project field debrief). Return the command for manual, isolated execution.
   if (options.requireWorktree && !options.worktreePath) {
     appendAuditEntry({
       actor: options.dispatcherAgent,

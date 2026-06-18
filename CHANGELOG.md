@@ -29,7 +29,7 @@ Release hardening for npm publishing and agent-surface coherence.
 ## [1.8.0] — 2026-06-09
 
 Multi-agent dispatch convergence — the "new frontier", driven by a real
-cross-project field session (NestJS/React monorepo "LeaseUp") where a sandboxed
+cross-project field session (a real NestJS/React monorepo) where a sandboxed
 codex worker could neither commit nor reach MCP and the coordinator had to carry
 every lifecycle step by hand. Theme: reduce the worker's contract and let
 brainclaw carry the rest. Builds on the 1.7.5 security patch.

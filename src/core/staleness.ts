@@ -156,7 +156,7 @@ const VERIFIED_STALE_DAYS = 30;
  * pln#530 — flag perishable memories (traps that opted in by carrying a
  * `verify_cmd` and/or `verified_at`) whose last empirical verification is stale
  * or never happened, so an agent re-probes the live system instead of trusting a
- * value that may have drifted (the LeaseUp `service_tier` trap that the API later
+ * value that may have drifted (the `service_tier` trap that the API later
  * rejected is the motivating case). Only traps with these fields are considered —
  * durable facts are untouched.
  */

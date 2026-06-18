@@ -9,6 +9,9 @@ dist-test/
 .memory/
 .brainclaw/
 
+# Internal planning notes — not part of the public repo
+internal-docs/
+
 # OS files
 Thumbs.db
 Desktop.ini

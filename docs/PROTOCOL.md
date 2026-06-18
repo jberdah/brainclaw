@@ -219,5 +219,5 @@ integrators before declaring any of them stable:
      dependency) lower the adoption bar for OSS agents that don't speak MCP
      yet?
 
-Open an issue, ping `ai@thomgroup.com`, or comment on the brainclaw plan
+Open an issue, ping `support@brainclaw.dev`, or comment on the brainclaw plan
 tracking this draft (pln#546).
