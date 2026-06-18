@@ -883,7 +883,7 @@ function assertOpenQuestionsInvariant(thread: LoopThread, intent: string): void 
       `[brainclaw/loops/fsm] ${intent}: open_questions drift on loop ${thread.id} ` +
       `— persisted=${JSON.stringify([...persisted])} canonical=${JSON.stringify([...canonical])}`;
     // Log in prod so drift is visible without taking down the engine.
-    // eslint-disable-next-line no-console
+     
     console.warn(message);
     if (fsmAssertsEnabled()) {
       throw new Error(message);

@@ -1132,7 +1132,7 @@ export function handleMcpReadToolCall(
       } catch { /* defensive: never block events query on reconcile failure */ }
     }
 
-    let events = queryRuntimeEvents({
+    const events = queryRuntimeEvents({
       ...(id ? { id } : {}),
       ...(assignmentId ? { assignment_id: assignmentId } : {}),
       ...(runId ? { run_id: runId } : {}),

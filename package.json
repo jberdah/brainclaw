@@ -47,6 +47,8 @@
     "dev:link": "npm link && echo 'Symlink created: global brainclaw → local repo. MCP agents now use dist/ directly.'",
     "build:test": "npm run build:cli && npm run clean:dist-test && tsc -p tsconfig.test.json",
     "pack:check": "node scripts/check-pack.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "npm run build:test && node scripts/run-tests.mjs default",
     "test:unit": "npm run build:test && node scripts/run-tests.mjs unit",
     "test:smoke": "npm run build:test && node scripts/run-tests.mjs smoke",
@@ -67,16 +69,18 @@
     "local-first"
   ],
   "license": "MIT",
-  "homepage": "https://brainclaw.dev",
   "dependencies": {
     "commander": "^14.0.3",
     "yaml": "^2.7.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.12.2",
     "ajv": "^8.20.0",
     "c8": "^11.0.0",
-    "typescript": "^6.0.3"
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
   }
 }

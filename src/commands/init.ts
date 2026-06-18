@@ -152,7 +152,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   // Auto-detect and register the AI coding agent running in this environment
   const detectedAi = skipAgentBootstrap ? undefined : detectAiAgent();
-  let registeredAiAgent = detectedAi
+  const registeredAiAgent = detectedAi
     ? registerAgentIdentity({
         agentName: detectedAi.name,
         kind: detectedAi.kind,

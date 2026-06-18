@@ -26,7 +26,7 @@ export interface VersionOptions {
 export function runVersion(options: VersionOptions = {}): void {
   const cwd = options.cwd ?? process.cwd();
   const initialized = memoryExists(cwd);
-  let config = initialized ? loadConfig(cwd) : undefined;
+  const config = initialized ? loadConfig(cwd) : undefined;
   let publishedLocalRelease: ReturnType<typeof publishLocalBrainclawRelease> | undefined;
 
   if (options.publishLocal) {

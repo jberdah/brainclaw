@@ -170,7 +170,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   if (input.markAsRead) {
     return mutate({ cwd }, () => {
       // Fresh read inside lock
-      let messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+      const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
 
       const total = messages.length;
       const offset = input.offset ?? 0;
@@ -192,7 +192,7 @@ export function readInbox(input: ReadInboxInput, cwd: string): ReadInboxResult {
   }
 
   // Read-only path: no lock needed
-  let messages = applyInboxFilters(loadMessagesFromDir(dir), input);
+  const messages = applyInboxFilters(loadMessagesFromDir(dir), input);
 
   const total = messages.length;
   const offset = input.offset ?? 0;
