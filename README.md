@@ -393,6 +393,22 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.9.1
+
+- **Multi-project scoping fixes for monorepos** — MCP reads/writes resolve the
+  effective project from an explicit arg, the MCP session, `BRAINCLAW_CWD`, or
+  the global active project (in that order), so commands target the right store
+  inside a monorepo; `bclaw_find` legacy-filter diagnostics report how many
+  `provenance.kind="legacy"` records the default filter excluded.
+- **Case-insensitive agent names** — `targetAgents=["Codex"]` (any casing) now
+  resolves like `codex`; dispatch/coordinate no longer silently drop a reviewer
+  over a capital letter, and an unresolved name reports a distinct `unknown_agent`
+  reason instead of the misleading "no CLI spawn template (IDE-only?)".
+- **Docs** — revamped Loop Engine, Git Worktrees, Cross-Project Signals, and the
+  Orchestration Playbook, corrected against actual behavior (`bclaw_work` =
+  session + context + claim, not worktree provisioning; worktrees come from
+  dispatch/coordinate; plans via `bclaw_create(entity="plan")`).
+
 ### v1.9.0
 
 - **Release hardening for npm publishing + agent-surface coherence** (pln#571).

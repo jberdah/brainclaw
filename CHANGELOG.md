@@ -5,6 +5,30 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] — 2026-06-18
+
+Maintenance release: monorepo project-scoping fixes, case-insensitive agent
+names, and a documentation accuracy pass.
+
+### Fixed
+
+- **MCP project scoping in monorepos** — effective-cwd resolution now follows a
+  defined precedence (explicit arg → MCP session → `BRAINCLAW_CWD` → global
+  active project → process cwd) so reads/writes target the intended project
+  store inside a monorepo / multi-project workspace.
+- **Legacy filter diagnostics** — search can count `provenance.kind="legacy"`
+  records excluded by the default `bclaw_find` filter, surfacing why a known
+  record is missing from default results.
+- **Case-insensitive agent-name resolution** — `targetAgents=["Codex"]` resolves
+  like `codex`; the dispatch pre-flight no longer drops a reviewer over casing.
+  An unknown name now returns a distinct `unknown_agent` reason (check
+  spelling/case) instead of the misleading "no CLI spawn template (IDE-only?)".
+
+### Changed
+
+- **Documentation** — revamped Loop Engine, Git Worktrees, Cross-Project
+  Signals, and the Orchestration Playbook, corrected against actual code behavior.
+
 ## [1.9.0] — 2026-06-14
 
 Release hardening for npm publishing and agent-surface coherence.
