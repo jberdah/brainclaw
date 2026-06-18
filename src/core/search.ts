@@ -22,6 +22,7 @@ export interface SearchCorpusDocument {
   created_at: string;
   tags: string[];
   related_paths?: string[];
+  provenance?: unknown;
 }
 
 type SearchCorpusInput = Omit<SearchCorpusDocument, 'section'>;
@@ -41,10 +42,17 @@ function tokenize(text: string): string[] {
     .filter(t => t.length > 1);
 }
 
-function buildCorpus(state: State, includePending: boolean, cwd?: string): BM25Doc[] {
+function isLegacyDocument(document: SearchCorpusDocument): boolean {
+  return document.provenance !== null
+    && typeof document.provenance === 'object'
+    && (document.provenance as { kind?: unknown }).kind === 'legacy';
+}
+
+function buildCorpus(state: State, includePending: boolean, cwd?: string, includeLegacy = false): BM25Doc[] {
   const docs: BM25Doc[] = [];
 
   const add = (section: string, item: SearchCorpusInput) => {
+    if (!includeLegacy && isLegacyDocument({ ...item, section })) return;
     const textParts = [item.text, item.author ?? '', ...(item.tags ?? []), ...(item.related_paths ?? [])];
     docs.push({ ...item, section, terms: tokenize(textParts.join(' ')) });
   };
@@ -108,6 +116,7 @@ export interface SearchOptions {
   since?: string;
   tags?: string[];
   includePending?: boolean;
+  includeLegacy?: boolean;
   maxResults?: number;
   cwd?: string;
 }
@@ -181,6 +190,17 @@ export function searchCorpus(documents: SearchCorpusDocument[], options: Omit<Se
 
 export function search(options: SearchOptions): SearchResult[] {
   const state = loadState(options.cwd);
-  const corpus = buildCorpus(state, options.includePending ?? false, options.cwd);
+  const corpus = buildCorpus(state, options.includePending ?? false, options.cwd, options.includeLegacy === true);
   return searchCorpus(corpus, options);
+}
+
+export function countLegacySearchMatches(options: SearchOptions): number {
+  const state = loadState(options.cwd);
+  const legacyCorpus = buildCorpus(state, options.includePending ?? false, options.cwd, true)
+    .filter(isLegacyDocument);
+  return searchCorpus(legacyCorpus, {
+    ...options,
+    includeLegacy: true,
+    maxResults: Number.MAX_SAFE_INTEGER,
+  }).length;
 }

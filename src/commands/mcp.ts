@@ -74,7 +74,7 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { buildAgentInventory } from '../core/agent-inventory.js';
-import { resolveEffectiveCwd, resolveProjectRef, resolveTargetStore, type StoreTarget } from '../core/store-resolution.js';
+import { resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveTargetStore, type ResolvedEffectiveCwd, type StoreTarget } from '../core/store-resolution.js';
 import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
@@ -144,6 +144,8 @@ export interface McpToolResponse {
 
 export interface McpReadToolContext {
   cwd?: string;
+  connectionSessionId?: string;
+  effectiveScope?: ResolvedEffectiveCwd;
 }
 
 export interface McpToolExecutionPayload {
@@ -151,6 +153,7 @@ export interface McpToolExecutionPayload {
   args: Record<string, unknown>;
   cwd: string;
   connectionSessionId?: string;
+  effectiveScope?: ResolvedEffectiveCwd;
 }
 
 export interface McpToolExecutionOutcome {
@@ -300,6 +303,8 @@ export const MCP_READ_TOOLS = [
         type: { type: 'string', description: 'Filter by section: decisions, constraints, traps, handoffs, candidates, plans, sequences.' },
         section: { type: 'string', description: 'Filter by section (state, candidates, runtime).' },
         since: { type: 'string', description: 'Filter items created after this ISO date.' },
+        project: { type: 'string', description: 'Optional project name/path to search. Defaults to the active project.' },
+        includeLegacy: { type: 'boolean', description: 'Include records with provenance.kind="legacy" (default false). Response reports excluded_legacy when false.' },
         limit: { type: 'number', description: 'Maximum number of results to return (default 10).' },
         offset: { type: 'number', description: 'Number of results to skip (for pagination).' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the result page (~4 chars/token). The page is size-bounded; has_more/next_offset advertise the rest.' },
@@ -2038,6 +2043,41 @@ function explicitSessionIdFromEnv(): string | undefined {
     || process.env.COPILOT_SESSION_ID?.trim();
 }
 
+function projectInfoForCwd(cwd: string): { path: string; name?: string } {
+  try {
+    const config = loadConfig(cwd);
+    return { path: cwd, name: config.project_name };
+  } catch {
+    return { path: cwd };
+  }
+}
+
+function scopeMetadataForTarget(
+  args: Record<string, unknown>,
+  targetCwd: string,
+  effectiveScope: ResolvedEffectiveCwd,
+): { resolved_project: { path: string; name?: string }; active_source: ResolvedEffectiveCwd['active_source'] | 'explicit' } {
+  const hasExplicitProject = typeof args.project === 'string' && args.project.trim().length > 0;
+  return {
+    resolved_project: projectInfoForCwd(targetCwd),
+    active_source: hasExplicitProject ? 'explicit' : effectiveScope.active_source,
+  };
+}
+
+function renderProvenanceFilterNote(result: {
+  excluded_legacy?: number;
+  excluded_low_confidence_auto_reflect?: number;
+}): string | undefined {
+  const parts: string[] = [];
+  if ((result.excluded_legacy ?? 0) > 0) {
+    parts.push(`${result.excluded_legacy} legacy item(s) excluded (pass filter.includeLegacy=true to include them)`);
+  }
+  if ((result.excluded_low_confidence_auto_reflect ?? 0) > 0) {
+    parts.push(`${result.excluded_low_confidence_auto_reflect} low-confidence auto_reflect item(s) excluded (lower filter.minAutoReflectConfidence to include them)`);
+  }
+  return parts.length > 0 ? parts.join('; ') : undefined;
+}
+
 export function parseMcpLine(line: string): ParsedMcpMessage {
   let parsed: unknown;
   try {
@@ -2912,6 +2952,11 @@ export { handleMcpReadToolCall };
 
 async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const { name, args, cwd, connectionSessionId } = payload;
+  const scopeInfo = payload.effectiveScope ?? {
+    cwd,
+    active_source: 'cwd' as const,
+    resolved_project: projectInfoForCwd(cwd),
+  };
 
   try {
     if (isLegacyMcpToolFacadeDisabled(name)) {
@@ -2926,7 +2971,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
     if (MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name)) {
       return {
-        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd })), name),
+        response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd, connectionSessionId, effectiveScope: scopeInfo })), name),
       };
     }
 
@@ -6805,6 +6850,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       try {
         const entity = String(args.entity ?? '') as EntityName;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         // pln#460 follow-up — some MCP clients (notably Claude Code with a
         // tool schema that declares `filter: { type: 'object' }` without a
         // sub-property schema) stringify the filter object before shipping
@@ -6870,10 +6916,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const bounded = boundListResult(result, offset, charBudget);
         const warnings = collectLoadValidationWarnings(entity, targetCwd);
         const nextActions: Array<Record<string, unknown>> = [
-          { tool: 'bclaw_get', args: { entity, id: '<id from items>' }, when: 'to read one item in full' },
+          { tool: 'bclaw_get', args: { entity, id: '<id from items>', ...(args.project ? { project: args.project } : {}), ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}) }, when: 'to read one item in full' },
         ];
         if (bounded.has_more) {
-          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset } }, when: 'to fetch the next page' });
+          nextActions.push({ tool: 'bclaw_find', args: { entity, filter: { ...filter, offset: bounded.next_offset }, ...(args.project ? { project: args.project } : {}), ...(args.budget_tokens ? { budget_tokens: args.budget_tokens } : {}) }, when: 'to fetch the next page' });
         }
         // structuredContent is the canonical MCP return channel that clients
         // (VS Code extension, Codex, etc.) read for machine-parseable data.
@@ -6882,10 +6928,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // `result.items` arrived as undefined on the client — the root cause
         // of the VS Code Backlog section rendering empty.
         const moreNote = bounded.has_more ? ` (returned ${bounded.returned}; ${result.total - bounded.returned} more — offset ${bounded.next_offset})` : '';
+        const provenanceFilterNote = renderProvenanceFilterNote(result);
+        const legacyNote = provenanceFilterNote
+          ? `; ${provenanceFilterNote}`
+          : '';
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}` }],
-            structuredContent: { ...bounded, warnings, next_actions: nextActions },
+            content: [{ type: 'text', text: `✔ ${result.total} ${entity} item(s)${moreNote}${legacyNote}` }],
+            structuredContent: {
+              ...bounded,
+              warnings,
+              resolved_project: targetScope.resolved_project,
+              active_source: targetScope.active_source,
+              next_actions: nextActions,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -6960,6 +7016,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
         const rawData = (args.data ?? {}) as Record<string, unknown>;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
 
         // Auto-fill identity fields. Without this, a caller who omits author/agent
         // creates a schema-invalid record that is silently dropped on read and
@@ -6993,7 +7050,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ created ${entity} ${result.id}` }],
-            structuredContent: { ...result },
+            structuredContent: {
+              ...result,
+              resolved_project: targetScope.resolved_project,
+              active_source: targetScope.active_source,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7007,6 +7068,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const id = String(args.id ?? '');
         const patch = (args.patch ?? {}) as Record<string, unknown>;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = updateEntity(entity, id, patch, targetCwd);
         appendAuditEntry(
@@ -7016,7 +7078,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ updated ${entity} ${id}` }],
-            structuredContent: { ...result },
+            structuredContent: {
+              ...result,
+              resolved_project: targetScope.resolved_project,
+              active_source: targetScope.active_source,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7030,6 +7096,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const id = String(args.id ?? '');
         const purge = args.purge === true;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = removeEntity(entity, id, targetCwd, purge);
         appendAuditEntry(
@@ -7039,7 +7106,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ removed ${entity} ${id}` }],
-            structuredContent: { ...result },
+            structuredContent: {
+              ...result,
+              resolved_project: targetScope.resolved_project,
+              active_source: targetScope.active_source,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7060,6 +7131,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = transitionEntity(entity, id, to, targetCwd, reason);
         appendAuditEntry(
@@ -7069,7 +7141,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}` }],
-            structuredContent: { ...result },
+            structuredContent: {
+              ...result,
+              resolved_project: targetScope.resolved_project,
+              active_source: targetScope.active_source,
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7115,9 +7191,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
  */
 export async function executeMcpToolCall(payload: McpToolExecutionPayload): Promise<McpToolExecutionOutcome> {
   const baseCwd = payload.cwd;
-  const cwd = payload.name === 'bclaw_switch'
-    ? baseCwd
-    : resolveEffectiveCwd({ baseCwd });
+  const effective = payload.name === 'bclaw_switch'
+    ? { cwd: baseCwd, active_source: 'cwd' as const, resolved_project: undefined }
+    : resolveEffectiveCwdInfo({ baseCwd, sessionId: payload.connectionSessionId });
+  const cwd = effective.cwd;
   const envClaimId = process.env.BRAINCLAW_CLAIM_ID?.trim() || undefined;
 
   // ── Auto-session ────────────────────────────────────────────────────────────
@@ -7172,6 +7249,7 @@ export async function executeMcpToolCall(payload: McpToolExecutionPayload): Prom
     ...payload,
     cwd,
     connectionSessionId: effectiveConnectionSessionId,
+    effectiveScope: effective,
   });
 
   // Apply legacy deprecation warning uniformly (Phase 3 slice 3g). Read tools

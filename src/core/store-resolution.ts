@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadActiveProject } from './active-project.js';
 import { loadConfig } from './config.js';
-import { loadCurrentSession } from './identity.js';
+import { loadCurrentSession, loadSessionById } from './identity.js';
 import { MEMORY_DIR } from './io.js';
 import { summarizeWorkspaceProjects } from './workspace-projects.js';
 
@@ -137,8 +137,21 @@ export interface ResolveEffectiveCwdOptions {
   explicitCwd?: string;
   /** Base cwd used to resolve session/global active project state. */
   baseCwd?: string;
+  /** Explicit MCP connection/session id. Takes precedence over process env. */
+  sessionId?: string;
   /** Store chain options passed through to resolveStoreChain. */
   storeChainOptions?: ResolveStoreChainOptions;
+}
+
+export type EffectiveCwdSource = 'explicit' | 'env_project' | 'session' | 'global' | 'cwd';
+
+export interface ResolvedEffectiveCwd {
+  cwd: string;
+  active_source: EffectiveCwdSource;
+  resolved_project?: {
+    path: string;
+    name?: string;
+  };
 }
 
 /**
@@ -155,11 +168,22 @@ export interface ResolveEffectiveCwdOptions {
 export function resolveEffectiveCwd(
   options: ResolveEffectiveCwdOptions = {},
 ): string {
+  return resolveEffectiveCwdInfo(options).cwd;
+}
+
+/**
+ * Resolve the effective cwd and explain which selector won. Use this for MCP
+ * facades that must echo their project scope to avoid silent cross-project reads.
+ */
+export function resolveEffectiveCwdInfo(
+  options: ResolveEffectiveCwdOptions = {},
+): ResolvedEffectiveCwd {
   const baseCwd = path.resolve(options.baseCwd ?? process.cwd());
 
   // 1. Explicit --cwd flag
   if (options.explicitCwd) {
-    return path.resolve(options.explicitCwd);
+    const cwd = path.resolve(options.explicitCwd);
+    return { cwd, active_source: 'explicit', resolved_project: projectInfo(cwd) };
   }
 
   // 2. BRAINCLAW_CWD env var — set by MCP configs to anchor resolution to the
@@ -177,15 +201,17 @@ export function resolveEffectiveCwd(
   const envProject = process.env.BRAINCLAW_PROJECT;
   if (envProject) {
     const resolved = resolveProjectRef(envProject, anchorCwd, options.storeChainOptions);
-    if (resolved) return resolved;
+    if (resolved) return { cwd: resolved, active_source: 'env_project', resolved_project: projectInfo(resolved) };
   }
 
   // 4. Session-scoped active project (per-agent, no cross-agent interference)
-  const session = loadCurrentSession(anchorCwd);
+  const session = options.sessionId
+    ? loadSessionById(options.sessionId, anchorCwd)
+    : loadCurrentSession(anchorCwd);
   if (session?.active_project) {
     const sp = session.active_project;
     if (fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
-      return sp.path;
+      return { cwd: sp.path, active_source: 'session', resolved_project: { path: sp.path, name: sp.name } };
     }
   }
 
@@ -194,12 +220,21 @@ export function resolveEffectiveCwd(
   if (wsRoot) {
     const active = loadActiveProject(wsRoot);
     if (active && fs.existsSync(path.join(active.path, MEMORY_DIR, 'config.yaml'))) {
-      return active.path;
+      return { cwd: active.path, active_source: 'global', resolved_project: { path: active.path, name: active.name } };
     }
   }
 
   // 6. Default
-  return anchorCwd;
+  return { cwd: anchorCwd, active_source: 'cwd', resolved_project: projectInfo(anchorCwd) };
+}
+
+function projectInfo(cwd: string): { path: string; name?: string } {
+  try {
+    const config = loadConfig(cwd);
+    return { path: cwd, name: config.project_name };
+  } catch {
+    return { path: cwd };
+  }
 }
 
 /**

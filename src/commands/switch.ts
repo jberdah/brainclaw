@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
-import { buildOperationalIdentity, loadCurrentSession, saveCurrentSession } from '../core/identity.js';
+import { buildOperationalIdentity, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
@@ -21,6 +21,8 @@ export interface SwitchProjectOptions {
   cwd?: string;
   /** Force session-scoped switch (never write to global active-project.json). */
   sessionOnly?: boolean;
+  /** Explicit MCP connection/session id. */
+  sessionId?: string;
 }
 
 export interface SwitchProjectResult {
@@ -70,10 +72,27 @@ export function switchProject(projectRef: string, options: SwitchProjectOptions 
 
   const now = new Date().toISOString();
   const sessionOnly = options.sessionOnly ?? true;
-  let session = loadCurrentSession(cwd);
+  let session = options.sessionId ? loadSessionById(options.sessionId, cwd) : loadCurrentSession(cwd);
   if (!session && sessionOnly) {
-    buildOperationalIdentity(undefined, cwd, { persistImplicitSession: true });
-    session = loadCurrentSession(cwd);
+    if (options.sessionId) {
+      const identity = buildOperationalIdentity(undefined, cwd, {
+        sessionId: options.sessionId,
+        persistImplicitSession: false,
+      });
+      saveCurrentSession({
+        session_id: options.sessionId,
+        started_at: now,
+        last_seen_at: now,
+        agent: identity.agent,
+        agent_id: identity.agent_id,
+        host_id: identity.host_id,
+        user: process.env.USER || process.env.USERNAME || undefined,
+        pid: process.pid,
+      }, cwd);
+    } else {
+      buildOperationalIdentity(undefined, cwd, { persistImplicitSession: true });
+    }
+    session = options.sessionId ? loadSessionById(options.sessionId, cwd) : loadCurrentSession(cwd);
   }
 
   if (session && sessionOnly) {
@@ -115,12 +134,16 @@ export interface ListProjectsResult {
  * List available projects in the workspace.
  */
 export function listAvailableProjects(cwd?: string): ListProjectsResult {
+  return listAvailableProjectsForSession(cwd);
+}
+
+export function listAvailableProjectsForSession(cwd?: string, sessionId?: string): ListProjectsResult {
   const wsRoot = findOutermostWorkspaceRoot(cwd ?? process.cwd());
   if (!wsRoot) {
     throw new Error('No brainclaw workspace found.');
   }
 
-  const sessionActive = loadCurrentSession(cwd)?.active_project;
+  const sessionActive = (sessionId ? loadSessionById(sessionId, cwd) : loadCurrentSession(cwd))?.active_project;
   const globalActive = loadActiveProject(wsRoot);
   const active = sessionActive ?? globalActive;
   const activeSource: ListProjectsResult['active_source'] = sessionActive ? 'session' : globalActive ? 'global' : 'none';

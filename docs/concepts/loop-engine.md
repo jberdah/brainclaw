@@ -509,3 +509,12 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 - pln#394 `feat/loop-engine-mvp`
 - pln#395 `feat/review-loop-protocol`
 - pln#392 `doc/mcp-versioning-and-surface-governance` (prerequisite)
+
+## Loops available today
+
+The loop surface exposed over MCP is intentionally narrow:
+
+- **Review loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="asymmetric"|"symmetric", targetAgents=[…])` opens the loop and dispatches the first turn. Drive subsequent turns with `bclaw_loop(intent="turn"|"complete_turn"|"advance"|"close")`.
+- **Ideation loops** — `bclaw_coordinate(intent="ideate", preset="bootstrap")` opens an ideation loop from a preset.
+
+Custom phase lists (`LoopPhase[]`) and bespoke `StopCondition` logic exist in the loop engine internally, but are **not** exposed through the MCP facade today: `CoordinateRequestSchema` accepts only `open_loop`, `review_mode`, `preflight`, `ref`, and `preset` — no `phases` or `stop_condition` — and the standalone `bclaw_loop` tool does not expose an `open` intent. Programmatic construction of ad-hoc loops is therefore internal / future work until the facade is extended.

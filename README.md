@@ -9,6 +9,7 @@
 ---
 
 If you've ever:
+
 - **lost your conversation** when your agent hit credit limits mid-task,
 - returned to a project **after a week** with no idea where you left off,
 - watched two coworkers (or two agents) **edit the same files** without knowing it,
@@ -18,7 +19,7 @@ brainclaw gives you durable shared state across sessions, agents, and teammates.
 
 Use it two ways — **together or separately**:
 
-- **Active orchestration** — dispatch work in parallel across multiple agent instances. Claims prevent conflicts, sequences manage lane dependencies, the dispatcher routes by capacity.
+- **Active orchestration** — dispatch work in parallel across multiple agent instances. Dispatched work runs in isolated Git Worktrees to prevent conflicts, sequences manage lane dependencies, the dispatcher routes by capacity.
 - **Async shared state** — when an agent runs out of credits, when you return to a project after weeks, or when teammates work in parallel: the next agent (or you) resumes cleanly with the same context, plans, and constraints.
 
 The same primitives — plans, claims, handoffs, decisions, traps — serve both modes. That's the design point. brainclaw stores everything locally as plain text + JSON, versions it in Git, and asks no opinion about which agent you should use for what.
@@ -29,16 +30,16 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 
 ## What it provides
 
-| | |
-|---|---|
-| **Project memory** | constraints, decisions, traps, handoffs, and layered instructions agents can resume from |
-| **Coordination state** | shared plans, file claims, runtime notes, and board views for active work |
-| **Agent-ready context** | compact, prompt-sized context built from real workspace state instead of stale instructions |
-| **Native agent files** | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance |
-| **Multi-turn loops** | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see [loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
-| **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI |
-| **Queued surface tasks** | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research |
-| **Local-first storage** | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default |
+|                                        |                                                                                                                                                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Project memory**               | constraints, decisions, traps, handoffs, and layered instructions agents can resume from                                                                                                            |
+| **Coordination state**           | shared plans, file claims (dispatched work isolated in Git Worktrees), runtime notes, and board views for active work                                                                                                 |
+| **Agent-ready context**          | compact, prompt-sized context built from real workspace state instead of stale instructions                                                                                                         |
+| **Native agent files**           | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance                                                                         |
+| **Multi-turn loops**             | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see[loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
+| **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI                                                                                                    |
+| **Queued surface tasks**         | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research                                                                             |
+| **Local-first storage**          | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default                                                                                                                        |
 
 ---
 
@@ -46,11 +47,11 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 
 brainclaw exposes the same collaboration state through three surfaces, but they do not have the same role in an agent-first workflow.
 
-| Surface | Primary use |
-|---|---|
-| **MCP** | default path for capable agents that need fresh context, board state, plans, claims, and write operations |
+| Surface                      | Primary use                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **MCP**                | default path for capable agents that need fresh context, board state, plans, claims, and write operations          |
 | **Native agent files** | local guidance and bootstrap hints for a specific agent surface (`AGENTS.md`, `CLAUDE.md`, Cursor rules, etc.) |
-| **CLI** | operator workflows, scripting, setup, debugging, release, and fallback access when MCP is not the integration path |
+| **CLI**                | operator workflows, scripting, setup, debugging, release, and fallback access when MCP is not the integration path |
 
 If you are documenting or integrating an agent workflow, treat MCP as the primary runtime path.
 
@@ -62,31 +63,31 @@ brainclaw is designed to sit alongside the coding agents teams are already using
 
 ### Code Agents
 
-| Logo | Agent | Tier | What brainclaw configures |
-|---|---|---|---|
-| [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code) | **[Claude Code](https://github.com/anthropics/claude-code)** | A | MCP + CLAUDE.md + hooks + auto-approve + permissions + /brainclaw skill |
-| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/) | **[Codex](https://openai.com/codex/)** | A | MCP + AGENTS.md + skills |
-| [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US) | **[Cursor](https://cursor.com/en-US)** | A | MCP (machine) + .cursor/rules/ + hooks + skills |
-| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/) | **[Windsurf](https://windsurf.com/)** | A | MCP (machine) + .windsurfrules + .windsurf/rules/ |
-| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline) | **[Cline](https://github.com/cline/cline)** | A | MCP + auto-approve + .clinerules/ |
-| [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)** | A | MCP + copilot-instructions.md + hooks + skills |
-| [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code) | **[Roo](https://github.com/RooCodeInc/Roo-Code)** | B | MCP + auto-approve + .roo/rules/ |
-| [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue) | **[Continue](https://github.com/continuedev/continue)** | B | MCP + .continue/rules/ |
-| [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode) | **[OpenCode](https://github.com/opencode-ai/opencode)** | B | MCP + AGENTS.md |
-| [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli) | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | B | MCP + GEMINI.md |
+| Logo                                                                                                                                       | Agent                                                                          | Tier | What brainclaw configures                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ---- | ----------------------------------------------------------------------- |
+| [![Claude Code](https://img.shields.io/badge/Claude_Code-111111?logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)     | **[Claude Code](https://github.com/anthropics/claude-code)**                | A    | MCP + CLAUDE.md + hooks + auto-approve + permissions + /brainclaw skill |
+| [![Codex](https://img.shields.io/badge/Codex-111111?logo=openai&logoColor=white)](https://openai.com/codex/)                                    | **[Codex](https://openai.com/codex/)**                                      | A    | MCP + AGENTS.md + skills                                                |
+| [![Cursor](https://img.shields.io/badge/Cursor-1F2430?logo=cursor&logoColor=white)](https://cursor.com/en-US)                                   | **[Cursor](https://cursor.com/en-US)**                                      | A    | MCP (machine) + .cursor/rules/ + hooks + skills                         |
+| [![Windsurf](https://img.shields.io/badge/Windsurf-0B1220?logo=codeium&logoColor=white)](https://windsurf.com/)                                 | **[Windsurf](https://windsurf.com/)**                                       | A    | MCP (machine) + .windsurfrules + .windsurf/rules/                       |
+| [![Cline](https://img.shields.io/badge/Cline-0F766E?logoColor=white)](https://github.com/cline/cline)                                           | **[Cline](https://github.com/cline/cline)**                                 | A    | MCP + auto-approve + .clinerules/                                       |
+| [![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-181717?logo=githubcopilot&logoColor=white)](https://github.com/features/copilot) | **[GitHub Copilot](https://github.com/features/copilot)**                   | A    | MCP + copilot-instructions.md + hooks + skills                          |
+| [![Roo](https://img.shields.io/badge/Roo-7C3AED?logoColor=white)](https://github.com/RooCodeInc/Roo-Code)                                       | **[Roo](https://github.com/RooCodeInc/Roo-Code)**                           | B    | MCP + auto-approve + .roo/rules/                                        |
+| [![Continue](https://img.shields.io/badge/Continue-2563EB?logoColor=white)](https://github.com/continuedev/continue)                            | **[Continue](https://github.com/continuedev/continue)**                     | B    | MCP + .continue/rules/                                                  |
+| [![OpenCode](https://img.shields.io/badge/OpenCode-0F172A?logoColor=white)](https://github.com/opencode-ai/opencode)                            | **[OpenCode](https://github.com/opencode-ai/opencode)**                     | B    | MCP + AGENTS.md                                                         |
+| [![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-1A73E8?logo=googlegemini&logoColor=white)](https://github.com/google-gemini/gemini-cli)  | **[Antigravity / Gemini CLI](https://github.com/google-gemini/gemini-cli)** | B    | MCP + GEMINI.md                                                         |
 
 **Tier A** = strongest supported integration for that agent family (usually MCP plus native files, and hooks/skills where the agent exposes them). **Tier B** = MCP/native-file integration with fewer automation surfaces. Tier can degrade at runtime if integration surfaces are missing.
 
 ### Autonomous Agents
 
-| Logo | Agent | Tier | What brainclaw configures |
-|---|---|---|---|
-| [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw) | **[OpenClaw](https://github.com/openclaw/openclaw)** | B | MCP + brainclaw skill (SKILL.md) for structured project memory |
-| [![Hermes](https://img.shields.io/badge/Hermes-111111?logoColor=white)](https://github.com/NousResearch/hermes-agent) | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | B | MCP + universal `.agents/skills/brainclaw/SKILL.md` |
-| [![NanoClaw](https://img.shields.io/badge/NanoClaw-4A90D9?logoColor=white)](https://github.com/qwibitai/nanoclaw) | **[NanoClaw](https://github.com/qwibitai/nanoclaw)** | C | brainclaw skill — messaging agent (WhatsApp, Telegram, Slack) |
-| [![NemoClaw](https://img.shields.io/badge/NemoClaw-76B900?logo=nvidia&logoColor=white)](https://github.com/NVIDIA/NemoClaw) | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)** | C | brainclaw skill — NVIDIA enterprise agent stack |
-| [![PicoClaw](https://img.shields.io/badge/PicoClaw-00ADD8?logo=go&logoColor=white)](https://github.com/sipeed/picoclaw) | **[PicoClaw](https://github.com/sipeed/picoclaw)** | C | brainclaw skill — edge/IoT agent (Go, <10MB RAM) |
-| [![ZeroClaw](https://img.shields.io/badge/ZeroClaw-B7410E?logoColor=white)](https://github.com/zeroclaw-labs/zeroclaw) | **[ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)** | C | brainclaw skill — ultra-lightweight Rust agent (20+ channels) |
+| Logo                                                                                                                   | Agent                                                               | Tier | What brainclaw configures                                      |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---- | -------------------------------------------------------------- |
+| [![OpenClaw](https://img.shields.io/badge/OpenClaw-FF6B35?logoColor=white)](https://github.com/openclaw/openclaw)           | **[OpenClaw](https://github.com/openclaw/openclaw)**             | B    | MCP + brainclaw skill (SKILL.md) for structured project memory |
+| [![Hermes](https://img.shields.io/badge/Hermes-111111?logoColor=white)](https://github.com/NousResearch/hermes-agent)       | **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** | B    | MCP + universal `.agents/skills/brainclaw/SKILL.md`          |
+| [![NanoClaw](https://img.shields.io/badge/NanoClaw-4A90D9?logoColor=white)](https://github.com/qwibitai/nanoclaw)           | **[NanoClaw](https://github.com/qwibitai/nanoclaw)**             | C    | brainclaw skill — messaging agent (WhatsApp, Telegram, Slack) |
+| [![NemoClaw](https://img.shields.io/badge/NemoClaw-76B900?logo=nvidia&logoColor=white)](https://github.com/NVIDIA/NemoClaw) | **[NemoClaw](https://github.com/NVIDIA/NemoClaw)**               | C    | brainclaw skill — NVIDIA enterprise agent stack               |
+| [![PicoClaw](https://img.shields.io/badge/PicoClaw-00ADD8?logo=go&logoColor=white)](https://github.com/sipeed/picoclaw)     | **[PicoClaw](https://github.com/sipeed/picoclaw)**               | C    | brainclaw skill — edge/IoT agent (Go, <10MB RAM)              |
+| [![ZeroClaw](https://img.shields.io/badge/ZeroClaw-B7410E?logoColor=white)](https://github.com/zeroclaw-labs/zeroclaw)      | **[ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw)**        | C    | brainclaw skill — ultra-lightweight Rust agent (20+ channels) |
 
 **Tier C** = no MCP, no hooks — skill-based only with inline context and constrained resources. Autonomous agents use `--profile compact` for short sessions.
 
@@ -98,11 +99,11 @@ brainclaw is most effective today when one agent works at a time in a given chec
 
 brainclaw declares support for Node.js 20+ in `package.json` (`engines.node = ">=20.0.0"`). CI actively exercises Node 22 (Active LTS) and Node 24 (current LTS) on Linux; Windows runs on Node 24. Node 20 still works as a minimum runtime but is no longer CI-verified — it reached EOL in April 2026 and was removed from GitHub-hosted runners. The recommended runtime is Node 22 LTS or Node 24 LTS. Real-world support is still not perfectly even yet.
 
-| Logo | Platform | Status today | Notes |
-|---|---|---|---|
-| [![Linux](https://img.shields.io/badge/Linux-111111?logo=linux&logoColor=white)](https://www.kernel.org/) | **[Linux](https://www.kernel.org/)** | Recommended | best-supported environment today; GitHub CI runs on Ubuntu with Node 22 and 24 |
-| [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/) | **[macOS](https://www.apple.com/macos/)** | Likely supported | Unix-like path and shell model should map well, but it is less exercised than Linux |
-| [![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows/) | **[Windows](https://www.microsoft.com/windows/)** | Supported with caveats | native support exists, but PATH, npm, SSH, and PowerShell quoting still create more friction than on Unix systems |
+| Logo                                                                                                                                            | Platform                                                          | Status today              | Notes                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [![Linux](https://img.shields.io/badge/Linux-111111?logo=linux&logoColor=white)](https://www.kernel.org/)                                            | **[Linux](https://www.kernel.org/)**                           | Recommended               | best-supported environment today; GitHub CI runs on Ubuntu with Node 22 and 24                                           |
+| [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)                                       | **[macOS](https://www.apple.com/macos/)**                      | Likely supported          | Unix-like path and shell model should map well, but it is less exercised than Linux                                      |
+| [![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows/)                           | **[Windows](https://www.microsoft.com/windows/)**              | Supported with caveats    | native support exists, but PATH, npm, SSH, and PowerShell quoting still create more friction than on Unix systems        |
 | [![Windows + WSL2](https://img.shields.io/badge/Windows%20%2B%20WSL2-0078D4?logo=windows&logoColor=white)](https://learn.microsoft.com/windows/wsl/) | **[Windows + WSL2](https://learn.microsoft.com/windows/wsl/)** | Important, still maturing | Brainclaw detects this setup explicitly, but setup/install/store parity across Windows and WSL is not fully seamless yet |
 
 If you want the least surprising setup today, use Linux first. If you are on Windows, prefer a disciplined single-environment workflow and expect a few extra machine-specific fixes.
@@ -193,6 +194,52 @@ brainclaw status          # see active sessions, claims, plans
 brainclaw agent-board     # see what each agent is doing
 ```
 
+## A Day in the Life of a Brainclaw Agent
+
+Here's how a typical autonomous task progresses using Brainclaw:
+
+```javascript
+// 1. Session start & Context setup
+bclaw_work({ intent: "execute", scope: "src/feature-auth" });
+// (Brainclaw starts/resumes the session, builds context, and claims the scope.
+//  Isolated Git Worktrees are provisioned when work is dispatched to other agents
+//  via bclaw_dispatch / bclaw_coordinate(intent="assign"|"review").)
+
+// 2. The agent writes code, tests it, and completes the step...
+// write code, test code
+bclaw_complete_step({ planId: "pln_123", stepId: "stp_456" });
+
+// 3. The agent releases the claim and requests a review from a peer agent
+bclaw_release_claim({ id: "clm_789", planStatus: "done" });
+bclaw_coordinate({ 
+  intent: "review", 
+  open_loop: true, 
+  review_mode: "symmetric", 
+  targetAgents: ["claude-code"] 
+});
+
+// 4. The loop progresses as agents interact and resolve findings
+bclaw_loop({ intent: "advance", loop_id: "lop_abc" });
+```
+
+## The Loop Engine (Multi-Turn Workflows)
+
+Brainclaw's Loop Engine moves beyond manual ping-pong by formalizing multi-turn workflows (review, ideation, testing). It features two distinct review modes:
+
+- **Asymmetric Mode**: The classic author→reviewer handoff. The reviewer creates findings, and the original author must apply the fixes.
+- **Symmetric Mode**: Eliminates unnecessary round-trips. Both the author and reviewer slots can apply fixes directly, drastically speeding up spec and documentation reviews.
+
+Each loop maintains a structured lifecycle, explicit phases, iteration bounds, and per-phase memory filters, executed seamlessly via `bclaw_loop`.
+
+## Enterprise Ready: Mono-repo & Micro-services
+
+Brainclaw is designed to scale across complex environments. Using the **`project_mode`** setting, Brainclaw seamlessly auto-detects folder boundaries for mono-repos and applies proper environment bootstrapping.
+
+Additionally, **`cross_project_links`** enables inter-project communication:
+
+- **Signals**: Candidates, handoffs, and runtime notes gracefully flow between sibling or micro-service projects.
+- **Inbox**: Agents can dispatch review/assign tasks to agents operating in completely different projects using unified inbox routing.
+
 ### Multi-agent setup
 
 To configure brainclaw for all your repos and agents at once:
@@ -247,14 +294,14 @@ Recommended use today:
 
 When brainclaw creates an agent worktree, it auto-detects which dependency directories to symlink from the main worktree based on stack markers present in the project root:
 
-| Stack marker | Symlinked directories |
-|---|---|
-| `package.json` | `node_modules` |
-| `requirements.txt` / `pyproject.toml` / `Pipfile` | `venv`, `.venv` |
-| `Gemfile` | `vendor/bundle` |
-| `go.mod` | `vendor` |
-| `composer.json` | `vendor` |
-| `mix.exs` | `deps` |
+| Stack marker                                            | Symlinked directories |
+| ------------------------------------------------------- | --------------------- |
+| `package.json`                                        | `node_modules`      |
+| `requirements.txt` / `pyproject.toml` / `Pipfile` | `venv`, `.venv`   |
+| `Gemfile`                                             | `vendor/bundle`     |
+| `go.mod`                                              | `vendor`            |
+| `composer.json`                                       | `vendor`            |
+| `mix.exs`                                             | `deps`              |
 
 Maven, Gradle, and Cargo are intentionally excluded — their dependency caches are machine-global (`~/.m2`, `~/.gradle/caches`, `~/.cargo/registry`) and found automatically by the toolchain.
 
@@ -303,29 +350,29 @@ The npm package includes the Markdown docs below under `docs/`. Public web docs 
 
 If you are integrating Brainclaw into an agent workflow, start with the agent-facing docs first:
 
-| | |
-|---|---|
-| `docs/index.md` | Documentation index grouped by getting started, guides, reference, and design |
-| `docs/integrations/overview.md` | Start here for agent integrations |
-| `docs/integrations/mcp.md` | MCP runtime path for capable agents |
-| `docs/quickstart.md` | First-time setup on a new project (greenfield) |
-| `docs/quickstart-existing-project.md` | Joining a project that already has `.brainclaw/` |
-| `docs/server-operations.md` | Operator and remote-server workflow guide |
-| `docs/cli.md` | CLI reference for operators, scripts, and fallback use |
-| `docs/concepts/memory.md` | What "memory" means in brainclaw |
-| `docs/concepts/plans-and-claims.md` | Coordination layer |
-| `docs/concepts/runtime-notes.md` | Ephemeral observations |
-| `docs/concepts/multi-agent-workflows.md` | The four common scenarios — orchestration, agent switching, project recovery, team async |
-| `docs/concepts/troubleshooting.md` | Runbook for degraded coordination state — stale claims, missing dist, octopus failures, etc. |
-| `docs/integrations/cursor.md` | Cursor |
-| `docs/integrations/claude-code.md` | Claude Code |
-| `docs/integrations/copilot.md` | GitHub Copilot |
-| `docs/integrations/codex.md` | Codex |
-| `docs/storage.md` | Storage model |
-| `docs/security.md` | Security model |
-| `docs/review.md` | Reflective review |
-| `docs/reputation.md` | Reputation signals |
-| `docs/playbooks/` | Audience design constraints for brainclaw development |
+|                                            |                                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `docs/index.md`                          | Documentation index grouped by getting started, guides, reference, and design                 |
+| `docs/integrations/overview.md`          | Start here for agent integrations                                                             |
+| `docs/integrations/mcp.md`               | MCP runtime path for capable agents                                                           |
+| `docs/quickstart.md`                     | First-time setup on a new project (greenfield)                                                |
+| `docs/quickstart-existing-project.md`    | Joining a project that already has `.brainclaw/`                                            |
+| `docs/server-operations.md`              | Operator and remote-server workflow guide                                                     |
+| `docs/cli.md`                            | CLI reference for operators, scripts, and fallback use                                        |
+| `docs/concepts/memory.md`                | What "memory" means in brainclaw                                                              |
+| `docs/concepts/plans-and-claims.md`      | Coordination layer                                                                            |
+| `docs/concepts/runtime-notes.md`         | Ephemeral observations                                                                        |
+| `docs/concepts/multi-agent-workflows.md` | The four common scenarios — orchestration, agent switching, project recovery, team async     |
+| `docs/concepts/troubleshooting.md`       | Runbook for degraded coordination state — stale claims, missing dist, octopus failures, etc. |
+| `docs/integrations/cursor.md`            | Cursor                                                                                        |
+| `docs/integrations/claude-code.md`       | Claude Code                                                                                   |
+| `docs/integrations/copilot.md`           | GitHub Copilot                                                                                |
+| `docs/integrations/codex.md`             | Codex                                                                                         |
+| `docs/storage.md`                        | Storage model                                                                                 |
+| `docs/security.md`                       | Security model                                                                                |
+| `docs/review.md`                         | Reflective review                                                                             |
+| `docs/reputation.md`                     | Reputation signals                                                                            |
+| `docs/playbooks/`                        | Audience design constraints for brainclaw development                                         |
 
 ---
 
@@ -416,13 +463,11 @@ For older releases (v0.x and the early v1.0 launch series), `git log` on `master
 
 - **Multi-agent dispatch hardening for JS/TS monorepos** — dispatched worktrees
   junction-link per-package `node_modules` (npm / yarn / pnpm workspaces), not
-  just the root, and surface failed links instead of swallowing them; `brainclaw
-  worktree clean` now garbage-collects merged worktrees past birth-noise instead
+  just the root, and surface failed links instead of swallowing them; `brainclaw worktree clean` now garbage-collects merged worktrees past birth-noise instead
   of skipping them all; the agent inventory reports an agent `spawnable` when its
   binary is on PATH even if `--version` is slow to start; dispatch-verification
   guidance leads with `bclaw_dispatch_status` (not the untrustworthy Windows
-  wrapper pid); and a new `LANE-RESULT.json` convention + `brainclaw harvest
-  <assignment_id>` give workers a standard, MCP-free result channel. The dispatch
+  wrapper pid); and a new `LANE-RESULT.json` convention + `brainclaw harvest <assignment_id>` give workers a standard, MCP-free result channel. The dispatch
   dirty-guard also ignores `.claude/`, `.cursor/`, and `.codex/` agent-local
   config. (pln#523, pln#524, pln#525, pln#526, trp#371, trp#427, trp#428)
 
