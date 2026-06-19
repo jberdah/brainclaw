@@ -114,26 +114,24 @@ function stripQuotes(text: string): string {
 }
 
 /**
- * The grammar node types that count as the enclosing import/export STATEMENT for
- * span/ordinal anchoring. JS/TS use `import_statement`/`export_statement`; Python
- * uses `import_statement` (for `import a, b`) and `import_from_statement` (for
- * `from x import …`). This set is the generic multi-language widening the rule of
- * two revealed (cadrage §3.3): the runtime previously hard-coded only the JS/TS
- * statement names, so a Python `from` import fell through to the @import.source
- * node and produced a too-narrow span. Adding a language's import-statement node
- * types here is the §3.3 import-grouping hardening, not a per-language special case.
+ * Walk up from a capture node to the enclosing import/export STATEMENT for
+ * span/ordinal anchoring, using the PROVIDER-LOCAL set of grammar node types that
+ * count as an import/export statement (cadrage §3 / Codex R1 langs#3-4).
+ *
+ * Each provider declares its OWN statement node types via
+ * {@link QueryRuntimeInput.enclosingStatementNodeTypes} (JS/TS
+ * `import_statement`/`export_statement`; Python `import_statement`/
+ * `import_from_statement`; PHP `namespace_use_declaration`; Java
+ * `import_declaration`). The runtime uses ONLY the set passed for the CURRENT file
+ * and NEVER imports/consults a central registry — adding a language is a provider
+ * declaration, not an edit here. This is the rule-of-N generalization the P1b
+ * review predicted: the runtime previously hard-coded the JS/Python statement
+ * names, which would have silently mis-spanned PHP/Java import statements.
  */
-const IMPORT_EXPORT_STATEMENT_TYPES: ReadonlySet<string> = new Set([
-  'import_statement',
-  'export_statement',
-  'import_from_statement',
-]);
-
-/** Walk up from a capture node to the enclosing import/export statement. */
-function enclosingStatement(node: TsNode): TsNode {
+function enclosingStatement(node: TsNode, statementTypes: ReadonlySet<string>): TsNode {
   let n: TsNode | null = node;
   while (n) {
-    if (IMPORT_EXPORT_STATEMENT_TYPES.has(n.type)) return n;
+    if (statementTypes.has(n.type)) return n;
     n = n.parent;
   }
   return node;
@@ -203,6 +201,16 @@ export interface QueryRuntimeInput {
   readonly tagsHash: string;
   readonly importsSource: string;
   readonly importsHash: string;
+  /**
+   * PROVIDER-LOCAL grammar node types that count as the enclosing import/export
+   * STATEMENT for import span/ordinal anchoring (the provider's
+   * `queries.enclosingStatementNodeTypes`). The runtime uses ONLY this set for the
+   * current file — it never derives it from a central registry (cadrage §3 / Codex
+   * R1). Include BOTH import and export statement node types where the language has
+   * them (JS/TS local exports/re-exports also resolve through {@link
+   * enclosingStatement}).
+   */
+  readonly enclosingStatementNodeTypes: readonly string[];
 }
 
 /** Per-definition scratch built while grouping definition matches. */
@@ -240,6 +248,9 @@ interface ImportScratch {
  */
 export async function extractWithQueries(input: QueryRuntimeInput): Promise<ExtractionDraft> {
   const facts: ExtractionFact[] = [];
+  // PROVIDER-LOCAL enclosing-statement node types — the only source of truth for
+  // import/export span anchoring (cadrage §3 / Codex R1). No registry lookup.
+  const statementTypes = new Set(input.enclosingStatementNodeTypes);
   const emptyDraft = (parseStatus: string, tree: Tree | null): ExtractionDraft => ({
     file: { path: input.path },
     definitions: [],
@@ -405,7 +416,7 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
         // node so a statement with N sources emits N module nodes (Python
         // `import a, b`). span/ordinal stay anchored on the enclosing statement,
         // which for single-source JS/TS is byte-identical to per-statement grouping.
-        const stmt = enclosingStatement(sourceNode);
+        const stmt = enclosingStatement(sourceNode, statementTypes);
         const isReExport = stmt.type === 'export_statement';
         let scratch = importBySource.get(sourceNode.id);
         if (!scratch) {
@@ -477,7 +488,7 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
       anchored.push({
         ordinalIndex: ex.ordinalIndex,
         emit: (ordinal) => {
-          exports.push({ ordinal, name: ex.name, span: spanOf(enclosingStatement(ex.node)) });
+          exports.push({ ordinal, name: ex.name, span: spanOf(enclosingStatement(ex.node, statementTypes)) });
         },
       });
     }

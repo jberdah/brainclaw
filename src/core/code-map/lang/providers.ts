@@ -14,6 +14,8 @@
 import { DefaultCodeLanguageRegistry, createRegistry } from './registry.js';
 import { typeScriptProvider } from './typescript/index.js';
 import { pythonProvider } from './python/index.js';
+import { phpProvider } from './php/index.js';
+import { javaProvider } from './java/index.js';
 
 /**
  * The default registry, pre-loaded with the bundled providers. Add a new
@@ -22,4 +24,6 @@ import { pythonProvider } from './python/index.js';
 export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(
   typeScriptProvider,
   pythonProvider,
+  phpProvider,
+  javaProvider,
 );

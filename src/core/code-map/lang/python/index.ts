@@ -102,6 +102,11 @@ const queries: QueryDeclarations = {
     sourceForLang: () => IMPORTS,
     hashForLang: () => IMPORTS_HASH,
   },
+  // Python import statement node types (cadrage §3 / Codex R1): `import a, b` is an
+  // `import_statement`; `from x import …` is an `import_from_statement`. Python has
+  // no export statement. PROVIDER-LOCAL — runtime gets this per file, no registry.
+  // (Same set the old module-global carried for Python → byte-identical output.)
+  enclosingStatementNodeTypes: ['import_statement', 'import_from_statement'],
   // P1b §3.4: the runtime drives capture→draft mapping off the HARD-CODED
   // capture-name convention (query-runtime.ts). This captureMap is a declared
   // MIRROR, validated by `assertCaptureMapConforms`. Every entry names a
@@ -272,6 +277,7 @@ async function extractDraftViaRuntime(
     tagsHash: TAGS_HASH,
     importsSource: IMPORTS,
     importsHash: IMPORTS_HASH,
+    enclosingStatementNodeTypes: queries.enclosingStatementNodeTypes,
   });
 }
 

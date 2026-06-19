@@ -1,0 +1,2537 @@
+{
+  "src/defs-class.php": {
+    "path": "src/defs-class.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App\\Models;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App\\Models"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class User implements Identifiable { const ROLE "
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "name",
+          "text": "User"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "const_declaration",
+          "text": "const ROLE = 'user';"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "name",
+          "text": "ROLE"
+        },
+        {
+          "capture": "definition.property.node",
+          "type": "property_declaration",
+          "text": "public int $id;"
+        },
+        {
+          "capture": "definition.property.name",
+          "type": "variable_name",
+          "text": "$id"
+        },
+        {
+          "capture": "definition.property.node",
+          "type": "property_declaration",
+          "text": "private string $name;"
+        },
+        {
+          "capture": "definition.property.name",
+          "type": "variable_name",
+          "text": "$name"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function __construct(int $id) { $this->id"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "__construct"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function getName(): string { return $this"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "getName"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "private static function make(): self { return ne"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "make"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App\\Models",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 22
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "User",
+          "subtype": "class",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 20,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.constant.node",
+          "name": "ROLE",
+          "subtype": "constant",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 25
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.property.node",
+          "name": "id",
+          "subtype": "property",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 20
+          }
+        },
+        {
+          "ordinal": 4,
+          "captureName": "definition.property.node",
+          "name": "name",
+          "subtype": "property",
+          "span": {
+            "start_line": 7,
+            "start_col": 5,
+            "end_line": 7,
+            "end_col": 26
+          }
+        },
+        {
+          "ordinal": 5,
+          "captureName": "definition.method.node",
+          "name": "__construct",
+          "subtype": "constructor",
+          "span": {
+            "start_line": 9,
+            "start_col": 5,
+            "end_line": 11,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 6,
+          "captureName": "definition.method.node",
+          "name": "getName",
+          "subtype": "method",
+          "span": {
+            "start_line": 13,
+            "start_col": 5,
+            "end_line": 15,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.method.node",
+          "name": "make",
+          "subtype": "method",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 19,
+            "end_col": 6
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/defs-class.php",
+          "path": "src/defs-class.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:5fa148a242e632149837d259251e709d4bc6dcb02103629b3b368f412b0cca5b",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App\\Models",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 22
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:ef0426cd8c3d5e5497ab4d4927876b961674796d7db02cffaec74177afa208a1",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "php",
+          "name": "User",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 20,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b895ab85d01fbe61708d8db3d9714fc79c6fd789518047feb7b3144f0d2c7322",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "php",
+          "name": "ROLE",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:246e9bd378b298540e35d2abceb4f0b9083d300ec741e1630c2debd879efec03",
+          "kind": "symbol",
+          "subtype": "property",
+          "lang": "php",
+          "name": "id",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 20
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:14363280d8dcafd1a806b30d5b995d79dd840ea3980af06f0b646a17f05f6784",
+          "kind": "symbol",
+          "subtype": "property",
+          "lang": "php",
+          "name": "name",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 7,
+            "start_col": 5,
+            "end_line": 7,
+            "end_col": 26
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d0f5adb011cc2463f3c85ffb91dfd3c294a88027300aea2d35e33718ce754958",
+          "kind": "symbol",
+          "subtype": "constructor",
+          "lang": "php",
+          "name": "__construct",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 9,
+            "start_col": 5,
+            "end_line": 11,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:f0f0e2831a15387a544be393ac5f11dfd9666f70c31015827ba3845a1fca53bd",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "getName",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 13,
+            "start_col": 5,
+            "end_line": 15,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b0fa2c050772ed1e7584fa486a29f6e09323dda326bff4e1df761ac7447448e1",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "make",
+          "path": "src/defs-class.php",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 19,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "e264379d4f37da4bc637a6058500835d5fbe6ca1ec397211eac20f3b948e2e12",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:5fa148a242e632149837d259251e709d4bc6dcb02103629b3b368f412b0cca5b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "db0b0d871bbcf467f3391805fc0bd3b319431ec5a890b2a5233511fbee77ed6d",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:5fa148a242e632149837d259251e709d4bc6dcb02103629b3b368f412b0cca5b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "0d38809a149329dcec479fdc699041fb5e5f693603049d14aaa2fe1b041af489",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:ef0426cd8c3d5e5497ab4d4927876b961674796d7db02cffaec74177afa208a1",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "24a2ad78453d4d997b15d18c20dad5e6fa2f6f3400589010dd00e26241dc8d95",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:ef0426cd8c3d5e5497ab4d4927876b961674796d7db02cffaec74177afa208a1",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "8d02188e4df9b9b81211abb9b874346f86fa4d99088bfa69b20dacaf1933e7ab",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:b895ab85d01fbe61708d8db3d9714fc79c6fd789518047feb7b3144f0d2c7322",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "7f6d0b127262fbf1e77e22232568f05c9eb64c0ed609d25314be2cab254f37ef",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:b895ab85d01fbe61708d8db3d9714fc79c6fd789518047feb7b3144f0d2c7322",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "77f108477f3135e8cb1e21de2ba0a573b4562dd626fd0c7f3e3646f6fd77c82b",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:246e9bd378b298540e35d2abceb4f0b9083d300ec741e1630c2debd879efec03",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "c20bb58c0138369c1ba212456a86948d4c1407749313597b786a3bdea2cb2c0e",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:246e9bd378b298540e35d2abceb4f0b9083d300ec741e1630c2debd879efec03",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "80f0a02be315920f879a6feb664b4ee557bb5950a32105992d391c7b4e3fbc2a",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:14363280d8dcafd1a806b30d5b995d79dd840ea3980af06f0b646a17f05f6784",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 7
+          }
+        },
+        {
+          "id": "c824c3ffb382d366708b7f16151d861ba236ad8f67d5c49e7ad30ff9849417ff",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:14363280d8dcafd1a806b30d5b995d79dd840ea3980af06f0b646a17f05f6784",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 7
+          }
+        },
+        {
+          "id": "cde8fdc844af27116dcda9ff6907d38863c06d4d8e71f7a1eb6f3997b997eed2",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:d0f5adb011cc2463f3c85ffb91dfd3c294a88027300aea2d35e33718ce754958",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 9
+          }
+        },
+        {
+          "id": "eba673ea79379a3667e1f28753e1c28603bfcb3c7d5e2c043b4acc394352a5a8",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:d0f5adb011cc2463f3c85ffb91dfd3c294a88027300aea2d35e33718ce754958",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 9
+          }
+        },
+        {
+          "id": "62132506377bbd95331323843b9fe849a7b00c13858909750d20911032f4e005",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:f0f0e2831a15387a544be393ac5f11dfd9666f70c31015827ba3845a1fca53bd",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 13
+          }
+        },
+        {
+          "id": "56452549c1da0f3c7f1577a7e913659c32315bd58dae4dec90653d533fe701c4",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:f0f0e2831a15387a544be393ac5f11dfd9666f70c31015827ba3845a1fca53bd",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 13
+          }
+        },
+        {
+          "id": "9a99464ec9c911c5335827b98fb4da6493185d36e5c30cfc9045a5c98afea1ca",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:b0fa2c050772ed1e7584fa486a29f6e09323dda326bff4e1df761ac7447448e1",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 17
+          }
+        },
+        {
+          "id": "7450a8b82b916938313f94e3c78d9ae2322548e84121a164d211be388211d9e8",
+          "from": "file:350be5eecdd56859c78ee3e57705f7939c6eb254a083b3af642b5088df95dbff",
+          "to": "sym:b0fa2c050772ed1e7584fa486a29f6e09323dda326bff4e1df761ac7447448e1",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.php",
+            "line": 17
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/defs-types.php": {
+    "path": "src/defs-types.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App\\Contracts;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App\\Contracts"
+        },
+        {
+          "capture": "definition.interface.node",
+          "type": "interface_declaration",
+          "text": "interface Repo { public function find(int $id): "
+        },
+        {
+          "capture": "definition.interface.name",
+          "type": "name",
+          "text": "Repo"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function find(int $id): ?object;"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "find"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function all(): array;"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "all"
+        },
+        {
+          "capture": "definition.php.trait.node",
+          "type": "trait_declaration",
+          "text": "trait Timestamps { public function touch(): void"
+        },
+        {
+          "capture": "definition.php.trait.name",
+          "type": "name",
+          "text": "Timestamps"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function touch(): void {}"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "touch"
+        },
+        {
+          "capture": "definition.enum.node",
+          "type": "enum_declaration",
+          "text": "enum Status: string { case Active = 'active'; ca"
+        },
+        {
+          "capture": "definition.enum.name",
+          "type": "name",
+          "text": "Status"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "enum_case",
+          "text": "case Active = 'active';"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "name",
+          "text": "Active"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "enum_case",
+          "text": "case Inactive = 'inactive';"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "name",
+          "text": "Inactive"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function label(): string { return ucfirst"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "label"
+        },
+        {
+          "capture": "definition.function.node",
+          "type": "function_definition",
+          "text": "function make_repo(): Repo { return new InMemory"
+        },
+        {
+          "capture": "definition.function.name",
+          "type": "name",
+          "text": "make_repo"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "const_declaration",
+          "text": "const APP_VERSION = '1.0';"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "name",
+          "text": "APP_VERSION"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App\\Contracts",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 25
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.interface.node",
+          "name": "Repo",
+          "subtype": "interface",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.method.node",
+          "name": "find",
+          "subtype": "method",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 44
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.method.node",
+          "name": "all",
+          "subtype": "method",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 34
+          }
+        },
+        {
+          "ordinal": 4,
+          "captureName": "definition.php.trait.node",
+          "name": "Timestamps",
+          "subtype": "php.trait",
+          "span": {
+            "start_line": 9,
+            "start_col": 1,
+            "end_line": 11,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 5,
+          "captureName": "definition.method.node",
+          "name": "touch",
+          "subtype": "method",
+          "span": {
+            "start_line": 10,
+            "start_col": 5,
+            "end_line": 10,
+            "end_col": 37
+          }
+        },
+        {
+          "ordinal": 6,
+          "captureName": "definition.enum.node",
+          "name": "Status",
+          "subtype": "enum",
+          "span": {
+            "start_line": 13,
+            "start_col": 1,
+            "end_line": 20,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.constant.node",
+          "name": "Active",
+          "subtype": "constant",
+          "span": {
+            "start_line": 14,
+            "start_col": 5,
+            "end_line": 14,
+            "end_col": 28
+          }
+        },
+        {
+          "ordinal": 8,
+          "captureName": "definition.constant.node",
+          "name": "Inactive",
+          "subtype": "constant",
+          "span": {
+            "start_line": 15,
+            "start_col": 5,
+            "end_line": 15,
+            "end_col": 32
+          }
+        },
+        {
+          "ordinal": 9,
+          "captureName": "definition.method.node",
+          "name": "label",
+          "subtype": "method",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 19,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 10,
+          "captureName": "definition.function.node",
+          "name": "make_repo",
+          "subtype": "function",
+          "span": {
+            "start_line": 22,
+            "start_col": 1,
+            "end_line": 24,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 11,
+          "captureName": "definition.constant.node",
+          "name": "APP_VERSION",
+          "subtype": "constant",
+          "span": {
+            "start_line": 26,
+            "start_col": 1,
+            "end_line": 26,
+            "end_col": 27
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/defs-types.php",
+          "path": "src/defs-types.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b9e39fb3e5318238f7f1cdb07d082d02aaf8be15e7cf079e5afc58f04fc87d05",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App\\Contracts",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:1f437ee6f581caf808c3b49680e3591052da659cc173f9d9814ab5f8be2ded5c",
+          "kind": "symbol",
+          "subtype": "interface",
+          "lang": "php",
+          "name": "Repo",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:149d21be45e1c42233154f868929b2fde58bb41b8e7c7720bb6f03575d9e20a4",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "find",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 44
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:74283a70caa3a3b7180909c2a795fb4687343ec0414ed1853291214901666201",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "all",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:c6c0da72bff47bfe6b89218f348c49decaa48a834c069d70e23d717677fdcf15",
+          "kind": "symbol",
+          "subtype": "php.trait",
+          "lang": "php",
+          "name": "Timestamps",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 9,
+            "start_col": 1,
+            "end_line": 11,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:cbb72b4533741684d9fa26c4ff67af3bdc91f8f9b7d6285694e81784132f39d0",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "touch",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 10,
+            "start_col": 5,
+            "end_line": 10,
+            "end_col": 37
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d45468337576c5dfc61ffb9c8ab355371124ca5c5a8b673d54d250fb9ca4a0ec",
+          "kind": "symbol",
+          "subtype": "enum",
+          "lang": "php",
+          "name": "Status",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 13,
+            "start_col": 1,
+            "end_line": 20,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:9186ba67cdcaa5a8ad0fed1f2b3e148285eadc79737ba7c58a443885acae0b40",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "php",
+          "name": "Active",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 14,
+            "start_col": 5,
+            "end_line": 14,
+            "end_col": 28
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:acc977cce1a7006dac6d04fad1da909af7f2f0a4898bfe8cafaf281ca5c19021",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "php",
+          "name": "Inactive",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 15,
+            "start_col": 5,
+            "end_line": 15,
+            "end_col": 32
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:6a1bb5471d74906c9e9f85373f26a9ffc1840335970cd49f43479eac8de0be34",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "label",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 19,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:674ad391902e2d8b5131481ad5784a4250ae1bef35d607ce2ba6a2762854fcb6",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "php",
+          "name": "make_repo",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 22,
+            "start_col": 1,
+            "end_line": 24,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:14d5a7d60fb36d1323952174e73dc8e162dfcd14c48f428d82b487d9a638a988",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "php",
+          "name": "APP_VERSION",
+          "path": "src/defs-types.php",
+          "span": {
+            "start_line": 26,
+            "start_col": 1,
+            "end_line": 26,
+            "end_col": 27
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "eaac30ae865de4b74eac83fd080a00efd9d4d0ec1dd0b077cd6df1e7d5efaede",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:b9e39fb3e5318238f7f1cdb07d082d02aaf8be15e7cf079e5afc58f04fc87d05",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "465c6fde905679b4abe3bc86c304ebf429de75bea2de186cdb76bae6e37ea389",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:b9e39fb3e5318238f7f1cdb07d082d02aaf8be15e7cf079e5afc58f04fc87d05",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "02c1e8a9725da3f0a1868681c03f9d0870913a1a30718923a6eeff6e4413cb4c",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:1f437ee6f581caf808c3b49680e3591052da659cc173f9d9814ab5f8be2ded5c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "937db38d5e67c6d3a99d5e7ee519792f828b0c852f852c57ae063ad966966699",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:1f437ee6f581caf808c3b49680e3591052da659cc173f9d9814ab5f8be2ded5c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "d24d76e74c4076f555d9c9d40bb3512cd5144058533f47816aceb5956dcee8eb",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:149d21be45e1c42233154f868929b2fde58bb41b8e7c7720bb6f03575d9e20a4",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "a5f77a6ecb7e1518c89eec70d7257937b1fbdfe4dc941262d4c3d3f5d839b2ef",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:149d21be45e1c42233154f868929b2fde58bb41b8e7c7720bb6f03575d9e20a4",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "5873af8cfd46ea99c3bde342a86d3b35179dc3fb4a6da3b1465cdf46898f97c1",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:74283a70caa3a3b7180909c2a795fb4687343ec0414ed1853291214901666201",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "170f40b95bf39faed2d9aebb572a23286c7ffa00223d8f6aa5f7611fd80510d2",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:74283a70caa3a3b7180909c2a795fb4687343ec0414ed1853291214901666201",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "e882f4e836ac142936c3d2a7a57625d099f2c376d3dd08d403312cce96962f1f",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:c6c0da72bff47bfe6b89218f348c49decaa48a834c069d70e23d717677fdcf15",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 9
+          }
+        },
+        {
+          "id": "5fb9c7f87f5ea9bd416bd0140b3938a87a345262e35d326898e7c77957faa3b9",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:c6c0da72bff47bfe6b89218f348c49decaa48a834c069d70e23d717677fdcf15",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 9
+          }
+        },
+        {
+          "id": "7f872203a2de2d6db79c1a86f9cc69f377d232feb4bb337ea4fab5157bc27bb5",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:cbb72b4533741684d9fa26c4ff67af3bdc91f8f9b7d6285694e81784132f39d0",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 10
+          }
+        },
+        {
+          "id": "48b5dd81e383e98d5a4423617d680614da07cb718dadfe6e6bb8244f4f99964b",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:cbb72b4533741684d9fa26c4ff67af3bdc91f8f9b7d6285694e81784132f39d0",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 10
+          }
+        },
+        {
+          "id": "041c06b49a0a4ab8e929a6913ab8eaae331e6c3478b583118e963c68a78a9555",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:d45468337576c5dfc61ffb9c8ab355371124ca5c5a8b673d54d250fb9ca4a0ec",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 13
+          }
+        },
+        {
+          "id": "3e264c30e19e835bf82a715e1410f8c02ad44a0e264f275bfe09e92368a8c87f",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:d45468337576c5dfc61ffb9c8ab355371124ca5c5a8b673d54d250fb9ca4a0ec",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 13
+          }
+        },
+        {
+          "id": "13c954f68398464d32af35c3f5ded91aa3def2e9d8d0cc447a2b330354569e1e",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:9186ba67cdcaa5a8ad0fed1f2b3e148285eadc79737ba7c58a443885acae0b40",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 14
+          }
+        },
+        {
+          "id": "b4705f7b1254e30f3fc47208b86eef08ec5bbe005e0c2e4b5865688523a1d0cd",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:9186ba67cdcaa5a8ad0fed1f2b3e148285eadc79737ba7c58a443885acae0b40",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 14
+          }
+        },
+        {
+          "id": "50709f4832c0fa716b7286c41e3f6e4c6c069eafb8d321e38ba391c260bb501e",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:acc977cce1a7006dac6d04fad1da909af7f2f0a4898bfe8cafaf281ca5c19021",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 15
+          }
+        },
+        {
+          "id": "0d013a5d2c88fd35d9815ab4abcf53f89867c17d5bdc35e6e078fd8e74503606",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:acc977cce1a7006dac6d04fad1da909af7f2f0a4898bfe8cafaf281ca5c19021",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 15
+          }
+        },
+        {
+          "id": "6c585cba0f34a0b6c970f78492189598009e678ada4a41c7e0ecf5f1d4a1aca5",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:6a1bb5471d74906c9e9f85373f26a9ffc1840335970cd49f43479eac8de0be34",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 17
+          }
+        },
+        {
+          "id": "ac64bcedb34ebea0f0bc2d640d37359c9051fd7869978704fbdab607cdae9656",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:6a1bb5471d74906c9e9f85373f26a9ffc1840335970cd49f43479eac8de0be34",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 17
+          }
+        },
+        {
+          "id": "60205cfed4a5b0d3c011df6acc34cc2b9a4c2e51399689aedf57ed49f47b9633",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:674ad391902e2d8b5131481ad5784a4250ae1bef35d607ce2ba6a2762854fcb6",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 22
+          }
+        },
+        {
+          "id": "fe65e9048ac1c0d2802f2ade29440e8e9872a263116bf3c952e9577e4028daa3",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:674ad391902e2d8b5131481ad5784a4250ae1bef35d607ce2ba6a2762854fcb6",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 22
+          }
+        },
+        {
+          "id": "fcadfbcb89933e19ab75b8f47265cc9168197634a124219c1f34bcc63f69cfe4",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:14d5a7d60fb36d1323952174e73dc8e162dfcd14c48f428d82b487d9a638a988",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 26
+          }
+        },
+        {
+          "id": "a7d6fe4b7b920b20ebfe8a8810b210cb6cad52c5cc7aae7661b97e102c9b6173",
+          "from": "file:134d9b5de14bfa2ed959862710ca188c854a5b00a980d3510628d8ac22f14273",
+          "to": "sym:14d5a7d60fb36d1323952174e73dc8e162dfcd14c48f428d82b487d9a638a988",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.php",
+            "line": 26
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/imports-simple.php": {
+    "path": "src/imports-simple.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App"
+        }
+      ],
+      "imports": [
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Contracts\\Repo"
+        },
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Models\\User"
+        },
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Util\\Helper"
+        },
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Util\\Logger"
+        },
+        {
+          "capture": "import.source",
+          "type": "name",
+          "text": "Closure"
+        }
+      ]
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          }
+        }
+      ],
+      "imports": [
+        {
+          "ordinal": 1,
+          "source": "App\\Contracts\\Repo",
+          "importedNames": [],
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 24
+          }
+        },
+        {
+          "ordinal": 2,
+          "source": "App\\Models\\User",
+          "importedNames": [],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 34
+          }
+        },
+        {
+          "ordinal": 3,
+          "source": "App\\Util\\Helper",
+          "importedNames": [],
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 4,
+          "source": "App\\Util\\Logger",
+          "importedNames": [],
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 5,
+          "source": "Closure",
+          "importedNames": [],
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 13
+          }
+        }
+      ],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/imports-simple.php",
+          "path": "src/imports-simple.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:1dc979e8e391f71169fdfd885ffaaa32124d5b91d54aae6cb767dd8113af1d52",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:70f7717256ba462156e6cd41de7c0a284e402717d4ece3ef17bfd5fae72f211c",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Contracts\\Repo",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 24
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:b8cfc9551d1514530a1cf67b90ec21d5c888556bbb6f530715f80f9bc7d5a5c0",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Models\\User",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:baa78c65b11b6e8aee081273747cb61ecbd0ddbe4874bdbc447539f424ab6f58",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Util\\Helper",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:723a56d608e2851bb05607923d311a60f081b313ee6e444fab5bcedd9cd3ab13",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Util\\Logger",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:98fc789317cba40923c94cf5e1ad09d80af0c1e70c21f5e59cbc8980f5968bff",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "Closure",
+          "path": "src/imports-simple.php",
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 13
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "7102322644e200492c5f50d304ddd9736563cfc17cac4d00f310aac5b9817ee8",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "sym:1dc979e8e391f71169fdfd885ffaaa32124d5b91d54aae6cb767dd8113af1d52",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "feb67c5d656c6203fd26db94ed6a263cd52c5de9fd7dfdd44b033d35dd7011de",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "sym:1dc979e8e391f71169fdfd885ffaaa32124d5b91d54aae6cb767dd8113af1d52",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "e3d6a1a01e0756fd9039af68d3e80dd704e878386e76b234a6238e9270e462f8",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "module:70f7717256ba462156e6cd41de7c0a284e402717d4ece3ef17bfd5fae72f211c",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "359c3a363a0e58d11df6780c5d2ada101ef7d02a8556706fec13e419fa6600b8",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "module:b8cfc9551d1514530a1cf67b90ec21d5c888556bbb6f530715f80f9bc7d5a5c0",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "92ff6ef9992fedc8bb163f4f91f27df0d7a8d6d4f2ac63fb34357af2fce0f321",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "module:baa78c65b11b6e8aee081273747cb61ecbd0ddbe4874bdbc447539f424ab6f58",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "33ac67c80393353edebea102d838d548eb6094864e6441c9d3b9a2044555d80e",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "module:723a56d608e2851bb05607923d311a60f081b313ee6e444fab5bcedd9cd3ab13",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "0331099c2e1b5d48cceedc1ba78813e27ee099cc3d1493a51c83b543a8e1c005",
+          "from": "file:4bac6799859aad7b72fe23555f6bfca8b1447ab51198b9518ee24593e620765f",
+          "to": "module:98fc789317cba40923c94cf5e1ad09d80af0c1e70c21f5e59cbc8980f5968bff",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-simple.php",
+            "line": 7
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/imports-group.php": {
+    "path": "src/imports-group.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App"
+        }
+      ],
+      "imports": [
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "Helper"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "Logger"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "User"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "Account"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "Role"
+        }
+      ]
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          }
+        }
+      ],
+      "imports": [
+        {
+          "ordinal": 1,
+          "source": "App\\Util\\Helper",
+          "importedNames": [],
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 2,
+          "source": "App\\Util\\Logger",
+          "importedNames": [],
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 3,
+          "source": "App\\Models\\User",
+          "importedNames": [],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          }
+        },
+        {
+          "ordinal": 4,
+          "source": "App\\Models\\Account",
+          "importedNames": [],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          }
+        },
+        {
+          "ordinal": 5,
+          "source": "App\\Models\\Role",
+          "importedNames": [],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          }
+        }
+      ],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/imports-group.php",
+          "path": "src/imports-group.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:bfe04f501ac9f8a1eb10478036c1e24037eedc9069340ec393789d6b43a96c81",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:6ab48c70fdce564917cc22bda6ebe94a2fd8b82e2e47a4a012232ed8a5106902",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Util\\Helper",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:acb4267ee89f76146d5bb6331a0c7e75d7690862809143219057457fedf9330b",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Util\\Logger",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:f35f22ec45c98cac73253f42bc0381b30344b749009689958a0ce04217962c85",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Models\\User",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:b0b057ea433066df249bc8a7bb57e0ae53d88dcaa7dc47c6e39f726b71c8f961",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Models\\Account",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:50165f0b00ae75f0fdb541a12218be3b472258fdf394f2cbf2611ba49ac90f61",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Models\\Role",
+          "path": "src/imports-group.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "9bf414967d991190b762f9246dc31faec2c9826a8bd1e73dc62b8edd3d1ed9ca",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "sym:bfe04f501ac9f8a1eb10478036c1e24037eedc9069340ec393789d6b43a96c81",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "e6f9b3fa8d2e840c09f8eb98d01e59a4ce570a99ee29de26b89cae2892e89d90",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "sym:bfe04f501ac9f8a1eb10478036c1e24037eedc9069340ec393789d6b43a96c81",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "ca0e4b7982bc5337dddea6c1d00e64c202f691385510a3845c9b7fac57c9ab73",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "module:6ab48c70fdce564917cc22bda6ebe94a2fd8b82e2e47a4a012232ed8a5106902",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "615a40774485ab43499185e53b740b8a7a645960158514d9de9ed5b1e04fd041",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "module:acb4267ee89f76146d5bb6331a0c7e75d7690862809143219057457fedf9330b",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "c8159eaddc2fced425bdc36d363799736849de8920a255586c1a8960c8c4f331",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "module:f35f22ec45c98cac73253f42bc0381b30344b749009689958a0ce04217962c85",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "c6c46f491299563700deb8f841bcf9144dd3c1c0e1f8caf2e6f140fc42f829fb",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "module:b0b057ea433066df249bc8a7bb57e0ae53d88dcaa7dc47c6e39f726b71c8f961",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "e609767bcc97e979e1a4f7c81ef80018dca2d90eb465d7b16e9db475f24c1531",
+          "from": "file:177d01b8e08fae14e7313d1aa315aa62e72105e9af7f28f9cfeead9d0b0079a7",
+          "to": "module:50165f0b00ae75f0fdb541a12218be3b472258fdf394f2cbf2611ba49ac90f61",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-group.php",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/imports-funcconst.php": {
+    "path": "src/imports-funcconst.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App"
+        }
+      ],
+      "imports": [
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Fns\\helper"
+        },
+        {
+          "capture": "import.source",
+          "type": "qualified_name",
+          "text": "App\\Config\\MAX_SIZE"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "add"
+        },
+        {
+          "capture": "import.source",
+          "type": "namespace_name",
+          "text": "sub"
+        }
+      ]
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          }
+        }
+      ],
+      "imports": [
+        {
+          "ordinal": 1,
+          "source": "App\\Fns\\helper",
+          "importedNames": [],
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 29
+          }
+        },
+        {
+          "ordinal": 2,
+          "source": "App\\Config\\MAX_SIZE",
+          "importedNames": [],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 31
+          }
+        },
+        {
+          "ordinal": 3,
+          "source": "App\\Math\\add",
+          "importedNames": [],
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 34
+          }
+        },
+        {
+          "ordinal": 4,
+          "source": "App\\Math\\sub",
+          "importedNames": [],
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 34
+          }
+        }
+      ],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/imports-funcconst.php",
+          "path": "src/imports-funcconst.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:61407011cc213afb7ea4243b3434e3eb54ad13fa35e6af798a7ca38a1591a69a",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App",
+          "path": "src/imports-funcconst.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:b8ad3924ad9625e513117594ff09b4e5c2ead42ebcce07d7d0b3d799363867f3",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Fns\\helper",
+          "path": "src/imports-funcconst.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 29
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:752530f3a4fe6fb6eba231e1b964f130d1b31a9d0612e0bd4c7d5b95ba7ea495",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Config\\MAX_SIZE",
+          "path": "src/imports-funcconst.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 31
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:cf60e67717e78cbef847dc88d3fa4f2a9e34a67517d8f6046e596985de560af4",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Math\\add",
+          "path": "src/imports-funcconst.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:8eccb128c5a8f7f59c2c39092068289c0c859a638ac19098d3c7f9e3661a3c7b",
+          "kind": "module",
+          "subtype": null,
+          "lang": "php",
+          "name": "App\\Math\\sub",
+          "path": "src/imports-funcconst.php",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "06d679ac5a9b6e12cc6dabf2190539e49e6e5157f39878815a544de028a9f958",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "sym:61407011cc213afb7ea4243b3434e3eb54ad13fa35e6af798a7ca38a1591a69a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "577883843015a62487dcfb5e47e392ce126121648e596ad5ee4189db2f427dd9",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "sym:61407011cc213afb7ea4243b3434e3eb54ad13fa35e6af798a7ca38a1591a69a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "d351eccc535fde97db18250cfc536bfd6e61bfa3af849488aadaafcdce22b6b8",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "module:b8ad3924ad9625e513117594ff09b4e5c2ead42ebcce07d7d0b3d799363867f3",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "82acfccbf38fdca6579c98bb44195c55810ae890b8ab7fd80aecc4b9a9ac39d5",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "module:752530f3a4fe6fb6eba231e1b964f130d1b31a9d0612e0bd4c7d5b95ba7ea495",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "0b2341a80da73809677ac1dfca7f7a7b3889473da00a77c0fd5bd8a489e02544",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "module:cf60e67717e78cbef847dc88d3fa4f2a9e34a67517d8f6046e596985de560af4",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 6
+          }
+        },
+        {
+          "id": "ae72eff9a8fab0852de451ac839a8fa71b59cb4fc98935ef301a49ab5861a6b2",
+          "from": "file:963a1adcdb1273019db86fe959c291c87e24fbc808c7c8e0301fd223aa3ae876",
+          "to": "module:8eccb128c5a8f7f59c2c39092068289c0c859a638ac19098d3c7f9e3661a3c7b",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports-funcconst.php",
+            "line": 6
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/syntax-error.php": {
+    "path": "src/syntax-error.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.namespace.node",
+          "type": "namespace_definition",
+          "text": "namespace App;"
+        },
+        {
+          "capture": "definition.namespace.name",
+          "type": "namespace_name",
+          "text": "App"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class Broken { public function ok(): void {} pub"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "name",
+          "text": "Broken"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public function ok(): void {}"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "name",
+          "text": "ok"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.namespace.node",
+          "name": "App",
+          "subtype": "namespace",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "Broken",
+          "subtype": "class",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.method.node",
+          "name": "ok",
+          "subtype": "method",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 34
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parse_error",
+      "facts": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    },
+    "result": {
+      "parseStatus": "parse_error",
+      "nodes": [
+        {
+          "id": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/syntax-error.php",
+          "path": "src/syntax-error.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fb794d371849b677fedd4720eea8f596f6a027cd7aa816fde16283be0e3df36d",
+          "kind": "symbol",
+          "subtype": "namespace",
+          "lang": "php",
+          "name": "App",
+          "path": "src/syntax-error.php",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:438e8d5fa1eb32f0ea07a81ca9fde45e84d6c601cbf699d2bdf2f197e287f454",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "php",
+          "name": "Broken",
+          "path": "src/syntax-error.php",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:4d84c93a91700cfd481737c85312853d656cf5f19a6e26755b8fbde1c18f6184",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "php",
+          "name": "ok",
+          "path": "src/syntax-error.php",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "a9bd1a4a5866868965b1538fa0f3376232a19518382286377bbb83b31e4aceb6",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:fb794d371849b677fedd4720eea8f596f6a027cd7aa816fde16283be0e3df36d",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "72e00c7cf162f0225f5d8498d03a30f9696c9fee517b1167be860fde39dd4ed2",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:fb794d371849b677fedd4720eea8f596f6a027cd7aa816fde16283be0e3df36d",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 2
+          }
+        },
+        {
+          "id": "d4d81c8d0841fe1dc6d3c240ad9287c250bb8bfc29b156bed7c6dcb02e06daed",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:438e8d5fa1eb32f0ea07a81ca9fde45e84d6c601cbf699d2bdf2f197e287f454",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "ab7c3b2df72844acffca7b8734c381e7895de1137607cb1389f3a09e07f0bb21",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:438e8d5fa1eb32f0ea07a81ca9fde45e84d6c601cbf699d2bdf2f197e287f454",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 4
+          }
+        },
+        {
+          "id": "8edcf567e9a80a5e39728ab8d125cf258d2c11e5abb2aed9d3a654582cb71ddb",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:4d84c93a91700cfd481737c85312853d656cf5f19a6e26755b8fbde1c18f6184",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 5
+          }
+        },
+        {
+          "id": "8e15ab1b7295b49bc7ea120414cd650c7a8776c8b258ec2e3bfa1012c01752e0",
+          "from": "file:f2c924b24bdbb2cba785b9974573c195d19e2c962b1a3f1f1bf25c8a61c40ce7",
+          "to": "sym:4d84c93a91700cfd481737c85312853d656cf5f19a6e26755b8fbde1c18f6184",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.php",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    }
+  },
+  "src/oversized.php": {
+    "path": "src/oversized.php",
+    "lang": "php",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": [],
+    "draft": {
+      "definitions": [],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "skipped_too_large",
+      "facts": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    },
+    "result": {
+      "parseStatus": "skipped_too_large",
+      "nodes": [
+        {
+          "id": "file:bbe5b9595130feac3fe9d21401e86e99c2b2fe7b5044ccd6f40bab978be05219",
+          "kind": "file",
+          "subtype": null,
+          "lang": "php",
+          "name": "src/oversized.php",
+          "path": "src/oversized.php",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    }
+  }
+}

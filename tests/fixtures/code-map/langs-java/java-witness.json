@@ -1,0 +1,3057 @@
+{
+  "src/defs-class.java": {
+    "path": "src/defs-class.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.app;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.app"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class App implements Service { private int count"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "App"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "private int count;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "count"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "public static final String NAME = \"app\";"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "NAME"
+        },
+        {
+          "capture": "definition.constructor.node",
+          "type": "constructor_declaration",
+          "text": "public App(int count) { this.count = count; }"
+        },
+        {
+          "capture": "definition.constructor.name",
+          "type": "identifier",
+          "text": "App"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public void run() { System.out.println(count); }"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "run"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "private int total() { return count; }"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "total"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "static class Inner { void helper() {} }"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "Inner"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "void helper() {}"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "helper"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.app",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 25
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "App",
+          "subtype": "class",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 22,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.field.node",
+          "name": "count",
+          "subtype": "field",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 23
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.field.node",
+          "name": "NAME",
+          "subtype": "field",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 45
+          }
+        },
+        {
+          "ordinal": 4,
+          "captureName": "definition.constructor.node",
+          "name": "App",
+          "subtype": "constructor",
+          "span": {
+            "start_line": 7,
+            "start_col": 5,
+            "end_line": 9,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 5,
+          "captureName": "definition.method.node",
+          "name": "run",
+          "subtype": "method",
+          "span": {
+            "start_line": 11,
+            "start_col": 5,
+            "end_line": 13,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 6,
+          "captureName": "definition.method.node",
+          "name": "total",
+          "subtype": "method",
+          "span": {
+            "start_line": 15,
+            "start_col": 5,
+            "end_line": 17,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.class.node",
+          "name": "Inner",
+          "subtype": "class",
+          "span": {
+            "start_line": 19,
+            "start_col": 5,
+            "end_line": 21,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 8,
+          "captureName": "definition.method.node",
+          "name": "helper",
+          "subtype": "method",
+          "span": {
+            "start_line": 20,
+            "start_col": 9,
+            "end_line": 20,
+            "end_col": 25
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/defs-class.java",
+          "path": "src/defs-class.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:462ed241cfde876d834011d23ae626229a4f789c4802805b5cf3080588f69aec",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.app",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:87cc25561a56a4630fd89a3a7848fc331227d9543c54f503d768068f10c8e576",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "App",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 22,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d9aae8e4c2872a3729a06174a9c22e56c886b632209c5435439a8878f3cbb37c",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "count",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 23
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:822a9e83931fd460ecbd4305ec96fe5dced9165f4c9cc73db72dfa76d3d0888d",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "NAME",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 45
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:2d9921444ab472688f24fdc2bace52d1d0205c9514b847928870317f9411e83c",
+          "kind": "symbol",
+          "subtype": "constructor",
+          "lang": "java",
+          "name": "App",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 7,
+            "start_col": 5,
+            "end_line": 9,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:6871cf6c25877c1d1acecd883bdca912498d2e75b8958afd345ef54d34b163bc",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "run",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 11,
+            "start_col": 5,
+            "end_line": 13,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:4a94709585c9dda422cf67699ca8ad818e8345283e6318e6e65434cb82391d9c",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "total",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 15,
+            "start_col": 5,
+            "end_line": 17,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:a310ce2a3652a888348c34e509ebe15f15248d1e38ee5f014dc18be40c0eb3b9",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "Inner",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 19,
+            "start_col": 5,
+            "end_line": 21,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:bda6a0abce7ada56b9cc44288da17bec67aa4814e2a3cf101abbaa1c10e1b6ee",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "helper",
+          "path": "src/defs-class.java",
+          "span": {
+            "start_line": 20,
+            "start_col": 9,
+            "end_line": 20,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "249618657a325cf827c426edaf851fe280afcaf7f88f1067956e8dcf14a46fbd",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:462ed241cfde876d834011d23ae626229a4f789c4802805b5cf3080588f69aec",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "b64e8a11211a2a23aa3b38a93f1b1c34ef76340b23bf5d4fb65dea62acbbabee",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:462ed241cfde876d834011d23ae626229a4f789c4802805b5cf3080588f69aec",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "5223bee4b60b101d549ef2c5e2b11618cfb141802f87a4bc1e5bbc6baae37cd9",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:87cc25561a56a4630fd89a3a7848fc331227d9543c54f503d768068f10c8e576",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "cb3fb3a118e629e274800a53534c3520d3b0759a7cd9641c57ffc3f32bc0d260",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:87cc25561a56a4630fd89a3a7848fc331227d9543c54f503d768068f10c8e576",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "df573c21ecc5cb88babff34b30faee221175c5063af15bfcb155f8991cc8adc0",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:d9aae8e4c2872a3729a06174a9c22e56c886b632209c5435439a8878f3cbb37c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "f9bd02a11d5b9b2bbc0fe4f3a8210126d9b90886a408d740553e7170e088c58c",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:d9aae8e4c2872a3729a06174a9c22e56c886b632209c5435439a8878f3cbb37c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "36f2f7e76684d5be4093f215ceb3725cdd5a1ce0592b32b84e7b633988183a70",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:822a9e83931fd460ecbd4305ec96fe5dced9165f4c9cc73db72dfa76d3d0888d",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "9d819d7c6f646a4d8341ba0cb73d7be19a2da496ccd4c303b874081c30c3a5e4",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:822a9e83931fd460ecbd4305ec96fe5dced9165f4c9cc73db72dfa76d3d0888d",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "424856764e3b326226fd8d2bd832c01257124dd5a201efb42e7cb0c65f23fca7",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:2d9921444ab472688f24fdc2bace52d1d0205c9514b847928870317f9411e83c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 7
+          }
+        },
+        {
+          "id": "94ef3ab57747b88d0ff01960b583768263f4b5a8094d05c8193895f4ad4e2044",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:2d9921444ab472688f24fdc2bace52d1d0205c9514b847928870317f9411e83c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 7
+          }
+        },
+        {
+          "id": "40032e217a898218760bcf98261d46038dd81177af924f06fe10e6b0a808dc94",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:6871cf6c25877c1d1acecd883bdca912498d2e75b8958afd345ef54d34b163bc",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 11
+          }
+        },
+        {
+          "id": "4b9090a80d6a835548d82b02c459d100fd442740d2bf7e0366f9c2f4a357d3af",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:6871cf6c25877c1d1acecd883bdca912498d2e75b8958afd345ef54d34b163bc",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 11
+          }
+        },
+        {
+          "id": "b2d8a7c5e37a88b9568c6b6c99131d66aa84de374137b91da8e3febb56fa2be8",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:4a94709585c9dda422cf67699ca8ad818e8345283e6318e6e65434cb82391d9c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 15
+          }
+        },
+        {
+          "id": "7cf58bfdd5af9caf2b2b2942ec87d29dd87e4a9cd019b9ceab5f9013613a7e14",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:4a94709585c9dda422cf67699ca8ad818e8345283e6318e6e65434cb82391d9c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 15
+          }
+        },
+        {
+          "id": "7980ac2a07dba6e4cbbfbd28589316b42f775714eed3b53d1354bdae029e793e",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:a310ce2a3652a888348c34e509ebe15f15248d1e38ee5f014dc18be40c0eb3b9",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 19
+          }
+        },
+        {
+          "id": "27a39357e197915127bea47d33af4cfeb399ecdcd6d9237b728f9678da11146f",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:a310ce2a3652a888348c34e509ebe15f15248d1e38ee5f014dc18be40c0eb3b9",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 19
+          }
+        },
+        {
+          "id": "feb9582c0ad41c862b3f90883a6fa28d0def69bdf1f8c6c325ea51aae64c9d3d",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:bda6a0abce7ada56b9cc44288da17bec67aa4814e2a3cf101abbaa1c10e1b6ee",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 20
+          }
+        },
+        {
+          "id": "a11b571f68c832c0e05266a2b94c98ecbb2c7628b13ad867e4f59b86e2be186c",
+          "from": "file:3bb9baad5d1e9492fbdcef791efdf1c315c6c33cbc786ebfbccf66e82f9e7897",
+          "to": "sym:bda6a0abce7ada56b9cc44288da17bec67aa4814e2a3cf101abbaa1c10e1b6ee",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-class.java",
+            "line": 20
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/defs-types.java": {
+    "path": "src/defs-types.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.types;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.types"
+        },
+        {
+          "capture": "definition.interface.node",
+          "type": "interface_declaration",
+          "text": "interface Service { void run(); int total(); }"
+        },
+        {
+          "capture": "definition.interface.name",
+          "type": "identifier",
+          "text": "Service"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "void run();"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "run"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "int total();"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "total"
+        },
+        {
+          "capture": "definition.enum.node",
+          "type": "enum_declaration",
+          "text": "enum Color { RED, GREEN, BLUE; public boolean is"
+        },
+        {
+          "capture": "definition.enum.name",
+          "type": "identifier",
+          "text": "Color"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "enum_constant",
+          "text": "RED"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "identifier",
+          "text": "RED"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "enum_constant",
+          "text": "GREEN"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "identifier",
+          "text": "GREEN"
+        },
+        {
+          "capture": "definition.constant.node",
+          "type": "enum_constant",
+          "text": "BLUE"
+        },
+        {
+          "capture": "definition.constant.name",
+          "type": "identifier",
+          "text": "BLUE"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public boolean isPrimary() { return this != GREE"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "isPrimary"
+        },
+        {
+          "capture": "definition.java.annotation.node",
+          "type": "annotation_type_declaration",
+          "text": "@interface MyAnnotation { String value() default"
+        },
+        {
+          "capture": "definition.java.annotation.name",
+          "type": "identifier",
+          "text": "MyAnnotation"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "annotation_type_element_declaration",
+          "text": "String value() default \"\";"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "value"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "annotation_type_element_declaration",
+          "text": "int count();"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "count"
+        },
+        {
+          "capture": "definition.java.record.node",
+          "type": "record_declaration",
+          "text": "record Point(int x, int y) { int sum() { return "
+        },
+        {
+          "capture": "definition.java.record.name",
+          "type": "identifier",
+          "text": "Point"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "int sum() { return x + y; }"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "sum"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.types",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 27
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.interface.node",
+          "name": "Service",
+          "subtype": "interface",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.method.node",
+          "name": "run",
+          "subtype": "method",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 16
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.method.node",
+          "name": "total",
+          "subtype": "method",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 17
+          }
+        },
+        {
+          "ordinal": 4,
+          "captureName": "definition.enum.node",
+          "name": "Color",
+          "subtype": "enum",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 14,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 5,
+          "captureName": "definition.constant.node",
+          "name": "RED",
+          "subtype": "constant",
+          "span": {
+            "start_line": 9,
+            "start_col": 5,
+            "end_line": 9,
+            "end_col": 8
+          }
+        },
+        {
+          "ordinal": 6,
+          "captureName": "definition.constant.node",
+          "name": "GREEN",
+          "subtype": "constant",
+          "span": {
+            "start_line": 9,
+            "start_col": 10,
+            "end_line": 9,
+            "end_col": 15
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.constant.node",
+          "name": "BLUE",
+          "subtype": "constant",
+          "span": {
+            "start_line": 9,
+            "start_col": 17,
+            "end_line": 9,
+            "end_col": 21
+          }
+        },
+        {
+          "ordinal": 8,
+          "captureName": "definition.method.node",
+          "name": "isPrimary",
+          "subtype": "method",
+          "span": {
+            "start_line": 11,
+            "start_col": 5,
+            "end_line": 13,
+            "end_col": 6
+          }
+        },
+        {
+          "ordinal": 9,
+          "captureName": "definition.java.annotation.node",
+          "name": "MyAnnotation",
+          "subtype": "java.annotation",
+          "span": {
+            "start_line": 16,
+            "start_col": 1,
+            "end_line": 19,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 10,
+          "captureName": "definition.method.node",
+          "name": "value",
+          "subtype": "method",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 17,
+            "end_col": 31
+          }
+        },
+        {
+          "ordinal": 11,
+          "captureName": "definition.method.node",
+          "name": "count",
+          "subtype": "method",
+          "span": {
+            "start_line": 18,
+            "start_col": 5,
+            "end_line": 18,
+            "end_col": 17
+          }
+        },
+        {
+          "ordinal": 12,
+          "captureName": "definition.java.record.node",
+          "name": "Point",
+          "subtype": "java.record",
+          "span": {
+            "start_line": 21,
+            "start_col": 1,
+            "end_line": 25,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 13,
+          "captureName": "definition.method.node",
+          "name": "sum",
+          "subtype": "method",
+          "span": {
+            "start_line": 22,
+            "start_col": 5,
+            "end_line": 24,
+            "end_col": 6
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/defs-types.java",
+          "path": "src/defs-types.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:56bb68a111eda44296162e6e4bcad9fa4008ab20d2899eb099600b3ec8939580",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.types",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 27
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b8862d8525748d9753efe2d3065579a0832daa8cd1f8a9cae02dc2108ecdc5a9",
+          "kind": "symbol",
+          "subtype": "interface",
+          "lang": "java",
+          "name": "Service",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d9f83f8d1809a8852368fe71cdc5355d8252e352398da9181e16744a0ac95d58",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "run",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 16
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:688a635723206fcbacfa1715b8e2e4c982af2451592fedb41ea78754df113f41",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "total",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:77648efd92216e2c5d1b1f980309bfd102e922b2500b7e4e5a36e8a9fd177016",
+          "kind": "symbol",
+          "subtype": "enum",
+          "lang": "java",
+          "name": "Color",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 14,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:ae05ce29831ba5be0953bb677d858ecfcfae12f8e1358dce548d2f6864edad9a",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "java",
+          "name": "RED",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 9,
+            "start_col": 5,
+            "end_line": 9,
+            "end_col": 8
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:c5ddd6f427cc60cff034f7693f3dd7679121f798ac6e7bd3dfc5bcd48d189d7c",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "java",
+          "name": "GREEN",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 9,
+            "start_col": 10,
+            "end_line": 9,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:e8896837be7f30eef34d832859d09d5a13a0e012eff165510b6891f8c964770d",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "java",
+          "name": "BLUE",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 9,
+            "start_col": 17,
+            "end_line": 9,
+            "end_col": 21
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b74054af8f3061a403f849d6c535310e902cd35eda82c7bb783779461e872243",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "isPrimary",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 11,
+            "start_col": 5,
+            "end_line": 13,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:5cc18465bcf843471612bd46c8617034cab274c127e8eca74cb5d8a43e543955",
+          "kind": "symbol",
+          "subtype": "java.annotation",
+          "lang": "java",
+          "name": "MyAnnotation",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 16,
+            "start_col": 1,
+            "end_line": 19,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:c14eb09045880505f54381d34a0005be89c39bd7834e1f1a9cc09d532c1f6454",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "value",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 17,
+            "end_col": 31
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:7c3258044dc8973a54ad54b9814bffef0b49ae80755b1f9a24737fa4a12bedc2",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "count",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 18,
+            "start_col": 5,
+            "end_line": 18,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:17b393a65170aceffac59194fc183100848993cb0f0e0bc0f34f2db30f2a39ec",
+          "kind": "symbol",
+          "subtype": "java.record",
+          "lang": "java",
+          "name": "Point",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 21,
+            "start_col": 1,
+            "end_line": 25,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:469af0a3eac23bfc087fbb0aa2b6b595222092af024762da168edf9b217b1d42",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "sum",
+          "path": "src/defs-types.java",
+          "span": {
+            "start_line": 22,
+            "start_col": 5,
+            "end_line": 24,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "0ee78d96b6cc4d01c22760bf721fb4fb03a7a1cb2b4eed4b37df41632230e28e",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:56bb68a111eda44296162e6e4bcad9fa4008ab20d2899eb099600b3ec8939580",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "43091fa6d2ed1e5b624a24df59a94451802b5998ba95276d8aef0bdad71b64f3",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:56bb68a111eda44296162e6e4bcad9fa4008ab20d2899eb099600b3ec8939580",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "ba19f2d547157142e42abe0f3c29c2894c61f82bc431da6e8a814e64f3de98fe",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:b8862d8525748d9753efe2d3065579a0832daa8cd1f8a9cae02dc2108ecdc5a9",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "f6cd98539f8c8c081ea11efbe323f86dbeca2dd12ff6f211d0928595fe80d750",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:b8862d8525748d9753efe2d3065579a0832daa8cd1f8a9cae02dc2108ecdc5a9",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "3a53f61e37779a4c07c93916d236af3ff9ca51760c265fb8f4c7c30578bd862a",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:d9f83f8d1809a8852368fe71cdc5355d8252e352398da9181e16744a0ac95d58",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "08e7173e3fa25e033dd8853295151453fb10c4b13373deb54d4f1a3ae8d7eb39",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:d9f83f8d1809a8852368fe71cdc5355d8252e352398da9181e16744a0ac95d58",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "b7a9896a57606d1c6ee9f1456fc1d710dd6142ee33b01fa049224f54215a5b48",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:688a635723206fcbacfa1715b8e2e4c982af2451592fedb41ea78754df113f41",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "c55faff1f399da8f021491efbc4f79f50ffcafa90a5a3de86dcf8eb11ecdb5b3",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:688a635723206fcbacfa1715b8e2e4c982af2451592fedb41ea78754df113f41",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "8d05cee95d95eba21a0573cd9e5c204b8ab7149525e56c75f25624a0b0c42fe2",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:77648efd92216e2c5d1b1f980309bfd102e922b2500b7e4e5a36e8a9fd177016",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 8
+          }
+        },
+        {
+          "id": "d718ad57d4a840c52ca36f76f848bd5de6a49522e6ba16f47dfd5a57185c8c3c",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:77648efd92216e2c5d1b1f980309bfd102e922b2500b7e4e5a36e8a9fd177016",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 8
+          }
+        },
+        {
+          "id": "3021a089b48580474f4457f920a14cee3f2dc3b4d552d14f5e94e87bcad6ccf8",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:ae05ce29831ba5be0953bb677d858ecfcfae12f8e1358dce548d2f6864edad9a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "5d414aff28d3ba01e2bc8855ed906ff20e8387d7e9e771d209b813fcc4a5dbe4",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:ae05ce29831ba5be0953bb677d858ecfcfae12f8e1358dce548d2f6864edad9a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "513f7042a738a9781f052892f256edcd96d32976222b2ef4d2ebd409f522d2cf",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:c5ddd6f427cc60cff034f7693f3dd7679121f798ac6e7bd3dfc5bcd48d189d7c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "cb15bb128d4a91cfc411a773c3981729225a2a6cacb3ff57ed02458235ac71cd",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:c5ddd6f427cc60cff034f7693f3dd7679121f798ac6e7bd3dfc5bcd48d189d7c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "894bfe9b2fd8a905c974c651f94ef3726b4874f24e20f67617a3a51ab6c8aa9a",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:e8896837be7f30eef34d832859d09d5a13a0e012eff165510b6891f8c964770d",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "c0bce162d246f6fa2d81b6d28999f3127c0e2a7d295c020397bb6a54974cfd85",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:e8896837be7f30eef34d832859d09d5a13a0e012eff165510b6891f8c964770d",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 9
+          }
+        },
+        {
+          "id": "58a9123d60a0883bc745623d03b7d659cecc7b185a3df65a8e30d1c4bf25acb8",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:b74054af8f3061a403f849d6c535310e902cd35eda82c7bb783779461e872243",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 11
+          }
+        },
+        {
+          "id": "f5c9a614b7465023e802960cdd3b855a754acc757c78ff5814a300d5a87ab2bd",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:b74054af8f3061a403f849d6c535310e902cd35eda82c7bb783779461e872243",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 11
+          }
+        },
+        {
+          "id": "6f25cd7000f3df3ea44d99196b92724f0843ac3d34733fe096d1ce07c6f68316",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:5cc18465bcf843471612bd46c8617034cab274c127e8eca74cb5d8a43e543955",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 16
+          }
+        },
+        {
+          "id": "72ebf9fe683f5619a7a988d0374c5cb9bd687753a9f2fd21ae518eb8c55dbb69",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:5cc18465bcf843471612bd46c8617034cab274c127e8eca74cb5d8a43e543955",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 16
+          }
+        },
+        {
+          "id": "888d1cecf7df2bcd40b91ee7635a351c9b8bd120da67b8de7250642cbc36c281",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:c14eb09045880505f54381d34a0005be89c39bd7834e1f1a9cc09d532c1f6454",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 17
+          }
+        },
+        {
+          "id": "1c61ec23ff957007334646aa697064a3fadd993de2a39b50abe3c6c4d9dea804",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:c14eb09045880505f54381d34a0005be89c39bd7834e1f1a9cc09d532c1f6454",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 17
+          }
+        },
+        {
+          "id": "41a44bd6d77801370701fd05258b4033ca485b5f42875e34f0d8c8c6bc872b3f",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:7c3258044dc8973a54ad54b9814bffef0b49ae80755b1f9a24737fa4a12bedc2",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 18
+          }
+        },
+        {
+          "id": "ac749bbb1344a2507c4b0aa140cfaa27bda8d9ac36e23e1979c90d0ed15c6449",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:7c3258044dc8973a54ad54b9814bffef0b49ae80755b1f9a24737fa4a12bedc2",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 18
+          }
+        },
+        {
+          "id": "cdb6704d90ab3153a3fa8b40c13d3db1ccfeb9197ddd473f58cf0eeb694ec71c",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:17b393a65170aceffac59194fc183100848993cb0f0e0bc0f34f2db30f2a39ec",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 21
+          }
+        },
+        {
+          "id": "fbb1e5a3aab336285b5fa18ccf85c8cbafb1c14f48fd348841870f1003b8b5ce",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:17b393a65170aceffac59194fc183100848993cb0f0e0bc0f34f2db30f2a39ec",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 21
+          }
+        },
+        {
+          "id": "123a44489214492e28fd749a48183ed9ce347ccaf9900e773ce9284d9539ed6d",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:469af0a3eac23bfc087fbb0aa2b6b595222092af024762da168edf9b217b1d42",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 22
+          }
+        },
+        {
+          "id": "69d0b4a71ea050684ef74bd03d6bb6e661d92a64c1e5500c0c52d1fa79187c84",
+          "from": "file:65777cbe6d8595d1e28c9174a49c20a42dbfa06611c3c9506dbabad252ee3747",
+          "to": "sym:469af0a3eac23bfc087fbb0aa2b6b595222092af024762da168edf9b217b1d42",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/defs-types.java",
+            "line": 22
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/imports.java": {
+    "path": "src/imports.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.app;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.app"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class Importer {}"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "Importer"
+        }
+      ],
+      "imports": [
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.util.List"
+        },
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.util.Map"
+        },
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.util"
+        },
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.lang.Math.PI"
+        },
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.lang.Math.max"
+        },
+        {
+          "capture": "import.source",
+          "type": "scoped_identifier",
+          "text": "java.util.Collections"
+        }
+      ]
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.app",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 25
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.class.node",
+          "name": "Importer",
+          "subtype": "class",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 10,
+            "end_col": 18
+          }
+        }
+      ],
+      "imports": [
+        {
+          "ordinal": 1,
+          "source": "java.util.List",
+          "importedNames": [],
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 23
+          }
+        },
+        {
+          "ordinal": 2,
+          "source": "java.util.Map",
+          "importedNames": [],
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 22
+          }
+        },
+        {
+          "ordinal": 3,
+          "source": "java.util",
+          "importedNames": [
+            "*"
+          ],
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 20
+          }
+        },
+        {
+          "ordinal": 4,
+          "source": "java.lang.Math",
+          "importedNames": [
+            "PI"
+          ],
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 33
+          }
+        },
+        {
+          "ordinal": 5,
+          "source": "java.lang.Math",
+          "importedNames": [
+            "max"
+          ],
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 34
+          }
+        },
+        {
+          "ordinal": 6,
+          "source": "java.util.Collections",
+          "importedNames": [
+            "*"
+          ],
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 39
+          }
+        }
+      ],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/imports.java",
+          "path": "src/imports.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:8c44b897ea6fac00f150bd136b8fadfed5e565b7858eace04ea2dbb1e1a335d1",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.app",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:0ef61c07d4a6aee6a6b9d10fda6c7d71feed755d9f162bfdf9233fa685a59fb3",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.util.List",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 23
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:657c4e68268fbbcb94c1a4308dc2ceef382eb0bb26a65be83295d4f3f2f3112b",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.util.Map",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 22
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:c96a8e316952c625978f383802f6267209f93424a8c0079510d6d0d892361b97",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.util",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 20
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "*"
+          ]
+        },
+        {
+          "id": "module:a8b5368c260270518bcef6b2a9a19ad3025a296e9be055ad879981c71aab1e5b",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.lang.Math",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 33
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "PI"
+          ]
+        },
+        {
+          "id": "module:3a5940e05e700ea33566cccea25671f8c0b5bf944ac2f5b55e3a3d7e34359c38",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.lang.Math",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "max"
+          ]
+        },
+        {
+          "id": "module:5eea0baf562e738e330b3e5cc7bda0cf6e795080a7af23ecf340b51e9561fa77",
+          "kind": "module",
+          "subtype": null,
+          "lang": "java",
+          "name": "java.util.Collections",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 39
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "*"
+          ]
+        },
+        {
+          "id": "sym:6bce6d7eb9db611d05a58b8f45fd2f19f5de93e0f95de4505f8ad8108be4c44e",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "Importer",
+          "path": "src/imports.java",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 10,
+            "end_col": 18
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "f1ad31fb722e5aa59a287867697d04ce5bd09352194d31b71b119c89c2193424",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "sym:8c44b897ea6fac00f150bd136b8fadfed5e565b7858eace04ea2dbb1e1a335d1",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "9be146ffa2bff94d997fe1c6fda7bea77de757c1acf4ccba94cd02a9094a99f0",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "sym:8c44b897ea6fac00f150bd136b8fadfed5e565b7858eace04ea2dbb1e1a335d1",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "a09e0f67a96c2d49c34eb829caa802b76bb278d998a231474005809b51cd3850",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:0ef61c07d4a6aee6a6b9d10fda6c7d71feed755d9f162bfdf9233fa685a59fb3",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "88c35b268ef28e1eed61ee621a65c46796155288818282e9f5bc065272eb0eae",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:657c4e68268fbbcb94c1a4308dc2ceef382eb0bb26a65be83295d4f3f2f3112b",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "4dbf7e61ff27658b9a93d7040965b5ed9d84e37d40a5752065c7814b8b65376f",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:c96a8e316952c625978f383802f6267209f93424a8c0079510d6d0d892361b97",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "0d389b7637255213e4beff069ce5b76f61ebb1e5aa563382cfd9c38e99ac3d82",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:a8b5368c260270518bcef6b2a9a19ad3025a296e9be055ad879981c71aab1e5b",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 6
+          }
+        },
+        {
+          "id": "b07604fb2e8ed817c6695dab7f37d17feecd0abebcf7474b936f4ec76dbf1ab2",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:3a5940e05e700ea33566cccea25671f8c0b5bf944ac2f5b55e3a3d7e34359c38",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 7
+          }
+        },
+        {
+          "id": "f77996081a7877a7c0f48d39abe7dfe4b2c649929326ccc93a49e6f5c3fa8a58",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "module:5eea0baf562e738e330b3e5cc7bda0cf6e795080a7af23ecf340b51e9561fa77",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 8
+          }
+        },
+        {
+          "id": "62772191d177b8f72e440f992b3e56f19e3bb00a38c280ff816f53084e99de74",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "sym:6bce6d7eb9db611d05a58b8f45fd2f19f5de93e0f95de4505f8ad8108be4c44e",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 10
+          }
+        },
+        {
+          "id": "5c54b98ebcc8a4ba6c32a82610ae13d1e6ee30f495b07af131c67b27481f9e20",
+          "from": "file:edce582ad2240eae7f6d8eda9e2f84b97af928acfedb38caf1d1f1ec09fb57f4",
+          "to": "sym:6bce6d7eb9db611d05a58b8f45fd2f19f5de93e0f95de4505f8ad8108be4c44e",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/imports.java",
+            "line": 10
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/multi-field.java": {
+    "path": "src/multi-field.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.fields;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.fields"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class Box { private int width, height, depth; pu"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "Box"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "private int width, height, depth;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "width"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "private int width, height, depth;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "height"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "private int width, height, depth;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "depth"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "public String label = \"box\";"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "label"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "static final double E = 2.718, TAU = 6.283;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "E"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "static final double E = 2.718, TAU = 6.283;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "TAU"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.fields",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 28
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "Box",
+          "subtype": "class",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.field.node",
+          "name": "width",
+          "subtype": "field",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.field.node",
+          "name": "height",
+          "subtype": "field",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 4,
+          "captureName": "definition.field.node",
+          "name": "depth",
+          "subtype": "field",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          }
+        },
+        {
+          "ordinal": 5,
+          "captureName": "definition.field.node",
+          "name": "label",
+          "subtype": "field",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 33
+          }
+        },
+        {
+          "ordinal": 6,
+          "captureName": "definition.field.node",
+          "name": "E",
+          "subtype": "field",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 48
+          }
+        },
+        {
+          "ordinal": 7,
+          "captureName": "definition.field.node",
+          "name": "TAU",
+          "subtype": "field",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 48
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/multi-field.java",
+          "path": "src/multi-field.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:0b7a4b092d74f21872c81a0826c48bcbf7172fec2be9b890cb3acbf500caa131",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.fields",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 28
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:8d83f7ce16d16beeee8476b228f8cbc1f46c891b5e45888deffb5c5f8806b14e",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "Box",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:da65466c125449a9524c87ef1c702bce945fe61537f5b59ec6c73f147e235093",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "width",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:c7025f0b5a097003013d44a39da89bca23921ad0c643459fc660f0a709ad22e2",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "height",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fa449313c877e8853b6545710f0998987c0cf34a2a6ee267d7b9162034d9d989",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "depth",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:93e33e58ff56d3474333b8445ac2f16a2d2aeb88ad9ea46e0472ac605302359c",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "label",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 5,
+            "end_col": 33
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:585968316048a0d59371fae59539943a3525406c4ee82dff35f507e13fad27f6",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "E",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 48
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:9f0c1678ec26ef0edac695971c4ed1f24caa357f9bac4446b7ca74c56c338242",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "TAU",
+          "path": "src/multi-field.java",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 48
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "a659e17dc3d342a14ab2af342dd66629c7c421e3deef0fa7de21f90ac34f22f6",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:0b7a4b092d74f21872c81a0826c48bcbf7172fec2be9b890cb3acbf500caa131",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "0494247c8c2ba0bfa2c45e7b2fa3c162b46056e9f871d20452900ad3679ebcbd",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:0b7a4b092d74f21872c81a0826c48bcbf7172fec2be9b890cb3acbf500caa131",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "8a9ed1028d2668c11054546a0eccc9be3a41cf19ff47894381b9f080c0ccde22",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:8d83f7ce16d16beeee8476b228f8cbc1f46c891b5e45888deffb5c5f8806b14e",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "9c7dc3580100a07b69d13ebfb00e229d96c0340db1ecb52703d389f0782b6a1f",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:8d83f7ce16d16beeee8476b228f8cbc1f46c891b5e45888deffb5c5f8806b14e",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "11dd2798b9e16d70c8719b82a96d5eff3017635beaf9bd4fe95d54f1c34c766c",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:da65466c125449a9524c87ef1c702bce945fe61537f5b59ec6c73f147e235093",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "90e9e1663b41c5095b26d8ded64f73851755ef7cbd9d083a84b613ad2d936b99",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:da65466c125449a9524c87ef1c702bce945fe61537f5b59ec6c73f147e235093",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "0514129240f1474eabc7ec14739649f67925f349c00c5ab66fd0ef1b08ea9961",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:c7025f0b5a097003013d44a39da89bca23921ad0c643459fc660f0a709ad22e2",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "c14cbd692d75b0d36205d491359804b15b62c5c59543c9c63abcfa0ed5f734c1",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:c7025f0b5a097003013d44a39da89bca23921ad0c643459fc660f0a709ad22e2",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "28df16741121f8771680ea810961318e863d7726d9ee4edcd6e2bfabd66ffd42",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:fa449313c877e8853b6545710f0998987c0cf34a2a6ee267d7b9162034d9d989",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "8c819d1d89fe089933c85ac1427c4cc40889a068eee3e4e89a50671a48a220ce",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:fa449313c877e8853b6545710f0998987c0cf34a2a6ee267d7b9162034d9d989",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "a567442e28666ee5de835e43afae65dba8bbd2260eea4817eee4eafe6ff604ca",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:93e33e58ff56d3474333b8445ac2f16a2d2aeb88ad9ea46e0472ac605302359c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "3b19003301d375e6c43ed4e6e131eb2bbfe9a363a3c82489d08ef4da96afbbc5",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:93e33e58ff56d3474333b8445ac2f16a2d2aeb88ad9ea46e0472ac605302359c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 5
+          }
+        },
+        {
+          "id": "303cdeab5f75a07845c1c9f2686b2d281344c4859921ebea497a1618a491bae4",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:585968316048a0d59371fae59539943a3525406c4ee82dff35f507e13fad27f6",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 6
+          }
+        },
+        {
+          "id": "eec5854fd664f4b7f663bb2a8ab9a047ec10026f2f3a708dbbd904fc66ddb153",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:585968316048a0d59371fae59539943a3525406c4ee82dff35f507e13fad27f6",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 6
+          }
+        },
+        {
+          "id": "9eb5b7e005f095994c184bbf3468278766d67e4456005c2c4b0fc7649864010a",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:9f0c1678ec26ef0edac695971c4ed1f24caa357f9bac4446b7ca74c56c338242",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 6
+          }
+        },
+        {
+          "id": "55c843216861f28129ca7afd9b363b445880286a7138690053d5c63e4e918860",
+          "from": "file:1ab37ef3dbd1cc243a1118f3372d82e907dbbed088aeab36de0d1db8ed11ffc7",
+          "to": "sym:9f0c1678ec26ef0edac695971c4ed1f24caa357f9bac4446b7ca74c56c338242",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/multi-field.java",
+            "line": 6
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/generics.java": {
+    "path": "src/generics.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.generic;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.generic"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class Container<T, K extends Comparable<K>> { pr"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "Container"
+        },
+        {
+          "capture": "definition.field.node",
+          "type": "field_declaration",
+          "text": "private T value;"
+        },
+        {
+          "capture": "definition.field.name",
+          "type": "identifier",
+          "text": "value"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public <R> R transform(T input) { return null; }"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "transform"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.generic",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 29
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "Container",
+          "subtype": "class",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 9,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.field.node",
+          "name": "value",
+          "subtype": "field",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 21
+          }
+        },
+        {
+          "ordinal": 3,
+          "captureName": "definition.method.node",
+          "name": "transform",
+          "subtype": "method",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 8,
+            "end_col": 6
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parsed",
+      "facts": []
+    },
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/generics.java",
+          "path": "src/generics.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:f02b34d5053b3221e8d4fc7f55b5ca1d018ddb10f0162cbb6d995c1dfa3e5fb0",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.generic",
+          "path": "src/generics.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 29
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d88f8cea8cada1d559439e293546ac8af9aa3ff6ea1249ca2c60b1269b7badd0",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "Container",
+          "path": "src/generics.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 9,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fb5b58be941c2a125e7081634edb15aeb3fcfa2daef5a0eb50128e37bc86166c",
+          "kind": "symbol",
+          "subtype": "field",
+          "lang": "java",
+          "name": "value",
+          "path": "src/generics.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 21
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:81044a9cef653b8d9cf04e07c5b0dff7e39c9b72168e0a63018a6291b777498a",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "transform",
+          "path": "src/generics.java",
+          "span": {
+            "start_line": 6,
+            "start_col": 5,
+            "end_line": 8,
+            "end_col": 6
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "a6459a712ab0384c882c80ddf58937ce170edff67e89d4b703361964776519cd",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:f02b34d5053b3221e8d4fc7f55b5ca1d018ddb10f0162cbb6d995c1dfa3e5fb0",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "c883ce53f096e88ca1a9e1e097449d6bf693f35b2e727a0c76c686c2e491ea17",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:f02b34d5053b3221e8d4fc7f55b5ca1d018ddb10f0162cbb6d995c1dfa3e5fb0",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "6700cfa0afb7983101dade1f4dff77c5ece3a1159cca6874ec9d88e28520f4c4",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:d88f8cea8cada1d559439e293546ac8af9aa3ff6ea1249ca2c60b1269b7badd0",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "378a0715485e7c9496ee0ecf759ed9af6dd95fbcf6a48b89a089b7e11d008c04",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:d88f8cea8cada1d559439e293546ac8af9aa3ff6ea1249ca2c60b1269b7badd0",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "d2bdefca5ed9bcba9b0b669aca7513a13d80daeca7ca1a512e63590684eb76cf",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:fb5b58be941c2a125e7081634edb15aeb3fcfa2daef5a0eb50128e37bc86166c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "4bc532072ac214ac5e16c2e553d8fcb4de736fe62202e1b48f7266aa886f808c",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:fb5b58be941c2a125e7081634edb15aeb3fcfa2daef5a0eb50128e37bc86166c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "ea6b10d1780908d40a479a1329bea5da40856f8ea6dbd6e85603993c3b96a2e1",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:81044a9cef653b8d9cf04e07c5b0dff7e39c9b72168e0a63018a6291b777498a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 6
+          }
+        },
+        {
+          "id": "12b0f20e5d05b5a9ae6f286ff24c9e3cd25f4db1f83dd3347664d9c0df822cfa",
+          "from": "file:a71e902cedc3ea8284c0db87f6a579398add359d6e8d7ab3e350d8445155cf71",
+          "to": "sym:81044a9cef653b8d9cf04e07c5b0dff7e39c9b72168e0a63018a6291b777498a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/generics.java",
+            "line": 6
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/syntax-error.java": {
+    "path": "src/syntax-error.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": {
+      "tags": [
+        {
+          "capture": "definition.package.node",
+          "type": "package_declaration",
+          "text": "package com.example.broken;"
+        },
+        {
+          "capture": "definition.package.name",
+          "type": "scoped_identifier",
+          "text": "com.example.broken"
+        },
+        {
+          "capture": "definition.class.node",
+          "type": "class_declaration",
+          "text": "class Broken { public void ok() {} public void o"
+        },
+        {
+          "capture": "definition.class.name",
+          "type": "identifier",
+          "text": "Broken"
+        },
+        {
+          "capture": "definition.method.node",
+          "type": "method_declaration",
+          "text": "public void ok() {}"
+        },
+        {
+          "capture": "definition.method.name",
+          "type": "identifier",
+          "text": "ok"
+        }
+      ],
+      "imports": []
+    },
+    "draft": {
+      "definitions": [
+        {
+          "ordinal": 0,
+          "captureName": "definition.package.node",
+          "name": "com.example.broken",
+          "subtype": "package",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 28
+          }
+        },
+        {
+          "ordinal": 1,
+          "captureName": "definition.class.node",
+          "name": "Broken",
+          "subtype": "class",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          }
+        },
+        {
+          "ordinal": 2,
+          "captureName": "definition.method.node",
+          "name": "ok",
+          "subtype": "method",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 24
+          }
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "parse_error",
+      "facts": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    },
+    "result": {
+      "parseStatus": "parse_error",
+      "nodes": [
+        {
+          "id": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/syntax-error.java",
+          "path": "src/syntax-error.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:0cf30785796fe3ab18d364959cd066933103c93611512256dc63c2fb719c3c3b",
+          "kind": "symbol",
+          "subtype": "package",
+          "lang": "java",
+          "name": "com.example.broken",
+          "path": "src/syntax-error.java",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 28
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:6e7052ab915cc1559131952c081fddf6288da6a9fa8010947b68d4148d4cfb31",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "java",
+          "name": "Broken",
+          "path": "src/syntax-error.java",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:6cc39605984d5f9eb36bbae38a7d795abb137abf1ec882f7b3a9f76841f78bdd",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "java",
+          "name": "ok",
+          "path": "src/syntax-error.java",
+          "span": {
+            "start_line": 4,
+            "start_col": 5,
+            "end_line": 4,
+            "end_col": 24
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "4d4e535c2a6e11f13fb465704e27b57dc6957196fd02f11ce60938bd27291920",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:0cf30785796fe3ab18d364959cd066933103c93611512256dc63c2fb719c3c3b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "ce2dd4ac687adb9e8373f2623a9a3638ccbcedcc6996931e876cd0882aafdcd5",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:0cf30785796fe3ab18d364959cd066933103c93611512256dc63c2fb719c3c3b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 1
+          }
+        },
+        {
+          "id": "0c8eb190e44cf89e6a7f118cee6bb0801dc5ce350ab67e1c226e66af3696967c",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:6e7052ab915cc1559131952c081fddf6288da6a9fa8010947b68d4148d4cfb31",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "b8b7d6c244a0054c11ab918cda6e24a92fea22817ca430ff3cc74a799cd2ad11",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:6e7052ab915cc1559131952c081fddf6288da6a9fa8010947b68d4148d4cfb31",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 3
+          }
+        },
+        {
+          "id": "9f875d299089a4823bdf43bbe0c87969ebc939241ef518084ba3d23fc83028c8",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:6cc39605984d5f9eb36bbae38a7d795abb137abf1ec882f7b3a9f76841f78bdd",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 4
+          }
+        },
+        {
+          "id": "e8e2530dc996be5cb2da2ba174a5e4fb9f1619735b59b700680c09ee34782422",
+          "from": "file:300936edab6d668c444c37079dd782a4412078f1840d88f1ea5bb2293d0832ce",
+          "to": "sym:6cc39605984d5f9eb36bbae38a7d795abb137abf1ec882f7b3a9f76841f78bdd",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/syntax-error.java",
+            "line": 4
+          }
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    }
+  },
+  "src/oversized.java": {
+    "path": "src/oversized.java",
+    "lang": "java",
+    "_note": "PARSER WITNESS, NOT an independent oracle (tree-sitter own view). Regenerate via scripts/gen-code-map-langs-witness.mjs only on intentional change.",
+    "tree_captures": [],
+    "draft": {
+      "definitions": [],
+      "imports": [],
+      "exports": [],
+      "parseStatus": "skipped_too_large",
+      "facts": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    },
+    "result": {
+      "parseStatus": "skipped_too_large",
+      "nodes": [
+        {
+          "id": "file:4c48d23ad8192eebb0fadab4c25758c7a2c0c64057afae5c70448a3258107aa5",
+          "kind": "file",
+          "subtype": null,
+          "lang": "java",
+          "name": "src/oversized.java",
+          "path": "src/oversized.java",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    }
+  }
+}

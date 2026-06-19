@@ -18,6 +18,7 @@ import type { CodeLang } from '../../../src/core/code-map/types.js';
 
 const TAGS = typeScriptProvider.queries.tags;
 const IMPORTS = typeScriptProvider.queries.imports;
+const ENCLOSING = typeScriptProvider.queries.enclosingStatementNodeTypes;
 
 /** Drive the runtime over a TS snippet (typescript grammar by default). */
 async function run(source: string, lang: CodeLang = 'typescript') {
@@ -33,6 +34,7 @@ async function run(source: string, lang: CodeLang = 'typescript') {
     tagsHash: TAGS.hashForLang(lang),
     importsSource: IMPORTS.sourceForLang(lang),
     importsHash: IMPORTS.hashForLang(lang),
+    enclosingStatementNodeTypes: ENCLOSING,
   });
 }
 
@@ -141,6 +143,7 @@ describe('code-map query runtime — capture→draft mapping', () => {
       tagsHash: TAGS.hashForLang('typescript'),
       importsSource: IMPORTS.sourceForLang('typescript'),
       importsHash: IMPORTS.hashForLang('typescript'),
+      enclosingStatementNodeTypes: ENCLOSING,
     });
     assert.equal(draft.attributes?.parseStatus, 'skipped_too_large');
     assert.equal(draft.definitions.length, 0);
