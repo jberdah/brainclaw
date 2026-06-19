@@ -1,0 +1,118 @@
+/**
+ * Code Map index builders (spec §5.6, §5.7).
+ *
+ * Both indexes are derived purely from `files/**` shards and written atomically
+ * (store.ts uses writeFileAtomic). Queries answer from these + shards alone;
+ * materialized JSONL is never required.
+ *
+ * Ordering is deterministic so two refreshes over identical inputs produce
+ * byte-identical indexes (concurrency rule 5 spirit; helps "no JSONL committed"
+ * diffs stay clean).
+ */
+import {
+  CODE_MAP_SCHEMA_VERSION,
+  type FileShard,
+  type ImportIndexEntry,
+  type ImportsIndex,
+  type SymbolIndexEntry,
+  type SymbolsIndex,
+} from './types.js';
+
+/** Lowercase token normalization (spec §5.6 keys). */
+function tokenize(name: string): string[] {
+  const lower = name.toLowerCase();
+  const tokens = new Set<string>();
+  tokens.add(lower);
+  // split camelCase / snake / kebab boundaries into sub-tokens for partial recall
+  for (const part of name.split(/[^A-Za-z0-9]+/)) {
+    if (!part) continue;
+    // camelCase split
+    for (const sub of part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/\s+/)) {
+      if (sub) tokens.add(sub.toLowerCase());
+    }
+  }
+  return [...tokens];
+}
+
+export function buildSymbolsIndex(
+  projectId: string,
+  shards: FileShard[],
+  extractorVersion: string,
+): SymbolsIndex {
+  const entries: Record<string, SymbolIndexEntry[]> = {};
+  // Deterministic shard order by path.
+  const ordered = [...shards].sort((a, b) => a.path.localeCompare(b.path));
+  for (const shard of ordered) {
+    for (const node of shard.nodes) {
+      if (node.kind !== 'symbol') continue;
+      const entry: SymbolIndexEntry = {
+        node_id: node.id,
+        name: node.name,
+        kind: node.kind,
+        subtype: node.subtype ?? null,
+        path: node.path,
+        file_id: shard.file_id,
+        score_hint: node.exported ? 1.0 : 0.8,
+      };
+      for (const token of tokenize(node.name)) {
+        (entries[token] ??= []).push(entry);
+      }
+    }
+  }
+  // Deterministic ordering within each token bucket.
+  for (const token of Object.keys(entries)) {
+    entries[token]!.sort(
+      (a, b) =>
+        a.path.localeCompare(b.path) ||
+        a.name.localeCompare(b.name) ||
+        a.node_id.localeCompare(b.node_id),
+    );
+  }
+  // Sort keys for byte-stable output.
+  const sortedEntries: Record<string, SymbolIndexEntry[]> = {};
+  for (const key of Object.keys(entries).sort()) sortedEntries[key] = entries[key]!;
+
+  return {
+    schema_version: CODE_MAP_SCHEMA_VERSION,
+    project_id: projectId,
+    updated_at: new Date().toISOString(),
+    extractor_version: extractorVersion,
+    entries: sortedEntries,
+  };
+}
+
+export function buildImportsIndex(projectId: string, shards: FileShard[]): ImportsIndex {
+  // module specifier -> (path -> entry)
+  const byModule = new Map<string, Map<string, ImportIndexEntry>>();
+  const ordered = [...shards].sort((a, b) => a.path.localeCompare(b.path));
+  for (const shard of ordered) {
+    for (const node of shard.nodes) {
+      if (node.kind !== 'module') continue;
+      const module = node.name;
+      const perPath = byModule.get(module) ?? new Map<string, ImportIndexEntry>();
+      const entry = perPath.get(shard.path) ?? {
+        path: shard.path,
+        file_id: shard.file_id,
+        imported: [] as string[],
+      };
+      // Merge imported bindings across multiple imports of the same module in one
+      // file, deduped + sorted for byte-stable output (spec §5.7 imported[]).
+      const merged = new Set(entry.imported);
+      for (const name of node.imported_names ?? []) merged.add(name);
+      entry.imported = [...merged].sort();
+      perPath.set(shard.path, entry);
+      byModule.set(module, perPath);
+    }
+  }
+  const entries: Record<string, ImportIndexEntry[]> = {};
+  for (const key of [...byModule.keys()].sort()) {
+    const list = [...byModule.get(key)!.values()].sort((a, b) => a.path.localeCompare(b.path));
+    entries[key] = list;
+  }
+  return {
+    schema_version: CODE_MAP_SCHEMA_VERSION,
+    project_id: projectId,
+    updated_at: new Date().toISOString(),
+    entries,
+  };
+}

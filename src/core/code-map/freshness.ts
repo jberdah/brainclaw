@@ -1,0 +1,118 @@
+/**
+ * Write-side freshness hashing + per-shard freshness classification
+ * (spec §5.1, §6.2, §12.4).
+ *
+ * The READ-path lazy freshness check (§6.1) is Sprint 3 — NOT implemented here.
+ * This module owns only:
+ *  - `computeExtractorConfigHash` — sha256 of a stable serialization of
+ *    extractor_config + the active language set. Changing ignore rules, size
+ *    caps, supported extensions, query budget, or active langs => stale_extractor.
+ *    NOTE: grammar/engine hashes are deliberately NOT folded in (spec §6.2):
+ *    stale_grammar (changed parse binary) is kept separable from stale_extractor.
+ *  - `shardFreshnessStatus` — classify a stored shard against the current
+ *    extractor_config_hash + per-language grammar hashes.
+ */
+import crypto from 'node:crypto';
+import type { CodeLang, ExtractorConfig, FileShard, FreshnessStatus, Manifest } from './types.js';
+
+/** Stable serialization: sort object keys recursively so hashing is order-independent. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+/**
+ * spec §5.1 — sha256 of (extractor_config + active language set). The active
+ * language set is the sorted list of enabled languages, so enabling/disabling a
+ * language invalidates affected shards as stale_extractor.
+ */
+export function computeExtractorConfigHash(
+  config: ExtractorConfig,
+  activeLanguages: string[],
+): string {
+  const payload = {
+    extractor_config: config,
+    active_languages: [...activeLanguages].sort(),
+  };
+  return `sha256:${crypto.createHash('sha256').update(stableStringify(payload)).digest('hex')}`;
+}
+
+export interface ShardFreshnessInput {
+  shard: Pick<
+    FileShard,
+    'extractor_config_hash' | 'tree_sitter_grammar_hash' | 'lang' | 'parse_status'
+  >;
+  /** Current manifest-level extractor config hash. */
+  currentExtractorConfigHash: string;
+  /** Current per-language grammar hash lookup. */
+  grammarHashFor: (lang: CodeLang) => string | undefined;
+}
+
+/**
+ * spec §12.4 — classify a stored shard:
+ *  - extractor_config_hash mismatch => stale_extractor
+ *  - tree_sitter_grammar_hash mismatch => stale_grammar
+ *  - otherwise fresh (content/path drift is the §6.1 read-path concern, Sprint 3)
+ *
+ * Precedence: extractor first, then grammar — both are "the binary/logic that
+ * produced this shard changed", and the badge only needs to surface one reason;
+ * extractor-config drift is the cheaper, more common cause.
+ */
+export function shardFreshnessStatus(input: ShardFreshnessInput): FreshnessStatus {
+  const { shard } = input;
+  if (shard.extractor_config_hash !== input.currentExtractorConfigHash) {
+    return 'stale_extractor';
+  }
+  const expectedGrammar = input.grammarHashFor(shard.lang);
+  if (
+    expectedGrammar !== undefined &&
+    shard.tree_sitter_grammar_hash != null &&
+    shard.tree_sitter_grammar_hash !== expectedGrammar
+  ) {
+    return 'stale_grammar';
+  }
+  return 'fresh';
+}
+
+/**
+ * Roll per-shard freshness up into a manifest-level freshness summary
+ * (spec §5.1). `missing_index` when nothing parsed; otherwise the dominant
+ * stale reason, else fresh.
+ */
+export function summarizeFreshness(
+  shards: FileShard[],
+): Manifest['freshness'] {
+  if (shards.length === 0) {
+    return { status: 'missing_index', stale_file_count: 0, partial_reason: null };
+  }
+  let staleExtractor = 0;
+  let staleGrammar = 0;
+  let staleChanged = 0;
+  for (const s of shards) {
+    switch (s.freshness.status) {
+      case 'stale_extractor':
+        staleExtractor++;
+        break;
+      case 'stale_grammar':
+        staleGrammar++;
+        break;
+      case 'stale_changed_files':
+        staleChanged++;
+        break;
+      default:
+        break;
+    }
+  }
+  const staleTotal = staleExtractor + staleGrammar + staleChanged;
+  if (staleTotal === 0) {
+    return { status: 'fresh', stale_file_count: 0, partial_reason: null };
+  }
+  // Surface the dominant reason for the manifest badge.
+  let status: FreshnessStatus = 'stale_changed_files';
+  if (staleExtractor >= staleGrammar && staleExtractor >= staleChanged) status = 'stale_extractor';
+  else if (staleGrammar >= staleChanged) status = 'stale_grammar';
+  return { status, stale_file_count: staleTotal, partial_reason: null };
+}

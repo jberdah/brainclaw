@@ -80,6 +80,13 @@ export const NodeSchema = z.object({
   exported: z.boolean().default(false),
   confidence: z.number().default(1.0),
   related_memory_ids: z.array(z.string()).default([]),
+  /**
+   * For `module` nodes: the named bindings pulled from this import/re-export
+   * (e.g. ["useEffect","useMemo"]). Default import → ["default"], namespace
+   * import → ["*"]. Feeds index.imports.v1 `imported[]` (spec §5.7). Empty/absent
+   * for non-module nodes.
+   */
+  imported_names: z.array(z.string()).default([]),
 });
 export type CodeNode = z.infer<typeof NodeSchema>;
 

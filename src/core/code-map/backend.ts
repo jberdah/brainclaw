@@ -8,8 +8,9 @@
  * return not-yet-implemented placeholders that still carry a real
  * `freshness_badge`, locking the response shape for later sprints.
  */
+import path from 'node:path';
 import { readManifest, storeExists } from './store.js';
-import { acquireCodeLock, releaseCodeLock } from './lock.js';
+import { refresh as runRefresh } from './refresh.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
@@ -35,6 +36,10 @@ export interface CodeRefreshInput extends CodeBackendContext {
   scope?: 'changed' | 'all';
   ownerAgent?: string | null;
   ownerAgentId?: string | null;
+  /** Project identity. Falls back to the manifest, then a cwd-derived default. */
+  projectId?: string;
+  /** Source root to enumerate. Falls back to the manifest, then cwd. */
+  projectRoot?: string;
 }
 
 export interface CodeRefreshResult {
@@ -129,44 +134,41 @@ export class JsonlBackend implements CodeQueryBackend {
   }
 
   /**
-   * Minimal real refresh: acquires the lock (returning a clear lock status if a
-   * live competitor holds it), then releases. Parse/index work lands in later
-   * sprints. Never blocks indefinitely — a held live lock fails fast.
+   * Real refresh (spec §7): resolves project identity (input -> manifest ->
+   * cwd-derived default), then runs the Tree-sitter parse + index + materialize
+   * pipeline behind the project lock. A live competing lock fails fast with a
+   * clear status — refresh never blocks bclaw_work (rule 8).
    */
   async refresh(input: CodeRefreshInput): Promise<CodeRefreshResult> {
     const scope = input.scope ?? 'changed';
-    const handle = acquireCodeLock({
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const projectRoot = input.projectRoot ?? manifest?.project_root ?? input.cwd ?? process.cwd();
+    const projectId =
+      input.projectId ?? manifest?.project_id ?? `prj_${path.basename(path.resolve(projectRoot))}`;
+
+    const result = await runRefresh({
+      projectId,
+      projectRoot,
+      scope,
       cwd: input.cwd,
       preferredDirName: input.preferredDirName,
-      operation: 'refresh',
-      scope,
       ownerAgent: input.ownerAgent ?? null,
       ownerAgentId: input.ownerAgentId ?? null,
     });
 
-    if (!handle) {
-      return {
-        ran: false,
-        scope,
-        lock_acquired: false,
-        freshness_badge: badge('partial', { reason: 'lock_held_by_live_writer' }),
-        lock_status: 'held_by_live_writer',
-      };
-    }
-
-    try {
-      const manifest = readManifest(input.cwd, input.preferredDirName);
-      const status: FreshnessStatus = manifest ? manifest.freshness.status : 'missing_index';
-      // Parse loop / index rebuild / compaction: deferred to later sprints.
-      return {
-        ran: true,
-        scope,
-        lock_acquired: true,
-        freshness_badge: badge(status, { note: 'refresh_stub_no_parse_yet' }),
-      };
-    } finally {
-      releaseCodeLock(handle);
-    }
+    return {
+      ran: result.ran,
+      scope,
+      lock_acquired: result.lock_acquired,
+      freshness_badge: badge(result.freshness.status, {
+        stale_file_count: result.freshness.stale_file_count,
+        partial_reason: result.freshness.partial_reason,
+        files_parsed: result.files_parsed,
+        files_compacted: result.files_compacted,
+        duration_ms: result.duration_ms,
+      }),
+      ...(result.lock_status ? { lock_status: result.lock_status } : {}),
+    };
   }
 
   async find(input: CodeFindInput): Promise<CodeFindResult> {
