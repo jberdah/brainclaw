@@ -193,7 +193,12 @@ export function readSymbolsIndex(cwd?: string, preferredDirName?: string): Symbo
   const raw = readJsonFile(symbolsIndexPath(cwd, preferredDirName));
   if (raw === null) return null;
   const parsed = SymbolsIndexSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  // Re-home entries onto a null-proto object so a token lookup like
+  // entries['constructor'] / entries['toString'] cannot resolve to an inherited
+  // Object.prototype member (a non-iterable function) on a JSON-parsed object.
+  parsed.data.entries = Object.assign(Object.create(null), parsed.data.entries);
+  return parsed.data;
 }
 
 export function writeSymbolsIndex(index: SymbolsIndex, cwd?: string, preferredDirName?: string): void {
@@ -205,7 +210,9 @@ export function readImportsIndex(cwd?: string, preferredDirName?: string): Impor
   const raw = readJsonFile(importsIndexPath(cwd, preferredDirName));
   if (raw === null) return null;
   const parsed = ImportsIndexSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+  parsed.data.entries = Object.assign(Object.create(null), parsed.data.entries);
+  return parsed.data;
 }
 
 export function writeImportsIndex(index: ImportsIndex, cwd?: string, preferredDirName?: string): void {

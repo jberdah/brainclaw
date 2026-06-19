@@ -39,7 +39,11 @@ export function buildSymbolsIndex(
   shards: FileShard[],
   extractorVersion: string,
 ): SymbolsIndex {
-  const entries: Record<string, SymbolIndexEntry[]> = {};
+  // Null-proto map: symbol-name tokens can collide with Object.prototype members
+  // (e.g. a method named `constructor`, or a `__proto__` key), which would make
+  // `entries[token] ??= []` see the inherited function and crash on .push, or make
+  // `entries['__proto__'] = …` mutate the prototype instead of adding a key.
+  const entries: Record<string, SymbolIndexEntry[]> = Object.create(null);
   // Deterministic shard order by path.
   const ordered = [...shards].sort((a, b) => a.path.localeCompare(b.path));
   for (const shard of ordered) {
@@ -69,7 +73,7 @@ export function buildSymbolsIndex(
     );
   }
   // Sort keys for byte-stable output.
-  const sortedEntries: Record<string, SymbolIndexEntry[]> = {};
+  const sortedEntries: Record<string, SymbolIndexEntry[]> = Object.create(null);
   for (const key of Object.keys(entries).sort()) sortedEntries[key] = entries[key]!;
 
   return {
@@ -104,7 +108,7 @@ export function buildImportsIndex(projectId: string, shards: FileShard[]): Impor
       byModule.set(module, perPath);
     }
   }
-  const entries: Record<string, ImportIndexEntry[]> = {};
+  const entries: Record<string, ImportIndexEntry[]> = Object.create(null);
   for (const key of [...byModule.keys()].sort()) {
     const list = [...byModule.get(key)!.values()].sort((a, b) => a.path.localeCompare(b.path));
     entries[key] = list;
