@@ -42,15 +42,24 @@ import type { CodeLang } from './types.js';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * The grammar keys THIS loader serves. It is the js-ts provider's own WASM table,
+ * so it is keyed by a LOCAL type — NOT `Exclude<CodeLang, 'jsx'>` — so that opening
+ * the global `CodeLang` union (P1b §3.1) for a new provider (e.g. `python`, which
+ * loads its grammar through its OWN provider loader) does not force a phantom key
+ * here. The loader maps the js-ts runtime langs onto these three grammars.
+ */
+type JsTsGrammarLang = 'javascript' | 'typescript' | 'tsx';
+
 /** Grammar packages keyed by Code Map language tag. */
-const GRAMMAR_WASM_BASENAME: Record<Exclude<CodeLang, 'jsx'>, string> = {
+const GRAMMAR_WASM_BASENAME: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-javascript.wasm',
   typescript: 'tree-sitter-typescript.wasm',
   tsx: 'tree-sitter-tsx.wasm',
 };
 
 /** node_modules fallback paths (resolved lazily; only used if dist bundle absent). */
-const GRAMMAR_NODE_MODULES_SPEC: Record<Exclude<CodeLang, 'jsx'>, string> = {
+const GRAMMAR_NODE_MODULES_SPEC: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-wasms/out/tree-sitter-javascript.wasm',
   typescript: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
   tsx: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
@@ -59,9 +68,23 @@ const GRAMMAR_NODE_MODULES_SPEC: Record<Exclude<CodeLang, 'jsx'>, string> = {
 const ENGINE_WASM_BASENAME = 'tree-sitter.wasm';
 const ENGINE_NODE_MODULES_SPEC = 'web-tree-sitter/tree-sitter.wasm';
 
-/** jsx files use the tsx grammar (it is a strict superset of jsx + js). */
-function grammarLangFor(lang: CodeLang): Exclude<CodeLang, 'jsx'> {
-  return lang === 'jsx' ? 'tsx' : lang;
+/**
+ * Narrow a runtime `CodeLang` onto the js-ts grammar key. `jsx` uses the tsx
+ * grammar (a strict superset of jsx + js). Any lang outside the js-ts set is not
+ * something THIS loader serves (it is some other provider's grammar) — default to
+ * `typescript` to stay total, matching the legacy fall-through behavior.
+ */
+function grammarLangFor(lang: CodeLang): JsTsGrammarLang {
+  switch (lang) {
+    case 'javascript':
+    case 'typescript':
+    case 'tsx':
+      return lang;
+    case 'jsx':
+      return 'tsx';
+    default:
+      return 'typescript';
+  }
 }
 
 /**
@@ -204,8 +227,8 @@ export function initEngine(): Promise<void> {
 
 // --- Grammar cache (lazy, per language) ---
 
-const grammarCache = new Map<Exclude<CodeLang, 'jsx'>, LanguageType>();
-const grammarHashCache = new Map<Exclude<CodeLang, 'jsx'>, string>();
+const grammarCache = new Map<JsTsGrammarLang, LanguageType>();
+const grammarHashCache = new Map<JsTsGrammarLang, string>();
 
 /**
  * Load (and cache) the grammar Language for a Code Map language. Initializes the
@@ -242,7 +265,7 @@ export function grammarHash(lang: CodeLang): string {
 }
 
 /** Map of canonical grammar names per language (manifest.languages.*). */
-export const GRAMMAR_NAMES: Record<Exclude<CodeLang, 'jsx'>, string> = {
+export const GRAMMAR_NAMES: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-javascript',
   typescript: 'tree-sitter-typescript',
   tsx: 'tree-sitter-tsx',

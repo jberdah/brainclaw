@@ -133,7 +133,11 @@ const queries: QueryDeclarations = {
     sourceForLang: () => IMPORTS,
     hashForLang: () => IMPORTS_HASH,
   },
-  // Informational in P1a — the runtime keys off the capture-name convention.
+  // P1b §3.4: the runtime drives capture→draft mapping off the HARD-CODED
+  // capture-name convention (query-runtime.ts) — that convention IS the contract.
+  // This captureMap is a declared MIRROR of it, validated against the convention
+  // by `assertCaptureMapConforms` (provider-oracle test). Every entry's `capture`
+  // MUST be a convention-recognized role; it cannot invent new capture roles.
   captureMap: [
     { capture: 'definition.function.node', field: 'node', subtype: 'function' },
     { capture: 'definition.function.name', field: 'name' },

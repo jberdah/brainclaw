@@ -16,12 +16,15 @@ import type { Tree } from 'web-tree-sitter';
 import type { ExtractInput, ExtractResult } from './extractor.js';
 import { finalize } from './finalizer.js';
 import type { ExtractionDraft } from './drafts.js';
-import { DefaultCodeLanguageRegistry, createRegistry } from './lang/registry.js';
 import type { CodeLanguageRegistry } from './lang/provider.js';
-import { typeScriptProvider } from './lang/typescript/index.js';
+import { defaultRegistry } from './lang/providers.js';
 
-/** The default registry — TypeScriptProvider only in P1a (rule of two with P1b). */
-export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(typeScriptProvider);
+/**
+ * The default registry is constructed + registered in `lang/providers.ts` (P1b
+ * §3.2) — the declared extension point for "which providers ship by default".
+ * Re-exported here so existing importers (`core.js`) keep working unchanged.
+ */
+export { defaultRegistry };
 
 const SERVICES = { version: '0.1.0' } as const;
 

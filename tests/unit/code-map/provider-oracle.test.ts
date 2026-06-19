@@ -16,6 +16,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractFile } from '../../../src/core/code-map/core.js';
+import { assertCaptureMapConforms } from '../../../src/core/code-map/lang/query-runtime.js';
+import { typeScriptProvider } from '../../../src/core/code-map/lang/typescript/index.js';
 import type { ExtractResult } from '../../../src/core/code-map/extractor.js';
 import type { CodeLang } from '../../../src/core/code-map/types.js';
 
@@ -117,4 +119,11 @@ describe('code-map P1a provider oracle (query-driven == legacy)', () => {
       assert.deepStrictEqual(live, entry.result);
     });
   }
+
+  // P1b §3.4 captureMap honesty: the hard-coded capture convention IS the contract;
+  // the provider's declared captureMap must be a faithful MIRROR of it (every entry
+  // names a convention-recognized capture role — no invented roles).
+  it('the TS provider captureMap conforms to the hard-coded capture convention', () => {
+    assert.deepStrictEqual(assertCaptureMapConforms(typeScriptProvider.queries.captureMap), []);
+  });
 });
