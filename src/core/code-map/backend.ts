@@ -11,6 +11,8 @@
 import path from 'node:path';
 import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
+import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
+import { defaultMemoryReader } from './memory-reader.js';
 import type { FreshnessBadge, FreshnessStatus } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
@@ -60,6 +62,7 @@ export interface CodeFindMatch {
   node_id: string;
   name: string;
   path: string;
+  file_id: string;
   kind: string;
   subtype: string | null;
   score: number;
@@ -69,7 +72,6 @@ export interface CodeFindResult {
   query: string;
   matches: CodeFindMatch[];
   freshness_badge: FreshnessBadge;
-  not_implemented?: boolean;
 }
 
 export interface CodeBriefInput extends CodeBackendContext {
@@ -84,11 +86,19 @@ export interface CodeBriefReadEntry {
   related_memory_ids: string[];
 }
 
+export interface CodeBriefRelatedMemory {
+  id: string;
+  kind: string;
+  text: string;
+  tags: string[];
+  related_paths: string[];
+}
+
 export interface CodeBrief {
   target: string;
   suggested_files_to_read: CodeBriefReadEntry[];
+  related_memory: CodeBriefRelatedMemory[];
   freshness_badge: FreshnessBadge;
-  not_implemented?: boolean;
 }
 
 /** spec §9 caps the brief reading list at 12 files. */
@@ -110,6 +120,16 @@ function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): 
  * shards + indexes); no graph DB. find()/brief() are stubbed for Sprint 1.
  */
 export class JsonlBackend implements CodeQueryBackend {
+  /**
+   * Related-memory read seam (spec §11). Defaults to the canonical entity read
+   * path; tests inject an in-memory reader to assert attachment without a store.
+   */
+  private readonly memoryReader: MemoryReader;
+
+  constructor(opts: { memoryReader?: MemoryReader } = {}) {
+    this.memoryReader = opts.memoryReader ?? defaultMemoryReader;
+  }
+
   async status(input: CodeStatusInput): Promise<CodeStatus> {
     const manifest = readManifest(input.cwd, input.preferredDirName);
     if (!manifest) {
@@ -171,25 +191,38 @@ export class JsonlBackend implements CodeQueryBackend {
     };
   }
 
+  /**
+   * Agent-facing symbol search (spec §12.1). Ranks symbols-index matches and
+   * lazily validates each backing shard against the live file before serving it
+   * as confident (§6.1); the response badge reflects any detected drift.
+   */
   async find(input: CodeFindInput): Promise<CodeFindResult> {
-    const manifest = readManifest(input.cwd, input.preferredDirName);
-    const status: FreshnessStatus = manifest ? manifest.freshness.status : 'missing_index';
+    const ctx = this.queryContext(input);
+    const out = runFind(input.query, input.limit, ctx);
     return {
-      query: input.query,
-      matches: [],
-      freshness_badge: badge(status, { note: 'find_not_implemented_in_sprint1' }),
-      not_implemented: true,
+      query: out.query,
+      matches: out.matches,
+      freshness_badge: { status: out.freshness_badge.status, details: out.freshness_badge.details },
     };
   }
 
+  /**
+   * Agent-facing reading list (spec §9, §11). Produces a ranked
+   * suggested_files_to_read (cap 12), attaches related brainclaw memory (cap 5),
+   * and carries a §6.1 lazy-validated freshness badge.
+   */
   async brief(input: CodeBriefInput): Promise<CodeBrief> {
-    const manifest = readManifest(input.cwd, input.preferredDirName);
-    const status: FreshnessStatus = manifest ? manifest.freshness.status : 'missing_index';
+    const ctx = this.queryContext(input);
+    const out = runBrief(input.target, input.limit, ctx, this.memoryReader);
     return {
-      target: input.target,
-      suggested_files_to_read: [],
-      freshness_badge: badge(status, { note: 'brief_not_implemented_in_sprint1' }),
-      not_implemented: true,
+      target: out.target,
+      suggested_files_to_read: out.suggested_files_to_read,
+      related_memory: out.related_memory,
+      freshness_badge: { status: out.freshness_badge.status, details: out.freshness_badge.details },
     };
+  }
+
+  private queryContext(input: CodeBackendContext): QueryContext {
+    return { cwd: input.cwd, preferredDirName: input.preferredDirName };
   }
 }
