@@ -71,6 +71,16 @@ export interface QueryDeclarations {
   readonly imports: QueryAssetDeclaration;
   /** Capture-name → draft-field map (spec §7 captureMap). */
   readonly captureMap: readonly CaptureMapping[];
+  /**
+   * Grammar node types that count as the enclosing import/export STATEMENT for
+   * import span/ordinal anchoring (cadrage §3 / Codex R1 langs#3-4). PROVIDER-LOCAL:
+   * the generic runtime uses ONLY this set for a file and never derives it from a
+   * central registry. Include BOTH import and export statement node types where the
+   * language has them. Examples: JS/TS `['import_statement','export_statement']`;
+   * Python `['import_statement','import_from_statement']`; PHP
+   * `['namespace_use_declaration']`; Java `['import_declaration']`.
+   */
+  readonly enclosingStatementNodeTypes: readonly string[];
 }
 
 /** Per-tier capability declaration; `proven` = a fixture demonstrates it. */

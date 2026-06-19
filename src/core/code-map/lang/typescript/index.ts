@@ -133,6 +133,12 @@ const queries: QueryDeclarations = {
     sourceForLang: () => IMPORTS,
     hashForLang: () => IMPORTS_HASH,
   },
+  // JS/TS import/export statement node types (cadrage §3 / Codex R1). Both are
+  // listed because local exports + re-exports (`export … from`) also resolve
+  // through the runtime's enclosingStatement walk. PROVIDER-LOCAL — the runtime
+  // gets this set per file, never from a registry. (Same set the old module-global
+  // carried for JS/TS, so output stays byte-identical.)
+  enclosingStatementNodeTypes: ['import_statement', 'export_statement'],
   // P1b §3.4: the runtime drives capture→draft mapping off the HARD-CODED
   // capture-name convention (query-runtime.ts) — that convention IS the contract.
   // This captureMap is a declared MIRROR of it, validated against the convention
@@ -256,6 +262,7 @@ export class TypeScriptProvider implements CodeLanguageProvider {
       tagsHash: tags.hash,
       importsSource: IMPORTS,
       importsHash: IMPORTS_HASH,
+      enclosingStatementNodeTypes: queries.enclosingStatementNodeTypes,
     });
   }
 
