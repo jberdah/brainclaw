@@ -91,7 +91,7 @@ export type FreshnessStatus = z.infer<typeof FreshnessStatusSchema>;
  * exhaustive is the js-ts grammar table in `wasm-loader.ts`, which narrows to its
  * own langs rather than the open union).
  */
-export type CodeLang = 'javascript' | 'typescript' | 'tsx' | 'jsx' | 'python' | 'php';
+export type CodeLang = 'javascript' | 'typescript' | 'tsx' | 'jsx' | 'python' | 'php' | 'java';
 
 /** The langs the bundled providers emit today — the fast-path of the validator. */
 const KNOWN_CODE_LANGS = new Set<string>([
@@ -101,6 +101,7 @@ const KNOWN_CODE_LANGS = new Set<string>([
   'jsx',
   'python',
   'php',
+  'java',
 ]);
 
 /** A well-formed (lowercase) language id a future provider could register. */
