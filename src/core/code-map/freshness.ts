@@ -5,8 +5,10 @@
  * The READ-path lazy freshness check (§6.1) is Sprint 3 — NOT implemented here.
  * This module owns only:
  *  - `computeExtractorConfigHash` — sha256 of a stable serialization of
- *    extractor_config + the active language set. Changing ignore rules, size
- *    caps, supported extensions, query budget, or active langs => stale_extractor.
+ *    extractor_config + the active language set + (P1a) the registry's
+ *    `configHashInputs()` (provider versions + every query-asset hash). Changing
+ *    ignore rules, size caps, supported extensions, query budget, active langs, a
+ *    provider version, OR a tags/imports `.scm` => stale_extractor.
  *    NOTE: grammar/engine hashes are deliberately NOT folded in (spec §6.2):
  *    stale_grammar (changed parse binary) is kept separable from stale_extractor.
  *  - `shardFreshnessStatus` — classify a stored shard against the current
@@ -25,17 +27,24 @@ function stableStringify(value: unknown): string {
 }
 
 /**
- * spec §5.1 — sha256 of (extractor_config + active language set). The active
- * language set is the sorted list of enabled languages, so enabling/disabling a
- * language invalidates affected shards as stale_extractor.
+ * spec §5.1 / §9 — sha256 of (extractor_config + active language set + the
+ * registry's provider/query-asset fingerprint). The active language set is the
+ * sorted list of enabled languages, so enabling/disabling a language invalidates
+ * affected shards as stale_extractor. `registryInputs` (from
+ * `registry.configHashInputs()`) folds in provider `version` + every tags/imports
+ * `.scm` hash, so editing a query asset flips affected shards to stale_extractor
+ * (dec#109 P0#3). Optional + omitted-vs-undefined hash the same so legacy callers
+ * (config-only) keep a stable hash for that input combination.
  */
 export function computeExtractorConfigHash(
   config: ExtractorConfig,
   activeLanguages: string[],
+  registryInputs?: unknown,
 ): string {
   const payload = {
     extractor_config: config,
     active_languages: [...activeLanguages].sort(),
+    registry: registryInputs ?? null,
   };
   return `sha256:${crypto.createHash('sha256').update(stableStringify(payload)).digest('hex')}`;
 }

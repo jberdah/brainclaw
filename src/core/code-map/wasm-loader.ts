@@ -37,7 +37,7 @@ import { createRequire } from 'node:module';
 // IMPORTANT: type-only import — fully erased at compile (no verbatimModuleSyntax),
 // so this does NOT put web-tree-sitter in the runtime import graph. The values
 // (Parser / Language) are loaded lazily via dynamic import in loadEngineGlue().
-import type { Parser as ParserType, Language as LanguageType } from 'web-tree-sitter';
+import type { Parser as ParserType, Language as LanguageType, Query as QueryType } from 'web-tree-sitter';
 import type { CodeLang } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -93,6 +93,7 @@ function readWasm(path: string): Uint8Array {
 interface EngineGlue {
   Parser: typeof ParserType;
   Language: typeof LanguageType;
+  Query: typeof QueryType;
 }
 
 let glueModule: EngineGlue | null = null;
@@ -144,6 +145,24 @@ async function loadEngineGlue(): Promise<EngineGlue> {
 export async function getParser(): Promise<typeof ParserType> {
   const glue = await loadEngineGlue();
   return glue.Parser;
+}
+
+/**
+ * `Query` constructor from the SAME lazily-loaded engine glue module that
+ * {@link initEngine}/{@link loadGrammar} run against, with the engine initialized
+ * first. CRITICAL: web-tree-sitter is shipped as a vendored copy under
+ * `dist/vendor/` AND exists as a node_modules devDependency; a fresh
+ * `import('web-tree-sitter')` resolves to a DISTINCT Emscripten module instance
+ * whose `Module` is never initialized by our `Parser.init({wasmBinary})` call.
+ * Constructing a `Query` against that un-inited instance throws
+ * `Cannot read properties of undefined (reading 'lengthBytesUTF8')`. Sourcing
+ * `Query` from `loadEngineGlue()` (same instance, after `initEngine()`) is the
+ * only correct path. (Regression fixed: P1a real-refresh WASM bug.)
+ */
+export async function getQueryClass(): Promise<typeof QueryType> {
+  await initEngine();
+  const glue = await loadEngineGlue();
+  return glue.Query;
 }
 
 function sha256(bytes: Uint8Array): string {

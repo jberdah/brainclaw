@@ -27,7 +27,7 @@
  * finalize finish; the core deletes it afterwards.
  */
 import type { Node as TsNode, Tree } from 'web-tree-sitter';
-import { getParser, loadGrammar } from '../wasm-loader.js';
+import { getParser, getQueryClass, loadGrammar } from '../wasm-loader.js';
 import type { CodeLang, NodeSubtype, Span } from '../types.js';
 import type {
   DefinitionDraft,
@@ -43,26 +43,8 @@ interface CompiledQuery {
   readonly captureNames: string[];
 }
 
-interface QueryCtor {
-  new (grammar: unknown, source: string): CompiledQuery;
-}
-
 /** Process-wide compiled-query cache, keyed `${providerId}|${lang}|${queryHash}`. */
 const queryCache = new Map<string, CompiledQuery>();
-
-let QueryClass: QueryCtor | null = null;
-
-/** Resolve the `Query` constructor from the engine glue once (compile-once path). */
-async function getQueryClass(): Promise<QueryCtor> {
-  if (QueryClass) return QueryClass;
-  // The vendored/devDep engine glue exposes `Query` as a named export. We reach it
-  // via the same dynamic-import seam the wasm-loader uses (web-tree-sitter is never
-  // in the eager module graph). getParser() guarantees the glue is loaded.
-  await getParser();
-  const mod = (await import('web-tree-sitter')) as unknown as { Query: QueryCtor };
-  QueryClass = mod.Query;
-  return QueryClass;
-}
 
 /**
  * Compile a query asset ONCE per `(providerId, lang, queryHash)` and cache it.
@@ -80,7 +62,10 @@ async function compileCached(
   const hit = queryCache.get(key);
   if (hit) return hit;
   const Query = await getQueryClass();
-  const compiled = new Query(grammar, source); // throws loudly on a broken asset
+  // The loader's `Query` comes from the SAME engine-glue instance the grammar was
+  // loaded against (and after initEngine), so the Emscripten Module is live here.
+  // Cast to the structural shape we consume.
+  const compiled = new Query(grammar as never, source) as unknown as CompiledQuery; // throws loudly on a broken asset
   queryCache.set(key, compiled);
   return compiled;
 }

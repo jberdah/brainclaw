@@ -107,3 +107,45 @@
     (variable_declaration
       (variable_declarator
         name: (identifier) @definition.variable.name)) @definition.variable.node) @definition.variable.exported)
+
+; ---------------------------------------------------------------------------
+; ERROR-root recovery (legacy parity).
+;
+; When tree-sitter cannot parse a file cleanly it may promote the WHOLE file to
+; an `ERROR` root rather than `program`, while still recovering the individual
+; top-level declarations as direct children of that ERROR node. The legacy
+; extractor walked `root.namedChild(i)` regardless of the root's type, so it
+; captured those declarations; an anchor on `(program ...)` alone silently drops
+; EVERY symbol in such a file. These sibling patterns mirror the `(program ...)`
+; forms under an `(ERROR ...)` root so content parity holds for files that only
+; parse under error recovery (e.g. test files the TS grammar trips on).
+; ---------------------------------------------------------------------------
+(ERROR
+  (function_declaration
+    name: (identifier) @definition.function.name) @definition.function.node)
+
+(ERROR
+  (generator_function_declaration
+    name: (identifier) @definition.function.name) @definition.function.node)
+
+(ERROR
+  (class_declaration
+    name: (type_identifier) @definition.class.name) @definition.class.node)
+
+(ERROR
+  (type_alias_declaration
+    name: (type_identifier) @definition.type.name) @definition.type.node)
+
+(ERROR
+  (interface_declaration
+    name: (type_identifier) @definition.interface.name) @definition.interface.node)
+
+(ERROR
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @definition.variable.name)) @definition.variable.node)
+
+(ERROR
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @definition.variable.name)) @definition.variable.node)

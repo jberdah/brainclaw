@@ -76,3 +76,31 @@
     (variable_declaration
       (variable_declarator
         name: (identifier) @definition.variable.name)) @definition.variable.node) @definition.variable.exported)
+
+; ---------------------------------------------------------------------------
+; ERROR-root recovery (legacy parity). See tags.scm for the rationale: when the
+; file promotes to an `ERROR` root the declarations recover as direct children;
+; the legacy extractor captured them via `root.namedChild(i)`. JS subset: no
+; type/interface; class names resolve via `identifier`.
+; ---------------------------------------------------------------------------
+(ERROR
+  (function_declaration
+    name: (identifier) @definition.function.name) @definition.function.node)
+
+(ERROR
+  (generator_function_declaration
+    name: (identifier) @definition.function.name) @definition.function.node)
+
+(ERROR
+  (class_declaration
+    name: (identifier) @definition.class.name) @definition.class.node)
+
+(ERROR
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @definition.variable.name)) @definition.variable.node)
+
+(ERROR
+  (variable_declaration
+    (variable_declarator
+      name: (identifier) @definition.variable.name)) @definition.variable.node)
