@@ -13,9 +13,13 @@
  */
 import { DefaultCodeLanguageRegistry, createRegistry } from './registry.js';
 import { typeScriptProvider } from './typescript/index.js';
+import { pythonProvider } from './python/index.js';
 
 /**
  * The default registry, pre-loaded with the bundled providers. Add a new
  * provider's singleton to this `createRegistry(...)` call to register it.
  */
-export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(typeScriptProvider);
+export const defaultRegistry: DefaultCodeLanguageRegistry = createRegistry(
+  typeScriptProvider,
+  pythonProvider,
+);

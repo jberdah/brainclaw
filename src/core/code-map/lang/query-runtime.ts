@@ -113,11 +113,27 @@ function stripQuotes(text: string): string {
   return text.replace(/^['"`]|['"`]$/g, '');
 }
 
+/**
+ * The grammar node types that count as the enclosing import/export STATEMENT for
+ * span/ordinal anchoring. JS/TS use `import_statement`/`export_statement`; Python
+ * uses `import_statement` (for `import a, b`) and `import_from_statement` (for
+ * `from x import …`). This set is the generic multi-language widening the rule of
+ * two revealed (cadrage §3.3): the runtime previously hard-coded only the JS/TS
+ * statement names, so a Python `from` import fell through to the @import.source
+ * node and produced a too-narrow span. Adding a language's import-statement node
+ * types here is the §3.3 import-grouping hardening, not a per-language special case.
+ */
+const IMPORT_EXPORT_STATEMENT_TYPES: ReadonlySet<string> = new Set([
+  'import_statement',
+  'export_statement',
+  'import_from_statement',
+]);
+
 /** Walk up from a capture node to the enclosing import/export statement. */
 function enclosingStatement(node: TsNode): TsNode {
   let n: TsNode | null = node;
   while (n) {
-    if (n.type === 'import_statement' || n.type === 'export_statement') return n;
+    if (IMPORT_EXPORT_STATEMENT_TYPES.has(n.type)) return n;
     n = n.parent;
   }
   return node;

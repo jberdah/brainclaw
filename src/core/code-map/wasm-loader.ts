@@ -110,6 +110,53 @@ function readWasm(path: string): Uint8Array {
   return new Uint8Array(fs.readFileSync(path));
 }
 
+// --- generic grammar loader (shared engine seam for non-js-ts providers) ---
+//
+// P1b §3 (rule-of-two): a 2nd provider (Python) loads a grammar this js-ts loader
+// does NOT own. Its grammar MUST come through the SAME initialized engine glue
+// (getParser/getQueryClass/initEngine) — a fresh `web-tree-sitter` import is a
+// distinct Emscripten instance and crashes on Query construction (trp_8df65ab7).
+// These generic helpers expose exactly that: load/hash an arbitrary grammar .wasm
+// (by dist basename + node_modules fallback spec) against the live engine. They are
+// engine SEAMS, not orchestration — a new provider calls them from its own dir.
+
+/** Cache for grammars loaded via the generic loader, keyed by dist basename. */
+const genericGrammarCache = new Map<string, LanguageType>();
+const genericGrammarHashCache = new Map<string, string>();
+
+/**
+ * Load (and cache) an arbitrary grammar Language by its dist basename + a
+ * node_modules fallback spec, using the SAME engine glue + init as the js-ts
+ * grammars. Lazy: only called from a provider's parse path.
+ */
+export async function loadGrammarWasm(
+  distBasename: string,
+  nodeModulesSpec: string,
+): Promise<LanguageType> {
+  const cached = genericGrammarCache.get(distBasename);
+  if (cached) return cached;
+  await initEngine();
+  const glue = await loadEngineGlue();
+  const wasmPath = resolveWasmPath(distBasename, nodeModulesSpec);
+  const bytes = readWasm(wasmPath);
+  if (!genericGrammarHashCache.has(distBasename)) {
+    genericGrammarHashCache.set(distBasename, sha256(bytes));
+  }
+  const language = await glue.Language.load(bytes);
+  genericGrammarCache.set(distBasename, language);
+  return language;
+}
+
+/** sha256 of an arbitrary grammar .wasm (per-language tree_sitter_grammar_hash). */
+export function grammarHashForWasm(distBasename: string, nodeModulesSpec: string): string {
+  const cached = genericGrammarHashCache.get(distBasename);
+  if (cached) return cached;
+  const wasmPath = resolveWasmPath(distBasename, nodeModulesSpec);
+  const h = sha256(readWasm(wasmPath));
+  genericGrammarHashCache.set(distBasename, h);
+  return h;
+}
+
 // --- engine glue (web-tree-sitter JS) — dynamic, lazy, never in module graph ---
 
 /** Static shape of the bits of the web-tree-sitter module we use. */
@@ -279,6 +326,8 @@ export function grammarName(lang: CodeLang): string {
 export function __resetWasmCaches(): void {
   grammarCache.clear();
   grammarHashCache.clear();
+  genericGrammarCache.clear();
+  genericGrammarHashCache.clear();
   engineInitPromise = null;
   enginePath = null;
   // NOTE: glueModule / glueLoadPromise are intentionally NOT reset — the dynamic
