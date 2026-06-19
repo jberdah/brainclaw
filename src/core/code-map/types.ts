@@ -6,6 +6,13 @@
  * never drift.
  */
 import { z } from 'zod';
+import {
+  NAMESPACED_VOCAB_RE,
+  UniversalEdgeKinds,
+  UniversalNodeSubtypes,
+  type EdgeKind,
+  type NodeSubtype,
+} from './vocabulary.js';
 
 /** Current schema version for all Code Map objects in P0. */
 export const CODE_MAP_SCHEMA_VERSION = 1;
@@ -27,22 +34,35 @@ export type ParseStatus = z.infer<typeof ParseStatusSchema>;
 export const NodeKindSchema = z.enum(['file', 'module', 'symbol']);
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 
-/** spec §5.4 — symbol subtypes. */
-export const NodeSubtypeSchema = z.enum([
-  'function',
-  'class',
-  'type',
-  'interface',
-  'component',
-  'hook',
-  'variable',
-  'export',
-]);
-export type NodeSubtype = z.infer<typeof NodeSubtypeSchema>;
+/**
+ * spec §5 (dec#108 #4) — symbol subtypes.
+ *
+ * No longer a closed `z.enum`: a subtype is EITHER a universal value
+ * ({@link UniversalNodeSubtypes}) OR a provider-namespaced value matching
+ * `^[a-z]+\.[a-z_]+$` (e.g. `rust.trait`). P1a emits only universal values.
+ * The TS type is sourced from `vocabulary.ts` so the static + runtime surfaces
+ * cannot drift.
+ */
+const UNIVERSAL_NODE_SUBTYPES = new Set<string>(UniversalNodeSubtypes);
+export const NodeSubtypeSchema = z.custom<NodeSubtype>(
+  (v): boolean =>
+    typeof v === 'string' && (UNIVERSAL_NODE_SUBTYPES.has(v) || NAMESPACED_VOCAB_RE.test(v)),
+  { error: 'Invalid node subtype: expected a universal subtype or a namespaced `provider.subtype` value' },
+);
+export type { NodeSubtype } from './vocabulary.js';
 
-/** spec §5.5 — reliable edge kinds (no calls/renders/uses in P0). */
-export const EdgeKindSchema = z.enum(['contains', 'imports', 'exports', 'defines']);
-export type EdgeKind = z.infer<typeof EdgeKindSchema>;
+/**
+ * spec §5 (dec#108 #4) — edge kinds. Same constrained-string contract as
+ * {@link NodeSubtypeSchema}: a universal value ({@link UniversalEdgeKinds}) or a
+ * provider-namespaced value matching `^[a-z]+\.[a-z_]+$`.
+ */
+const UNIVERSAL_EDGE_KINDS = new Set<string>(UniversalEdgeKinds);
+export const EdgeKindSchema = z.custom<EdgeKind>(
+  (v): boolean =>
+    typeof v === 'string' && (UNIVERSAL_EDGE_KINDS.has(v) || NAMESPACED_VOCAB_RE.test(v)),
+  { error: 'Invalid edge kind: expected a universal edge kind or a namespaced `provider.kind` value' },
+);
+export type { EdgeKind } from './vocabulary.js';
 
 /** spec §5.1 — freshness status enum, shared by manifest + read responses. */
 export const FreshnessStatusSchema = z.enum([

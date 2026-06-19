@@ -1,0 +1,2605 @@
+{
+  "src/p1a/declarations.ts": {
+    "path": "src/p1a/declarations.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/declarations.ts",
+          "path": "src/p1a/declarations.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:91626d5bbea99b0d903fa6a4a86473db8b4f782f817c1da78b8d577051dffc8f",
+          "kind": "symbol",
+          "subtype": "interface",
+          "lang": "typescript",
+          "name": "UserShape",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fdf694437efa17c269a404bdfde70872ac0596a4042fed45fd5de7c3ad04cd0c",
+          "kind": "symbol",
+          "subtype": "interface",
+          "lang": "typescript",
+          "name": "AdminShape",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 6,
+            "start_col": 8,
+            "end_line": 8,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:a9f1ae408159df327c0f841edcf8670e85fabc6d7b2fdd38dd70c91aeec50a97",
+          "kind": "symbol",
+          "subtype": "type",
+          "lang": "typescript",
+          "name": "UserId",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 10,
+            "end_col": 22
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:037d15e6743f8dfcd1c8727c37ddbe4919c26a283c1bd6828868dbef55029f19",
+          "kind": "symbol",
+          "subtype": "type",
+          "lang": "typescript",
+          "name": "AdminId",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 12,
+            "start_col": 8,
+            "end_line": 12,
+            "end_col": 30
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:68c71ae50b43ace45316c14293b2aa06b6ba62a7b3d30d557ef0ad1da7167318",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "typescript",
+          "name": "InternalStore",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 14,
+            "start_col": 1,
+            "end_line": 18,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:f0d85fb020b7a2f6fefcc6a48c35e8d9cb84323a856578452b975702c929094e",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "typescript",
+          "name": "PublicStore",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 20,
+            "start_col": 8,
+            "end_line": 22,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:a90ea84b8fe8368bf81d3b77e2861372f1ddbfd4e94ed923141acc16992e5944",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "helper",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 24,
+            "start_col": 1,
+            "end_line": 26,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:01be2b0d095a600207645bc8389eec97eb69de9b931afd924ab5cf30190b182a",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "compute",
+          "path": "src/p1a/declarations.ts",
+          "span": {
+            "start_line": 28,
+            "start_col": 8,
+            "end_line": 30,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "7d922ee5b6c06b65eddba53a355b99579514ca445d8bd4a2a523cb915cd7bd4e",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:91626d5bbea99b0d903fa6a4a86473db8b4f782f817c1da78b8d577051dffc8f",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "f612c62e7d1a91c7137e3592e6a3c8af96140aa3e286c9e4c7824352246da970",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:91626d5bbea99b0d903fa6a4a86473db8b4f782f817c1da78b8d577051dffc8f",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "4175a1c50a7fc47cc011b1202c71b66fb41e1e2b11ebb3a0ace04831d6de80f5",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:fdf694437efa17c269a404bdfde70872ac0596a4042fed45fd5de7c3ad04cd0c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "bd2f28afa444e72308a2cbafdfabd0e6a105e3c51374676343b630e1b2f6ab0d",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:fdf694437efa17c269a404bdfde70872ac0596a4042fed45fd5de7c3ad04cd0c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "e0720904a63137bd2054ca08895212ae967567da27a29698476e587667eacaf9",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:a9f1ae408159df327c0f841edcf8670e85fabc6d7b2fdd38dd70c91aeec50a97",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "727fee56c76ea7dd9f110a432caef6956dbbde00f4b5c7c55056056863750ce0",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:a9f1ae408159df327c0f841edcf8670e85fabc6d7b2fdd38dd70c91aeec50a97",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "b2c5435823cb8d1120b4262b42d59de47a0feae5b52731da4c4c580f586864af",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:037d15e6743f8dfcd1c8727c37ddbe4919c26a283c1bd6828868dbef55029f19",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 12
+          }
+        },
+        {
+          "id": "72448907643d5bc7a40525ed266f0c4f3f854bd68c6f72394863bb2b3d67c917",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:037d15e6743f8dfcd1c8727c37ddbe4919c26a283c1bd6828868dbef55029f19",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 12
+          }
+        },
+        {
+          "id": "b80865a7ef4ee63d22160a61873b7b14665ae5ca00799a40189e1c06e71ab4d7",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:68c71ae50b43ace45316c14293b2aa06b6ba62a7b3d30d557ef0ad1da7167318",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 14
+          }
+        },
+        {
+          "id": "b12f1b1a0564012fce20a77b0b0aa364e58c594da6751c3cef84d3e26fc1abe0",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:68c71ae50b43ace45316c14293b2aa06b6ba62a7b3d30d557ef0ad1da7167318",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 14
+          }
+        },
+        {
+          "id": "8a86f41e5be6b4b4e1843fc740215b03bfdc4bca2b6cd1fd5f141378eb42005a",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:f0d85fb020b7a2f6fefcc6a48c35e8d9cb84323a856578452b975702c929094e",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 20
+          }
+        },
+        {
+          "id": "24fac03bcee529ec16ce1a8b5635707e13d5dcef0139f593ebbf624531ea4879",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:f0d85fb020b7a2f6fefcc6a48c35e8d9cb84323a856578452b975702c929094e",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 20
+          }
+        },
+        {
+          "id": "851911098139d692f1cc48eaf58295100c7d524203d8a34dfaf85ad8e0e0de8f",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:a90ea84b8fe8368bf81d3b77e2861372f1ddbfd4e94ed923141acc16992e5944",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 24
+          }
+        },
+        {
+          "id": "da5f3558556f06403fa62b21dae8275e52fa8425d4659eb4f49af69062161f6a",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:a90ea84b8fe8368bf81d3b77e2861372f1ddbfd4e94ed923141acc16992e5944",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 24
+          }
+        },
+        {
+          "id": "3cbb63c54c7f41d25bca2e422d0bcfaa66b264aece6b438d23003435290f9771",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:01be2b0d095a600207645bc8389eec97eb69de9b931afd924ab5cf30190b182a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 28
+          }
+        },
+        {
+          "id": "e6a31058d21395f6127aeefe486c1ed85ca71478cd46440ea485e732c69c1192",
+          "from": "file:3282d843352f27f3287645857c9d187f9a45afbfa0609704131cb7dfc172a33a",
+          "to": "sym:01be2b0d095a600207645bc8389eec97eb69de9b931afd924ab5cf30190b182a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/declarations.ts",
+            "line": 28
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/lexical-multi.ts": {
+    "path": "src/p1a/lexical-multi.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/lexical-multi.ts",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:386f30b4d6e97f3ff3bb0e92e36e2ee210ac6e53f5f1b5432ddf6d545350ec9a",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "a",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 9
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:08cf769c3e64522811d00c9f4b58b4d5bafede65de079fa9465c8cd848a3448c",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "b",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 9
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:8a0ff09bad3545ba87697703bcebd121afe2c070da2dea30ed5230678adfd4e9",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "c",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 9
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:45e385f2264e1a8acc179f86dec9ba2a7c7cbadb3888a3cfbbb0ee5c3c03fe06",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "d",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 7,
+            "start_col": 8,
+            "end_line": 8,
+            "end_col": 10
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:00d4043fd02d0e43343e82922a92acae163c34bd32e268bac34ef05209bf938a",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "e",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 7,
+            "start_col": 8,
+            "end_line": 8,
+            "end_col": 10
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:1eb9a111febe3273e02bbbe133dfbc0e3ea22fb988c1a33ab5d7ea49bf81631f",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "mutableX",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 11,
+            "end_col": 16
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d67168c1d761b2bcc2d925f2006bd67916f83e2165a1434bb2939da2ee0bcf36",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "mutableY",
+          "path": "src/p1a/lexical-multi.ts",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 11,
+            "end_col": 16
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "55ca75c6f61aff98eb47eadca4a40a570961869928cdc067a5ad64770fa62aae",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:386f30b4d6e97f3ff3bb0e92e36e2ee210ac6e53f5f1b5432ddf6d545350ec9a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "f4b72f444616da63d3177d7c9ceefa5d1f4139c5d3332a697eafc579dd17c650",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:386f30b4d6e97f3ff3bb0e92e36e2ee210ac6e53f5f1b5432ddf6d545350ec9a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "b7563c04cf4fd6c353ecbaf0ad06d5141474d93e04b1be66267f5fc65b6cc24a",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:08cf769c3e64522811d00c9f4b58b4d5bafede65de079fa9465c8cd848a3448c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "44d37bfb5b05f2352a39f8ebf3c4b9e311a8c0eb1adcaae81b4ba4ec0789d3c9",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:08cf769c3e64522811d00c9f4b58b4d5bafede65de079fa9465c8cd848a3448c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "48ba83a7e63e47fb646ffff618df963897aa7314e3a42b76403b8cfed06cfc45",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:8a0ff09bad3545ba87697703bcebd121afe2c070da2dea30ed5230678adfd4e9",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "f0629d7908dfdd4cc061cab71fef9cadda08e8e3a286f464f0f9afff9bc8942f",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:8a0ff09bad3545ba87697703bcebd121afe2c070da2dea30ed5230678adfd4e9",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "a06b72fdc64e2136a67401f68411893a09d44afbb6ee5a4b028c3cc111495870",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:45e385f2264e1a8acc179f86dec9ba2a7c7cbadb3888a3cfbbb0ee5c3c03fe06",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 7
+          }
+        },
+        {
+          "id": "0afd21ecfb7211bc0a1c59e79f51f66d5b43bb21bb8180245a2c5cedfd9d8639",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:45e385f2264e1a8acc179f86dec9ba2a7c7cbadb3888a3cfbbb0ee5c3c03fe06",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 7
+          }
+        },
+        {
+          "id": "9a90d6008d0aa090ae30713dd8b977ccbe6f8aadcf16c1ab45223b4427b8e3fa",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:00d4043fd02d0e43343e82922a92acae163c34bd32e268bac34ef05209bf938a",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 7
+          }
+        },
+        {
+          "id": "6f2dd356c0d32d857ee2b79ee4f6faeaeda666a6c12852ef6343a704a082be85",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:00d4043fd02d0e43343e82922a92acae163c34bd32e268bac34ef05209bf938a",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 7
+          }
+        },
+        {
+          "id": "cdecb5a3a49c0097f526bc783b694df3a617066887a43978371bf951b35cfda1",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:1eb9a111febe3273e02bbbe133dfbc0e3ea22fb988c1a33ab5d7ea49bf81631f",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "a7cab3e9f35c1601065c8c6468df8516d1e0473409aad5fdd969553b86ca358a",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:1eb9a111febe3273e02bbbe133dfbc0e3ea22fb988c1a33ab5d7ea49bf81631f",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "289399d4086cccb4cafd1e68dcba7d6c1775fec82b4c655d08d191f1c0e97aed",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:d67168c1d761b2bcc2d925f2006bd67916f83e2165a1434bb2939da2ee0bcf36",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "7cb34182da7bec71d9336890c89a076e21204cc4085221991a82f6db99629538",
+          "from": "file:7fe260d15ef9ddfbd00d4aa68e874406c9e75b2386406b1f77ec144bdc5d142a",
+          "to": "sym:d67168c1d761b2bcc2d925f2006bd67916f83e2165a1434bb2939da2ee0bcf36",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/lexical-multi.ts",
+            "line": 10
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/arrow-var.ts": {
+    "path": "src/p1a/arrow-var.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/arrow-var.ts",
+          "path": "src/p1a/arrow-var.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:7168f0f7064dd0e3ba53a018cc05b60f69413f43baacc07fff0245aae8affd83",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "addArrow",
+          "path": "src/p1a/arrow-var.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 58
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fe65116e66c721eca755e56590cd054b9cb00ff0a887c806945bc10dc0a49f4c",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "multiplyArrow",
+          "path": "src/p1a/arrow-var.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 8,
+            "end_line": 4,
+            "end_col": 70
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:927748cc083ff64216c6b480cde9d26bbb52f60998528630d9176fd3ac674163",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "plainValue",
+          "path": "src/p1a/arrow-var.ts",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 23
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d749d7295078ab14c94f0ed27fe39e6735d895bc56c248e8337329583f5dc22c",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "legacyVar",
+          "path": "src/p1a/arrow-var.ts",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 23
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:e02e0e2ad889cba209bfdc519b3726213ac1d03524aab688d7adbc6a72dd6570",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "fnExpr",
+          "path": "src/p1a/arrow-var.ts",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 12,
+            "end_col": 3
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "3e377e0ad683c7a9bcee82370a1fb3883a41e0882bd84b48ac7ba5bc77273c73",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:7168f0f7064dd0e3ba53a018cc05b60f69413f43baacc07fff0245aae8affd83",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "53e9745da7a53fb1247a5cac72409917e34fca9f67ff852840183b584c6624b9",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:7168f0f7064dd0e3ba53a018cc05b60f69413f43baacc07fff0245aae8affd83",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "194c9f7b09a32b7d040d2692626a28ae00105e1c10c48895d8e8930bf51d6ea0",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:fe65116e66c721eca755e56590cd054b9cb00ff0a887c806945bc10dc0a49f4c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "9bf5aaae5f55d212031e8bd8e5387cea9c4db0aa116136bc4fa90bb348715c3b",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:fe65116e66c721eca755e56590cd054b9cb00ff0a887c806945bc10dc0a49f4c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "1ad176df0ee0b4778a45d6776302ac6fe8e82a0a36471a49d466e4033a9100e5",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:927748cc083ff64216c6b480cde9d26bbb52f60998528630d9176fd3ac674163",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "80f42df6eb400ff9e3da4670c5bd0bd06dc16bc336c91b0780c848778b949a7c",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:927748cc083ff64216c6b480cde9d26bbb52f60998528630d9176fd3ac674163",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "7d3e8fd652d92feac4039ec4cfbeaa3d81f23bc047ffc18995e548f8ddfc40dc",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:d749d7295078ab14c94f0ed27fe39e6735d895bc56c248e8337329583f5dc22c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 8
+          }
+        },
+        {
+          "id": "81f91395450b33487e6938bb86403a5ffdeb9f2c4b8dedaa3a2cf5064b4cb3d5",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:d749d7295078ab14c94f0ed27fe39e6735d895bc56c248e8337329583f5dc22c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 8
+          }
+        },
+        {
+          "id": "9d3eb62b81cf129b607d430afa0cdb084c0d57535908b5c7e16a4c8e7041beba",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:e02e0e2ad889cba209bfdc519b3726213ac1d03524aab688d7adbc6a72dd6570",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 10
+          }
+        },
+        {
+          "id": "aefd35a55832f81b69b38c52d4dbb53200af88beab1e89766fb896160e55636a",
+          "from": "file:b99f8bc55dc2c67dbf17c4e30f0461566ffceeb27ce42491b2b73676a3df7f68",
+          "to": "sym:e02e0e2ad889cba209bfdc519b3726213ac1d03524aab688d7adbc6a72dd6570",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/arrow-var.ts",
+            "line": 10
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/react-component.tsx": {
+    "path": "src/p1a/react-component.tsx",
+    "lang": "tsx",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "kind": "file",
+          "subtype": null,
+          "lang": "tsx",
+          "name": "src/p1a/react-component.tsx",
+          "path": "src/p1a/react-component.tsx",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:4a9ab2f52d396d381c4b4f3d0007fdb1fab89b53e1a642543a687cc41c79c752",
+          "kind": "module",
+          "subtype": null,
+          "lang": "tsx",
+          "name": "react",
+          "path": "src/p1a/react-component.tsx",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 42
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "default",
+            "useEffect"
+          ]
+        },
+        {
+          "id": "sym:116a0a07bbcef407e057aa60542fb0fafbe85db94e00d0391b71e97b55e694d4",
+          "kind": "symbol",
+          "subtype": "hook",
+          "lang": "tsx",
+          "name": "useAuth",
+          "path": "src/p1a/react-component.tsx",
+          "span": {
+            "start_line": 4,
+            "start_col": 8,
+            "end_line": 8,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b725012d20592d7d4c806dd449af7cc3f434e5a561ed777559c641719527a13e",
+          "kind": "symbol",
+          "subtype": "component",
+          "lang": "tsx",
+          "name": "Panel",
+          "path": "src/p1a/react-component.tsx",
+          "span": {
+            "start_line": 10,
+            "start_col": 8,
+            "end_line": 13,
+            "end_col": 3
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d269dc9b153b8120b57eebec4d08dc97e8a955d0045c98036e0b0dd5cb906e07",
+          "kind": "symbol",
+          "subtype": "component",
+          "lang": "tsx",
+          "name": "Widget",
+          "path": "src/p1a/react-component.tsx",
+          "span": {
+            "start_line": 15,
+            "start_col": 1,
+            "end_line": 17,
+            "end_col": 2
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:6974225904303d5b7cb328256416332f2fb7b0a10d36410f9d604fc2a638fe49",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "tsx",
+          "name": "notAComponent",
+          "path": "src/p1a/react-component.tsx",
+          "span": {
+            "start_line": 19,
+            "start_col": 1,
+            "end_line": 19,
+            "end_col": 32
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "1ac0fcf532175da104fb093d114baaeb462398d4be7846ac94c308c0845ffd9e",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "module:4a9ab2f52d396d381c4b4f3d0007fdb1fab89b53e1a642543a687cc41c79c752",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 2
+          }
+        },
+        {
+          "id": "d51a90adb88446d8f2b45aa23900d73220df6689f25644264eaf61884e8aa0c9",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:116a0a07bbcef407e057aa60542fb0fafbe85db94e00d0391b71e97b55e694d4",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 4
+          }
+        },
+        {
+          "id": "7f06623e9c2031158b878016f01e55314c8fb7c0b27ebf15e24efe8b814108ac",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:116a0a07bbcef407e057aa60542fb0fafbe85db94e00d0391b71e97b55e694d4",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 4
+          }
+        },
+        {
+          "id": "9f2de86ecc25fef5c6e0a4d41e67b141ee2c86a6133de2a17a9182f2ee0af158",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:b725012d20592d7d4c806dd449af7cc3f434e5a561ed777559c641719527a13e",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 10
+          }
+        },
+        {
+          "id": "279a6832a0ff447727931f88adcc34504b77e0df4d383e8dc37bfae33923b6a4",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:b725012d20592d7d4c806dd449af7cc3f434e5a561ed777559c641719527a13e",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 10
+          }
+        },
+        {
+          "id": "4a354006cfdbd846425c26647c4655570f8d9a6283e2187ad5e70de4129fdb1e",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:d269dc9b153b8120b57eebec4d08dc97e8a955d0045c98036e0b0dd5cb906e07",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 15
+          }
+        },
+        {
+          "id": "44ea93d9955df2f130bd2b071d1fc865f9da1eb2ae94977ede3a134eda4c815e",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:d269dc9b153b8120b57eebec4d08dc97e8a955d0045c98036e0b0dd5cb906e07",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 15
+          }
+        },
+        {
+          "id": "e762d4dc5b22d4f63d72dede775f57b8d916939eb6d09a1964a7a52aca20dd5c",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:6974225904303d5b7cb328256416332f2fb7b0a10d36410f9d604fc2a638fe49",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 19
+          }
+        },
+        {
+          "id": "798fe8cea8505d77faa5d54e3df010ca9fc2cc321a274dd5171f3fe4007f01de",
+          "from": "file:9e08e4feef91786fc075d436c6f23a98e96239874c7e178a2d6bc83d330b20bc",
+          "to": "sym:6974225904303d5b7cb328256416332f2fb7b0a10d36410f9d604fc2a638fe49",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/react-component.tsx",
+            "line": 19
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/imports-basic.ts": {
+    "path": "src/p1a/imports-basic.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:a1622810e6cc62a337fe90c685cee859fd35f90dc8f56e1f8315e7650f0e44bf",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/imports-basic.ts",
+          "path": "src/p1a/imports-basic.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:381caae9425c4cd75a1a4a328eddc5c7eb32b5dc61275145dbf46ee70d7865ca",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "node:fs",
+          "path": "src/p1a/imports-basic.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 40
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "readFileSync"
+          ]
+        },
+        {
+          "id": "module:a7673793abe2abda4a00430cf0f75364e531a1f3a730dc0cb0c651f4f8c645b6",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./helper",
+          "path": "src/p1a/imports-basic.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "default"
+          ]
+        },
+        {
+          "id": "module:c80bc20eb00ac4a6978c5da78d9bfa79c0f5311fe27da45f49ae5057e390991f",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./utils",
+          "path": "src/p1a/imports-basic.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "*"
+          ]
+        },
+        {
+          "id": "module:70694d20f48ae0954397b95192bd1afbee7c075243ac1c547de804178f2f00f5",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "node:path",
+          "path": "src/p1a/imports-basic.ts",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 43
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "join",
+            "resolve"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "2af6dc9dc556a399b74c8c88493d81c9e3b7fa58d5e91902e7f5f27db1615f5f",
+          "from": "file:a1622810e6cc62a337fe90c685cee859fd35f90dc8f56e1f8315e7650f0e44bf",
+          "to": "module:381caae9425c4cd75a1a4a328eddc5c7eb32b5dc61275145dbf46ee70d7865ca",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-basic.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "e1a62264b8724ccdd70ac57542a28fe75832e21ab264e358f253285711703017",
+          "from": "file:a1622810e6cc62a337fe90c685cee859fd35f90dc8f56e1f8315e7650f0e44bf",
+          "to": "module:a7673793abe2abda4a00430cf0f75364e531a1f3a730dc0cb0c651f4f8c645b6",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-basic.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "b7c2a5b637e6daf9dfc67dd5badb6335063d8ab3dc99a128a604fd54b074b017",
+          "from": "file:a1622810e6cc62a337fe90c685cee859fd35f90dc8f56e1f8315e7650f0e44bf",
+          "to": "module:c80bc20eb00ac4a6978c5da78d9bfa79c0f5311fe27da45f49ae5057e390991f",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-basic.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "d1caf4be33c1a168e5b310545554bb8ee6cc266e6664c72dcf568b268d7134b9",
+          "from": "file:a1622810e6cc62a337fe90c685cee859fd35f90dc8f56e1f8315e7650f0e44bf",
+          "to": "module:70694d20f48ae0954397b95192bd1afbee7c075243ac1c547de804178f2f00f5",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-basic.ts",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/imports-multiple.ts": {
+    "path": "src/p1a/imports-multiple.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:6d335ed376a5700bc906f5e30214551c857ebc8bbd1fd37e23c8793327fe992f",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/imports-multiple.ts",
+          "path": "src/p1a/imports-multiple.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:d665a1dcf66937729cc4e508acf04eb959a9d184d2f485b6e4095b0f43884f6a",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./shared",
+          "path": "src/p1a/imports-multiple.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 30
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "a"
+          ]
+        },
+        {
+          "id": "module:7da11c315edba37207517b1f39adefa713093d94e07f26e3f3e472bc5845146f",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./shared",
+          "path": "src/p1a/imports-multiple.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 30
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "b"
+          ]
+        },
+        {
+          "id": "module:4c6e8382ab12d88e88a816af82dd4523cdfc701d3edd3d85659f381d24cc9203",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./shared",
+          "path": "src/p1a/imports-multiple.ts",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 38
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "default"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "632699e79b545b5ce1322fd2bff631483adc541561817f0b6aec33f4f1c7b817",
+          "from": "file:6d335ed376a5700bc906f5e30214551c857ebc8bbd1fd37e23c8793327fe992f",
+          "to": "module:d665a1dcf66937729cc4e508acf04eb959a9d184d2f485b6e4095b0f43884f6a",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-multiple.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "f055ed6b2bf1f52f3a72bfb0049b14a2d691cfed2222de866254a2b97f43daf4",
+          "from": "file:6d335ed376a5700bc906f5e30214551c857ebc8bbd1fd37e23c8793327fe992f",
+          "to": "module:7da11c315edba37207517b1f39adefa713093d94e07f26e3f3e472bc5845146f",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-multiple.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "18fcfd35ead328a0683712496f203f1069763943cf87820921623b69b09be209",
+          "from": "file:6d335ed376a5700bc906f5e30214551c857ebc8bbd1fd37e23c8793327fe992f",
+          "to": "module:4c6e8382ab12d88e88a816af82dd4523cdfc701d3edd3d85659f381d24cc9203",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/imports-multiple.ts",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/export-declarations.ts": {
+    "path": "src/p1a/export-declarations.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/export-declarations.ts",
+          "path": "src/p1a/export-declarations.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:0ddc98cb74b913f4b13893d437a0451531e325e1d59fa1f0eb7677439549a975",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "exportedFn",
+          "path": "src/p1a/export-declarations.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 8,
+            "end_line": 2,
+            "end_col": 38
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:db570f673fece627c57917517f7185ba44f359455687f20e010625b00a4d33a9",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "typescript",
+          "name": "ExportedClass",
+          "path": "src/p1a/export-declarations.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 8,
+            "end_line": 4,
+            "end_col": 30
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:e3640fcc9250f891d718a6be392e2f2ef552c2f8aa3b739a572157a7bac6ba96",
+          "kind": "symbol",
+          "subtype": "type",
+          "lang": "typescript",
+          "name": "ExportedType",
+          "path": "src/p1a/export-declarations.ts",
+          "span": {
+            "start_line": 6,
+            "start_col": 8,
+            "end_line": 6,
+            "end_col": 35
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:3aff291ab61cdb3e4a04a46f788d937017dda49104a82e9601565ca4f21ec42f",
+          "kind": "symbol",
+          "subtype": "interface",
+          "lang": "typescript",
+          "name": "ExportedIface",
+          "path": "src/p1a/export-declarations.ts",
+          "span": {
+            "start_line": 8,
+            "start_col": 8,
+            "end_line": 10,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:5ce43ef7987f35ef004d1ccf70a8a5d59bde2bfa32daadd8deee36a6d7bd524b",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "exportedConst",
+          "path": "src/p1a/export-declarations.ts",
+          "span": {
+            "start_line": 12,
+            "start_col": 8,
+            "end_line": 12,
+            "end_col": 32
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "7228455281760cb41df39b26e79582e515f8a35c26b1624b83aaa2289bda858e",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:0ddc98cb74b913f4b13893d437a0451531e325e1d59fa1f0eb7677439549a975",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "d15220451bdcfc20e6160b971bb54f2d484ed40282baee20846a9683a2d0d7e0",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:0ddc98cb74b913f4b13893d437a0451531e325e1d59fa1f0eb7677439549a975",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "497eb2f1b07c44a24eafec7a6a34aac028c750f85dbc159b366edc2bfaeac64d",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:db570f673fece627c57917517f7185ba44f359455687f20e010625b00a4d33a9",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "8c867fa0db4366ffb48b0eb7861299948b25dc14be83e481de5d26cf6b963498",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:db570f673fece627c57917517f7185ba44f359455687f20e010625b00a4d33a9",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "52eb9a4be23d344dc91d3a143dac3e29f8ea7df2e39ad452d20b373789efc84b",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:e3640fcc9250f891d718a6be392e2f2ef552c2f8aa3b739a572157a7bac6ba96",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "5795b1c47cfd2177eeb8b771e030e276a8d5709381a71662a01ae83b34be8b4b",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:e3640fcc9250f891d718a6be392e2f2ef552c2f8aa3b739a572157a7bac6ba96",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "6242e23b037d2114d55de89e91334d300a0f0bd942466f240e3af39afc0bd071",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:3aff291ab61cdb3e4a04a46f788d937017dda49104a82e9601565ca4f21ec42f",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 8
+          }
+        },
+        {
+          "id": "11f0150a8ba00a0968fad38eeb9412a0316d85107e6be584b92870a88be3a18b",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:3aff291ab61cdb3e4a04a46f788d937017dda49104a82e9601565ca4f21ec42f",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 8
+          }
+        },
+        {
+          "id": "72dd3d7ef3f4ce22c01a154142ad9e2577563a96930cbcacfb3f26caa1ee9081",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:5ce43ef7987f35ef004d1ccf70a8a5d59bde2bfa32daadd8deee36a6d7bd524b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 12
+          }
+        },
+        {
+          "id": "72c10deeeabb1bab6376900d01dd1b1a87f9f517385d4b4248ab7622ce67c368",
+          "from": "file:b81fec7aff180fa2a7a31b7edc111f0b67f8b3ebd480734fb35a66dd9d253f5f",
+          "to": "sym:5ce43ef7987f35ef004d1ccf70a8a5d59bde2bfa32daadd8deee36a6d7bd524b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-declarations.ts",
+            "line": 12
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/export-clause-after.ts": {
+    "path": "src/p1a/export-clause-after.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/export-clause-after.ts",
+          "path": "src/p1a/export-clause-after.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b68bd1e3f286d04363c6d41f2ced5910a984c208250a7972f16f15a91ad623c7",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "alpha",
+          "path": "src/p1a/export-clause-after.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 26
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:11b510650cf9f756b66d50c421387b849f971e4c748eee92daf2f0b2cd120ca4",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "beta",
+          "path": "src/p1a/export-clause-after.ts",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 16
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "d5eddcf55493ee10e3767ab30a22c400637589538a767eaa7e0036cc06ab7eb5",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:b68bd1e3f286d04363c6d41f2ced5910a984c208250a7972f16f15a91ad623c7",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "919b258cdc30df5044b2f0012c0701f6e7b5441cbba66cfba702c78ea4702afe",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:b68bd1e3f286d04363c6d41f2ced5910a984c208250a7972f16f15a91ad623c7",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "0c9586e956b1dcc833a72ba54f0917232a9b3e22a6b04a019153d8d59582b674",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:11b510650cf9f756b66d50c421387b849f971e4c748eee92daf2f0b2cd120ca4",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 5
+          }
+        },
+        {
+          "id": "2d19d92813427b2bc4b4e419ac432aba7749218da1b8743edc55050a06f92090",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:11b510650cf9f756b66d50c421387b849f971e4c748eee92daf2f0b2cd120ca4",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 5
+          }
+        },
+        {
+          "id": "4a54b21dd12a4fd069e82503f315f9f530410364a14eda13aa33a536082e36be",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:b68bd1e3f286d04363c6d41f2ced5910a984c208250a7972f16f15a91ad623c7",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 7
+          }
+        },
+        {
+          "id": "bb4ef6194056ab7d0af41c286a7be50e55061670da3696029a9fe0c1aaf7f445",
+          "from": "file:046f5932ca38c111fda85b9c0a51af46d230e6e21b5f8dea67a2e093688a4dc2",
+          "to": "sym:11b510650cf9f756b66d50c421387b849f971e4c748eee92daf2f0b2cd120ca4",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-after.ts",
+            "line": 7
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/export-clause-before.ts": {
+    "path": "src/p1a/export-clause-before.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/export-clause-before.ts",
+          "path": "src/p1a/export-clause-before.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:04ee7aadc1709931650756d269356c4733b75971824fecf3fdbc47a6fc0150f9",
+          "kind": "symbol",
+          "subtype": "export",
+          "lang": "typescript",
+          "name": "gamma",
+          "path": "src/p1a/export-clause-before.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 25
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:ad924689eca162b37f122a8f6fa4f3a25f40543e7b3cf75117c1e8ffe1028904",
+          "kind": "symbol",
+          "subtype": "export",
+          "lang": "typescript",
+          "name": "delta",
+          "path": "src/p1a/export-clause-before.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 25
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:b43fca4c7010f2e5d59f7569d503c9e301e5ad9338f1af733d68b0ef7ac0e51b",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "gamma",
+          "path": "src/p1a/export-clause-before.ts",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 26
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:5604d12494b5e9564bc8fcc48f7e945aea53428e9e41fd7978c9e158b9beb14b",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "typescript",
+          "name": "delta",
+          "path": "src/p1a/export-clause-before.ts",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "3601223dcc592b364d430257e390624e7721154383419ef5f83a9e6a16c7152e",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:04ee7aadc1709931650756d269356c4733b75971824fecf3fdbc47a6fc0150f9",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "0a9f18c695c541f0f56addbe70e94fbb4bd74aed55bb2122dae66f0d135f0d68",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:04ee7aadc1709931650756d269356c4733b75971824fecf3fdbc47a6fc0150f9",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "1f6eb670a931bca805d1330e4a549bcf5b90b2ea577cd85e0aff159869888f50",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:04ee7aadc1709931650756d269356c4733b75971824fecf3fdbc47a6fc0150f9",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "67acdef6990a06f2380cb6b391b447902996ef376bf94381e2504d8acb237931",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:ad924689eca162b37f122a8f6fa4f3a25f40543e7b3cf75117c1e8ffe1028904",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "e2f906d65e33176a0f5bc7e75397befb865e3989a105d365c8e01d9c212aefb9",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:ad924689eca162b37f122a8f6fa4f3a25f40543e7b3cf75117c1e8ffe1028904",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "227f0fc18be6eefe24c021965f5a3553de954375065067942c097627e3cb05f1",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:ad924689eca162b37f122a8f6fa4f3a25f40543e7b3cf75117c1e8ffe1028904",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "5d64a4acb58bf46b6da3c258d8d27319752e3a50e2c2d076cbd229c95fb74cb2",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:b43fca4c7010f2e5d59f7569d503c9e301e5ad9338f1af733d68b0ef7ac0e51b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "a02a4a6f062a7f554762fab4c071eed70da3fac7752c38764c1301784ebe758c",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:b43fca4c7010f2e5d59f7569d503c9e301e5ad9338f1af733d68b0ef7ac0e51b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 6
+          }
+        },
+        {
+          "id": "bb5e59f6ee24a6067efea91c1205cd6b9a9eeba14fcf31ce195e4df6683efc98",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:5604d12494b5e9564bc8fcc48f7e945aea53428e9e41fd7978c9e158b9beb14b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 8
+          }
+        },
+        {
+          "id": "3a6de414677b7fcf8de2c7a9f07f16d55d7b715d82302fc0a7b58e70bbdf3d88",
+          "from": "file:a54fec0899bd374a62df7a2e0c7685974c5b6e2930f5085bc96f6616fd6aebc9",
+          "to": "sym:5604d12494b5e9564bc8fcc48f7e945aea53428e9e41fd7978c9e158b9beb14b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/export-clause-before.ts",
+            "line": 8
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/alias.ts": {
+    "path": "src/p1a/alias.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:43c2280c4310349f134ae12bef676a163d82837c2e6078c20fd12908fc4c31ae",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/alias.ts",
+          "path": "src/p1a/alias.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:0a2ae4a922ad1e1cea1601c3cff037440a9db8dd9c60236c37fe3dce84bc3dae",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./source",
+          "path": "src/p1a/alias.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 60
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "original",
+            "other"
+          ]
+        },
+        {
+          "id": "sym:66387a14e0c0555c7b65fac01028a854f5ccc156a26386e4e51d3158944307b5",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "localThing",
+          "path": "src/p1a/alias.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 31
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "f36e3e82a6baeea43e1891ef6bc3354baf79561a73750c85f7aa9466e0282059",
+          "from": "file:43c2280c4310349f134ae12bef676a163d82837c2e6078c20fd12908fc4c31ae",
+          "to": "module:0a2ae4a922ad1e1cea1601c3cff037440a9db8dd9c60236c37fe3dce84bc3dae",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/alias.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "c23905a13f18e2f96f3c56922051d515297220cf9bfe02dc5f5e9dcf3c99660b",
+          "from": "file:43c2280c4310349f134ae12bef676a163d82837c2e6078c20fd12908fc4c31ae",
+          "to": "sym:66387a14e0c0555c7b65fac01028a854f5ccc156a26386e4e51d3158944307b5",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/alias.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "44fd303c5327b5d45173164c79a0916080a6ade377552b33d8349a0dfdfe69e1",
+          "from": "file:43c2280c4310349f134ae12bef676a163d82837c2e6078c20fd12908fc4c31ae",
+          "to": "sym:66387a14e0c0555c7b65fac01028a854f5ccc156a26386e4e51d3158944307b5",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/alias.ts",
+            "line": 4
+          }
+        },
+        {
+          "id": "9d3a8711a1ecb675e57fa2bcb2e862e3c538dc8c573348c169cec2193afe9048",
+          "from": "file:43c2280c4310349f134ae12bef676a163d82837c2e6078c20fd12908fc4c31ae",
+          "to": "sym:66387a14e0c0555c7b65fac01028a854f5ccc156a26386e4e51d3158944307b5",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/alias.ts",
+            "line": 6
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/reexport.ts": {
+    "path": "src/p1a/reexport.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:e61cf3d747f7beea4c43140c4f688d123785ee685931b05ad96c31bc37676701",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/reexport.ts",
+          "path": "src/p1a/reexport.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:f459ddd612c421aaeeaefd8d867fbb148c385c50a3f8774a31e8f034405df053",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./helper",
+          "path": "src/p1a/reexport.ts",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 47
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "helper",
+            "other"
+          ]
+        },
+        {
+          "id": "module:1c89f3ab0d827d69faa0f072cbf40818d3bb211178884929f553b612a707f4ac",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./star",
+          "path": "src/p1a/reexport.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 24
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "*"
+          ]
+        },
+        {
+          "id": "module:80903eec1fb392669bf7332ead8b246c6b13e4bf5dd95c456d019c468b2c1a4e",
+          "kind": "module",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "./local",
+          "path": "src/p1a/reexport.ts",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 39
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "localImport"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "c7ac522a2c536e2cb38e073955e47ae330267a5b0f693eb1e2d6127480a21d6a",
+          "from": "file:e61cf3d747f7beea4c43140c4f688d123785ee685931b05ad96c31bc37676701",
+          "to": "module:f459ddd612c421aaeeaefd8d867fbb148c385c50a3f8774a31e8f034405df053",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/reexport.ts",
+            "line": 2
+          }
+        },
+        {
+          "id": "eadc85c58a267519894260500fd128e6fb1b6e579a7159bae205877cc42c92ab",
+          "from": "file:e61cf3d747f7beea4c43140c4f688d123785ee685931b05ad96c31bc37676701",
+          "to": "module:1c89f3ab0d827d69faa0f072cbf40818d3bb211178884929f553b612a707f4ac",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/reexport.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "71d8fc78d671436d50bde422a62233e24630de4e5ba5ea393a2b88cd22aed108",
+          "from": "file:e61cf3d747f7beea4c43140c4f688d123785ee685931b05ad96c31bc37676701",
+          "to": "module:80903eec1fb392669bf7332ead8b246c6b13e4bf5dd95c456d019c468b2c1a4e",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/reexport.ts",
+            "line": 4
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/default-export.ts": {
+    "path": "src/p1a/default-export.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:cc21b83d7a6fe72413939a8086835aaa830977b33a460ac16cea938c3f536fb9",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/default-export.ts",
+          "path": "src/p1a/default-export.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:36c9d42f5517a5d253b31550f2908b3d03c1a079e456d2def824549761f913ee",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "typescript",
+          "name": "mainEntry",
+          "path": "src/p1a/default-export.ts",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 30
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "8fc6f6637250def37b6f7811276c7f96712b69ae63d603b727ef178d52d9c1b4",
+          "from": "file:cc21b83d7a6fe72413939a8086835aaa830977b33a460ac16cea938c3f536fb9",
+          "to": "sym:36c9d42f5517a5d253b31550f2908b3d03c1a079e456d2def824549761f913ee",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/default-export.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "1ceddb40367935bf9d0cf8c00e6307e79b234452bad36f8b6e48511ce7f16771",
+          "from": "file:cc21b83d7a6fe72413939a8086835aaa830977b33a460ac16cea938c3f536fb9",
+          "to": "sym:36c9d42f5517a5d253b31550f2908b3d03c1a079e456d2def824549761f913ee",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/default-export.ts",
+            "line": 3
+          }
+        },
+        {
+          "id": "4703ae5d432609d114aebd8a0d4034e660eb5e99a7381a9b3a68840b0384d018",
+          "from": "file:cc21b83d7a6fe72413939a8086835aaa830977b33a460ac16cea938c3f536fb9",
+          "to": "sym:36c9d42f5517a5d253b31550f2908b3d03c1a079e456d2def824549761f913ee",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/default-export.ts",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/syntax-error.ts": {
+    "path": "src/p1a/syntax-error.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "parse_error",
+      "nodes": [
+        {
+          "id": "file:eec460110a1c9f4c0ca136ffcf15516d73e583c114d7ef3b8c6e54151b795fbe",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/syntax-error.ts",
+          "path": "src/p1a/syntax-error.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    }
+  },
+  "src/p1a/oversized.ts": {
+    "path": "src/p1a/oversized.ts",
+    "lang": "typescript",
+    "result": {
+      "parseStatus": "skipped_too_large",
+      "nodes": [
+        {
+          "id": "file:0676da96447a6b7af74d803356420492cdfe4b04d5b2c09c240880fc7933aec2",
+          "kind": "file",
+          "subtype": null,
+          "lang": "typescript",
+          "name": "src/p1a/oversized.ts",
+          "path": "src/p1a/oversized.ts",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    }
+  },
+  "src/p1a/plain.js": {
+    "path": "src/p1a/plain.js",
+    "lang": "javascript",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "kind": "file",
+          "subtype": null,
+          "lang": "javascript",
+          "name": "src/p1a/plain.js",
+          "path": "src/p1a/plain.js",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:1be87462b026f685800acf605052d058fa55b81560dd450bb8a8fadc08a57687",
+          "kind": "module",
+          "subtype": null,
+          "lang": "javascript",
+          "name": "react",
+          "path": "src/p1a/plain.js",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 34
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "useState"
+          ]
+        },
+        {
+          "id": "sym:11c580299e7d0319cbbec0fc78b43ee67790fe4980c2b2b542d1c234dadeede8",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "javascript",
+          "name": "makeCounter",
+          "path": "src/p1a/plain.js",
+          "span": {
+            "start_line": 4,
+            "start_col": 8,
+            "end_line": 6,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:a6231d2f4f6622119d55931a729604452ff96f77e3597479fb51b001727de07b",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "javascript",
+          "name": "PI",
+          "path": "src/p1a/plain.js",
+          "span": {
+            "start_line": 8,
+            "start_col": 8,
+            "end_line": 8,
+            "end_col": 24
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:8ec9b27a7e60eaa00a0a2751a8868fcd24107f298ddf7d221294845efa329fd5",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "javascript",
+          "name": "localOnly",
+          "path": "src/p1a/plain.js",
+          "span": {
+            "start_line": 10,
+            "start_col": 1,
+            "end_line": 10,
+            "end_col": 21
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "06e27d94da4e8f3147dc71a0e3348af48d11dcc375482212dd10d3956931357b",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "module:1be87462b026f685800acf605052d058fa55b81560dd450bb8a8fadc08a57687",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 2
+          }
+        },
+        {
+          "id": "d472532562e827be65e8fd4659c9c4ed83573171389f51081e5316b78e1973ae",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:11c580299e7d0319cbbec0fc78b43ee67790fe4980c2b2b542d1c234dadeede8",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 4
+          }
+        },
+        {
+          "id": "771f02d83febefcf911dcb043bcf0e680f69b8e07967503e1ba6d83308106089",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:11c580299e7d0319cbbec0fc78b43ee67790fe4980c2b2b542d1c234dadeede8",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 4
+          }
+        },
+        {
+          "id": "198684e9f1954b224ddd48ec4e754b5d4d701481c5593b156330c450e7df7883",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:a6231d2f4f6622119d55931a729604452ff96f77e3597479fb51b001727de07b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 8
+          }
+        },
+        {
+          "id": "401087eef96ea822aedb03a4898731306f980214fdb23e92ff3fcadae9620c85",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:a6231d2f4f6622119d55931a729604452ff96f77e3597479fb51b001727de07b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 8
+          }
+        },
+        {
+          "id": "ddf5d6cc94d50dbe27d39f59a2e2be85310dc14ccaf695598812a893000c2a18",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:8ec9b27a7e60eaa00a0a2751a8868fcd24107f298ddf7d221294845efa329fd5",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 10
+          }
+        },
+        {
+          "id": "08ddfbee20b84765081f59047ae0b2ce3d97596f92b0c6c01362c6845b7fd320",
+          "from": "file:4b58ca181aa31a3e928724d9aeca5b3b72fb19a31d2c522d3bd783ae3fd2871c",
+          "to": "sym:8ec9b27a7e60eaa00a0a2751a8868fcd24107f298ddf7d221294845efa329fd5",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/plain.js",
+            "line": 10
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1a/component.jsx": {
+    "path": "src/p1a/component.jsx",
+    "lang": "tsx",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "kind": "file",
+          "subtype": null,
+          "lang": "tsx",
+          "name": "src/p1a/component.jsx",
+          "path": "src/p1a/component.jsx",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:4a338251c5f8eeae939e72f71cc7edf9a38c9b408524a45ef3e84e3d0a171d28",
+          "kind": "module",
+          "subtype": null,
+          "lang": "tsx",
+          "name": "react",
+          "path": "src/p1a/component.jsx",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 27
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "default"
+          ]
+        },
+        {
+          "id": "sym:a58d2e55cec703d0e6d7fbf75c9d4111a42ba09ab4409d64fe09ad3edae11142",
+          "kind": "symbol",
+          "subtype": "hook",
+          "lang": "tsx",
+          "name": "useToggle",
+          "path": "src/p1a/component.jsx",
+          "span": {
+            "start_line": 4,
+            "start_col": 8,
+            "end_line": 6,
+            "end_col": 2
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:cf62f7efd79276371a6fddd657b55aa81bbaa43fe1eb7f6fbc6dfbc6529b9b96",
+          "kind": "symbol",
+          "subtype": "component",
+          "lang": "tsx",
+          "name": "Box",
+          "path": "src/p1a/component.jsx",
+          "span": {
+            "start_line": 8,
+            "start_col": 8,
+            "end_line": 10,
+            "end_col": 3
+          },
+          "exported": true,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "2c6d52cd644c921bb399b64021b0d93d74e9e8476f9a2bed7c9253155e6bb562",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "module:4a338251c5f8eeae939e72f71cc7edf9a38c9b408524a45ef3e84e3d0a171d28",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 2
+          }
+        },
+        {
+          "id": "6613c35d1154aef3b0d81b11e4c57813b0758573407ec34b7c6f5574078e08d5",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:a58d2e55cec703d0e6d7fbf75c9d4111a42ba09ab4409d64fe09ad3edae11142",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 4
+          }
+        },
+        {
+          "id": "4b46462846af1ea19d7b857958db08925ea99bd065e221a00d10a66fe42c8fca",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:a58d2e55cec703d0e6d7fbf75c9d4111a42ba09ab4409d64fe09ad3edae11142",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 4
+          }
+        },
+        {
+          "id": "92f8de80ec764d68d16c51f7ea1430dab00fc25d30db4a46e890fbd88c9f111b",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:cf62f7efd79276371a6fddd657b55aa81bbaa43fe1eb7f6fbc6dfbc6529b9b96",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 8
+          }
+        },
+        {
+          "id": "411e409e3b915e7dbd540c4bb07e275fe10a00cee7c4712297adc6b1250e270b",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:cf62f7efd79276371a6fddd657b55aa81bbaa43fe1eb7f6fbc6dfbc6529b9b96",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 8
+          }
+        },
+        {
+          "id": "09356116fd43fbd0a2dd8284bcdc3d29b2898c7eb2fc6a8cf932f1dad60d70e1",
+          "from": "file:94e1291fa961d6833eac67a45aec0a3787803342e2667a110f198f7d9b9b0583",
+          "to": "sym:cf62f7efd79276371a6fddd657b55aa81bbaa43fe1eb7f6fbc6dfbc6529b9b96",
+          "kind": "exports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1a/component.jsx",
+            "line": 12
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  }
+}

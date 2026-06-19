@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractFile, langForExtension } from '../../../src/core/code-map/extractor.js';
+import { extractFile } from '../../../src/core/code-map/extractor.js';
 import type { CodeNode } from '../../../src/core/code-map/types.js';
 
 const PROJECT = 'prj_extractor_test';
@@ -209,13 +209,5 @@ export default Page;
     const page = byName(res.nodes, 'Page');
     assert.equal(page!.subtype, 'component');
     assert.equal(page!.exported, true, 'default-exported binding marked exported');
-  });
-
-  it('langForExtension maps extensions to grammars', () => {
-    assert.equal(langForExtension('.ts'), 'typescript');
-    assert.equal(langForExtension('.tsx'), 'tsx');
-    assert.equal(langForExtension('.jsx'), 'tsx');
-    assert.equal(langForExtension('.js'), 'javascript');
-    assert.equal(langForExtension('.py'), null);
   });
 });

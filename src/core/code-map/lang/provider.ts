@@ -1,0 +1,164 @@
+/**
+ * Code Map P1a — CodeLanguageProvider / CodeLanguageRegistry interfaces (spec §4).
+ *
+ * A provider declares WHICH languages it owns (by extension + runtime CodeLang),
+ * the parser/query/vocabulary/capability assets it carries, and HOW to turn a
+ * source file into an id-free {@link ExtractionDraft}. Providers NEVER mint final
+ * ids or `CodeNode`/`CodeEdge` objects — that is the CORE finalizer's job
+ * (dec#108 #1). `extractFile` itself lives on the CORE (`core.ts`), not here
+ * (Grok v2 HIGH #1 / Codex P0 #1).
+ *
+ * `resolveImport` is DECLARED but never called in P1a (import resolution EXECUTION
+ * is P1c) — it pins the shape so P1c is additive.
+ */
+import type { CodeLang } from '../types.js';
+import type { CaptureMapping, ProviderVocabularyDeclaration } from '../vocabulary.js';
+import type { ExtractionDraft } from '../drafts.js';
+
+/** Capability tiers a provider can prove against its fixtures (spec §4). */
+export type CapabilityTier =
+  | 'T1.definitions'
+  | 'T2.imports'
+  | 'T3.import_resolution'
+  | 'T4.tests_for';
+
+/**
+ * Input handed to a provider's `extractDraft`. Mirrors the CORE `ExtractInput`
+ * minus the bits the provider does not need (it never mints ids), plus the
+ * resolved runtime `lang` for the path.
+ */
+export interface ProviderExtractInput {
+  readonly projectId: string;
+  /** Normalized POSIX relative path (store identity). */
+  readonly path: string;
+  /** Runtime language resolved via {@link CodeLanguageProvider.langForPath}. */
+  readonly lang: CodeLang;
+  readonly source: string;
+  readonly sizeBytes: number;
+  readonly maxParseFileBytes: number;
+  /** Bounds parse + query execution (NOT refine/finalize). */
+  readonly maxQueryWaitMs?: number;
+}
+
+/**
+ * Per-language parser declaration. `grammarForLang` returns an opaque handle the
+ * runtime feeds to the engine; `grammarVersion`/`grammarHash` feed freshness.
+ */
+export interface ParserDeclaration {
+  /** Resolve the grammar handle for a runtime lang (async — grammar load is lazy). */
+  grammarForLang(lang: CodeLang): Promise<unknown>;
+  /** Stable grammar name per lang (e.g. `tree-sitter-typescript`). */
+  grammarNameForLang(lang: CodeLang): string;
+  /** sha256 of the grammar .wasm per lang (freshness input). */
+  grammarHashForLang(lang: CodeLang): string;
+}
+
+/** A single query asset (tags / imports) + its content hash (freshness input). */
+export interface QueryAssetDeclaration {
+  /** Logical asset name (`tags` | `imports`). */
+  readonly name: 'tags' | 'imports';
+  /** The query source. For grammar subsets a provider may carry per-lang variants. */
+  sourceForLang(lang: CodeLang): string;
+  /** sha256 of the (per-lang) query source — feeds `configHashInputs`. */
+  hashForLang(lang: CodeLang): string;
+}
+
+/**
+ * The provider's query assets + the capture→draft map the generic runtime uses.
+ */
+export interface QueryDeclarations {
+  readonly tags: QueryAssetDeclaration;
+  readonly imports: QueryAssetDeclaration;
+  /** Capture-name → draft-field map (spec §7 captureMap). */
+  readonly captureMap: readonly CaptureMapping[];
+}
+
+/** Per-tier capability declaration; `proven` = a fixture demonstrates it. */
+export interface ProviderCapabilityDeclaration {
+  readonly tiers: readonly CapabilityTier[];
+  readonly proven: Readonly<Record<CapabilityTier, boolean>>;
+}
+
+/** Context handed to `refine()` — drafts-only mutation (spec §4 refine semantics). */
+export interface RefineContext {
+  readonly input: ProviderExtractInput;
+  /** Runtime language for the file. */
+  readonly lang: CodeLang;
+}
+
+/** Services the CORE injects into `extractDraft` (engine seams, kept minimal in P1a). */
+export interface ExtractionServices {
+  /** No-op marker today; reserved so P1b/P1c can inject resolvers without a signature break. */
+  readonly version: string;
+}
+
+/** A P1c import-resolution request (declared-but-unused in P1a). */
+export interface ImportResolutionRequest {
+  readonly source: string;
+  readonly fromPath: string;
+}
+
+/** A P1c import resolution (declared-but-unused in P1a). */
+export interface ImportResolution {
+  readonly source: string;
+  readonly resolvedPath: string | null;
+  readonly confidence: number;
+}
+
+/**
+ * A language provider (spec §4). `id` is a PROVIDER id (a string like `js-ts`),
+ * distinct from a runtime {@link CodeLang}.
+ */
+export interface CodeLanguageProvider {
+  readonly id: string;
+  readonly displayName: string;
+  /** Runtime langs this provider emits, e.g. `['javascript','typescript','tsx']`. */
+  readonly languages: readonly CodeLang[];
+  /** Owned file extensions, e.g. `['.js','.jsx','.ts','.tsx']`. */
+  readonly extensions: readonly string[];
+  /** Extension-collision tiebreak (default 0; higher wins, then registration order). */
+  readonly priority?: number;
+  /** Provider version — feeds freshness via `configHashInputs`. */
+  readonly version: string;
+  readonly parser: ParserDeclaration;
+  readonly queries: QueryDeclarations;
+  readonly vocabulary: ProviderVocabularyDeclaration;
+  readonly capabilities: ProviderCapabilityDeclaration;
+
+  /** Resolve the runtime lang for a path (e.g. `.jsx` → `tsx`, `.js` → `javascript`). */
+  langForPath(path: string): CodeLang;
+
+  /** Produce the id-free draft (delegates to the generic query runtime). */
+  extractDraft(input: ProviderExtractInput, services: ExtractionServices): Promise<ExtractionDraft>;
+
+  /** Optional drafts-only refinement (React reclassification etc.). */
+  refine?(draft: ExtractionDraft, ctx: RefineContext): ExtractionDraft | Promise<ExtractionDraft>;
+
+  /** P1c — DECLARED but never called in P1a. */
+  resolveImport?(
+    req: ImportResolutionRequest,
+    ctx: RefineContext,
+  ): Promise<readonly ImportResolution[]>;
+}
+
+/** Shape of one `Manifest['languages']` entry (kept loose to avoid a cycle). */
+export interface RegistryLanguageEntry {
+  readonly enabled: boolean;
+  readonly grammar_name: string;
+  readonly grammar_version: string;
+  readonly tree_sitter_grammar_hash: string;
+}
+
+/** The provider registry (spec §4). */
+export interface CodeLanguageRegistry {
+  register(p: CodeLanguageProvider): void;
+  /** Deterministic on extension collision (priority, then registration order). */
+  providerForPath(path: string): { provider: CodeLanguageProvider; lang: CodeLang } | null;
+  providerForLang(lang: CodeLang): CodeLanguageProvider | null;
+  activeLanguages(): CodeLang[];
+  includedExtensions(): string[];
+  /** Keyed by runtime CodeLang (javascript/typescript/tsx) — unchanged shape. */
+  languageEntries(): Record<string, RegistryLanguageEntry>;
+  /** Provider versions + every query-asset hash (freshness). */
+  configHashInputs(): unknown;
+}
