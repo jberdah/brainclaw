@@ -210,6 +210,15 @@ export const FacadeResponseSchema = z.object({
    * remains for the bootstrap hint; new consumers should read this array.
    */
   next_actions: z.array(NextActionSchema).optional(),
+  /**
+   * Code Map P0 (spec §10): opt-in, present ONLY when the project's Code Map
+   * manifest carries `code_map_enabled: true`. Absent for every project that
+   * has not turned Code Map on (the P0 default), so existing bclaw_work callers
+   * are unaffected and the off-path adds no work. Shape mirrors
+   * CodeMapWorkSection: { enabled, matches, freshness_badge, missing_index?,
+   * lock_wait_ms? }. Passthrough so the section can evolve without a schema bump.
+   */
+  code_map: z.object({}).passthrough().optional(),
 });
 
 export type WorkIntent = z.infer<typeof WorkIntentSchema>;

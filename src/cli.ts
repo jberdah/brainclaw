@@ -20,6 +20,7 @@ import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
 import { runDeletePlan } from './commands/delete-plan.js';
 import { runPlanResource } from './commands/plan-resource.js';
+import { runCodeMap } from './commands/code-map.js';
 import { runSequenceResource } from './commands/sequence.js';
 import { runAddStep } from './commands/add-step.js';
 import { runDeleteStep } from './commands/delete-step.js';
@@ -620,6 +621,21 @@ program
   .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
     runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort, localOnly: options.localOnly });
+  });
+
+// --- code-map ---
+program
+  .command('code-map <subcommand> [args...]')
+  .description('Query the per-project Code Map (status, refresh, find, brief)')
+  .option('--json', 'Output as JSON')
+  .option('--all', 'For refresh: enumerate all supported files (full refresh)')
+  .option('--changed', 'For refresh: only changed files (default)')
+  .option('--limit <n>', 'Max results for find/brief', (v) => parseInt(v, 10))
+  .action((subcommand, args, options) => {
+    void runCodeMap(subcommand, args, options).catch((err: unknown) => {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
   });
 
 // --- list-plans ---
