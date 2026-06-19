@@ -7,35 +7,38 @@
  *  - Grammar .wasm (typescript / tsx / javascript) ship under dist/wasm/.
  *  - All assets are resolved by `new URL('./wasm/<file>.wasm', import.meta.url)`
  *    — NEVER cwd/__dirname — so the loader is worktree-safe under ESM.
- *  - Lazy-load on FIRST PARSE only: `Parser.init()` once per process; each
- *    grammar `Language` is loaded only when a file of that language appears,
- *    then cached. Nothing here runs at import time or on the query path.
+ *  - Lazy-load on FIRST PARSE only. CRITICAL: the web-tree-sitter *JS glue* is a
+ *    devDependency, so it is NEVER imported at module-load time — a static import
+ *    would sit in the eager graph of cli.js / mcp.js and brick the ENTIRE CLI on
+ *    a published package (devDeps dropped) even for `--version` / find / brief /
+ *    status. Instead the glue is loaded via a DYNAMIC import inside `initEngine()`
+ *    (the first-parse init path), preferring the VENDORED copy at
+ *    `dist/vendor/web-tree-sitter/tree-sitter.js` (resolved via import.meta.url,
+ *    bundled by scripts/copy-code-map-wasm.mjs) so the published package works at
+ *    parse time too; it falls back to the bare 'web-tree-sitter' specifier when
+ *    the vendored copy is absent (running from source).
+ *  - `Parser.init()` runs once per process; each grammar `Language` is loaded
+ *    only when a file of that language appears, then cached. Nothing here runs at
+ *    import time or on the query path.
  *  - Hashes: `engineGlueHash()` = sha256 of the vendored engine .wasm;
  *    `grammarHash(lang)` = sha256 of the grammar .wasm. These feed manifest /
  *    shard freshness and are kept SEPARATE from extractor_config_hash.
  *
  * Packaging fallback: if the dist/wasm/ bundle is absent (e.g. running from
  * source before the copy step has run, or the fallback packaging path), the
- * loader resolves the assets from the installed node_modules devDependencies
- * via `createRequire`. This keeps parse logic + tests working regardless of
- * whether the dist bundling step has executed.
+ * loader resolves the .wasm assets from the installed node_modules
+ * devDependencies via `createRequire`. This keeps parse logic + tests working
+ * regardless of whether the dist bundling step has executed.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { Parser, Language } from 'web-tree-sitter';
+// IMPORTANT: type-only import — fully erased at compile (no verbatimModuleSyntax),
+// so this does NOT put web-tree-sitter in the runtime import graph. The values
+// (Parser / Language) are loaded lazily via dynamic import in loadEngineGlue().
+import type { Parser as ParserType, Language as LanguageType } from 'web-tree-sitter';
 import type { CodeLang } from './types.js';
-
-// TODO(code-map packaging): the engine + grammar .wasm are bundled into
-// dist/wasm/ (and the engine .wasm vendored into dist/vendor/web-tree-sitter/)
-// by scripts/copy-code-map-wasm.mjs, but the web-tree-sitter *JS glue* is still
-// imported from node_modules (a devDependency). A real `npm publish` drops
-// devDeps, so the JS glue must also be vendored (e.g. bundle tree-sitter.js into
-// dist/vendor/ and import it by path) before Code Map ships in a release. The
-// .wasm resolution + parse logic + freshness/hashing are complete and tested;
-// only the JS-glue vendoring for publish remains. Tracked for P0 packaging
-// hardening / a follow-up sprint.
 
 const require = createRequire(import.meta.url);
 
@@ -84,6 +87,65 @@ function readWasm(path: string): Uint8Array {
   return new Uint8Array(fs.readFileSync(path));
 }
 
+// --- engine glue (web-tree-sitter JS) — dynamic, lazy, never in module graph ---
+
+/** Static shape of the bits of the web-tree-sitter module we use. */
+interface EngineGlue {
+  Parser: typeof ParserType;
+  Language: typeof LanguageType;
+}
+
+let glueModule: EngineGlue | null = null;
+let glueLoadPromise: Promise<EngineGlue> | null = null;
+
+/**
+ * Dynamically import the web-tree-sitter JS glue on FIRST PARSE only. Prefers the
+ * vendored copy bundled into dist/vendor/web-tree-sitter/tree-sitter.js (resolved
+ * relative to this module via import.meta.url) so a published package — which has
+ * dropped the web-tree-sitter devDependency — still parses. Falls back to the
+ * bare 'web-tree-sitter' specifier when the vendored copy is absent (running from
+ * source / tests against node_modules).
+ *
+ * This function is the ONLY place that pulls web-tree-sitter into the runtime
+ * graph, and it runs strictly inside the parse path — so cli.js / mcp.js module
+ * load (and find / brief / status, which never parse) work with the engine glue
+ * entirely absent.
+ */
+async function loadEngineGlue(): Promise<EngineGlue> {
+  if (glueModule) return glueModule;
+  if (glueLoadPromise) return glueLoadPromise;
+  glueLoadPromise = (async () => {
+    // Vendored copy: <module dir>/../../vendor/web-tree-sitter/tree-sitter.js.
+    // At runtime this module is dist/core/code-map/wasm-loader.js, so
+    // '../../vendor/...' === dist/vendor/...
+    let mod: EngineGlue;
+    const vendored = new URL('../../vendor/web-tree-sitter/tree-sitter.js', import.meta.url);
+    let vendoredExists = false;
+    try {
+      vendoredExists = fs.existsSync(fileURLToPath(vendored));
+    } catch {
+      vendoredExists = false;
+    }
+    if (vendoredExists) {
+      mod = (await import(vendored.href)) as unknown as EngineGlue;
+    } else {
+      // Fallback: bare specifier (node_modules devDependency). On a published
+      // package without the vendored copy this would throw — but the copy script
+      // always vendors the glue, so this branch is the from-source/tests path.
+      mod = (await import('web-tree-sitter')) as unknown as EngineGlue;
+    }
+    glueModule = mod;
+    return mod;
+  })();
+  return glueLoadPromise;
+}
+
+/** Parser constructor from the lazily-loaded engine glue (parse path only). */
+export async function getParser(): Promise<typeof ParserType> {
+  const glue = await loadEngineGlue();
+  return glue.Parser;
+}
+
 function sha256(bytes: Uint8Array): string {
   return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 }
@@ -107,30 +169,34 @@ function engineWasmPath(): string {
  */
 export function initEngine(): Promise<void> {
   if (!engineInitPromise) {
-    const wasmBinary = readWasm(engineWasmPath());
-    engineInitPromise = Parser.init({ wasmBinary });
+    engineInitPromise = (async () => {
+      const glue = await loadEngineGlue();
+      const wasmBinary = readWasm(engineWasmPath());
+      await glue.Parser.init({ wasmBinary });
+    })();
   }
   return engineInitPromise;
 }
 
 // --- Grammar cache (lazy, per language) ---
 
-const grammarCache = new Map<Exclude<CodeLang, 'jsx'>, Language>();
+const grammarCache = new Map<Exclude<CodeLang, 'jsx'>, LanguageType>();
 const grammarHashCache = new Map<Exclude<CodeLang, 'jsx'>, string>();
 
 /**
  * Load (and cache) the grammar Language for a Code Map language. Initializes the
  * engine first if needed. Lazy: only called from the parse loop.
  */
-export async function loadGrammar(lang: CodeLang): Promise<Language> {
+export async function loadGrammar(lang: CodeLang): Promise<LanguageType> {
   const key = grammarLangFor(lang);
   const cached = grammarCache.get(key);
   if (cached) return cached;
   await initEngine();
+  const glue = await loadEngineGlue();
   const path = resolveWasmPath(GRAMMAR_WASM_BASENAME[key], GRAMMAR_NODE_MODULES_SPEC[key]);
   const bytes = readWasm(path);
   if (!grammarHashCache.has(key)) grammarHashCache.set(key, sha256(bytes));
-  const language = await Language.load(bytes);
+  const language = await glue.Language.load(bytes);
   grammarCache.set(key, language);
   return language;
 }
@@ -168,4 +234,7 @@ export function __resetWasmCaches(): void {
   grammarHashCache.clear();
   engineInitPromise = null;
   enginePath = null;
+  // NOTE: glueModule / glueLoadPromise are intentionally NOT reset — the dynamic
+  // import is process-global and re-importing is unnecessary; Parser.init is the
+  // re-runnable seam (gated by engineInitPromise above).
 }

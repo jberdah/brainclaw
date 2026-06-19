@@ -9,7 +9,7 @@ import {
   summarizeFreshness,
 } from '../../../src/core/code-map/freshness.js';
 import { refresh, DEFAULT_EXTRACTOR_CONFIG } from '../../../src/core/code-map/refresh.js';
-import { readManifest, listShards, writeManifest } from '../../../src/core/code-map/store.js';
+import { readManifest, listShards, writeManifest, writeShard } from '../../../src/core/code-map/store.js';
 import type { FileShard } from '../../../src/core/code-map/types.js';
 
 const cleanupDirs: string[] = [];
@@ -131,6 +131,46 @@ describe('code-map freshness (write-side via refresh)', () => {
       grammarHashFor: () => 'sha256:CURRENT_GRAMMAR',
     });
     assert.equal(status, 'stale_grammar');
+  });
+
+  it('FIX 2: refresh --changed heals version-stale shards even with unchanged content', async () => {
+    const root = tmpProject();
+    // two files, both content-unchanged across the config bump.
+    writeSrc(root, 'src/util.ts', `export function add(a: number, b: number) { return a + b; }\n`);
+    writeSrc(root, 'src/other.ts', `export const k = 1;\n`);
+    await refresh({ projectId: PROJECT, projectRoot: root, scope: 'all', cwd: root, disableGit: true });
+
+    // Forge version drift WITHOUT changing any file content: rewrite the stored
+    // shards' extractor_config_hash to an old value so they read as stale_extractor.
+    const stale = listShards(root);
+    assert.equal(stale.length, 2);
+    for (const shard of stale) {
+      writeShard(
+        { ...shard, extractor_config_hash: 'sha256:OLD_CONFIG_HASH' },
+        root,
+      );
+    }
+    // cheap path: --changed (no git, no content change). BEFORE FIX 2 this parsed
+    // 0 files and left the shards stale forever. It must now union the
+    // version-stale shards into the work set, re-parse them, and restore freshness.
+    const res = await refresh({
+      projectId: PROJECT,
+      projectRoot: root,
+      scope: 'changed',
+      cwd: root,
+      disableGit: true,
+    });
+
+    assert.equal(res.ran, true);
+    assert.equal(res.files_parsed, 2, 'both version-stale shards re-parsed by the cheap path');
+
+    const healed = listShards(root);
+    assert.equal(healed.length, 2);
+    assert.ok(
+      healed.every((s) => s.freshness.status === 'fresh'),
+      'all shards restored to fresh after --changed',
+    );
+    assert.equal(readManifest(root)!.freshness.status, 'fresh', 'manifest freshness healed');
   });
 
   it('changing only git.head does NOT mark unchanged shards stale', async () => {

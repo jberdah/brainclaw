@@ -36,10 +36,36 @@ function copyResolved(spec, destDir, destName) {
 // Engine glue .wasm -> dist/wasm/ (loaded by path) + vendored copy for provenance.
 const engineOk = copyResolved('web-tree-sitter/tree-sitter.wasm', wasmDir, 'tree-sitter.wasm');
 copyResolved('web-tree-sitter/tree-sitter.wasm', vendorDir, 'tree-sitter.wasm');
-// Engine JS glue is bundled by Node's module resolution of the web-tree-sitter
-// import in wasm-loader.js; we vendor the .wasm because only the .wasm is loaded
-// by explicit path. (If a future publish drops the devDep, the .js import would
-// also need vendoring — tracked for P1 packaging hardening.)
+
+// Engine JS glue -> dist/vendor/web-tree-sitter/tree-sitter.js. The loader
+// dynamic-imports THIS vendored copy (resolved via import.meta.url) on first
+// parse, so the published package works even after devDeps are dropped. The
+// glue is a single self-contained ESM file (only node builtins fs/path/url at
+// runtime; the .wasm is passed in explicitly via wasmBinary), so a flat copy
+// is sufficient. We also copy the source map for debuggability when present.
+let glueOk = false;
+try {
+  // IMPORTANT: resolve the ESM entry explicitly, not via require.resolve (which
+  // would return the CJS `require` condition = tree-sitter.cjs). brainclaw's
+  // package.json is "type":"module", so a vendored `.js` MUST be the ESM build —
+  // copying the .cjs under a .js name would crash with "module is not defined".
+  // Read the package's exports["."].import target and copy THAT file.
+  // package.json is not in the package's exports map; derive the package dir from
+  // the exported .wasm subpath (which sits at the package root) instead.
+  const wasmPath = require.resolve('web-tree-sitter/tree-sitter.wasm');
+  const pkgDir = path.dirname(wasmPath);
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf-8'));
+  const esmRel = pkg.exports?.['.']?.import ?? './tree-sitter.js';
+  const glueSrc = path.resolve(pkgDir, esmRel);
+  fs.copyFileSync(glueSrc, path.join(vendorDir, 'tree-sitter.js'));
+  glueOk = true;
+  const mapSrc = `${glueSrc}.map`;
+  if (fs.existsSync(mapSrc)) {
+    fs.copyFileSync(mapSrc, path.join(vendorDir, 'tree-sitter.js.map'));
+  }
+} catch (err) {
+  console.warn(`[copy-code-map-wasm] could not vendor web-tree-sitter JS glue: ${err.message}`);
+}
 
 const grammars = [
   ['tree-sitter-wasms/out/tree-sitter-typescript.wasm', 'tree-sitter-typescript.wasm'],
@@ -52,8 +78,10 @@ for (const [spec, name] of grammars) {
   grammarOk = copyResolved(spec, wasmDir, name) && grammarOk;
 }
 
-if (engineOk && grammarOk) {
-  console.log('[copy-code-map-wasm] bundled engine + 3 grammar wasm into dist/wasm/');
+if (engineOk && grammarOk && glueOk) {
+  console.log(
+    '[copy-code-map-wasm] bundled engine + 3 grammar wasm into dist/wasm/ and vendored JS glue into dist/vendor/web-tree-sitter/',
+  );
 } else {
-  console.warn('[copy-code-map-wasm] some wasm assets missing; runtime will fall back to node_modules');
+  console.warn('[copy-code-map-wasm] some wasm/glue assets missing; runtime will fall back to node_modules');
 }

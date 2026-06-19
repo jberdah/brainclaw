@@ -16,10 +16,12 @@
  *  - hook: a function/arrow/const whose name matches /^use[A-Z0-9]/.
  */
 import crypto from 'node:crypto';
+// type-only import — fully erased at compile, so web-tree-sitter is NOT in the
+// runtime import graph here. The Parser *value* is obtained lazily via
+// getParser() (dynamic import inside the parse path) — see wasm-loader.ts FIX 1.
 import type { Node as TsNode, Tree } from 'web-tree-sitter';
-import { Parser } from 'web-tree-sitter';
 import { edgeId, fileId, nodeId } from './ids.js';
-import { loadGrammar } from './wasm-loader.js';
+import { getParser, loadGrammar } from './wasm-loader.js';
 import type { CodeEdge, CodeLang, CodeNode, NodeSubtype, Span } from './types.js';
 
 export interface ExtractInput {
@@ -411,6 +413,7 @@ export async function extractFile(input: ExtractInput): Promise<ExtractResult> {
   let tree: Tree;
   try {
     const grammar = await loadGrammar(input.lang);
+    const Parser = await getParser();
     const parser = new Parser();
     parser.setLanguage(grammar);
     const parsed = parser.parse(input.source);

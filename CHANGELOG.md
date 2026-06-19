@@ -7,6 +7,21 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Code Map (P0)** — a per-project structural index of the JS/TS/TSX codebase
+  (symbols, imports/exports, React component/hook detection) built with
+  Tree-sitter WASM and stored as JSONL shards under `.brainclaw/code-map/`. New
+  CLI: `brainclaw code-map status | refresh [--changed|--all] | find <query> |
+  brief <symbol-or-path>`. New MCP tools: `bclaw_code_status`,
+  `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`. Every output
+  carries a freshness badge (`fresh` / `stale_changed_files` / `stale_extractor`
+  / `stale_grammar` / `partial` / `missing_index`). `refresh --changed` re-parses
+  content-changed files and heals version-stale shards on the cheap path; the
+  Tree-sitter engine + grammars are bundled into `dist/` and loaded lazily on
+  first parse, so the rest of the CLI/MCP never depends on the WASM engine. See
+  `docs/code-map.md`.
+
 ### Changed
 
 - **BREAKING — minimum Node.js is now 22.12** (`engines.node = ">=22.12.0"`).
