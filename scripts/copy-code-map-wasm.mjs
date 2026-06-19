@@ -3,7 +3,7 @@
  *
  * tsc only emits .js — this script bundles the runtime WASM:
  *  - the web-tree-sitter engine glue .wasm  -> dist/wasm/ + dist/vendor/web-tree-sitter/
- *  - prebuilt grammar .wasm (typescript / tsx / javascript) -> dist/wasm/
+ *  - prebuilt grammar .wasm (typescript / tsx / javascript / python) -> dist/wasm/
  *
  * Runtime resolves these via `new URL('../../wasm/<file>.wasm', import.meta.url)`
  * from dist/core/code-map/wasm-loader.js (== dist/wasm/). Mirrors
@@ -71,6 +71,7 @@ const grammars = [
   ['tree-sitter-wasms/out/tree-sitter-typescript.wasm', 'tree-sitter-typescript.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-tsx.wasm', 'tree-sitter-tsx.wasm'],
   ['tree-sitter-wasms/out/tree-sitter-javascript.wasm', 'tree-sitter-javascript.wasm'],
+  ['tree-sitter-wasms/out/tree-sitter-python.wasm', 'tree-sitter-python.wasm'],
 ];
 
 let grammarOk = true;
@@ -84,16 +85,22 @@ for (const [spec, name] of grammars) {
 // without the src/ tree. (Tests fall back to src/ via the repo-root walk.)
 let scmOk = true;
 try {
-  const scmSrcDir = 'src/core/code-map/lang/typescript';
-  const scmDestDir = 'dist/core/code-map/lang/typescript';
-  fs.mkdirSync(scmDestDir, { recursive: true });
-  for (const name of ['tags.scm', 'tags.js.scm', 'imports.scm']) {
-    const src = path.join(scmSrcDir, name);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, path.join(scmDestDir, name));
-    } else {
-      scmOk = false;
-      console.warn(`[copy-code-map-wasm] query asset missing: ${src}`);
+  // Per-provider .scm asset sets (read by each provider via import.meta.url from
+  // dist/core/code-map/lang/<provider>/). Tests fall back to src/ via a repo-root walk.
+  const scmSets = [
+    ['src/core/code-map/lang/typescript', 'dist/core/code-map/lang/typescript', ['tags.scm', 'tags.js.scm', 'imports.scm']],
+    ['src/core/code-map/lang/python', 'dist/core/code-map/lang/python', ['tags.scm', 'imports.scm']],
+  ];
+  for (const [scmSrcDir, scmDestDir, names] of scmSets) {
+    fs.mkdirSync(scmDestDir, { recursive: true });
+    for (const name of names) {
+      const src = path.join(scmSrcDir, name);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(scmDestDir, name));
+      } else {
+        scmOk = false;
+        console.warn(`[copy-code-map-wasm] query asset missing: ${src}`);
+      }
     }
   }
 } catch (err) {
@@ -103,7 +110,7 @@ try {
 
 if (engineOk && grammarOk && glueOk && scmOk) {
   console.log(
-    '[copy-code-map-wasm] bundled engine + 3 grammar wasm into dist/wasm/ and vendored JS glue into dist/vendor/web-tree-sitter/',
+    '[copy-code-map-wasm] bundled engine + 4 grammar wasm into dist/wasm/ and vendored JS glue into dist/vendor/web-tree-sitter/',
   );
 } else {
   console.warn('[copy-code-map-wasm] some wasm/glue assets missing; runtime will fall back to node_modules');

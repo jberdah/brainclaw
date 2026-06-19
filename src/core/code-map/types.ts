@@ -75,9 +75,40 @@ export const FreshnessStatusSchema = z.enum([
 ]);
 export type FreshnessStatus = z.infer<typeof FreshnessStatusSchema>;
 
-/** Per-file language tag. */
-export const CodeLangSchema = z.enum(['javascript', 'typescript', 'tsx', 'jsx']);
-export type CodeLang = z.infer<typeof CodeLangSchema>;
+/**
+ * Per-file language tag.
+ *
+ * OPEN union (P1b §3.1): the runtime `CodeLang` type lists the languages
+ * brainclaw's own providers currently emit (`javascript`/`typescript`/`tsx`/`jsx`
+ * for js-ts; `python` for the Python provider), but the PERSISTED `lang`
+ * validator is NOT a closed `z.enum` — it is a constrained string, mirroring the
+ * Sprint-1 `NodeSubtypeSchema` migration. A persisted `lang` validates if it is a
+ * KNOWN code lang OR a well-formed lowercase language id (`^[a-z][a-z0-9_]*$`).
+ * That means registering a new provider/language never requires re-touching this
+ * validator: an unknown-but-well-formed lang round-trips instead of throwing. The
+ * TS union stays the single compile-time source of truth for code that switches
+ * on `CodeLang`; adding a member here is additive (the only consumer that must be
+ * exhaustive is the js-ts grammar table in `wasm-loader.ts`, which narrows to its
+ * own langs rather than the open union).
+ */
+export type CodeLang = 'javascript' | 'typescript' | 'tsx' | 'jsx' | 'python';
+
+/** The langs the bundled providers emit today — the fast-path of the validator. */
+const KNOWN_CODE_LANGS = new Set<string>([
+  'javascript',
+  'typescript',
+  'tsx',
+  'jsx',
+  'python',
+]);
+
+/** A well-formed (lowercase) language id a future provider could register. */
+const CODE_LANG_RE = /^[a-z][a-z0-9_]*$/;
+
+export const CodeLangSchema = z.custom<CodeLang>(
+  (v): boolean => typeof v === 'string' && (KNOWN_CODE_LANGS.has(v) || CODE_LANG_RE.test(v)),
+  { error: 'Invalid code lang: expected a known or well-formed lowercase language id' },
+);
 
 // --- Node / Edge / Span (spec §5.4, §5.5) ---
 

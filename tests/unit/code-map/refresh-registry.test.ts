@@ -46,7 +46,10 @@ afterEach(() => {
 
 const PROJECT = 'prj_refresh_registry_test';
 
-/** A small mixed-extension fixture: a .ts, a .jsx, plus an UNSUPPORTED .md/.py. */
+/**
+ * A small mixed-extension fixture: a .ts, a .jsx, a .py (Python provider registered
+ * since P1b), plus an UNSUPPORTED .md.
+ */
 function fixture(root: string): void {
   writeSrc(root, 'src/util.ts', `export function add(a: number, b: number) { return a + b; }\n`);
   writeSrc(
@@ -54,9 +57,9 @@ function fixture(root: string): void {
     'src/App.jsx',
     `import React from 'react';\nexport const App = () => <div>app</div>;\n`,
   );
-  // unsupported extensions — no provider owns them, must be skipped.
-  writeSrc(root, 'README.md', `# not code\n`);
   writeSrc(root, 'src/script.py', `def f():\n    return 1\n`);
+  // unsupported extension — no provider owns it, must be skipped.
+  writeSrc(root, 'README.md', `# not code\n`);
 }
 
 async function runAll(root: string, registry?: CodeLanguageRegistry) {
@@ -89,26 +92,27 @@ function registryWithBumpedQueryHash(): CodeLanguageRegistry {
 }
 
 describe('code-map refresh ↔ registry (P1a cutover)', () => {
-  it('routes .ts and .jsx via the registry; skips unsupported extensions', async () => {
+  it('routes .ts, .jsx and .py via the registry; skips unsupported extensions', async () => {
     const root = tmpProject();
     fixture(root);
     const res = await runAll(root);
 
     assert.equal(res.ran, true);
-    assert.equal(res.files_parsed, 2, 'only the .ts + .jsx are routed to a provider');
+    assert.equal(res.files_parsed, 3, 'the .ts + .jsx + .py are routed to a provider');
 
     const shards = listShards(root);
     const paths = shards.map((s) => s.path).sort();
-    assert.deepEqual(paths, ['src/App.jsx', 'src/util.ts']);
+    assert.deepEqual(paths, ['src/App.jsx', 'src/script.py', 'src/util.ts']);
 
-    // .jsx resolves to the tsx runtime lang (registry langForPath); .ts → typescript.
+    // .jsx resolves to the tsx runtime lang (registry langForPath); .ts → typescript;
+    // .py → python (PythonProvider registered since P1b).
     const byPath = new Map(shards.map((s) => [s.path, s.lang]));
     assert.equal(byPath.get('src/util.ts'), 'typescript' as CodeLang);
     assert.equal(byPath.get('src/App.jsx'), 'tsx' as CodeLang);
+    assert.equal(byPath.get('src/script.py'), 'python' as CodeLang);
 
     // unsupported extensions never produced a shard.
     assert.ok(!shards.some((s) => s.path.endsWith('.md')), '.md skipped');
-    assert.ok(!shards.some((s) => s.path.endsWith('.py')), '.py skipped (no provider in P1a)');
   });
 
   it('manifest.languages comes from registry.languageEntries()', async () => {

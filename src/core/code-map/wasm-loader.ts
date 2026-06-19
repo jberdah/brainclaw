@@ -42,15 +42,24 @@ import type { CodeLang } from './types.js';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * The grammar keys THIS loader serves. It is the js-ts provider's own WASM table,
+ * so it is keyed by a LOCAL type — NOT `Exclude<CodeLang, 'jsx'>` — so that opening
+ * the global `CodeLang` union (P1b §3.1) for a new provider (e.g. `python`, which
+ * loads its grammar through its OWN provider loader) does not force a phantom key
+ * here. The loader maps the js-ts runtime langs onto these three grammars.
+ */
+type JsTsGrammarLang = 'javascript' | 'typescript' | 'tsx';
+
 /** Grammar packages keyed by Code Map language tag. */
-const GRAMMAR_WASM_BASENAME: Record<Exclude<CodeLang, 'jsx'>, string> = {
+const GRAMMAR_WASM_BASENAME: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-javascript.wasm',
   typescript: 'tree-sitter-typescript.wasm',
   tsx: 'tree-sitter-tsx.wasm',
 };
 
 /** node_modules fallback paths (resolved lazily; only used if dist bundle absent). */
-const GRAMMAR_NODE_MODULES_SPEC: Record<Exclude<CodeLang, 'jsx'>, string> = {
+const GRAMMAR_NODE_MODULES_SPEC: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-wasms/out/tree-sitter-javascript.wasm',
   typescript: 'tree-sitter-wasms/out/tree-sitter-typescript.wasm',
   tsx: 'tree-sitter-wasms/out/tree-sitter-tsx.wasm',
@@ -59,9 +68,23 @@ const GRAMMAR_NODE_MODULES_SPEC: Record<Exclude<CodeLang, 'jsx'>, string> = {
 const ENGINE_WASM_BASENAME = 'tree-sitter.wasm';
 const ENGINE_NODE_MODULES_SPEC = 'web-tree-sitter/tree-sitter.wasm';
 
-/** jsx files use the tsx grammar (it is a strict superset of jsx + js). */
-function grammarLangFor(lang: CodeLang): Exclude<CodeLang, 'jsx'> {
-  return lang === 'jsx' ? 'tsx' : lang;
+/**
+ * Narrow a runtime `CodeLang` onto the js-ts grammar key. `jsx` uses the tsx
+ * grammar (a strict superset of jsx + js). Any lang outside the js-ts set is not
+ * something THIS loader serves (it is some other provider's grammar) — default to
+ * `typescript` to stay total, matching the legacy fall-through behavior.
+ */
+function grammarLangFor(lang: CodeLang): JsTsGrammarLang {
+  switch (lang) {
+    case 'javascript':
+    case 'typescript':
+    case 'tsx':
+      return lang;
+    case 'jsx':
+      return 'tsx';
+    default:
+      return 'typescript';
+  }
 }
 
 /**
@@ -85,6 +108,53 @@ function resolveWasmPath(distBasename: string, nodeModulesSpec: string): string 
 
 function readWasm(path: string): Uint8Array {
   return new Uint8Array(fs.readFileSync(path));
+}
+
+// --- generic grammar loader (shared engine seam for non-js-ts providers) ---
+//
+// P1b §3 (rule-of-two): a 2nd provider (Python) loads a grammar this js-ts loader
+// does NOT own. Its grammar MUST come through the SAME initialized engine glue
+// (getParser/getQueryClass/initEngine) — a fresh `web-tree-sitter` import is a
+// distinct Emscripten instance and crashes on Query construction (trp_8df65ab7).
+// These generic helpers expose exactly that: load/hash an arbitrary grammar .wasm
+// (by dist basename + node_modules fallback spec) against the live engine. They are
+// engine SEAMS, not orchestration — a new provider calls them from its own dir.
+
+/** Cache for grammars loaded via the generic loader, keyed by dist basename. */
+const genericGrammarCache = new Map<string, LanguageType>();
+const genericGrammarHashCache = new Map<string, string>();
+
+/**
+ * Load (and cache) an arbitrary grammar Language by its dist basename + a
+ * node_modules fallback spec, using the SAME engine glue + init as the js-ts
+ * grammars. Lazy: only called from a provider's parse path.
+ */
+export async function loadGrammarWasm(
+  distBasename: string,
+  nodeModulesSpec: string,
+): Promise<LanguageType> {
+  const cached = genericGrammarCache.get(distBasename);
+  if (cached) return cached;
+  await initEngine();
+  const glue = await loadEngineGlue();
+  const wasmPath = resolveWasmPath(distBasename, nodeModulesSpec);
+  const bytes = readWasm(wasmPath);
+  if (!genericGrammarHashCache.has(distBasename)) {
+    genericGrammarHashCache.set(distBasename, sha256(bytes));
+  }
+  const language = await glue.Language.load(bytes);
+  genericGrammarCache.set(distBasename, language);
+  return language;
+}
+
+/** sha256 of an arbitrary grammar .wasm (per-language tree_sitter_grammar_hash). */
+export function grammarHashForWasm(distBasename: string, nodeModulesSpec: string): string {
+  const cached = genericGrammarHashCache.get(distBasename);
+  if (cached) return cached;
+  const wasmPath = resolveWasmPath(distBasename, nodeModulesSpec);
+  const h = sha256(readWasm(wasmPath));
+  genericGrammarHashCache.set(distBasename, h);
+  return h;
 }
 
 // --- engine glue (web-tree-sitter JS) — dynamic, lazy, never in module graph ---
@@ -204,8 +274,8 @@ export function initEngine(): Promise<void> {
 
 // --- Grammar cache (lazy, per language) ---
 
-const grammarCache = new Map<Exclude<CodeLang, 'jsx'>, LanguageType>();
-const grammarHashCache = new Map<Exclude<CodeLang, 'jsx'>, string>();
+const grammarCache = new Map<JsTsGrammarLang, LanguageType>();
+const grammarHashCache = new Map<JsTsGrammarLang, string>();
 
 /**
  * Load (and cache) the grammar Language for a Code Map language. Initializes the
@@ -242,7 +312,7 @@ export function grammarHash(lang: CodeLang): string {
 }
 
 /** Map of canonical grammar names per language (manifest.languages.*). */
-export const GRAMMAR_NAMES: Record<Exclude<CodeLang, 'jsx'>, string> = {
+export const GRAMMAR_NAMES: Record<JsTsGrammarLang, string> = {
   javascript: 'tree-sitter-javascript',
   typescript: 'tree-sitter-typescript',
   tsx: 'tree-sitter-tsx',
@@ -256,6 +326,8 @@ export function grammarName(lang: CodeLang): string {
 export function __resetWasmCaches(): void {
   grammarCache.clear();
   grammarHashCache.clear();
+  genericGrammarCache.clear();
+  genericGrammarHashCache.clear();
   engineInitPromise = null;
   enginePath = null;
   // NOTE: glueModule / glueLoadPromise are intentionally NOT reset — the dynamic

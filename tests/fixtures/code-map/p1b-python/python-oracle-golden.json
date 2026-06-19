@@ -1,0 +1,1409 @@
+{
+  "src/p1b/toplevel-def.py": {
+    "path": "src/p1b/toplevel-def.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:a9617fc26cabf6b2ddc87f38c4010c80244c52203f3857d3c0bf10e61cf72fcf",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/toplevel-def.py",
+          "path": "src/p1b/toplevel-def.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:641980d1649168cd00d35b5774fbc3bb3697ad02e6c573bdb6953aead55e1a30",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "python",
+          "name": "greet",
+          "path": "src/p1b/toplevel-def.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 24
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:5d5567656899fcdd906df54c543176bcdb23a2b65c5c327ebdccbc3461df2233",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "python",
+          "name": "fetch",
+          "path": "src/p1b/toplevel-def.py",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "ca25a184bf71e7e4030bb9754ccc7c1c98fd967b83fe17b70ef1d8bad5a615ac",
+          "from": "file:a9617fc26cabf6b2ddc87f38c4010c80244c52203f3857d3c0bf10e61cf72fcf",
+          "to": "sym:641980d1649168cd00d35b5774fbc3bb3697ad02e6c573bdb6953aead55e1a30",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-def.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "e7e96fd2840aa3fdeeb74754e86f26d634329fe98bc467fb215d286f233b1276",
+          "from": "file:a9617fc26cabf6b2ddc87f38c4010c80244c52203f3857d3c0bf10e61cf72fcf",
+          "to": "sym:641980d1649168cd00d35b5774fbc3bb3697ad02e6c573bdb6953aead55e1a30",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-def.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "407789f61c8907ba11ea5e715ce0e7d2f180e3c6cd4c432579fd363517cecac5",
+          "from": "file:a9617fc26cabf6b2ddc87f38c4010c80244c52203f3857d3c0bf10e61cf72fcf",
+          "to": "sym:5d5567656899fcdd906df54c543176bcdb23a2b65c5c327ebdccbc3461df2233",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-def.py",
+            "line": 5
+          }
+        },
+        {
+          "id": "646b236dee816766b4293abeac60b094c42c035c7a149260f36263a59cae2fe9",
+          "from": "file:a9617fc26cabf6b2ddc87f38c4010c80244c52203f3857d3c0bf10e61cf72fcf",
+          "to": "sym:5d5567656899fcdd906df54c543176bcdb23a2b65c5c327ebdccbc3461df2233",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-def.py",
+            "line": 5
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/class-methods.py": {
+    "path": "src/p1b/class-methods.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/class-methods.py",
+          "path": "src/p1b/class-methods.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:1c744da8f1afa15c42c9f49261e3242a6c7328be857c8dc7e8f602091d0b7e98",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "python",
+          "name": "Widget",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 18,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d3d0eab87d9eda26a8a8e6f361811ee33fa7e5072d4bb8fe1c7c5b2ec04dc104",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "python",
+          "name": "__init__",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 5,
+            "end_line": 3,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:52d59a5a654ecf47f9763eb1124c31d4aa215b3692965eff0a910832456db4d5",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "python",
+          "name": "render",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 5,
+            "start_col": 5,
+            "end_line": 6,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:0bd3e384b6e3935e15011ef7524d48b18752de7ce169c3ff1710ef0c48f068e5",
+          "kind": "symbol",
+          "subtype": "property",
+          "lang": "python",
+          "name": "area",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 9,
+            "start_col": 5,
+            "end_line": 10,
+            "end_col": 37
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:e5fa1a2452b4b5769bd10d53dfe44c3343f1d050695ef0e7565a90f2dc880bbe",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "python",
+          "name": "make",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 13,
+            "start_col": 5,
+            "end_line": 14,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:2da4dcde4d63192bf41a78142f28ba27ecdb61d0857417b956908141ce996c2c",
+          "kind": "symbol",
+          "subtype": "method",
+          "lang": "python",
+          "name": "from_size",
+          "path": "src/p1b/class-methods.py",
+          "span": {
+            "start_line": 17,
+            "start_col": 5,
+            "end_line": 18,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "32b5a3c8c2da74b73cc0482a39d9e78031c78e48b67fa65c4ffa071493f85a69",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:1c744da8f1afa15c42c9f49261e3242a6c7328be857c8dc7e8f602091d0b7e98",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "654846ce4bc459a40dec93a81a5a371159d60756347ec94dc8cac6088294b418",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:1c744da8f1afa15c42c9f49261e3242a6c7328be857c8dc7e8f602091d0b7e98",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "9aeb6970397da20bf508c4963afdb76d19e3f536f94a8a03057ed20fd5071291",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:d3d0eab87d9eda26a8a8e6f361811ee33fa7e5072d4bb8fe1c7c5b2ec04dc104",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "47158dc2c0645c32826dcb39de785ff48ca8e229dc29e6ab7d2705701bff5507",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:d3d0eab87d9eda26a8a8e6f361811ee33fa7e5072d4bb8fe1c7c5b2ec04dc104",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "a723700d6c55ac20a2cff620cf5ee6e10e54285a06ea0212d7f0e9813f028b64",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:52d59a5a654ecf47f9763eb1124c31d4aa215b3692965eff0a910832456db4d5",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 5
+          }
+        },
+        {
+          "id": "db00350c259b213def83e94cb749ed83e7063052f606009f21c3ebe982662b94",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:52d59a5a654ecf47f9763eb1124c31d4aa215b3692965eff0a910832456db4d5",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 5
+          }
+        },
+        {
+          "id": "516c2ac4a5508e8bfd5ed74cba82d6a7953eb386261d409f1e76983fa8ceaab2",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:0bd3e384b6e3935e15011ef7524d48b18752de7ce169c3ff1710ef0c48f068e5",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 9
+          }
+        },
+        {
+          "id": "0d31bb1ce2671ef81692bd201d4071fab4a4845f76ca3eaea89dab68abc42ef2",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:0bd3e384b6e3935e15011ef7524d48b18752de7ce169c3ff1710ef0c48f068e5",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 9
+          }
+        },
+        {
+          "id": "47db860930a7afdf70f735334d11dbb38473e8e5ab0d4216c26d72516264e6e8",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:e5fa1a2452b4b5769bd10d53dfe44c3343f1d050695ef0e7565a90f2dc880bbe",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 13
+          }
+        },
+        {
+          "id": "843fe4c8e5d677de2a7c93e2cf685b8b9e75563a3af6c6945dcd742bd50ab4c8",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:e5fa1a2452b4b5769bd10d53dfe44c3343f1d050695ef0e7565a90f2dc880bbe",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 13
+          }
+        },
+        {
+          "id": "f54cebe86595bcccd10e49fba1ee380c9a8f99297a78828a510baab77748d14f",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:2da4dcde4d63192bf41a78142f28ba27ecdb61d0857417b956908141ce996c2c",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 17
+          }
+        },
+        {
+          "id": "2b8127e06bf594c28dfbc19bc6dab4124d792046d3a5cb549a5d14dafad0b49a",
+          "from": "file:649a73ddd11d02807650f4bd8b97b3336093aeea26c87c23b65e0af3e5ae3119",
+          "to": "sym:2da4dcde4d63192bf41a78142f28ba27ecdb61d0857417b956908141ce996c2c",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/class-methods.py",
+            "line": 17
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/nested-def.py": {
+    "path": "src/p1b/nested-def.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:67e9aad5af39123d98f474dd1ebebc80f2ab2ca0ac0c50de69af9bb179735c2b",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/nested-def.py",
+          "path": "src/p1b/nested-def.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:4bdaa18eb6f38a3037acfbfe46fe074f675565e4b83905cce960603b3bb15048",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "python",
+          "name": "outer",
+          "path": "src/p1b/nested-def.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:fb58b2e54089896e03f38c250ac497b05ebd8492b77211a5cac6b8a9af696df7",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "python",
+          "name": "inner",
+          "path": "src/p1b/nested-def.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 5,
+            "end_line": 3,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "2c4d00c81119a2ac4eb8a5cd3c1a6adc9944cfbc4b7feafe3f6dd6c02eb832b7",
+          "from": "file:67e9aad5af39123d98f474dd1ebebc80f2ab2ca0ac0c50de69af9bb179735c2b",
+          "to": "sym:4bdaa18eb6f38a3037acfbfe46fe074f675565e4b83905cce960603b3bb15048",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/nested-def.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "7353a75f95ddc23ad66fe6c4c287f14f67644b80c2889383fc001c68f44cd69e",
+          "from": "file:67e9aad5af39123d98f474dd1ebebc80f2ab2ca0ac0c50de69af9bb179735c2b",
+          "to": "sym:4bdaa18eb6f38a3037acfbfe46fe074f675565e4b83905cce960603b3bb15048",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/nested-def.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "a6faef01dc3f136337c58008b1162efbf4dd468646c9fb4a39ea785247f0ddc6",
+          "from": "file:67e9aad5af39123d98f474dd1ebebc80f2ab2ca0ac0c50de69af9bb179735c2b",
+          "to": "sym:fb58b2e54089896e03f38c250ac497b05ebd8492b77211a5cac6b8a9af696df7",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/nested-def.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "5d94a52b78e525f4b040b75e4d5ed1f58d79a11222e91ed74d080a84640e2e2a",
+          "from": "file:67e9aad5af39123d98f474dd1ebebc80f2ab2ca0ac0c50de69af9bb179735c2b",
+          "to": "sym:fb58b2e54089896e03f38c250ac497b05ebd8492b77211a5cac6b8a9af696df7",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/nested-def.py",
+            "line": 2
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/module-vars.py": {
+    "path": "src/p1b/module-vars.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/module-vars.py",
+          "path": "src/p1b/module-vars.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:d2edd1cf3bea1df8cc8dd24796d1f518f7c04bdb451e8a1654c904f08af3ad7b",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "python",
+          "name": "count",
+          "path": "src/p1b/module-vars.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 10
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:e77f25074f34ef0e413cfd5ff1410bae2573b07bb91d7d0f4b0a90a8783188ae",
+          "kind": "symbol",
+          "subtype": "constant",
+          "lang": "python",
+          "name": "MAX_SIZE",
+          "path": "src/p1b/module-vars.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:9c82aef0fbc93907bf050271929b000f156c0e82f0f45590b771bff9d923b921",
+          "kind": "symbol",
+          "subtype": "variable",
+          "lang": "python",
+          "name": "threshold",
+          "path": "src/p1b/module-vars.py",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 19
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "770942d26cbb9a4c34c515f588e0fbd16327ede674dca3bf7ed6702e8d5f441c",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:d2edd1cf3bea1df8cc8dd24796d1f518f7c04bdb451e8a1654c904f08af3ad7b",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "94cb9e95daac3b9b290d6dbcc7e228e7b08b10635a56dbeb42b5a30e2a995e94",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:d2edd1cf3bea1df8cc8dd24796d1f518f7c04bdb451e8a1654c904f08af3ad7b",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "8c62a56c53ce21fbaed27243e821d1eb8ab12fee3975794d842e04267b8c95e0",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:e77f25074f34ef0e413cfd5ff1410bae2573b07bb91d7d0f4b0a90a8783188ae",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "12d887b9d3bfaa8b037a40d2d8cbe5e39eb7421cbcbad3002aa1f4553e0683e3",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:e77f25074f34ef0e413cfd5ff1410bae2573b07bb91d7d0f4b0a90a8783188ae",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "a3ddb5b0841955030eb16d78ff0b97df3ac294d67cbdff2d11ec35bcaf9bb566",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:9c82aef0fbc93907bf050271929b000f156c0e82f0f45590b771bff9d923b921",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 3
+          }
+        },
+        {
+          "id": "5f7316ef1a0adbb9b9185ad23bf701d7de46b2782fcc2a86ea3be83e56b7f756",
+          "from": "file:b0f49e8825c8f622b48d62a479ec364c1f8e24abd4ba9da57ed7060d1df96493",
+          "to": "sym:9c82aef0fbc93907bf050271929b000f156c0e82f0f45590b771bff9d923b921",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/module-vars.py",
+            "line": 3
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/decorated.py": {
+    "path": "src/p1b/decorated.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:6e6189a4f60846131143954c999551c16bb01a5fc90ffa405e416c370ac761fc",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/decorated.py",
+          "path": "src/p1b/decorated.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:523bad17279a32798a18b5ecb7705e71f11a1b5735810a08469caabd7778fd10",
+          "kind": "symbol",
+          "subtype": "function",
+          "lang": "python",
+          "name": "handler",
+          "path": "src/p1b/decorated.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 16
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:38e5e041092bc00bdf79ff89f1a78e306d1757af5a4ae24330c794b6650a60d2",
+          "kind": "symbol",
+          "subtype": "class",
+          "lang": "python",
+          "name": "Plugin",
+          "path": "src/p1b/decorated.py",
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 9
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "4273d593dc03176c005a6866250390b4d27fdc1208bd4879dee60f9d9424fe43",
+          "from": "file:6e6189a4f60846131143954c999551c16bb01a5fc90ffa405e416c370ac761fc",
+          "to": "sym:523bad17279a32798a18b5ecb7705e71f11a1b5735810a08469caabd7778fd10",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/decorated.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "1f39641f6aea73979d31babd471f375e96081ede902fc23e778464f0bf3dc15c",
+          "from": "file:6e6189a4f60846131143954c999551c16bb01a5fc90ffa405e416c370ac761fc",
+          "to": "sym:523bad17279a32798a18b5ecb7705e71f11a1b5735810a08469caabd7778fd10",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/decorated.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "8608f10b9ba9170b9d6f8bf10013503d6c6071865428f463b8587e8cd79129f2",
+          "from": "file:6e6189a4f60846131143954c999551c16bb01a5fc90ffa405e416c370ac761fc",
+          "to": "sym:38e5e041092bc00bdf79ff89f1a78e306d1757af5a4ae24330c794b6650a60d2",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/decorated.py",
+            "line": 7
+          }
+        },
+        {
+          "id": "8a323e40b1d4c8401988a021886acb534752712b944af8461961011f1a0b0490",
+          "from": "file:6e6189a4f60846131143954c999551c16bb01a5fc90ffa405e416c370ac761fc",
+          "to": "sym:38e5e041092bc00bdf79ff89f1a78e306d1757af5a4ae24330c794b6650a60d2",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/decorated.py",
+            "line": 7
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/imports.py": {
+    "path": "src/p1b/imports.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/imports.py",
+          "path": "src/p1b/imports.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:10b532d1daaab3c7e7873d88215b03ea4daef49b6fcfb97b803935e9aed27bb8",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "os",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 10
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:a788278e0c9cba7150dc10079567a2de7a1c27f82abb60e2b5c790d65afc52f6",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "os.path",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 15
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:a5f73674bbfc28a63f979add81af6a5e6cfccbdc71da2614231480e5bd44d322",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "sys",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:15157108c7860d12bd2e4e33ec94292a2c2e0b4370d48f47f301990de743d2e1",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "json",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 3,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 17
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:d654d5fdf6f7b491cb9c189f27df6fd3b83555e47dbdcceee135f2769f0edb2a",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "collections",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 4,
+            "start_col": 1,
+            "end_line": 4,
+            "end_col": 49
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "OrderedDict",
+            "defaultdict"
+          ]
+        },
+        {
+          "id": "module:959d447fe614571c98118bf64fbdec1cafa36f6fde0720f0b31c5f6192fa2bfd",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "typing",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 5,
+            "start_col": 1,
+            "end_line": 5,
+            "end_col": 29
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "List"
+          ]
+        },
+        {
+          "id": "module:d1f8d743d1614af506933efcb0a3556f7909d0f07bb9178da77ccdcccd541a1f",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": ".",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 6,
+            "start_col": 1,
+            "end_line": 6,
+            "end_col": 22
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "sibling"
+          ]
+        },
+        {
+          "id": "module:03de43110775665383121db0fce6beaae6fbba876870e022ba24f85698739afa",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "..pkg",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 7,
+            "start_col": 1,
+            "end_line": 7,
+            "end_col": 25
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "helper"
+          ]
+        },
+        {
+          "id": "module:67cf3eb2f2672f29b9a950e4182aaf6a3942ba169a6e4fd121f04901204b5b5d",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "glob",
+          "path": "src/p1b/imports.py",
+          "span": {
+            "start_line": 8,
+            "start_col": 1,
+            "end_line": 8,
+            "end_col": 19
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "*"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "be2cab2e84a99f5567126b9f57277ff7f55ff8bdd6f4400e0de7cfffb60a9a9c",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:10b532d1daaab3c7e7873d88215b03ea4daef49b6fcfb97b803935e9aed27bb8",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "43e1c8683f2de86e74c244be297830cd243eafa9eac1a0d66895f0651e06efde",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:a788278e0c9cba7150dc10079567a2de7a1c27f82abb60e2b5c790d65afc52f6",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "c47bdeb248053e12c525db262b27edf3dc4770450a8c55b35dbed42c500a9bd4",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:a5f73674bbfc28a63f979add81af6a5e6cfccbdc71da2614231480e5bd44d322",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 3
+          }
+        },
+        {
+          "id": "58f6204ed70fad3d4f5f5bb8c02c0a66e85838103b6cfc2bcf44e1de7fb496ba",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:15157108c7860d12bd2e4e33ec94292a2c2e0b4370d48f47f301990de743d2e1",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 3
+          }
+        },
+        {
+          "id": "25e87208d7bb497ac2b94ef362ff0836bc9a86d7dc9022751cf4bb4e6d0e0ca8",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:d654d5fdf6f7b491cb9c189f27df6fd3b83555e47dbdcceee135f2769f0edb2a",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 4
+          }
+        },
+        {
+          "id": "be06702d2f3b27dd8440fe4b8ae5556bab7180e5696638134ee6f1746d7cf58d",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:959d447fe614571c98118bf64fbdec1cafa36f6fde0720f0b31c5f6192fa2bfd",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 5
+          }
+        },
+        {
+          "id": "6f72b835139efd6270bbf27c0d52070b9c6a2e22ba36a90fcb97ed48d125c5d0",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:d1f8d743d1614af506933efcb0a3556f7909d0f07bb9178da77ccdcccd541a1f",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 6
+          }
+        },
+        {
+          "id": "cba55103472801f15956a66fa73f5d1f791357cada32fedf11e7c4562535f4fa",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:03de43110775665383121db0fce6beaae6fbba876870e022ba24f85698739afa",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 7
+          }
+        },
+        {
+          "id": "ffd203667a68df64a1d0b43da26b25b6152e53a91926019344feaed209444145",
+          "from": "file:20c71e0286a3a9c9227eb01b92ab2d4c7b40179c5909aafe45c0230dbb401da5",
+          "to": "module:67cf3eb2f2672f29b9a950e4182aaf6a3942ba169a6e4fd121f04901204b5b5d",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/imports.py",
+            "line": 8
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/import-as.py": {
+    "path": "src/p1b/import-as.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:da57bcf5c083a5f570214ad6a50e4a898a5790f164d487061971814d803098d7",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/import-as.py",
+          "path": "src/p1b/import-as.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:bd4b432295d297336c3dd0c3cbe19886ddcb6f8925de6de50178446852c563c2",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "numpy",
+          "path": "src/p1b/import-as.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 19
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:0cf7b2e5776977da8656cdd126faf5795e9d0f01bda677c92732ea99b5d275c7",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "pandas",
+          "path": "src/p1b/import-as.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 35
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "DataFrame"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "cf6b2388ed81e44f722891fab712d0de1932de15fade53c142e8995fdb3a503d",
+          "from": "file:da57bcf5c083a5f570214ad6a50e4a898a5790f164d487061971814d803098d7",
+          "to": "module:bd4b432295d297336c3dd0c3cbe19886ddcb6f8925de6de50178446852c563c2",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/import-as.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "2fa3d7583d93940d1043d7c1e2f5d9942b226ab158633678b2ee5c60d1176323",
+          "from": "file:da57bcf5c083a5f570214ad6a50e4a898a5790f164d487061971814d803098d7",
+          "to": "module:0cf7b2e5776977da8656cdd126faf5795e9d0f01bda677c92732ea99b5d275c7",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/import-as.py",
+            "line": 2
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/import-repeat.py": {
+    "path": "src/p1b/import-repeat.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:fba0004e5cba3efda40fe72d12a3723759a4db1fcfcd9ede61242b0e2aa27c9e",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/import-repeat.py",
+          "path": "src/p1b/import-repeat.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:16ea82f790d2159661a8b21d297c135f2aeef4d5f1d40927d9daeac5b9409b92",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "collections",
+          "path": "src/p1b/import-repeat.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 36
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "OrderedDict"
+          ]
+        },
+        {
+          "id": "module:985cb38a60bb83def2acf048cfe1a70af30da42bcb73bbbd0bb493749edd9e21",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "collections",
+          "path": "src/p1b/import-repeat.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 2,
+            "end_col": 36
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "defaultdict"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "bdcab59b76800661ea7f9473bac214314da830b65887b5ea87567f6d754159d4",
+          "from": "file:fba0004e5cba3efda40fe72d12a3723759a4db1fcfcd9ede61242b0e2aa27c9e",
+          "to": "module:16ea82f790d2159661a8b21d297c135f2aeef4d5f1d40927d9daeac5b9409b92",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/import-repeat.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "e12dc84aad31cc84178e0b2b17adf08b5f4cf79b27edd57e836afa7850093619",
+          "from": "file:fba0004e5cba3efda40fe72d12a3723759a4db1fcfcd9ede61242b0e2aa27c9e",
+          "to": "module:985cb38a60bb83def2acf048cfe1a70af30da42bcb73bbbd0bb493749edd9e21",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/import-repeat.py",
+            "line": 2
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/syntax-error.py": {
+    "path": "src/p1b/syntax-error.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parse_error",
+      "nodes": [
+        {
+          "id": "file:128b735cc2a71462f0ac2b1df1ecd1c67f5de266bdfdaa8b88c2577ad0d15dfa",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/syntax-error.py",
+          "path": "src/p1b/syntax-error.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "parse_error",
+          "message": "tree contains syntax errors"
+        }
+      ]
+    }
+  },
+  "src/p1b/oversized.py": {
+    "path": "src/p1b/oversized.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "skipped_too_large",
+      "nodes": [
+        {
+          "id": "file:710e3bc87c14c8665ace65d6f724b3ba7d723e4505d07a1609780d394e075714",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/oversized.py",
+          "path": "src/p1b/oversized.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [],
+      "diagnostics": [
+        {
+          "code": "skipped_too_large",
+          "message": "file 8388608 bytes exceeds max_parse_file_bytes 1048576"
+        }
+      ]
+    },
+    "oversizedBytes": 8388608
+  },
+  "src/p1b/paren-import.py": {
+    "path": "src/p1b/paren-import.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:cec0a930242f355d783cabe6d9136d967cef4726d39cc16b59786c32726d93e0",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/paren-import.py",
+          "path": "src/p1b/paren-import.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "module:e84f4a1c914d5e27a3fbf26384fee06417a0b55f1fdbe867ac9a6aeeddd8ff81",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": ".",
+          "path": "src/p1b/paren-import.py",
+          "span": {
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 21
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "id": "module:df8d3f4bfff8faf45b0eac8c78427cc9129867e3f851095e61eb424dc349d578",
+          "kind": "module",
+          "subtype": null,
+          "lang": "python",
+          "name": "pkg",
+          "path": "src/p1b/paren-import.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 7
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": [
+            "c",
+            "d"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "5a59aef6ab78d8ddf69cb10a3397e7225df35f08d9d791a6f9433110eede7e69",
+          "from": "file:cec0a930242f355d783cabe6d9136d967cef4726d39cc16b59786c32726d93e0",
+          "to": "module:e84f4a1c914d5e27a3fbf26384fee06417a0b55f1fdbe867ac9a6aeeddd8ff81",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/paren-import.py",
+            "line": 1
+          }
+        },
+        {
+          "id": "298949b3dd9fbc99a4c76392693fbf8ab2ea0762139fea17d2a4fb57fdf47734",
+          "from": "file:cec0a930242f355d783cabe6d9136d967cef4726d39cc16b59786c32726d93e0",
+          "to": "module:df8d3f4bfff8faf45b0eac8c78427cc9129867e3f851095e61eb424dc349d578",
+          "kind": "imports",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/paren-import.py",
+            "line": 2
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  },
+  "src/p1b/toplevel-property.py": {
+    "path": "src/p1b/toplevel-property.py",
+    "lang": "python",
+    "result": {
+      "parseStatus": "parsed",
+      "nodes": [
+        {
+          "id": "file:a46fc6ecf72cfd746b61b59c7bfb13a100814eb9be1b5bf2e578c41a6f056d95",
+          "kind": "file",
+          "subtype": null,
+          "lang": "python",
+          "name": "src/p1b/toplevel-property.py",
+          "path": "src/p1b/toplevel-property.py",
+          "span": null,
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        },
+        {
+          "id": "sym:936270a47800642b8172a7f7f49cdbc5b922b8c835eb68be62ec73bae1fbcf0d",
+          "kind": "symbol",
+          "subtype": "property",
+          "lang": "python",
+          "name": "foo",
+          "path": "src/p1b/toplevel-property.py",
+          "span": {
+            "start_line": 2,
+            "start_col": 1,
+            "end_line": 3,
+            "end_col": 13
+          },
+          "exported": false,
+          "confidence": 1,
+          "related_memory_ids": [],
+          "imported_names": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "82b01ee3cdf8a419253ba54b75f658d60ef805cf1c302dbe95ab87aed956670b",
+          "from": "file:a46fc6ecf72cfd746b61b59c7bfb13a100814eb9be1b5bf2e578c41a6f056d95",
+          "to": "sym:936270a47800642b8172a7f7f49cdbc5b922b8c835eb68be62ec73bae1fbcf0d",
+          "kind": "contains",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-property.py",
+            "line": 2
+          }
+        },
+        {
+          "id": "624b2d4fbcc5153dd327e50cae75ac98db7eb3fe66c5803bf3e9477e24779a75",
+          "from": "file:a46fc6ecf72cfd746b61b59c7bfb13a100814eb9be1b5bf2e578c41a6f056d95",
+          "to": "sym:936270a47800642b8172a7f7f49cdbc5b922b8c835eb68be62ec73bae1fbcf0d",
+          "kind": "defines",
+          "confidence": 1,
+          "source": {
+            "path": "src/p1b/toplevel-property.py",
+            "line": 2
+          }
+        }
+      ],
+      "diagnostics": []
+    }
+  }
+}
