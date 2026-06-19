@@ -1,7 +1,9 @@
 /**
  * Code Map P1a — generic query-driven extraction runtime (spec §7).
  *
- * Loads the grammar via `wasm-loader`, COMPILES each query asset ONCE per
+ * Loads the grammar via the provider-supplied `grammarForLang` loader (keeping
+ * the generic runtime independent of any one provider's WASM loader), COMPILES
+ * each query asset ONCE per
  * `(providerId, lang, query-hash)` and caches the compiled `Query` process-wide
  * (Tree-sitter `Query` objects are compile-once — never recompile per file), runs
  * the tags + imports queries over a parsed file, and maps captures to an
@@ -26,8 +28,8 @@
  * The parse TREE is retained on the draft (`attributes.__tree`) until refine +
  * finalize finish; the core deletes it afterwards.
  */
-import type { Node as TsNode, Tree } from 'web-tree-sitter';
-import { getParser, getQueryClass, loadGrammar } from '../wasm-loader.js';
+import type { Node as TsNode, Tree, Parser as ParserType } from 'web-tree-sitter';
+import { getParser, getQueryClass } from '../wasm-loader.js';
 import type { CodeLang, NodeSubtype, Span } from '../types.js';
 import type {
   DefinitionDraft,
@@ -108,7 +110,7 @@ function enclosingStatement(node: TsNode): TsNode {
 function parseDefinitionCapture(
   name: string,
 ): { subtype: string; role: 'node' | 'name' | 'exported' } | null {
-  const m = /^definition\.([a-z_]+)\.(node|name|exported)$/.exec(name);
+  const m = /^definition\.(.+)\.(node|name|exported)$/.exec(name);
   if (!m) return null;
   return { subtype: m[1], role: m[2] as 'node' | 'name' | 'exported' };
 }
@@ -122,6 +124,8 @@ export interface QueryRuntimeInput {
   readonly maxParseFileBytes: number;
   readonly maxQueryWaitMs?: number;
   readonly path: string;
+  /** Provider grammar loader — keeps the runtime independent of the JS/TS loader. */
+  readonly grammarForLang: (lang: CodeLang) => Promise<unknown>;
   /** Query assets + their per-lang hashes. */
   readonly tagsSource: string;
   readonly tagsHash: string;
@@ -178,11 +182,14 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
 
   // --- Parse (bounded by max_query_wait_ms) ---
   let tree: Tree;
+  let parser: ParserType | null = null;
   try {
-    const grammar = await loadGrammar(input.lang);
+    const grammar = await input.grammarForLang(input.lang);
     const Parser = await getParser();
-    const parser = new Parser();
-    parser.setLanguage(grammar);
+    parser = new Parser();
+    // `grammarForLang` returns the engine-opaque grammar handle (typed `unknown` so
+    // the runtime stays provider-agnostic); it IS a web-tree-sitter Language here.
+    parser.setLanguage(grammar as Parameters<ParserType['setLanguage']>[0]);
     const deadline = input.maxQueryWaitMs;
     if (typeof deadline === 'number' && deadline > 0) {
       // web-tree-sitter parse is synchronous; the bound is advisory. We honor it by
@@ -215,6 +222,17 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
   } catch (err) {
     facts.push({ code: 'parse_error', message: err instanceof Error ? err.message : String(err) });
     return emptyDraft('parse_error', null);
+  } finally {
+    // The per-file parser is no longer needed once parse() returns; the TREE stays
+    // alive for refine/finalize. Delete the parser (best effort) so each file does
+    // not leak a web-tree-sitter Parser instance.
+    if (parser) {
+      try {
+        parser.delete();
+      } catch {
+        /* best effort */
+      }
+    }
   }
 
   const definitions: DefinitionDraft[] = [];
@@ -222,7 +240,7 @@ export async function extractWithQueries(input: QueryRuntimeInput): Promise<Extr
   const exports: ExportDraft[] = [];
 
   try {
-    const grammar = await loadGrammar(input.lang);
+    const grammar = await input.grammarForLang(input.lang);
     const tagsQuery = await compileCached(
       input.providerId,
       input.lang,

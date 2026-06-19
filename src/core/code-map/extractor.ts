@@ -28,6 +28,8 @@ export interface ExtractInput {
   source: string;
   sizeBytes: number;
   maxParseFileBytes: number;
+  /** Bounds parse + query execution (NOT refine/finalize); from extractor config. */
+  maxQueryWaitMs?: number;
 }
 
 export interface ExtractResult {

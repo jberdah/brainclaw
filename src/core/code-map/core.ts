@@ -78,6 +78,7 @@ export async function extractFile(
     source: input.source,
     sizeBytes: input.sizeBytes,
     maxParseFileBytes: input.maxParseFileBytes,
+    maxQueryWaitMs: input.maxQueryWaitMs,
   };
   void lang;
 

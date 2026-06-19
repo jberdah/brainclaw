@@ -141,8 +141,13 @@ async function loadEngineGlue(): Promise<EngineGlue> {
   return glueLoadPromise;
 }
 
-/** Parser constructor from the lazily-loaded engine glue (parse path only). */
+/**
+ * Parser constructor from the lazily-loaded engine glue (parse path only). Awaits
+ * {@link initEngine} first so any caller constructs a parser off an INITIALIZED
+ * engine — a parser built before `Parser.init()` would brick on first use.
+ */
 export async function getParser(): Promise<typeof ParserType> {
+  await initEngine();
   const glue = await loadEngineGlue();
   return glue.Parser;
 }

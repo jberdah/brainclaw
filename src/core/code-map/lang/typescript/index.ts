@@ -247,6 +247,7 @@ export class TypeScriptProvider implements CodeLanguageProvider {
       maxParseFileBytes: input.maxParseFileBytes,
       maxQueryWaitMs: input.maxQueryWaitMs,
       path: input.path,
+      grammarForLang: this.parser.grammarForLang,
       tagsSource: tags.source,
       tagsHash: tags.hash,
       importsSource: IMPORTS,
