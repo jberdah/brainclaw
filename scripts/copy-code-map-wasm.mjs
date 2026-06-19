@@ -78,7 +78,30 @@ for (const [spec, name] of grammars) {
   grammarOk = copyResolved(spec, wasmDir, name) && grammarOk;
 }
 
-if (engineOk && grammarOk && glueOk) {
+// Curated tree-sitter query assets (.scm) -> next to the compiled provider in
+// dist. tsc only emits .js; the TypeScriptProvider reads these by import.meta.url
+// (dist/core/code-map/lang/typescript/), so a published package can resolve them
+// without the src/ tree. (Tests fall back to src/ via the repo-root walk.)
+let scmOk = true;
+try {
+  const scmSrcDir = 'src/core/code-map/lang/typescript';
+  const scmDestDir = 'dist/core/code-map/lang/typescript';
+  fs.mkdirSync(scmDestDir, { recursive: true });
+  for (const name of ['tags.scm', 'tags.js.scm', 'imports.scm']) {
+    const src = path.join(scmSrcDir, name);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(scmDestDir, name));
+    } else {
+      scmOk = false;
+      console.warn(`[copy-code-map-wasm] query asset missing: ${src}`);
+    }
+  }
+} catch (err) {
+  scmOk = false;
+  console.warn(`[copy-code-map-wasm] could not copy query assets: ${err.message}`);
+}
+
+if (engineOk && grammarOk && glueOk && scmOk) {
   console.log(
     '[copy-code-map-wasm] bundled engine + 3 grammar wasm into dist/wasm/ and vendored JS glue into dist/vendor/web-tree-sitter/',
   );
