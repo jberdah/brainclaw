@@ -43,7 +43,9 @@ Don't grep the repo blind. Orient with the Code Map first:
 \`\`\`bash
 brainclaw code-map brief <symbol-or-path>   # ranked reading list + related decisions/traps (MCP: bclaw_code_brief)
 brainclaw code-map find <name>              # locate a symbol/class/component (MCP: bclaw_code_find)
-brainclaw code-map status                   # freshness — if missing_index/stale, run: code-map refresh --all
+brainclaw code-map status                   # freshness
+brainclaw code-map refresh --all            # when status is missing_index
+brainclaw code-map refresh --changed        # when status is stale_*
 \`\`\`
 
 ### Before finishing (required)

@@ -58,4 +58,37 @@ describe('code-map ignore — nested ignored directories', () => {
       );
     }
   });
+
+  it('does not ignore real source under internal-docs, only vendored desktop runtime copies', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-codemap-ignore-'));
+    cleanupDirs.push(root);
+
+    write(root, 'internal-docs/real-source.ts', 'export function documentedSource(): number { return 1; }');
+    write(
+      root,
+      'internal-docs/desktop-extensions/demo/runtime/mirror.ts',
+      'export function runtimeMirror(): number { return 2; }',
+    );
+
+    const res = await refresh({
+      projectId: 'prj_ignore_internal_docs',
+      projectRoot: root,
+      scope: 'all',
+      cwd: root,
+      disableGit: true,
+    });
+    assert.equal(res.ran, true);
+    assert.equal(res.files_parsed, 1, 'generic internal-docs source is indexed; runtime mirror is ignored');
+
+    const be = new JsonlBackend();
+    assert.ok(
+      (await be.find({ query: 'documentedSource', cwd: root })).matches.length > 0,
+      'real source under internal-docs is indexed',
+    );
+    assert.equal(
+      (await be.find({ query: 'runtimeMirror', cwd: root })).matches.length,
+      0,
+      'vendored desktop runtime mirror is ignored',
+    );
+  });
 });
