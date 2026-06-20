@@ -11,7 +11,7 @@
  * `resolveImport` is DECLARED but never called in P1a (import resolution EXECUTION
  * is P1c) — it pins the shape so P1c is additive.
  */
-import type { CodeLang } from '../types.js';
+import type { CodeLang, Span } from '../types.js';
 import type { CaptureMapping, ProviderVocabularyDeclaration } from '../vocabulary.js';
 import type { ExtractionDraft } from '../drafts.js';
 
@@ -102,15 +102,39 @@ export interface ExtractionServices {
   readonly version: string;
 }
 
-/** A P1c import-resolution request (declared-but-unused in P1a). */
+/**
+ * A P1c import-resolution request. `source`/`fromPath` drive file-level (v1)
+ * resolution; `importedNames` + `span` are carried NOW (already on the module node)
+ * so symbol-level (B) is additive — no request-contract rewrite for
+ * `import {foo as bar}` / `from x import y` / default / namespace (Codex R1 #3).
+ */
 export interface ImportResolutionRequest {
+  /** The module specifier as written (e.g. `./utils`, `react`, `app.models.user`). */
   readonly source: string;
+  /** Project-relative POSIX path of the importing file. */
   readonly fromPath: string;
+  /** Source-side imported binding names (default→"default", namespace→"*"). For B. */
+  readonly importedNames: readonly string[];
+  /** The import statement span (the module node's identity span). For B + diagnostics. */
+  readonly span?: Span;
 }
 
-/** A P1c import resolution (declared-but-unused in P1a). */
+/**
+ * Pure project resolver services injected into `resolveImport` (Codex R1 #3/#5): a
+ * provider does PATH LOGIC ONLY — it never reads disk and never mints ids.
+ * `fileExists` answers "is this project-relative POSIX path an INDEXED file"
+ * (resolution targets are indexed files); `langOfFile` returns an indexed file's
+ * runtime lang (so the core can mint the target file-node id).
+ */
+export interface ResolveImportContext {
+  fileExists(relPath: string): boolean;
+  langOfFile(relPath: string): CodeLang | undefined;
+}
+
+/** A P1c import resolution: the provider-verified target PATH + confidence (the core mints the edge/target ids). */
 export interface ImportResolution {
   readonly source: string;
+  /** Project-relative POSIX path of the resolved target file, or null when unresolved/external. */
   readonly resolvedPath: string | null;
   readonly confidence: number;
 }
@@ -144,10 +168,17 @@ export interface CodeLanguageProvider {
   /** Optional drafts-only refinement (React reclassification etc.). */
   refine?(draft: ExtractionDraft, ctx: RefineContext): ExtractionDraft | Promise<ExtractionDraft>;
 
-  /** P1c — DECLARED but never called in P1a. */
+  /**
+   * P1c import resolution (file-level v1). Resolve one import's `source` (relative
+   * to `req.fromPath`) to a project-internal target FILE path using the pure `ctx`
+   * services. Return resolutions (path + confidence); `[]` or a null `resolvedPath`
+   * when external/unresolved → the core emits NO `resolves_to` edge. The provider
+   * returns PATHS only; the core mints the edge + target file id (dec#108/#109).
+   * Optional: a provider without a resolver leaves the pass a no-op for its files.
+   */
   resolveImport?(
     req: ImportResolutionRequest,
-    ctx: RefineContext,
+    ctx: ResolveImportContext,
   ): Promise<readonly ImportResolution[]>;
 }
 

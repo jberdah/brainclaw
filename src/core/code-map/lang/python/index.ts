@@ -36,11 +36,14 @@ import { extractWithQueries } from '../query-runtime.js';
 import type {
   CodeLanguageProvider,
   ExtractionServices,
+  ImportResolution,
+  ImportResolutionRequest,
   ParserDeclaration,
   ProviderCapabilityDeclaration,
   ProviderExtractInput,
   QueryDeclarations,
   RefineContext,
+  ResolveImportContext,
 } from '../provider.js';
 import type { ProviderVocabularyDeclaration } from '../../vocabulary.js';
 
@@ -130,14 +133,81 @@ const vocabulary: ProviderVocabularyDeclaration = {
 };
 
 const capabilities: ProviderCapabilityDeclaration = {
-  tiers: ['T1.definitions', 'T2.imports'],
+  tiers: ['T1.definitions', 'T2.imports', 'T3.import_resolution'],
   proven: {
     'T1.definitions': true,
     'T2.imports': true,
-    'T3.import_resolution': false,
+    'T3.import_resolution': true,
     'T4.tests_for': false,
   },
 };
+
+/**
+ * P1c file-level import resolution for Python (cadrage v2 §"Python"). Maps an import
+ * source string — as the provider emits it on the `module` node `name` — to a single
+ * project-internal target FILE path, or `null` (stdlib / site-packages / unresolved).
+ *
+ * Source forms (verified against the provider's golden):
+ *  - absolute dotted: `os`, `os.path`, `collections`, `pkg`, `a.b.c`
+ *  - relative: leading dots count the package level — `.` / `..` (bare, from
+ *    `from . import x`), `.mod`, `..pkg`, `..pkg.sub`.
+ *
+ * Resolution (PEP 328 file-level approximation):
+ *  - relative: N leading dots ⇒ start at the importer's DIRECTORY and walk up (N-1)
+ *    levels (1 dot = current package). The remaining dotted tail (after the dots) is
+ *    a sub-path; empty tail (bare `.`/`..`) targets that package's `__init__.py`.
+ *  - absolute dotted: resolve project-ROOT-relative (`a.b.c` → `a/b/c.py` |
+ *    `a/b/c/__init__.py`). Stdlib / third-party names simply won't exist as project
+ *    files → `null` (no edge). v1 does NOT model `src/`-layout sys.path roots — a
+ *    documented limitation; symbol/submodule precision (`from . import sib` → the
+ *    `sib` SUBMODULE rather than the package `__init__`) is the P1c-B follow-up.
+ *
+ * Candidate order is `module.py` before `package/__init__.py` (a regular module
+ * shadows a package of the same dotted name in CPython import order). The CORE
+ * verifies existence via `ctx.fileExists` and owns id/edge minting — this returns a
+ * path only (dec#108/#109).
+ */
+function resolvePyImport(source: string, fromPath: string, ctx: ResolveImportContext): string | null {
+  const candidates: string[] = [];
+
+  if (source.startsWith('.')) {
+    let dots = 0;
+    while (source[dots] === '.') dots++;
+    const tail = source.slice(dots); // after the dots: '' | 'mod' | 'pkg.sub'
+    let base = path.posix.dirname(toPosixPy(fromPath)); // current package dir (1 dot)
+    let escapedRoot = false;
+    for (let up = 1; up < dots; up++) {
+      if (base === '' || base === '.' || base === '/') {
+        escapedRoot = true;
+        break;
+      }
+      base = path.posix.dirname(base); // ..  = parent, etc.
+    }
+    if (escapedRoot) return null;
+    if (base === '.' || base === '/') base = '';
+    const prefix = base ? `${base}/` : '';
+    if (tail === '') {
+      candidates.push(`${prefix}__init__.py`); // the package itself
+    } else {
+      const sub = tail.replace(/\./g, '/');
+      candidates.push(`${prefix}${sub}.py`, `${prefix}${sub}/__init__.py`);
+    }
+  } else {
+    // Absolute dotted module, resolved project-root-relative.
+    const sub = source.replace(/\./g, '/');
+    candidates.push(`${sub}.py`, `${sub}/__init__.py`);
+  }
+
+  for (const c of candidates) {
+    const norm = c.replace(/^\.\//, '');
+    if (ctx.fileExists(norm)) return norm;
+  }
+  return null;
+}
+
+function toPosixPy(p: string): string {
+  return p.replace(/\\/g, '/');
+}
 
 /** A sourceNode handle the runtime attaches to definition drafts. */
 interface DefSourceNode {
@@ -252,6 +322,20 @@ export class PythonProvider implements CodeLanguageProvider {
       return d;
     });
     return { ...draft, definitions };
+  }
+
+  /**
+   * P1c file-level import resolution (T3). Returns at most one resolution per import:
+   * the resolved project-internal target file path, or `resolvedPath: null` when the
+   * specifier points outside the project (stdlib / site-packages / unresolved). The
+   * CORE pass filters out `null` paths and mints the `resolves_to` edge.
+   */
+  async resolveImport(
+    req: ImportResolutionRequest,
+    ctx: ResolveImportContext,
+  ): Promise<readonly ImportResolution[]> {
+    const resolvedPath = resolvePyImport(req.source, req.fromPath, ctx);
+    return [{ source: req.source, resolvedPath, confidence: resolvedPath ? 1.0 : 0 }];
   }
 }
 
