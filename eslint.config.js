@@ -19,6 +19,8 @@ export default tseslint.config(
       'vscode-extension/**', // has its own toolchain
       '**/*.d.ts',
       'scripts/**', // build/release scripts — not part of the shipped surface
+      'tests/fixtures/**', // test INPUT data (e.g. Code Map extractor fixtures with
+                           // intentional `var` / syntax errors) — not lintable source
     ],
   },
   js.configs.recommended,
