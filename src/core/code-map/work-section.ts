@@ -209,3 +209,44 @@ export async function codeMapWorkSection(
     ...(lockWaitMs !== undefined ? { lock_wait_ms: lockWaitMs } : {}),
   };
 }
+
+/** A next_action suggestion (mirrors the bclaw_work `next_actions` element shape). */
+export interface CodeMapNextAction {
+  tool: string;
+  args: Record<string, unknown>;
+  when: string;
+}
+
+/**
+ * Derive the onboarding/freshness next_action(s) from a Code Map work section
+ * (pln#588 adoption). The passive `missing_index` hint string was easy for agents
+ * to skip; promoting the refresh to a first-class `next_action` makes a fresh or
+ * stale project's first `bclaw_work` actively nudge the agent to build/update the
+ * index — without ever refreshing here. Pure + side-effect-free so it can be
+ * unit-locked; the bclaw_work handler spreads the result into its next_actions.
+ *  - missing_index -> build the whole index (`scope: all`)
+ *  - stale_*       -> refresh changed files (`scope: changed`)
+ *  - fresh/partial/null -> nothing (don't nag on a usable index or a transient lock)
+ */
+export function codeMapRefreshNextActions(section: CodeMapWorkSection | null): CodeMapNextAction[] {
+  if (!section) return [];
+  if (section.missing_index) {
+    return [
+      {
+        tool: 'bclaw_code_refresh',
+        args: { scope: 'all' },
+        when: 'Code Map index is empty — build it so bclaw_code_find/brief can orient you before editing',
+      },
+    ];
+  }
+  if (section.freshness_badge?.status?.startsWith('stale_')) {
+    return [
+      {
+        tool: 'bclaw_code_refresh',
+        args: { scope: 'changed' },
+        when: 'Code Map is stale — refresh changed files before relying on bclaw_code_find/brief',
+      },
+    ];
+  }
+  return [];
+}

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { refresh } from '../../../src/core/code-map/refresh.js';
 import { runCodeMap } from '../../../src/commands/code-map.js';
 import { executeMcpToolCall } from '../../../src/commands/mcp.js';
-import { codeMapWorkSection, WORK_SECTION_MAX_WAIT_MS } from '../../../src/core/code-map/work-section.js';
+import { codeMapWorkSection, codeMapRefreshNextActions, WORK_SECTION_MAX_WAIT_MS } from '../../../src/core/code-map/work-section.js';
+import type { CodeMapWorkSection } from '../../../src/core/code-map/work-section.js';
 import { readManifest, writeManifest } from '../../../src/core/code-map/store.js';
 import { codeMapDir, lockPath } from '../../../src/core/code-map/paths.js';
 
@@ -334,5 +335,42 @@ describe('codeMapWorkSection (bclaw_work integration, spec §10)', () => {
     // Abandoned lock does not force partial; serves the fresh index.
     assert.equal(section!.freshness_badge.status, 'fresh');
     assert.ok(section!.matches.some((m) => m.name === 'App'));
+  });
+});
+
+describe('codeMapRefreshNextActions (bclaw_work onboarding nudge, pln#588)', () => {
+  const base = (over: Partial<CodeMapWorkSection>): CodeMapWorkSection => ({
+    enabled: true,
+    matches: [],
+    freshness_badge: { status: 'fresh', details: {} },
+    ...over,
+  });
+
+  it('null section -> no next_actions', () => {
+    assert.deepEqual(codeMapRefreshNextActions(null), []);
+  });
+
+  it('missing_index -> bclaw_code_refresh scope=all', () => {
+    const out = codeMapRefreshNextActions(
+      base({ missing_index: 'empty', freshness_badge: { status: 'missing_index', details: {} } }),
+    );
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.tool, 'bclaw_code_refresh');
+    assert.equal((out[0]!.args as { scope?: string }).scope, 'all');
+  });
+
+  it('stale_changed_files -> bclaw_code_refresh scope=changed', () => {
+    const out = codeMapRefreshNextActions(base({ freshness_badge: { status: 'stale_changed_files', details: {} } }));
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.tool, 'bclaw_code_refresh');
+    assert.equal((out[0]!.args as { scope?: string }).scope, 'changed');
+  });
+
+  it('fresh -> no nudge (do not nag a usable index)', () => {
+    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { status: 'fresh', details: {} } })), []);
+  });
+
+  it('partial (transient lock) -> no nudge', () => {
+    assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { status: 'partial', details: {} } })), []);
   });
 });

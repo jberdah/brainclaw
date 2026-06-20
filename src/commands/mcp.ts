@@ -85,7 +85,7 @@ import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
-import { codeMapWorkSection } from '../core/code-map/work-section.js';
+import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode, validateAgentForDispatch } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
@@ -5412,6 +5412,14 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         });
       } catch {
         // Best-effort: Code Map must never break or block bclaw_work.
+      }
+
+      // Code Map onboarding/freshness nudge (pln#588): promote the actionable
+      // refresh to a first-class next_action so a fresh or stale project's first
+      // bclaw_work TELLS the agent to build/update the index — the passive
+      // missing_index hint alone was easy to skip. Still never refreshes here.
+      for (const action of codeMapRefreshNextActions(codeMapSection)) {
+        nextActions.push(action);
       }
 
       const facadeResponse: FacadeResponse = {
