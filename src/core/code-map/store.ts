@@ -15,11 +15,13 @@ import {
   ImportsIndexSchema,
   ManifestSchema,
   ProfilerSchema,
+  ResolutionIndexSchema,
   SymbolsIndexSchema,
   type FileShard,
   type ImportsIndex,
   type Manifest,
   type Profiler,
+  type ResolutionIndex,
   type SymbolsIndex,
 } from './types.js';
 import {
@@ -29,6 +31,7 @@ import {
   indexesDir,
   manifestPath,
   profilerPath,
+  resolutionIndexPath,
   shardPath,
   symbolsIndexPath,
 } from './paths.js';
@@ -218,6 +221,23 @@ export function readImportsIndex(cwd?: string, preferredDirName?: string): Impor
 export function writeImportsIndex(index: ImportsIndex, cwd?: string, preferredDirName?: string): void {
   ensureDir(indexesDir(cwd, preferredDirName));
   writeFileAtomic(importsIndexPath(cwd, preferredDirName), JSON.stringify(index, null, 2));
+}
+
+export function readResolutionIndex(cwd?: string, preferredDirName?: string): ResolutionIndex | null {
+  const raw = readJsonFile(resolutionIndexPath(cwd, preferredDirName));
+  if (raw === null) return null;
+  const parsed = ResolutionIndexSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  // Re-home both maps onto null-proto objects so a key like 'constructor' /
+  // 'toString' (a path or node id) can't resolve to an inherited prototype member.
+  parsed.data.dependents_by_file = Object.assign(Object.create(null), parsed.data.dependents_by_file);
+  parsed.data.dependents_by_symbol = Object.assign(Object.create(null), parsed.data.dependents_by_symbol);
+  return parsed.data;
+}
+
+export function writeResolutionIndex(index: ResolutionIndex, cwd?: string, preferredDirName?: string): void {
+  ensureDir(indexesDir(cwd, preferredDirName));
+  writeFileAtomic(resolutionIndexPath(cwd, preferredDirName), JSON.stringify(index, null, 2));
 }
 
 /** True when a Code Map store has been initialized for this project. */

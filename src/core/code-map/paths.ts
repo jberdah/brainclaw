@@ -49,6 +49,10 @@ export function importsIndexPath(cwd?: string, preferredDirName?: string): strin
   return path.join(indexesDir(cwd, preferredDirName), 'index.imports.v1.json');
 }
 
+export function resolutionIndexPath(cwd?: string, preferredDirName?: string): string {
+  return path.join(indexesDir(cwd, preferredDirName), 'index.resolution.v1.json');
+}
+
 export function materializedDir(cwd?: string, preferredDirName?: string): string {
   return path.join(codeMapDir(cwd, preferredDirName), 'materialized');
 }

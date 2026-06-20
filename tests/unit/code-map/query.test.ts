@@ -154,6 +154,64 @@ describe('code-map brief()', () => {
   });
 });
 
+describe('code-map P1d brief graph signals (resolution surfaced)', () => {
+  // fixture: src/app/App.tsx  `import { useAuth } from '../hooks/useAuth'`
+  //          src/hooks/useAuth.ts  `export function useAuth()`
+  it('brief("useAuth") surfaces App.tsx as a DEPENDENT (reverse / blast radius)', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+    const be = backend(root);
+    const brief = await be.brief({ target: 'useAuth', cwd: root });
+    const app = brief.suggested_files_to_read.find((f) => f.path === 'src/app/App.tsx');
+    assert.ok(app, 'App.tsx (importer of useAuth) appears in the reading list');
+    // reverse (+5) outranks the import-specifier heuristic (+3): the graph reason wins.
+    assert.match(app!.reason, /imports the matching symbol useAuth/);
+  });
+
+  it('brief("App") surfaces useAuth.ts as a FORWARD dependency (resolved)', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+    const be = backend(root);
+    const brief = await be.brief({ target: 'App', cwd: root });
+    assert.equal(brief.suggested_files_to_read[0]!.path, 'src/app/App.tsx', 'defining still top');
+    const dep = brief.suggested_files_to_read.find((f) => f.path === 'src/hooks/useAuth.ts');
+    assert.ok(dep, 'useAuth.ts (a resolved dependency of App) appears');
+    assert.match(dep!.reason, /imported by the matching symbol \(resolved\): useAuth/);
+  });
+
+  it('a deleted importer is not surfaced as a stale graph dependent', async () => {
+    const root = tmpProject();
+    fixture(root);
+    await refreshAll(root);
+    // delete App.tsx on disk AFTER refresh (reverse index still lists it).
+    fs.rmSync(path.join(root, 'src/app/App.tsx'));
+    const be = backend(root);
+    const brief = await be.brief({ target: 'useAuth', cwd: root });
+    assert.ok(
+      !brief.suggested_files_to_read.some((f) => f.path === 'src/app/App.tsx'),
+      'deleted importer suppressed (no silent stale graph hint)',
+    );
+  });
+
+  it('prefers an EXACT symbol match as the defining file (not same-token siblings)', async () => {
+    const root = tmpProject();
+    // parseConfig and parseConfigFile share tokens (parse, config) but only one is exact.
+    writeSrc(root, 'src/a.ts', `export function parseConfig() { return 1; }\n`);
+    writeSrc(root, 'src/b.ts', `export function parseConfigFile() { return 2; }\n`);
+    await refreshAll(root);
+    const be = backend(root);
+    const brief = await be.brief({ target: 'parseConfig', cwd: root });
+    const a = brief.suggested_files_to_read.find((f) => f.path === 'src/a.ts');
+    assert.ok(a, 'the exact-match file is present');
+    assert.match(a!.reason, /defines matching symbol parseConfig\b/, 'a.ts is the defining file');
+    // b.ts (parseConfigFile) must NOT be presented as a defining match for parseConfig.
+    const b = brief.suggested_files_to_read.find((f) => f.path === 'src/b.ts');
+    if (b) assert.doesNotMatch(b.reason, /defines matching symbol/, 'same-token sibling is not "defining"');
+  });
+});
+
 describe('code-map lazy read-path freshness (spec §6.1)', () => {
   it('detects a modified file (mtime/size + hash) -> stale_changed_files badge', async () => {
     const root = tmpProject();

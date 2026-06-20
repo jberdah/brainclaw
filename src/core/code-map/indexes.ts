@@ -11,12 +11,15 @@
  */
 import {
   CODE_MAP_SCHEMA_VERSION,
+  type DependencyIndexEntry,
   type FileShard,
   type ImportIndexEntry,
   type ImportsIndex,
+  type ResolutionIndex,
   type SymbolIndexEntry,
   type SymbolsIndex,
 } from './types.js';
+import { fileNodeId } from './ids.js';
 
 /** Lowercase token normalization (spec §5.6 keys). */
 function tokenize(name: string): string[] {
@@ -118,5 +121,99 @@ export function buildImportsIndex(projectId: string, shards: FileShard[]): Impor
     project_id: projectId,
     updated_at: new Date().toISOString(),
     entries,
+  };
+}
+
+/**
+ * P1d reverse-dependency index: "who imports this target". Derived from the P1c
+ * resolution edges that live on each IMPORTER's shard:
+ *  - `resolves_to` (module → target FILE node) → `dependents_by_file[targetPath]`
+ *  - `imports_symbol` (module → target SYMBOL node) → `dependents_by_symbol[nodeId]`
+ *
+ * `resolves_to.to` is a file NODE ID (not a path), so we invert fileNodeId→path by
+ * computing the id for every indexed shard (Codex review). One entry per (target,
+ * importer file): multiple module nodes in one importer that hit the same target are
+ * merged (imported names unioned, strongest confidence, lexicographically-smallest
+ * specifier) for byte-stable output. Deterministic key + array ordering.
+ */
+export function buildResolutionIndex(projectId: string, shards: FileShard[]): ResolutionIndex {
+  // Invert file-node id → path so reverse resolves_to can be keyed by target path.
+  const fileNodeIdToPath = new Map<string, string>();
+  for (const shard of shards) {
+    fileNodeIdToPath.set(fileNodeId(projectId, shard.path, shard.lang), shard.path);
+  }
+
+  // target key -> (importer path -> merged entry)
+  const byFile = new Map<string, Map<string, DependencyIndexEntry>>();
+  const bySymbol = new Map<string, Map<string, DependencyIndexEntry>>();
+
+  const addDependent = (
+    bucket: Map<string, Map<string, DependencyIndexEntry>>,
+    targetKey: string,
+    importerPath: string,
+    importerFileId: string,
+    module: string | undefined,
+    imported: readonly string[],
+    confidence: number | undefined,
+  ): void => {
+    const perImporter = bucket.get(targetKey) ?? new Map<string, DependencyIndexEntry>();
+    const prev = perImporter.get(importerPath);
+    if (!prev) {
+      perImporter.set(importerPath, {
+        path: importerPath,
+        file_id: importerFileId,
+        module,
+        imported: [...new Set(imported)].sort(),
+        confidence,
+      });
+    } else {
+      // Merge a second edge from the same importer to the same target.
+      const mergedNames = new Set(prev.imported);
+      for (const n of imported) mergedNames.add(n);
+      prev.imported = [...mergedNames].sort();
+      if (module && (!prev.module || module < prev.module)) prev.module = module; // smallest spec, stable
+      if (typeof confidence === 'number') {
+        prev.confidence = typeof prev.confidence === 'number' ? Math.max(prev.confidence, confidence) : confidence;
+      }
+    }
+    bucket.set(targetKey, perImporter);
+  };
+
+  const ordered = [...shards].sort((a, b) => a.path.localeCompare(b.path));
+  for (const shard of ordered) {
+    // module node id -> its specifier + imported names (for reason metadata).
+    const moduleById = new Map<string, { name: string; imported: readonly string[] }>();
+    for (const n of shard.nodes) {
+      if (n.kind === 'module') moduleById.set(n.id, { name: n.name, imported: n.imported_names ?? [] });
+    }
+    for (const e of shard.edges) {
+      if (e.kind !== 'resolves_to' && e.kind !== 'imports_symbol') continue;
+      const mod = moduleById.get(e.from);
+      if (e.kind === 'resolves_to') {
+        const targetPath = fileNodeIdToPath.get(e.to);
+        if (!targetPath) continue; // target id not an indexed file (defensive)
+        addDependent(byFile, targetPath, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence);
+      } else {
+        addDependent(bySymbol, e.to, shard.path, shard.file_id, mod?.name, mod?.imported ?? [], e.confidence);
+      }
+    }
+  }
+
+  const finalize = (
+    bucket: Map<string, Map<string, DependencyIndexEntry>>,
+  ): Record<string, DependencyIndexEntry[]> => {
+    const out: Record<string, DependencyIndexEntry[]> = Object.create(null);
+    for (const key of [...bucket.keys()].sort()) {
+      out[key] = [...bucket.get(key)!.values()].sort((a, b) => a.path.localeCompare(b.path));
+    }
+    return out;
+  };
+
+  return {
+    schema_version: CODE_MAP_SCHEMA_VERSION,
+    project_id: projectId,
+    updated_at: new Date().toISOString(),
+    dependents_by_file: finalize(byFile),
+    dependents_by_symbol: finalize(bySymbol),
   };
 }

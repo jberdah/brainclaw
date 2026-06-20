@@ -324,6 +324,45 @@ export const ImportsIndexSchema = z.object({
 });
 export type ImportsIndex = z.infer<typeof ImportsIndexSchema>;
 
+// --- resolution index (P1d) — reverse dependency maps over the P1c graph ---
+
+/**
+ * One DEPENDENT of a target (file or symbol): the importing file + enough metadata
+ * to lazy-validate it (file_id) and explain WHY it appears (module specifier the
+ * import was written as, source-side imported names, edge confidence).
+ */
+export const DependencyIndexEntrySchema = z.object({
+  /** Importer file path (POSIX, store identity). */
+  path: z.string(),
+  /** Importer shard file id (for read-path freshness validation). */
+  file_id: Sha256Hash,
+  /** Module specifier the importer wrote (e.g. `./b`, `.core`), for reason text. */
+  module: z.string().optional(),
+  /** Source-side imported names carried on the importing module node. */
+  imported: z.array(z.string()).default([]),
+  /** Resolution edge confidence (inherited from the A file resolution). */
+  confidence: z.number().optional(),
+});
+export type DependencyIndexEntry = z.infer<typeof DependencyIndexEntrySchema>;
+
+/**
+ * Reverse dependency index (P1d): "who imports this target". Built at refresh from
+ * the in-memory shards' `resolves_to` / `imports_symbol` edges (post-pass), so
+ * `bclaw_code_brief` can surface a target's dependents (blast radius) without a
+ * read-path scan of every shard. Forward deps are read straight from a target's own
+ * shard, so they need no index.
+ */
+export const ResolutionIndexSchema = z.object({
+  schema_version: z.number().int().default(CODE_MAP_SCHEMA_VERSION),
+  project_id: z.string(),
+  updated_at: z.string(),
+  /** Keys are TARGET file paths (reverse `resolves_to`). */
+  dependents_by_file: z.record(z.string(), z.array(DependencyIndexEntrySchema)).default({}),
+  /** Keys are TARGET symbol node ids (reverse `imports_symbol`). */
+  dependents_by_symbol: z.record(z.string(), z.array(DependencyIndexEntrySchema)).default({}),
+});
+export type ResolutionIndex = z.infer<typeof ResolutionIndexSchema>;
+
 // --- .lock (spec §5.8) ---
 
 export const CodeLockSchema = z.object({
