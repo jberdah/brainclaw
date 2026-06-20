@@ -48,6 +48,16 @@ describe('buildWorkerIdentityEnv (F7 — worker identity scrub)', () => {
     assert.equal(buildWorkerIdentityEnv({ PATH: '/x' }, { agent: 'codex' }).BRAINCLAW_CLAIM_ID, undefined);
   });
 
+  it('does NOT inherit a parent BRAINCLAW_CLAIM_ID when no real claim is supplied (codev/dry-run)', () => {
+    const base: NodeJS.ProcessEnv = { ...coordinatorEnv, BRAINCLAW_CLAIM_ID: 'clm_parent' };
+    // codev/codev-rounds call sites pass only { agent } → must not adopt the coordinator's claim
+    assert.equal(buildWorkerIdentityEnv(base, { agent: 'codex' }).BRAINCLAW_CLAIM_ID, undefined);
+    // dry-run dispatch must not adopt it either
+    assert.equal(buildWorkerIdentityEnv(base, { agent: 'codex', claimId: '(dry-run)' }).BRAINCLAW_CLAIM_ID, undefined);
+    // a real claim still overrides the inherited one
+    assert.equal(buildWorkerIdentityEnv(base, { agent: 'codex', claimId: 'clm_new' }).BRAINCLAW_CLAIM_ID, 'clm_new');
+  });
+
   it('extraEnv CANNOT reintroduce scrubbed coordinator identity (scrub runs last)', () => {
     const env = buildWorkerIdentityEnv(coordinatorEnv, {
       agent: 'codex',

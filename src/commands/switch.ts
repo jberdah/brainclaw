@@ -259,7 +259,16 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
   if (options.global) {
     // Opt-in, audited: set the SHARED workspace default for every agent on the
     // host. Bypasses the session entirely (an operator setting a default).
-    const resolved = resolveProjectRef(projectRef, cwd);
+    // Resolve store-chain children AND cross-project links (mirror switchProject)
+    // so `switch <linked> --global` matches what --list shows and what the
+    // session path can target (Codex final review F3-F5 finding).
+    let resolved = resolveProjectRef(projectRef, cwd);
+    if (!resolved) {
+      try {
+        const linkResolved = resolveProjectCwd(projectRef, cwd);
+        if (linkResolved !== cwd) resolved = linkResolved;
+      } catch { /* falls through to the error below */ }
+    }
     if (!resolved) {
       console.error(`Error: cannot resolve project "${projectRef}".`);
       console.error('Use `brainclaw switch --list` to see available projects.');

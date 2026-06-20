@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
@@ -8,6 +9,7 @@ import { runSwitch } from '../../src/commands/switch.js';
 import { loadCurrentSession, loadSessionById, saveCurrentSession } from '../../src/core/identity.js';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../../src/core/active-project.js';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
+import { addCrossProjectLink } from '../../src/core/cross-project.js';
 
 /**
  * F3 + F5 (monorepo independence, trp_71accb07) — CLI `switch`.
@@ -171,6 +173,24 @@ describe('switch CLI — session-scoped by default (F3+F5)', () => {
       assert.ok(!loadCurrentSession(ws.dir)?.active_project, '--global must NOT write a session active_project');
     } finally {
       clearActiveProject(ws.dir);
+    }
+  });
+
+  it('--global resolves a cross-project LINKED project (not a nested child) and writes only the global pointer', () => {
+    // External project (outside ws), reachable only via a cross-project link —
+    // resolveProjectRef can't find it; the --global branch must use the link
+    // fallback, matching what --list shows and the session path can target.
+    const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-switch-ext-'));
+    fs.mkdirSync(path.join(ext, '.brainclaw'), { recursive: true });
+    saveConfig(defaultConfig('extproj', { projectId: 'prj_extproj' }), ext);
+    addCrossProjectLink({ path: ext, name: 'extproj', cwd: ws.dir });
+    try {
+      runSwitch('extproj', { cwd: ws.dir, global: true });
+      assert.equal(path.resolve(loadActiveProject(ws.dir)?.path ?? ''), path.resolve(ext), '--global must resolve the linked project and write the shared pointer');
+      assert.ok(!loadCurrentSession(ws.dir)?.active_project, '--global must NOT write a session active_project');
+    } finally {
+      clearActiveProject(ws.dir);
+      fs.rmSync(ext, { recursive: true, force: true });
     }
   });
 });

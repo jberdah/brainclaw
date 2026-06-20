@@ -355,8 +355,14 @@ export function buildWorkerIdentityEnv(
     delete env.BRAINCLAW_AGENT;
     delete env.BRAINCLAW_AGENT_NAME;
   }
+  // Claim ownership is explicit: adopt the supplied claim, otherwise DELETE any
+  // inherited parent BRAINCLAW_CLAIM_ID so an unclaimed/dry-run worker (e.g. the
+  // codev/codev-rounds call sites that pass only { agent }) never adopts the
+  // coordinator's claim (Codex final review F7 finding).
   if (options.claimId && options.claimId !== '(dry-run)') {
     env.BRAINCLAW_CLAIM_ID = options.claimId;
+  } else {
+    delete env.BRAINCLAW_CLAIM_ID;
   }
 
   // SCRUB LAST — coordinator identity must never survive into the worker, even if
