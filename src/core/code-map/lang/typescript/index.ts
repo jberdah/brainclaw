@@ -32,11 +32,14 @@ import { extractWithQueries } from '../query-runtime.js';
 import type {
   CodeLanguageProvider,
   ExtractionServices,
+  ImportResolution,
+  ImportResolutionRequest,
   ParserDeclaration,
   ProviderCapabilityDeclaration,
   ProviderExtractInput,
   QueryDeclarations,
   RefineContext,
+  ResolveImportContext,
 } from '../provider.js';
 import type { ProviderVocabularyDeclaration } from '../../vocabulary.js';
 
@@ -175,14 +178,48 @@ const vocabulary: ProviderVocabularyDeclaration = {
 };
 
 const capabilities: ProviderCapabilityDeclaration = {
-  tiers: ['T1.definitions', 'T2.imports'],
+  tiers: ['T1.definitions', 'T2.imports', 'T3.import_resolution'],
   proven: {
     'T1.definitions': true,
     'T2.imports': true,
-    'T3.import_resolution': false,
+    'T3.import_resolution': true, // P1c file-level: relative specifiers, intra-project
     'T4.tests_for': false,
   },
 };
+
+/** Extensions tried (in order) when resolving an extensionless relative specifier. */
+const TS_RESOLVE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'] as const;
+/** JS-family extensions a written specifier may use for a TS source file (ESM `./x.js` → `x.ts`). */
+const JS_LIKE_EXTS = new Set(['.js', '.jsx', '.mjs', '.cjs']);
+
+/**
+ * P1c file-level resolution (relative specifiers only). Given `./x` / `../x`
+ * resolved against the importer dir, try in order: the exact path (if it carries
+ * an extension), the TS-source siblings of a JS-family extension (ESM convention:
+ * `./b.js` may mean `b.ts`/`b.tsx`), the extensionless candidate + each known
+ * extension, then `<candidate>/index.<ext>`. Return the FIRST that is an indexed
+ * file. Bare/external specifiers (`react`, `@scope/x`) → no resolution (no edge).
+ */
+function resolveTsImport(spec: string, fromPath: string, ctx: ResolveImportContext): string | null {
+  if (!spec.startsWith('./') && !spec.startsWith('../')) return null; // external/bare → no edge
+  const base = path.posix.join(path.posix.dirname(fromPath), spec); // normalized project-relative
+  const ext = path.posix.extname(base);
+  const candidates: string[] = [];
+  if (ext) {
+    candidates.push(base);
+    if (JS_LIKE_EXTS.has(ext)) {
+      const noExt = base.slice(0, -ext.length);
+      candidates.push(`${noExt}.ts`, `${noExt}.tsx`);
+    }
+  } else {
+    for (const e of TS_RESOLVE_EXTS) candidates.push(`${base}${e}`);
+    for (const e of TS_RESOLVE_EXTS) candidates.push(`${base}/index${e}`);
+  }
+  for (const c of candidates) {
+    if (ctx.fileExists(c)) return c;
+  }
+  return null;
+}
 
 /** A sourceNode handle the runtime attaches to definition drafts. */
 interface DefSourceNode {
@@ -291,6 +328,19 @@ export class TypeScriptProvider implements CodeLanguageProvider {
       return d;
     });
     return { ...draft, definitions };
+  }
+
+  /**
+   * P1c file-level import resolution (intra-project, relative specifiers). Returns
+   * paths only — the core mints the `resolves_to` edge + target file id. Bare/
+   * external specifiers resolve to nothing (no edge). Confidence 1.0 (exact file).
+   */
+  async resolveImport(
+    req: ImportResolutionRequest,
+    ctx: ResolveImportContext,
+  ): Promise<readonly ImportResolution[]> {
+    const resolved = resolveTsImport(req.source, req.fromPath, ctx);
+    return resolved ? [{ source: req.source, resolvedPath: resolved, confidence: 1.0 }] : [];
   }
 }
 
