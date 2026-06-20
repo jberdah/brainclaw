@@ -36,6 +36,18 @@ This project uses brainclaw for shared coordination between humans and agents.
 2. Check **Your open work** for active claims and in-progress plans assigned to you
 3. Respect active claims from other agents — check \`brainclaw claim list\` before editing a claimed scope
 
+### Before editing unfamiliar code (Code Map)
+
+Don't grep the repo blind. Orient with the Code Map first:
+
+\`\`\`bash
+brainclaw code-map brief <symbol-or-path>   # ranked reading list + related decisions/traps (MCP: bclaw_code_brief)
+brainclaw code-map find <name>              # locate a symbol/class/component (MCP: bclaw_code_find)
+brainclaw code-map status                   # freshness
+brainclaw code-map refresh --all            # when status is missing_index
+brainclaw code-map refresh --changed        # when status is stale_*
+\`\`\`
+
 ### Before finishing (required)
 
 1. Release claims you opened: \`brainclaw claim release <id>\` — or \`brainclaw session-end --auto-release\`

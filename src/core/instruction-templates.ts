@@ -273,6 +273,7 @@ function renderSessionProtocol(): string {
     '1. Call `bclaw_work(intent)` (consult|execute|resume|review) — one call handles session, context, and claim (execute). Every response carries `next_actions` with the exact follow-up calls: follow those instead of memorizing the API.',
     '2. Canonical grammar for memory objects: `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` (entity, …).',
     '3. Do not assume project state without reading brainclaw context first.',
+    '4. Before editing unfamiliar code, orient with the **Code Map**: `bclaw_code_brief(target=<symbol|path>)` for a ranked reading list + related decisions/traps, `bclaw_code_find(query=<name>)` to locate a symbol/class/component. Don\'t grep the repo blind when a symbol index already answers "where is X / what should I read first". A `missing_index`/stale badge means run `bclaw_code_refresh` first.',
     '',
     'Escalation (only when orchestrating other agents): `bclaw_coordinate(intent=review|consult|assign)`. Verify any dispatch with `bclaw_dispatch_status(target_id)` — trust its sentinel-based verdict, not the tracked pid. Details: `docs/concepts/dispatch-lifecycle.md`.',
   ].join('\n');
@@ -374,6 +375,7 @@ function renderAvailableTools(): string {
     '**Session/claims:** `bclaw_session_start`, `bclaw_session_end`, `bclaw_claim`, `bclaw_release_claim` · **steps:** `bclaw_add_step`, `bclaw_complete_step`, `bclaw_update_step`, `bclaw_delete_step` · **sequences:** `bclaw_list_sequences`, `bclaw_create_sequence`, `bclaw_update_sequence`, `bclaw_delete_sequence`',
     '**Inbox:** `bclaw_read_inbox`, `bclaw_ack_message`, `bclaw_send_message`, `bclaw_correct_handoff` · **capture:** `bclaw_write_note`, `bclaw_quick_capture(text, type?)` · **search:** `bclaw_search` · **setup:** `bclaw_setup`, `bclaw_bootstrap`, `bclaw_switch`, `bclaw_release_notes`',
     '**Escalation (orchestrators):** `bclaw_coordinate(intent=review|consult|assign|ideate)` · `bclaw_dispatch(intent=execute)` on an active sequence · `bclaw_loop(intent=turn|complete_turn|advance|close)` to drive turns · `bclaw_dispatch_status(target_id)` to verify',
+    '**Code discovery (Code Map):** `bclaw_code_find(query)` locate a symbol/class/component · `bclaw_code_brief(target)` ranked reading list + related memory before editing · `bclaw_code_status` / `bclaw_code_refresh` check freshness / rebuild the symbol+import index. Use it before grepping unfamiliar code — see `docs/code-map.md`.',
     '',
     'Responses are self-teaching — follow their `next_actions`. Full catalog + stability contract: `docs/integrations/mcp.md`, `docs/concepts/mcp-governance.md`.',
   ].join('\n');

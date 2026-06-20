@@ -43,6 +43,12 @@ function assertMinimalProtocol(content: string): void {
   // protocol section itself must not instruct agents to call it directly.
   const protocolSection = content.split('## brainclaw — session protocol')[1]?.split('## brainclaw')[0] ?? '';
   assert.ok(!protocolSection.includes('bclaw_get_context'), 'protocol section must not reference bclaw_get_context');
+  // Adoption phase (pln#588): the protocol must point agents at the Code Map
+  // before editing unfamiliar code, so code discovery becomes a reflex.
+  assert.ok(
+    protocolSection.includes('bclaw_code_brief'),
+    'protocol section must point agents at the Code Map (bclaw_code_brief) before editing',
+  );
 }
 
 describe('instruction-templates', () => {
@@ -139,6 +145,12 @@ describe('instruction-templates', () => {
         'bclaw_release_notes',
         'bclaw_switch',
         'bclaw_setup',
+        // Code Map discovery tools (adoption phase pln#588) — the available-tools
+        // section must surface them so agents know code discovery exists.
+        'bclaw_code_find',
+        'bclaw_code_brief',
+        'bclaw_code_status',
+        'bclaw_code_refresh',
       ];
       for (const tool of toolNames) {
         assert.ok(result.content.includes(tool), `available tools should mention ${tool}`);
