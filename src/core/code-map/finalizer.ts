@@ -23,16 +23,11 @@
  *
  * Output nodes/edges are validated against the `types.ts` zod schemas before return.
  */
-import { edgeId, nodeId } from './ids.js';
+import { edgeId, fileNodeId, nodeId } from './ids.js';
 import type { ExtractionDraft } from './drafts.js';
 import type { CodeEdge, CodeLang, CodeNode, NodeSubtype, Span } from './types.js';
 import { EdgeSchema, NodeSchema } from './types.js';
 import type { ExtractInput, ExtractResult } from './extractor.js';
-
-/** Compute the legacy `file:<hash>` node id (mirrors `extractor.ts:fileNodeId`). */
-function fileNodeId(projectId: string, path: string, lang: CodeLang): string {
-  return `file:${nodeId({ projectId, path, lang, kind: 'file', subtype: null, name: path, startLine: 0, startCol: 0 })}`;
-}
 
 /** Compute the legacy `sym:<hash>` node id (mirrors `extractor.ts:symId`). */
 function symNodeId(
