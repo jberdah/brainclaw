@@ -637,5 +637,72 @@ describe('core/store-resolution', () => {
         fs.rmSync(ws, { recursive: true, force: true });
       }
     });
+
+    // F2 (monorepo independence, trp_71accb07): even WITHOUT a BRAINCLAW_CWD
+    // anchor, an agent physically inside a child must beat a stale/shared global
+    // pointer. Ceiling = resolveWorkspaceRoot(baseCwd) (NOT homedir).
+    it('F2: no anchor, inside a child, stale global elsewhere → child wins (cwd_child beats global)', () => {
+      const { ws, api, web } = makeMonorepo();
+      try {
+        saveActiveProject(ws, { path: api, name: 'api', switched_at: new Date().toISOString() });
+        withEnv({}, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: web, storeChainOptions: { boundary: ws } });
+          assert.equal(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(web));
+        });
+      } finally {
+        clearActiveProject(ws);
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('F2: no anchor, inside a child, no global → child resolved (cwd_child)', () => {
+      const { ws, api } = makeMonorepo();
+      try {
+        withEnv({}, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: api, storeChainOptions: { boundary: ws } });
+          assert.equal(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(api));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('F2 non-regression: single-project repo + global pointer → still resolves global (no-anchor step no-ops)', () => {
+      const ws = tmpDir('bclaw-single-');
+      const other = tmpDir('bclaw-single-other-');
+      try {
+        makeStore(ws, 'repo');
+        saveConfig(defaultConfig('solo', { projectId: 'prj_solo' }), ws);
+        makeStore(other, 'repo');
+        saveConfig(defaultConfig('other', { projectId: 'prj_other' }), other);
+        saveActiveProject(ws, { path: other, name: 'other', switched_at: new Date().toISOString() });
+        withEnv({}, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: ws, storeChainOptions: { boundary: ws } });
+          assert.equal(r.active_source, 'global');
+          assert.equal(r.cwd, path.resolve(other));
+        });
+      } finally {
+        clearActiveProject(ws);
+        fs.rmSync(ws, { recursive: true, force: true });
+        fs.rmSync(other, { recursive: true, force: true });
+      }
+    });
+
+    it('F2 non-regression: single-project repo, no global → resolves cwd/default (no-anchor step no-ops)', () => {
+      const ws = tmpDir('bclaw-single2-');
+      try {
+        makeStore(ws, 'repo');
+        saveConfig(defaultConfig('solo2', { projectId: 'prj_solo2' }), ws);
+        withEnv({}, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: ws, storeChainOptions: { boundary: ws } });
+          assert.notEqual(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(ws));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
   });
 });

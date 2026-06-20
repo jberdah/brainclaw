@@ -313,6 +313,61 @@ export function buildClaimEnvPrefix(claimId: string | undefined, options?: { she
   }
 }
 
+/**
+ * F7 (trp_0e5150d3): build the env for a SPAWNED worker so it is an INDEPENDENT
+ * agent, not a clone of the coordinator. The coordinator's process.env carries
+ * identity-bearing state (BRAINCLAW_AGENT*, BRAINCLAW_SESSION_ID, BRAINCLAW_PROJECT);
+ * inherited by an MCP-capable worker it would make the worker read/mutate the
+ * coordinator's session-scoped active project and identify AS the coordinator.
+ *
+ * Merge order (Codex cadrage review — batch 2): baseEnv → extraEnv (git
+ * attribution + invoke.env) → worker identity (agent name, claim) → SCRUB the
+ * forbidden coordinator keys LAST, so a deliberate or accidental extraEnv cannot
+ * reintroduce them. This helper is the SINGLE place worker env is built; every
+ * agent-spawn site must route through it.
+ *
+ * BRAINCLAW_CWD is intentionally PRESERVED (D1 = (a)): a worker's worktree lives
+ * outside the monorepo and has no .brainclaw, so it must anchor to the shared
+ * monorepo-root store the coordinator pointed at; the claim scopes the work. A
+ * caller override via extraEnv.BRAINCLAW_CWD is honoured (deliberate, not leaked).
+ */
+export function buildWorkerIdentityEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  options: { agent?: string; claimId?: string; extraEnv?: Record<string, string | undefined> } = {},
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (typeof value === 'string') env[key] = value;
+  }
+  if (options.extraEnv) {
+    for (const [key, value] of Object.entries(options.extraEnv)) {
+      if (typeof value === 'string') env[key] = value;
+    }
+  }
+
+  // Worker identity — truthful attribution, mirrors buildGitAttributionEnv.
+  const agent = options.agent?.trim();
+  if (agent) {
+    env.BRAINCLAW_AGENT = agent;
+    env.BRAINCLAW_AGENT_NAME = agent;
+  } else {
+    // No target agent → don't leak the coordinator's identity either.
+    delete env.BRAINCLAW_AGENT;
+    delete env.BRAINCLAW_AGENT_NAME;
+  }
+  if (options.claimId && options.claimId !== '(dry-run)') {
+    env.BRAINCLAW_CLAIM_ID = options.claimId;
+  }
+
+  // SCRUB LAST — coordinator identity must never survive into the worker, even if
+  // baseEnv or extraEnv set it. (BRAINCLAW_CWD is deliberately NOT scrubbed.)
+  delete env.BRAINCLAW_AGENT_ID;
+  delete env.BRAINCLAW_SESSION_ID;
+  delete env.BRAINCLAW_PROJECT;
+
+  return env;
+}
+
 // ── Verification helper (used by setup / doctor) ───────────────────────────
 
 /**

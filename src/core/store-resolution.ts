@@ -163,6 +163,7 @@ export interface ResolvedEffectiveCwd {
  * 3. BRAINCLAW_PROJECT env var → resolved by name/path from workspace anchor
  * 4. Session-scoped active project (from .current-session under the anchor)
  * 5. cwd_child — the child project the agent is physically inside, under the anchor
+ * 5b. cwd_child (no anchor) — same, ceiling = discovered workspace root (F2)
  * 6. Global active-project.json in workspace root
  * 7. Workspace anchor or process.cwd()
  */
@@ -230,6 +231,26 @@ export function resolveEffectiveCwdInfo(
     const child = findClosestStoreBelow(baseCwd, anchorCwd);
     if (child && path.resolve(child) !== path.resolve(anchorCwd)) {
       return { cwd: child, active_source: 'cwd_child', resolved_project: projectInfo(child) };
+    }
+  }
+
+  // 5b. cwd_child (NO anchor) — F2 [trp_71accb07]: even without a BRAINCLAW_CWD
+  //     anchor, an agent physically inside a child project must resolve THAT
+  //     child rather than a stale/shared global pointer set by another agent.
+  //     Ceiling = the discovered workspace root via resolveWorkspaceRoot(baseCwd)
+  //     — NOT os.homedir() (that would revive the F6 boundary edge and could let
+  //     an unrelated home store influence a monorepo worker). Same containment
+  //     guard as the anchored case (isAtOrBelow + a child strictly below).
+  //     For a single-project repo this is a strict no-op: findClosestStoreBelow
+  //     walks UP to the ceiling EXCLUSIVELY, so it can never return the lone root
+  //     store (Codex cadrage non-regression proof, batch 2).
+  if (!hasEnvWorkspace) {
+    const physicalRoot = resolveWorkspaceRoot(baseCwd, options.storeChainOptions);
+    if (physicalRoot && isAtOrBelow(baseCwd, physicalRoot)) {
+      const child = findClosestStoreBelow(baseCwd, physicalRoot);
+      if (child && path.resolve(child) !== path.resolve(physicalRoot)) {
+        return { cwd: child, active_source: 'cwd_child', resolved_project: projectInfo(child) };
+      }
     }
   }
 
