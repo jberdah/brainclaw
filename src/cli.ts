@@ -20,6 +20,7 @@ import { runListPlans } from './commands/list-plans.js';
 import { runUpdatePlan } from './commands/update-plan.js';
 import { runDeletePlan } from './commands/delete-plan.js';
 import { runPlanResource } from './commands/plan-resource.js';
+import { runCodeMap } from './commands/code-map.js';
 import { runSequenceResource } from './commands/sequence.js';
 import { runAddStep } from './commands/add-step.js';
 import { runDeleteStep } from './commands/delete-step.js';
@@ -620,6 +621,21 @@ program
   .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
     runPlanResource(subcommand, args, { ...options, actualEffort: options.actualEffort, localOnly: options.localOnly });
+  });
+
+// --- code-map ---
+program
+  .command('code-map <subcommand> [args...]')
+  .description('Query the per-project Code Map (status, refresh, find, brief)')
+  .option('--json', 'Output as JSON')
+  .option('--all', 'For refresh: enumerate all supported files (full refresh)')
+  .option('--changed', 'For refresh: only changed files (default)')
+  .option('--limit <n>', 'Max results for find/brief', (v) => parseInt(v, 10))
+  .action((subcommand, args, options) => {
+    void runCodeMap(subcommand, args, options).catch((err: unknown) => {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
   });
 
 // --- list-plans ---
@@ -1934,15 +1950,17 @@ program
 
 program
   .command('switch [project]')
-  .description('Set the active project for subsequent commands')
+  .description('Set the active project for subsequent commands (session-scoped by default)')
   .option('--list', 'List available projects in the workspace')
   .option('--clear', 'Clear the active project (revert to cwd)')
+  .option('--global', 'Set/clear the SHARED workspace default for ALL agents (writes active-project.json). Without it, switch is session-scoped and isolated.')
   .option('--json', 'Output as JSON')
   .action((project: string | undefined, options) => {
     const globalOpts = options.parent?.parent ? program.opts() : {};
     runSwitch(project, {
       list: options.list,
       clear: options.clear,
+      global: options.global,
       json: options.json,
       cwd: globalOpts.cwd,
     });

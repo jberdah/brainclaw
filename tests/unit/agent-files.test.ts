@@ -106,6 +106,15 @@ describe('core/agent-files — buildBrainclawSection', () => {
     assert.ok(section.includes('brainclaw claim create'), 'should mention claim command');
     assert.ok(section.includes('brainclaw plan create'), 'should mention plan command');
   });
+
+  it('points agents at the Code Map before editing unfamiliar code (pln#588 adoption)', () => {
+    const section = buildBrainclawSection('.brainclaw');
+    assert.ok(section.includes('Code Map'), 'should have a Code Map subsection');
+    assert.ok(section.includes('brainclaw code-map brief'), 'should mention code-map brief (reading list before editing)');
+    assert.ok(section.includes('brainclaw code-map find'), 'should mention code-map find (locate a symbol)');
+    assert.ok(section.includes('brainclaw code-map refresh --all'), 'should mention full refresh for missing_index');
+    assert.ok(section.includes('brainclaw code-map refresh --changed'), 'should mention changed refresh for stale indexes');
+  });
 });
 
 describe('core/agent-files — buildHygieneSection', () => {

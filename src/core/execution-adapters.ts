@@ -1,7 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildClaimEnvPrefix } from './execution-profile.js';
+import { buildClaimEnvPrefix, buildWorkerIdentityEnv } from './execution-profile.js';
 import { getCapabilityProfile, type InvokeCommand } from './agent-capability.js';
 import { nowISO } from './ids.js';
 import {
@@ -181,15 +181,16 @@ export class CliExecutionAdapter implements ExecutionAdapter {
   start(invoke: InvokeCommand, options: ExecutionAdapterStartOptions): SpawnResult {
     const isWin32 = process.platform === 'win32';
 
-    const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      // pln#562 step 5 — truthful attribution: every commit a dispatched
-      // worker makes is authored as the AGENT, not as the human whose
-      // git config happens to be on the machine. invoke.env may override.
-      ...buildGitAttributionEnv(options.agent),
-      ...(invoke.env ?? {}),
-      ...(options.claimId ? { BRAINCLAW_CLAIM_ID: options.claimId } : {}),
-    };
+    // F7 (trp_0e5150d3): route worker env through buildWorkerIdentityEnv so the
+    // worker is an independent agent — coordinator identity (BRAINCLAW_AGENT*,
+    // SESSION_ID, PROJECT) is scrubbed LAST and cannot be reintroduced by
+    // invoke.env. pln#562 step 5 — truthful git attribution (worker authors its
+    // own commits) is merged before the scrub. BRAINCLAW_CWD is preserved (D1a).
+    const env = buildWorkerIdentityEnv(process.env, {
+      agent: options.agent,
+      claimId: options.claimId,
+      extraEnv: { ...buildGitAttributionEnv(options.agent), ...(invoke.env ?? {}) },
+    });
 
     if (invoke.promptDelivery === 'temp_file' && invoke.tempFilePath && invoke.promptText) {
       const dir = path.dirname(invoke.tempFilePath);

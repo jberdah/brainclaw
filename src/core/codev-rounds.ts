@@ -7,6 +7,7 @@
 import { saveIdeationRound, loadIdeationRound, listIdeationRounds, type IdeationRound } from './ideation.js';
 import { recordResponse } from './codev-metrics.js';
 import { buildPositionPrompt, buildReactionPrompt, buildConvergencePrompt } from './codev-prompts.js';
+import { buildWorkerIdentityEnv } from './execution-profile.js';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,6 +84,9 @@ function spawnAgent(
     detached: true,
     stdio: ['ignore', outFd, 'ignore'],
     cwd,
+    // F7 (trp_0e5150d3): scrub coordinator identity — this spawn previously
+    // inherited the full parent env.
+    env: buildWorkerIdentityEnv(process.env, { agent: agentName }),
   });
   child.on('error', (err) => {
     console.warn(`  ⚠ Spawn error for ${agentName}/${personaName}: ${(err as Error).message}`);

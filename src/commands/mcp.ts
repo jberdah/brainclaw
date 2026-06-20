@@ -85,6 +85,7 @@ import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
 import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
+import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
 import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode, validateAgentForDispatch } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
@@ -585,9 +586,55 @@ export const MCP_READ_TOOLS = [
       required: ['target_id'],
     },
   },
+  {
+    name: 'bclaw_code_status',
+    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'bclaw_code_find',
+    description: 'Search the Code Map symbol index for a query (function/class/component/hook/type names). Returns ranked matches with path + score, plus a freshness_badge from the lazy read-path check. Read-only; never refreshes — a missing_index badge means run bclaw_code_refresh first.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Symbol or token to search for (e.g. "App", "useAuth", "dispatch").' },
+        limit: { type: 'number', description: 'Max matches to return.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'bclaw_code_brief',
+    description: 'Before editing, ask Code Map what to read: returns a ranked suggested_files_to_read list (cap 12) for a symbol or path, related brainclaw memory (cap 5), and a freshness_badge. Read-only; never refreshes.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Symbol name or file path to build a reading brief for.' },
+        limit: { type: 'number', description: 'Max suggested files (hard-capped at 12 by the spec).' },
+      },
+      required: ['target'],
+    },
+  },
 ] as const;
 
 const MCP_WRITE_TOOLS = [
+  {
+    name: 'bclaw_code_refresh',
+    description: 'Rebuild the Code Map index for this project (Tree-sitter parse + shards + indexes, behind the per-project lock). scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. A live competing lock fails fast with a clear status — refresh never blocks. Returns the resulting freshness_badge.',
+    annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', enum: ['changed', 'all'], description: 'changed (default) reparses changed files only; all does a full refresh with orphan compaction.' },
+      },
+    },
+  },
   {
     name: 'bclaw_dispatch',
     description: 'Unified dispatch entry for sequence-lane parallelization (parallelize plans across lanes). To open a NEW review of a commit/branch, use `bclaw_coordinate(intent="review", open_loop=true, targetAgents=[…])` instead — bclaw_dispatch is for sequence-driven execution, NOT for opening new reviews. `intent` discriminator: analysis (sequence lane status, read-only), execute (default — analyze + generate briefs + send to agents), review (routes an EXISTING already-reflected handoff to a reviewer — only for handoffs produced by `session-end --reflect-handoff` or similar). Consolidates the legacy bclaw_dispatch_analysis / bclaw_dispatch / bclaw_dispatch_review. Returns FacadeResponse; for verification semantics see the same response-validation guidance documented on `bclaw_coordinate`.',
@@ -2969,6 +3016,60 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       return { response: toolResponse(await handleCheckSecurity(args, cwd)) };
     }
 
+    // Code Map tools (spec §9). These delegate to the async JsonlBackend, so
+    // they are handled here rather than via the synchronous read-tool path.
+    // status/find/brief are reads; refresh is a write (prompt approval).
+    if (name === 'bclaw_code_status' || name === 'bclaw_code_find' || name === 'bclaw_code_brief' || name === 'bclaw_code_refresh') {
+      const { JsonlBackend } = await import('../core/code-map/backend.js');
+      const be = new JsonlBackend();
+      if (name === 'bclaw_code_status') {
+        const status = await be.status({ cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.status}` }],
+            structuredContent: { ...status, freshness_badge: status.freshness_badge },
+          }),
+        };
+      }
+      if (name === 'bclaw_code_refresh') {
+        const scope = args.scope === 'all' ? 'all' : 'changed';
+        const result = await be.refresh({ scope, cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.status}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
+            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+          }),
+        };
+      }
+      if (name === 'bclaw_code_find') {
+        const query = typeof args.query === 'string' ? args.query : '';
+        if (!query.trim()) {
+          return { response: createToolErrorResponse('validation_error', 'bclaw_code_find requires a non-empty query.') };
+        }
+        const limit = typeof args.limit === 'number' ? args.limit : undefined;
+        const result = await be.find({ query, limit, cwd });
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `Code Map find "${result.query}": ${result.matches.length} match(es), freshness=${result.freshness_badge.status}` }],
+            structuredContent: { ...result, freshness_badge: result.freshness_badge },
+          }),
+        };
+      }
+      // bclaw_code_brief
+      const target = typeof args.target === 'string' ? args.target : '';
+      if (!target.trim()) {
+        return { response: createToolErrorResponse('validation_error', 'bclaw_code_brief requires a non-empty target.') };
+      }
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+      const result = await be.brief({ target, limit, cwd });
+      return {
+        response: toolResponse({
+          content: [{ type: 'text', text: `Code Map brief "${result.target}": ${result.suggested_files_to_read.length} file(s) to read, freshness=${result.freshness_badge.status}` }],
+          structuredContent: { ...result, freshness_badge: result.freshness_badge },
+        }),
+      };
+    }
+
     if (MCP_READ_TOOLS.some((tool) => tool.name === name) || LEGACY_READ_TOOL_HANDLERS.has(name)) {
       return {
         response: appendLegacyMcpToolWarning(toolResponse(handleMcpReadToolCall(name, args, { cwd, connectionSessionId, effectiveScope: scopeInfo })), name),
@@ -5300,6 +5401,27 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       nextActions.push({ tool: 'bclaw_quick_capture', args: { text: '<finding>', type: '<decision|trap|constraint|note>' }, when: 'capture decisions/traps as you work' });
 
+      // Code Map opt-in section (spec §10). Single live seam: returns null
+      // (and does no work) unless the project's Code Map manifest carries
+      // code_map_enabled:true. Never refreshes; bounded ≤2500ms on an active
+      // lock; surfaces a missing_index hint or stale results with the badge.
+      let codeMapSection: Awaited<ReturnType<typeof codeMapWorkSection>> = null;
+      try {
+        codeMapSection = await codeMapWorkSection(targetCwd, {
+          query: workReq.scope ?? workReq.contextTarget,
+        });
+      } catch {
+        // Best-effort: Code Map must never break or block bclaw_work.
+      }
+
+      // Code Map onboarding/freshness nudge (pln#588): promote the actionable
+      // refresh to a first-class next_action so a fresh or stale project's first
+      // bclaw_work TELLS the agent to build/update the index — the passive
+      // missing_index hint alone was easy to skip. Still never refreshes here.
+      for (const action of codeMapRefreshNextActions(codeMapSection)) {
+        nextActions.push(action);
+      }
+
       const facadeResponse: FacadeResponse = {
         status: 'ok',
         intent: workReq.intent,
@@ -5314,6 +5436,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         bootstrap_verdict: bootstrapVerdict,
         next_action: nextAction,
         next_actions: nextActions,
+        ...(codeMapSection ? { code_map: codeMapSection as unknown as Record<string, unknown> } : {}),
       };
 
       const summaryParts: string[] = [`✔ bclaw_work [${workReq.intent}] session=${sessionResult.session_id}`];

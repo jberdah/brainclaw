@@ -5,7 +5,22 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.0] — 2026-06-20
+
+### Added
+
+- **Code Map (P0)** — a per-project structural index of the JS/TS/TSX codebase
+  (symbols, imports/exports, React component/hook detection) built with
+  Tree-sitter WASM and stored as JSONL shards under `.brainclaw/code-map/`. New
+  CLI: `brainclaw code-map status | refresh [--changed|--all] | find <query> |
+  brief <symbol-or-path>`. New MCP tools: `bclaw_code_status`,
+  `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`. Every output
+  carries a freshness badge (`fresh` / `stale_changed_files` / `stale_extractor`
+  / `stale_grammar` / `partial` / `missing_index`). `refresh --changed` re-parses
+  content-changed files and heals version-stale shards on the cheap path; the
+  Tree-sitter engine + grammars are bundled into `dist/` and loaded lazily on
+  first parse, so the rest of the CLI/MCP never depends on the WASM engine. See
+  `docs/code-map.md`.
 
 ### Changed
 
@@ -16,6 +31,29 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **commander 14 → 15** — the CLI argument parser is now ESM-only and requires
   Node ≥ 22.12. No CLI behavior change: brainclaw's `--no-*` flags are all lone
   negations, unaffected by v15's positive/negative default-value change.
+- **Monorepo multi-project safety — `brainclaw switch` is session-scoped by
+  default.** A plain `switch <project>` (and `switch --clear`) now only affects the
+  calling agent's session; the new `--global` flag is the sole path that writes or
+  clears the shared `.brainclaw/active-project.json`. `switch --list` / show are
+  session-aware. Prevents two agents in one monorepo from clobbering a shared
+  active-project pointer (last-writer-wins).
+- **Dispatched / CoDev workers spawn with a scrubbed identity.** The coordinator's
+  `BRAINCLAW_SESSION_ID` / `BRAINCLAW_PROJECT` / `BRAINCLAW_AGENT*` no longer leak into
+  a spawned worker (new `buildWorkerIdentityEnv`), so an MCP-capable worker is an
+  independent agent rather than a clone of the coordinator. `BRAINCLAW_CLAIM_ID` is set
+  only for a real claim (never inherited).
+
+### Fixed
+
+- **Anchored agent resolves the child project it works in (monorepo).** With
+  `BRAINCLAW_CWD` anchoring the workspace, an agent working inside a child project now
+  resolves *that* child (new `cwd_child` resolution step, guarded by a containment
+  check) instead of defaulting to the repo root — the "plans / Code Map target the repo
+  root" symptom.
+- **Physical location beats a stale shared global.** A session-less agent physically
+  inside a child project resolves the child rather than a stale/foreign
+  `active-project.json` pointer (no-anchor `cwd_child`, bounded by the discovered
+  workspace root, never `$HOME`).
 
 ## [1.9.1] — 2026-06-18
 

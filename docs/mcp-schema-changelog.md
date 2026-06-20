@@ -104,10 +104,14 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:70cf80b9615f631f`
-  (updated 2026-06-18 for 1.9.1: monorepo project-scoping fix — session-aware
+- MCP public surface fingerprint: `sha256:35fd83b0d124df94`
+  (updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
+  `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`, `bclaw_code_status`.
+  Additive: no tool removed or renamed.)
+  Previous: `sha256:70cf80b9615f631f`,
+  updated 2026-06-18 for 1.9.1: monorepo project-scoping fix — session-aware
   effective-cwd resolution and read-path project scoping shift the published
-  input-schema surface. Additive: no tool added, removed, or renamed.)
+  input-schema surface. Additive: no tool added, removed, or renamed.
   Previous: `sha256:b1d3c6a00a224509`,
   updated 2026-06-14: journal ON by default + `migrate --enable-journal`,
   registry post-image families + verify gate, and capped auto-handoff diff

@@ -6,6 +6,15 @@
 
 <p align="center"><strong>Local-first coordination and shared memory for coding agents.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml"><img src="https://github.com/jberdah/brainclaw/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/brainclaw"><img src="https://img.shields.io/npm/v/brainclaw?logo=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/brainclaw"><img src="https://img.shields.io/npm/dm/brainclaw" alt="npm downloads"></a>
+  <img src="https://img.shields.io/node/v/brainclaw" alt="node version">
+  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/brainclaw" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/MCP-stdio-blue" alt="MCP">
+</p>
+
 ---
 
 If you've ever:
@@ -35,11 +44,25 @@ It sits alongside your coding agents and gives them a shared state layer they ca
 | **Project memory**               | constraints, decisions, traps, handoffs, and layered instructions agents can resume from                                                                                                            |
 | **Coordination state**           | shared plans, file claims (dispatched work isolated in Git Worktrees), runtime notes, and board views for active work                                                                                                 |
 | **Agent-ready context**          | compact, prompt-sized context built from real workspace state instead of stale instructions                                                                                                         |
+| **Code Map**                     | a Tree-sitter symbol + import index (JS/TS, Python, PHP, Java) so agents ask "where is X / what should I read first" before editing, with related decisions/traps attached — `bclaw_code_find` / `bclaw_code_brief`, see [code map](docs/code-map.md) |
 | **Native agent files**           | auto-writes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurfrules`, and similar local guidance                                                                         |
 | **Multi-turn loops**             | review and ideation loops with structured phases, iteration semantics, and per-phase memory filters — see[loop engine](docs/concepts/loop-engine.md) and [ideation loop](docs/concepts/ideation-loop.md) |
 | **Machine AI surface discovery** | detects local coding agents plus desktop AI work surfaces such as ChatGPT Desktop and Gemini CLI                                                                                                    |
 | **Queued surface tasks**         | stores project-scoped requests for other local AI surfaces, such as visual generation, drafting, summaries, or research                                                                             |
 | **Local-first storage**          | plain text + JSON, Git-friendly, no mandatory cloud, no telemetry by default                                                                                                                        |
+
+---
+
+## Code Map
+
+When an agent (or you) is about to edit unfamiliar code, the first question is *"where is this, and what should I read first?"* Code Map answers it without grepping: a per-project [Tree-sitter](https://tree-sitter.github.io/) index of the symbols each file defines (functions, classes, types, React components/hooks), what it imports/exports, and how files relate — across **JS / TS / TSX, Python, PHP, and Java**.
+
+```bash
+brainclaw code-map find useAuth        # locate a symbol / component / hook by name
+brainclaw code-map brief src/App.tsx   # ranked "read these first" list + related decisions/traps
+```
+
+Capable agents use the MCP equivalents `bclaw_code_find` / `bclaw_code_brief`, each carrying a freshness badge. Code Map is a **discovery aid, not a build artifact**: it never changes your code, never blocks `bclaw_work`, and degrades gracefully — a stale or missing index says so instead of answering wrong. Pull-based (no daemon) and monorepo-aware. Full guide: **[Code Map](docs/code-map.md)**.
 
 ---
 
@@ -359,6 +382,7 @@ If you are integrating Brainclaw into an agent workflow, start with the agent-fa
 | `docs/quickstart-existing-project.md`    | Joining a project that already has `.brainclaw/`                                            |
 | `docs/server-operations.md`              | Operator and remote-server workflow guide                                                     |
 | `docs/cli.md`                            | CLI reference for operators, scripts, and fallback use                                        |
+| `docs/code-map.md`                       | Code Map — symbol/import index, freshness model, monorepo behavior                            |
 | `docs/concepts/memory.md`                | What "memory" means in brainclaw                                                              |
 | `docs/concepts/plans-and-claims.md`      | Coordination layer                                                                            |
 | `docs/concepts/runtime-notes.md`         | Ephemeral observations                                                                        |
@@ -392,6 +416,28 @@ npm run test:coverage      # with coverage report
 ## Changelog
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
+
+### v1.10.0
+
+- **Code Map** — a new per-project [Tree-sitter](docs/code-map.md) symbol + import
+  index for **JS / TS / TSX, Python, PHP, and Java**. Ask *"where is X / what should I
+  read first"* before editing: `bclaw_code_find`, `bclaw_code_brief`,
+  `bclaw_code_status`, `bclaw_code_refresh` (CLI: `brainclaw code-map …`). Pull-based
+  freshness with a per-response badge; never blocks `bclaw_work`; monorepo-aware. See
+  [code map](docs/code-map.md).
+- **Monorepo multi-project safety** — agents working in different child projects of a
+  monorepo are now genuinely independent:
+  - an anchored agent working *inside* a child project resolves **that** child, not the
+    repo root — no more "plans / index target the repo root";
+  - CLI `brainclaw switch` is **session-scoped by default** (two agents no longer clobber
+    a shared pointer); the new `--global` flag is the only path that sets the shared
+    workspace default; `switch --list` / show are session-aware;
+  - a session-less agent physically inside a child project beats a stale shared global
+    pointer (resolves the child it is in);
+  - dispatched / CoDev workers spawn with a **clean identity** — the coordinator's
+    session / project / agent env no longer leaks into a worker.
+- Internal — MCP public surface fingerprint re-pinned for the Code Map tools (additive;
+  no tool removed or renamed).
 
 ### v1.9.1
 

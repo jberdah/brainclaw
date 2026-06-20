@@ -25,10 +25,11 @@ The default dynamic workflow is:
 1. `bclaw_work` to start the session and load the relevant context in one call (returns compact payload by default — pass `compact: false` for the full context result)
 2. `bclaw_context({ kind: "execution" })` early when the agent needs local tooling signals or package update visibility
 3. `bclaw_context({ kind: "memory" })`, `bclaw_context({ kind: "board" })`, or `bclaw_context({ kind: "delta" })` when the target path changes or full memory is needed beyond the compact summary
-4. `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` for entity reads and writes
-5. `bclaw_coordinate`, `bclaw_dispatch`, or `bclaw_loop` for assign, consult, review, reroute, summarize, dispatch, or multi-turn loop flows
-6. `bclaw_read_inbox` when resuming delegated work
-7. `bclaw_write_note`, `bclaw_quick_capture`, or `bclaw_create({ entity: "candidate", ... })` when the result should become runtime or durable shared memory
+4. `bclaw_code_brief({ target })` / `bclaw_code_find({ query })` before editing unfamiliar code — get a ranked reading list (with related decisions/traps) and locate symbols from the Code Map instead of grepping blind. A `missing_index` badge means run `bclaw_code_refresh` first. See [code map](../code-map.md)
+5. `bclaw_find` / `bclaw_get` / `bclaw_create` / `bclaw_update` / `bclaw_remove` / `bclaw_transition` for entity reads and writes
+6. `bclaw_coordinate`, `bclaw_dispatch`, or `bclaw_loop` for assign, consult, review, reroute, summarize, dispatch, or multi-turn loop flows
+7. `bclaw_read_inbox` when resuming delegated work
+8. `bclaw_write_note`, `bclaw_quick_capture`, or `bclaw_create({ entity: "candidate", ... })` when the result should become runtime or durable shared memory
 
 This keeps session continuity inside Brainclaw instead of pushing the agent back to manual CLI usage.
 
@@ -36,7 +37,7 @@ When a human operator needs the CLI equivalent of `bclaw_write_note`, use `brain
 
 ## Available Tools
 
-All 59 published MCP tools are discoverable via `tools/list`. Each tool carries an `annotations` object with `tier` and `category` metadata so clients can filter or group tools without server-side hiding.
+All 65 published MCP tools are discoverable via `tools/list`. Each tool carries an `annotations` object with `tier` and `category` metadata so clients can filter or group tools without server-side hiding.
 
 ### Tool tiers
 
@@ -46,7 +47,7 @@ Every tool has one of three tiers in its `annotations.tier` field:
 - **standard** — Day-to-day coordination tools: plans, claims, messaging, sequences, dispatch, review, memory. Returned by default alongside facades.
 - **advanced** — Specialized governance, audit, registry, and power tools.
 
-By default, `tools/list` returns **facade + standard** tools (38 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
+By default, `tools/list` returns **facade + standard** tools (44 tools). To get all tools including advanced, pass `{ "catalog": "all" }`, `{ "include": "all" }`, or `{ "advanced": true }`. To filter by a single tier, pass `{ "tier": "facade" }`, `{ "tier": "standard" }`, or `{ "tier": "advanced" }`.
 
 Published tools remain callable regardless of catalog filtering — the tier only affects discovery via `tools/list`.
 
@@ -106,6 +107,12 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_update` | memory | Partially update mutable fields on a canonical entity |
 | `bclaw_remove` | memory | Archive or purge a canonical entity |
 | `bclaw_transition` | memory | Move an entity through its validated state machine |
+| `bclaw_code_status` | discovery | Code Map freshness badge + index stats (store presence, files/nodes/edges) |
+| `bclaw_code_find` | discovery | Search the Code Map symbol index by name (function/class/component/hook/type) |
+| `bclaw_code_brief` | discovery | Ranked reading list + related decisions/traps before editing a symbol or path |
+| `bclaw_code_refresh` | discovery | Rebuild the Code Map index (`scope: changed \| all`) |
+
+See [code map](../code-map.md) for the full Code Map reference (CLI, freshness model, supported languages).
 
 ### Advanced tools
 

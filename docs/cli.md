@@ -34,25 +34,32 @@ All commands support these global options:
 
 ### `brainclaw switch [project]`
 
-Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces. The active project is persisted per-workspace in `.brainclaw/active-project.json`.
+Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces.
+
+**Session-scoped by default (v1.10.0).** A plain `switch <project>` only affects the **calling agent's session** — it auto-creates a session if needed and never touches the shared pointer. This is what keeps two agents working in the same monorepo independent: neither clobbers the other. `switch --list` and the no-argument "show current" reflect the session's own active project.
+
+`--global` is the **only** path that writes (or, with `--clear`, removes) the shared, per-workspace `.brainclaw/active-project.json` that every agent on the host sees. Use it for an operator setting a workspace-wide default — not for per-agent work.
 
 | Option | Description |
 |---|---|
-| `--list` | List all available projects in the workspace |
-| `--clear` | Clear the active project (revert to cwd default) |
-| `--json` | Output as JSON |
+| `--list` | List all available projects in the workspace (marks the session's active project) |
+| `--clear` | Clear the **session's** active project (revert to cwd); add `--global` to clear the shared pointer |
+| `--global` | Write/clear the **shared** workspace default for all agents (the only path that mutates `active-project.json`); bypasses the session |
+| `--json` | Output as JSON (includes `scope: "session" \| "global"`) |
 
 The `<project>` argument accepts:
-- **Project name** — matched against the global registry and workspace config
+- **Project name** — matched against the global registry, workspace config, and cross-project links
 - **Relative path** — resolved from the workspace root (e.g. `apps/lodestar`)
 - **Absolute path** — used directly
 
 ```bash
 brainclaw switch --list              # discover available projects
-brainclaw switch lodestar            # switch by project name
+brainclaw switch lodestar            # session-scoped switch (isolated to this agent)
 brainclaw switch apps/lodestar       # switch by relative path
-brainclaw switch                     # show current active project
-brainclaw switch --clear             # clear, revert to cwd
+brainclaw switch                     # show current active project (session-aware)
+brainclaw switch --clear             # clear THIS session's active project
+brainclaw switch lodestar --global   # set the shared workspace default for everyone
+brainclaw switch --clear --global    # clear the shared workspace default
 brainclaw --cwd /other/path status   # one-off override without switching
 ```
 
@@ -595,6 +602,37 @@ Use the same options as `runtime-note` when an operator workflow or wrapper expe
 ```bash
 brainclaw note create "Observed host-specific CUDA mismatch on dgx-a"
 brainclaw note create "Need follow-up on launcher script" --plan pln_abc123
+```
+
+---
+
+## Code Map
+
+A per-project Tree-sitter symbol + import index (JS/TS, Python, PHP, Java) so agents
+can ask "where is X / what should I read first" before editing. The MCP equivalents
+are `bclaw_code_status` / `bclaw_code_find` / `bclaw_code_brief` / `bclaw_code_refresh`.
+Full reference (freshness model, supported languages, WASM bundling): [docs/code-map.md](code-map.md).
+
+### `brainclaw code-map status`
+
+Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only.
+
+### `brainclaw code-map refresh [--all|--changed]`
+
+Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock.
+
+### `brainclaw code-map find <query> [--limit <n>]`
+
+Search the symbol index by name (function / class / component / hook / type). Returns ranked matches with path + score. Note: this is a symbol/structure index, not a full-text search — use it to locate definitions, not arbitrary strings.
+
+### `brainclaw code-map brief <target> [--limit <n>]`
+
+Given a symbol or path, return a ranked reading list (`suggested_files_to_read`) plus related memory (decisions/traps/constraints) — what to read before editing.
+
+```bash
+brainclaw code-map refresh --all
+brainclaw code-map find RouteCollector
+brainclaw code-map brief src/core/code-map/work-section.ts
 ```
 
 ---

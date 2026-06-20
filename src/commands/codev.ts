@@ -27,6 +27,7 @@ import { buildContext } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { getDefaultInvokeTemplate, getSpawnableAgents, type DefaultInvokeTemplate } from '../core/agent-capability.js';
 import { executeRound, type RoundConfig } from '../core/codev-rounds.js';
+import { buildWorkerIdentityEnv } from '../core/execution-profile.js';
 import { loadIdeationRound } from '../core/ideation.js';
 import { summarizeMetrics, summarizeMetricsByRound } from '../core/codev-metrics.js';
 import { generatePlansFromConvergence, generateSummaryNote } from '../core/codev-plan-gen.js';
@@ -484,12 +485,17 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
     });
   };
 
+  // F7 (trp_0e5150d3): scrub coordinator identity so a consultant worker is an
+  // independent agent — these spawns previously inherited the full parent env.
+  const workerEnv = buildWorkerIdentityEnv(process.env, { agent: agentName });
+
   if (agentName === 'codex') {
     // Codex: use temp file via shell to avoid Windows .cmd ENOENT issues
     const child = spawn('sh', ['-c', `cat "${briefFile}" | "${binaryPath}" exec --full-auto - ; rm -f "${briefFile}"`], {
       detached: true,
       stdio: 'ignore',
       cwd,
+      env: workerEnv,
     });
     attachErrorHandler(child);
     child.unref();
@@ -499,6 +505,7 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
       detached: true,
       stdio: 'ignore',
       cwd,
+      env: workerEnv,
     });
     attachErrorHandler(child);
     child.unref();
@@ -508,6 +515,7 @@ function spawnConsultant(brief: string, threadId: string, personaName: string, c
       detached: true,
       stdio: 'ignore',
       cwd,
+      env: workerEnv,
     });
     attachErrorHandler(child);
     child.unref();
