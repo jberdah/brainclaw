@@ -599,6 +599,37 @@ brainclaw note create "Need follow-up on launcher script" --plan pln_abc123
 
 ---
 
+## Code Map
+
+A per-project Tree-sitter symbol + import index (JS/TS, Python, PHP, Java) so agents
+can ask "where is X / what should I read first" before editing. The MCP equivalents
+are `bclaw_code_status` / `bclaw_code_find` / `bclaw_code_brief` / `bclaw_code_refresh`.
+Full reference (freshness model, supported languages, WASM bundling): [docs/code-map.md](code-map.md).
+
+### `brainclaw code-map status`
+
+Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only.
+
+### `brainclaw code-map refresh [--all|--changed]`
+
+Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock.
+
+### `brainclaw code-map find <query> [--limit <n>]`
+
+Search the symbol index by name (function / class / component / hook / type). Returns ranked matches with path + score. Note: this is a symbol/structure index, not a full-text search — use it to locate definitions, not arbitrary strings.
+
+### `brainclaw code-map brief <target> [--limit <n>]`
+
+Given a symbol or path, return a ranked reading list (`suggested_files_to_read`) plus related memory (decisions/traps/constraints) — what to read before editing.
+
+```bash
+brainclaw code-map refresh --all
+brainclaw code-map find RouteCollector
+brainclaw code-map brief src/core/code-map/work-section.ts
+```
+
+---
+
 ## Memory Review
 
 ### `brainclaw reflect [text]`
