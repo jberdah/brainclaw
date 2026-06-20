@@ -41,6 +41,10 @@ describe('code-map P1c Python resolveImport', () => {
   it('bare `..` resolves to the parent package __init__', async () => {
     assert.equal(await resolve('..', 'pkg/sub/a.py', ['pkg/__init__.py']), 'pkg/__init__.py');
   });
+  it('relative dots beyond project root do not resolve a top-level file', async () => {
+    assert.equal(await resolve('...top', 'pkg/a.py', ['top.py']), null);
+    assert.equal(await resolve('..top', 'main.py', ['top.py']), null);
+  });
   it('absolute dotted resolves project-root-relative to a module', async () => {
     assert.equal(await resolve('a.b.c', 'pkg/x.py', ['a/b/c.py']), 'a/b/c.py');
   });

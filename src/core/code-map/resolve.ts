@@ -120,6 +120,8 @@ export async function resolveProjectImports(
           const targetPath = toPosix(r.resolvedPath);
           const targetLang = fileLang.get(targetPath);
           if (!targetLang) continue; // target not an indexed file → no edge
+          const confidence = clampConfidence(r.confidence);
+          if (confidence <= 0) continue; // preserves the resolves_to confidence invariant: (0, 1]
           const to = fileNodeId(projectId, targetPath, targetLang);
           const id = edgeId({ projectId, from: mod.id, to, kind: 'resolves_to' });
           if (seen.has(id)) continue; // dedup (same module → same target)
@@ -129,7 +131,7 @@ export async function resolveProjectImports(
             from: mod.id,
             to,
             kind: 'resolves_to',
-            confidence: clampConfidence(r.confidence),
+            confidence,
             source: { path: toPosix(shard.path), line: mod.span?.start_line ?? null },
           });
         }

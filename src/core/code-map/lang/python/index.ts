@@ -175,7 +175,15 @@ function resolvePyImport(source: string, fromPath: string, ctx: ResolveImportCon
     while (source[dots] === '.') dots++;
     const tail = source.slice(dots); // after the dots: '' | 'mod' | 'pkg.sub'
     let base = path.posix.dirname(toPosixPy(fromPath)); // current package dir (1 dot)
-    for (let up = 1; up < dots; up++) base = path.posix.dirname(base); // ..  = parent, etc.
+    let escapedRoot = false;
+    for (let up = 1; up < dots; up++) {
+      if (base === '' || base === '.' || base === '/') {
+        escapedRoot = true;
+        break;
+      }
+      base = path.posix.dirname(base); // ..  = parent, etc.
+    }
+    if (escapedRoot) return null;
     if (base === '.' || base === '/') base = '';
     const prefix = base ? `${base}/` : '';
     if (tail === '') {

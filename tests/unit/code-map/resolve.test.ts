@@ -120,6 +120,15 @@ describe('code-map P1c resolveProjectImports', () => {
     assert.equal(res.edgesEmitted, 0);
   });
 
+  it('drops valid-path resolutions with non-positive confidence', async () => {
+    const a = fileShard('a.ts', 'typescript', [moduleNode('module:m1', './b')], []);
+    const b = fileShard('b.ts', 'typescript');
+    const reg = registryWith(async (req) => [{ source: req.source, resolvedPath: 'b.ts', confidence: 0 }]);
+    const res = await resolveProjectImports({ projectId: PROJECT, registry: reg, shards: [a, b], persistShard: () => {} });
+    assert.equal(a.edges.filter((e) => e.kind === 'resolves_to').length, 0);
+    assert.equal(res.edgesEmitted, 0);
+  });
+
   it('strips a stale resolves_to when the import no longer resolves', async () => {
     const stale = {
       id: 'old', from: 'module:m1', to: fileNodeId(PROJECT, 'b.ts', 'typescript'),
