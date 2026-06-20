@@ -130,6 +130,52 @@ which is independent from a parser-binary change (`stale_grammar`). The badge
 surfaces the dominant reason; `--json` output and the manifest carry the per-file
 counts.
 
+## Lifecycle — pull-based, no daemon
+
+Code Map never runs in the background and never auto-reindexes. The model is lazy
+reconciliation at the read path:
+
+1. You edit or pull code — the index does not change.
+2. The next `status` / `find` / `brief` recomputes a freshness badge (git status +
+   file-hash diff vs the stored shards), so a stale index is always *visible*,
+   never silently wrong.
+3. `refresh --changed` re-parses only the changed files (incremental); `--all` does
+   a full rebuild + orphan compaction.
+4. `bclaw_work` nudges a refresh when the badge is `missing_index` or stale, so an
+   agent knows to reconcile before trusting the map.
+
+It never blocks `bclaw_work` (a held lock fails fast), so the worst case of a stale
+index is a one-line "run refresh" hint — not a wrong answer.
+
+## Monorepos and nested projects
+
+Code Map is **per project**: the index lives at `<project>/.brainclaw/code/`, and
+`refresh` indexes the source tree under the project root it runs in — descending
+into subdirectories but skipping `node_modules`, `dist`, `.git`, `.brainclaw`,
+`vendor`, `target`, … at any depth.
+
+There is no nested-project *boundary*, so the scope follows **where you run it**:
+
+| You run refresh / find / brief … | … against |
+|---|---|
+| at the monorepo root | one index covering the whole tree (every child project's source) |
+| inside a child project (e.g. `apps/api`) | that child's own index, at `apps/api/.brainclaw/code/` |
+
+When an agent works inside a child project, brainclaw's project resolution routes
+Code Map to **that child** — the same per-project scoping that powers `bclaw_work`
+/ `bclaw_switch` — so each project gets its own clean map without manual `--cwd`
+juggling. A submodule that is itself an application (under e.g. `apps/`) is indexed
+like any other directory.
+
+**Not yet supported** (roadmap):
+
+- A single aggregated view that keeps **separate per-child indexes and federates
+  them** at the root (a query spanning services without double-indexing).
+- **Cross-service edges** — e.g. linking an API call to the route that defines it in
+  another service. Code Map indexes language *symbols* and *module imports*, not
+  framework routes or runtime HTTP calls, so it does not (today) map "service A calls
+  endpoint X defined in service B".
+
 ## WASM bundling note
 
 The parser is [Tree-sitter](https://tree-sitter.github.io/) compiled to

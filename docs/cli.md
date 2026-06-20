@@ -34,25 +34,32 @@ All commands support these global options:
 
 ### `brainclaw switch [project]`
 
-Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces. The active project is persisted per-workspace in `.brainclaw/active-project.json`.
+Set the active project for subsequent CLI and MCP commands. This eliminates the need to `cd` into a subproject directory in multi-project workspaces.
+
+**Session-scoped by default (v1.10.0).** A plain `switch <project>` only affects the **calling agent's session** — it auto-creates a session if needed and never touches the shared pointer. This is what keeps two agents working in the same monorepo independent: neither clobbers the other. `switch --list` and the no-argument "show current" reflect the session's own active project.
+
+`--global` is the **only** path that writes (or, with `--clear`, removes) the shared, per-workspace `.brainclaw/active-project.json` that every agent on the host sees. Use it for an operator setting a workspace-wide default — not for per-agent work.
 
 | Option | Description |
 |---|---|
-| `--list` | List all available projects in the workspace |
-| `--clear` | Clear the active project (revert to cwd default) |
-| `--json` | Output as JSON |
+| `--list` | List all available projects in the workspace (marks the session's active project) |
+| `--clear` | Clear the **session's** active project (revert to cwd); add `--global` to clear the shared pointer |
+| `--global` | Write/clear the **shared** workspace default for all agents (the only path that mutates `active-project.json`); bypasses the session |
+| `--json` | Output as JSON (includes `scope: "session" \| "global"`) |
 
 The `<project>` argument accepts:
-- **Project name** — matched against the global registry and workspace config
+- **Project name** — matched against the global registry, workspace config, and cross-project links
 - **Relative path** — resolved from the workspace root (e.g. `apps/lodestar`)
 - **Absolute path** — used directly
 
 ```bash
 brainclaw switch --list              # discover available projects
-brainclaw switch lodestar            # switch by project name
+brainclaw switch lodestar            # session-scoped switch (isolated to this agent)
 brainclaw switch apps/lodestar       # switch by relative path
-brainclaw switch                     # show current active project
-brainclaw switch --clear             # clear, revert to cwd
+brainclaw switch                     # show current active project (session-aware)
+brainclaw switch --clear             # clear THIS session's active project
+brainclaw switch lodestar --global   # set the shared workspace default for everyone
+brainclaw switch --clear --global    # clear the shared workspace default
 brainclaw --cwd /other/path status   # one-off override without switching
 ```
 
