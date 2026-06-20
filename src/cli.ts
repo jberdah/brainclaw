@@ -1950,15 +1950,17 @@ program
 
 program
   .command('switch [project]')
-  .description('Set the active project for subsequent commands')
+  .description('Set the active project for subsequent commands (session-scoped by default)')
   .option('--list', 'List available projects in the workspace')
   .option('--clear', 'Clear the active project (revert to cwd)')
+  .option('--global', 'Set/clear the SHARED workspace default for ALL agents (writes active-project.json). Without it, switch is session-scoped and isolated.')
   .option('--json', 'Output as JSON')
   .action((project: string | undefined, options) => {
     const globalOpts = options.parent?.parent ? program.opts() : {};
     runSwitch(project, {
       list: options.list,
       clear: options.clear,
+      global: options.global,
       json: options.json,
       cwd: globalOpts.cwd,
     });
