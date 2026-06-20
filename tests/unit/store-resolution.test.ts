@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
-import { resolveContextStoreCwd, resolveEffectiveCwd, resolveStoreChain, resolvePrimaryStore, resolveWorkspaceRoot } from '../../src/core/store-resolution.js';
+import { resolveContextStoreCwd, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveStoreChain, resolvePrimaryStore, resolveWorkspaceRoot } from '../../src/core/store-resolution.js';
 import { saveActiveProject, clearActiveProject } from '../../src/core/active-project.js';
+import { saveCurrentSession } from '../../src/core/identity.js';
 
 function tmpDir(prefix = 'bclaw-storechain-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -463,6 +464,177 @@ describe('core/store-resolution', () => {
       } finally {
         clearActiveProject(workspace);
         fs.rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // F1 (monorepo independence, trp_71accb07): when an agent is ANCHORED to the
+  // workspace (BRAINCLAW_CWD) but physically working inside a child project, it
+  // must resolve THAT child — not the anchor root and not a shared/stale global
+  // pointer. New `active_source: 'cwd_child'`, inserted between session(4) and
+  // global(6). The containment GUARD (isAtOrBelow) is the Codex cadrage catch.
+  describe('resolveEffectiveCwdInfo — cwd_child (F1)', () => {
+    const ENV_KEYS = ['BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID'];
+
+    function withEnv<T>(vars: Record<string, string>, fn: () => T): T {
+      const saved: Record<string, string | undefined> = {};
+      for (const k of ENV_KEYS) saved[k] = process.env[k];
+      try {
+        for (const k of ENV_KEYS) delete process.env[k];
+        for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+        return fn();
+      } finally {
+        for (const k of ENV_KEYS) {
+          if (saved[k] === undefined) delete process.env[k];
+          else process.env[k] = saved[k];
+        }
+      }
+    }
+
+    function makeMonorepo(): { ws: string; api: string; web: string } {
+      const ws = tmpDir('bclaw-cwdchild-');
+      makeStore(ws, 'workspace');
+      saveConfig(defaultConfig('workspace', {
+        projectId: 'prj_workspace',
+        projectMode: 'multi-project',
+        projectStrategy: 'folder',
+      }), ws);
+
+      const api = path.join(ws, 'apps', 'api');
+      fs.mkdirSync(api, { recursive: true });
+      makeStore(api, 'repo');
+      saveConfig(defaultConfig('api', { projectId: 'prj_api' }), api);
+
+      const web = path.join(ws, 'apps', 'web');
+      fs.mkdirSync(web, { recursive: true });
+      makeStore(web, 'repo');
+      saveConfig(defaultConfig('web', { projectId: 'prj_web' }), web);
+
+      return { ws, api, web };
+    }
+
+    it('resolves the child project when anchored and physically inside it', () => {
+      const { ws, api } = makeMonorepo();
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: api });
+          assert.equal(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(api));
+          assert.equal(r.resolved_project?.name, 'api');
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('resolves the closest child store from a deep subdir inside it', () => {
+      const { ws, api } = makeMonorepo();
+      const deep = path.join(api, 'src', 'handlers');
+      fs.mkdirSync(deep, { recursive: true });
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: deep });
+          assert.equal(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(api));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('does NOT fire when baseCwd equals the anchor (stays at root)', () => {
+      const { ws } = makeMonorepo();
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: ws });
+          assert.notEqual(r.active_source, 'cwd_child');
+          assert.equal(r.cwd, path.resolve(ws));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('GUARD: does NOT fire when baseCwd is OUTSIDE the anchor even if it has a .brainclaw', () => {
+      const { ws } = makeMonorepo();
+      const outside = tmpDir('bclaw-outside-');
+      makeStore(outside, 'repo');
+      saveConfig(defaultConfig('outside', { projectId: 'prj_outside' }), outside);
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: outside });
+          assert.notEqual(r.active_source, 'cwd_child');
+          assert.notEqual(r.cwd, path.resolve(outside));
+          assert.equal(r.cwd, path.resolve(ws));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('session active project beats cwd_child', () => {
+      const { ws, api, web } = makeMonorepo();
+      const now = new Date().toISOString();
+      saveCurrentSession({
+        session_id: 'sess_f1',
+        started_at: now,
+        last_seen_at: now,
+        agent: 'claude-code',
+        agent_id: 'agent-test',
+        host_id: 'host-test',
+        pid: 424242,
+        active_project: { path: web, name: 'web', switched_at: now },
+      }, ws);
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: api, sessionId: 'sess_f1' });
+          assert.equal(r.active_source, 'session');
+          assert.equal(r.cwd, path.resolve(web));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('BRAINCLAW_PROJECT beats cwd_child', () => {
+      const { ws, api, web } = makeMonorepo();
+      try {
+        withEnv({ BRAINCLAW_CWD: ws, BRAINCLAW_PROJECT: 'web' }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: api });
+          assert.equal(r.active_source, 'env_project');
+          assert.equal(r.cwd, path.resolve(web));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('explicitCwd beats cwd_child', () => {
+      const { ws, api, web } = makeMonorepo();
+      try {
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: api, explicitCwd: web });
+          assert.equal(r.active_source, 'explicit');
+          assert.equal(r.cwd, path.resolve(web));
+        });
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    });
+
+    it('global pointer still applies at the root (cwd_child does not shadow it)', () => {
+      const { ws, api } = makeMonorepo();
+      try {
+        saveActiveProject(ws, { path: api, name: 'api', switched_at: new Date().toISOString() });
+        withEnv({ BRAINCLAW_CWD: ws }, () => {
+          const r = resolveEffectiveCwdInfo({ baseCwd: ws });
+          assert.equal(r.active_source, 'global');
+          assert.equal(r.cwd, path.resolve(api));
+        });
+      } finally {
+        clearActiveProject(ws);
+        fs.rmSync(ws, { recursive: true, force: true });
       }
     });
   });
