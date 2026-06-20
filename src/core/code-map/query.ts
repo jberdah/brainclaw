@@ -525,8 +525,11 @@ function rankFiles(
   for (const f of forwardRows) bump(f.path, f.file_id, f.reason, 4, true);
 
   // 4. import-specifier heuristic — weak fallback (kept; real graph rows outrank it).
+  //    Dedup by path (a file is bumped ONCE even if it matches several specifiers /
+  //    appears in several token buckets) so the weak signal can't accumulate.
   if (importsIndex) {
     const qLower = query.toLowerCase();
+    const heuristicPaths = new Map<string, { fileId: string; reason: string }>();
     for (const [moduleSpec, entries] of Object.entries(importsIndex.entries)) {
       const specLower = moduleSpec.toLowerCase();
       const relevant =
@@ -534,21 +537,25 @@ function rankFiles(
         [...definingDirs].some((d) => moduleSpec.includes(path.posix.basename(d)));
       if (!relevant) continue;
       for (const e of entries) {
-        bump(e.path, e.file_id, `imports ${moduleSpec}`, 3, false);
+        if (!heuristicPaths.has(e.path)) heuristicPaths.set(e.path, { fileId: e.file_id, reason: `imports ${moduleSpec}` });
       }
     }
+    for (const [p, { fileId, reason }] of heuristicPaths) bump(p, fileId, reason, 3, false);
   }
 
-  // 5. files that share a directory with a defining file.
+  // 5. files that share a directory with a defining file — bumped ONCE per file
+  //    (the symbols index repeats a file across every symbol AND every token bucket;
+  //    without dedup a symbol-dense file would accumulate +1 dozens of times and bury
+  //    the real graph signals).
   if (definingDirs.size > 0) {
+    const sameDirPaths = new Map<string, string>(); // path -> file_id
     for (const bucket of Object.values(symbolsIndex.entries)) {
       for (const entry of bucket) {
         const dir = path.posix.dirname(entry.path.replace(/\\/g, '/'));
-        if (definingDirs.has(dir)) {
-          bump(entry.path, entry.file_id, `shares directory with the matching symbol`, 1, false);
-        }
+        if (definingDirs.has(dir) && !sameDirPaths.has(entry.path)) sameDirPaths.set(entry.path, entry.file_id);
       }
     }
+    for (const [p, fid] of sameDirPaths) bump(p, fid, `shares directory with the matching symbol`, 1, false);
   }
 
   return [...byPath.values()].sort(
@@ -664,9 +671,15 @@ export function brief(
   const importsIndex = readImportsIndex(ctx.cwd, ctx.preferredDirName);
   const resolutionIndex = readResolutionIndex(ctx.cwd, ctx.preferredDirName);
 
-  // Resolve target -> defining symbol entries (symbol query first, then path).
+  // Resolve target -> defining symbol entries. A brief orients on a SPECIFIC target,
+  // so prefer EXACT name matches when present — otherwise the token index floods the
+  // result with unrelated same-token symbols (e.g. `resolveProjectImports` would pull
+  // in every `resolve*`), burying the real defining file + its graph signals. Fall
+  // back to the fuzzy token set, then to a path match. (find() stays fuzzy by design.)
   let defining = gatherSymbolEntries(symbolsIndex, target);
-  if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
+  const exact = defining.filter((e) => e.name.toLowerCase() === target.toLowerCase());
+  if (exact.length > 0) defining = exact;
+  else if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
 
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);

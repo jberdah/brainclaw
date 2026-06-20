@@ -194,6 +194,22 @@ describe('code-map P1d brief graph signals (resolution surfaced)', () => {
       'deleted importer suppressed (no silent stale graph hint)',
     );
   });
+
+  it('prefers an EXACT symbol match as the defining file (not same-token siblings)', async () => {
+    const root = tmpProject();
+    // parseConfig and parseConfigFile share tokens (parse, config) but only one is exact.
+    writeSrc(root, 'src/a.ts', `export function parseConfig() { return 1; }\n`);
+    writeSrc(root, 'src/b.ts', `export function parseConfigFile() { return 2; }\n`);
+    await refreshAll(root);
+    const be = backend(root);
+    const brief = await be.brief({ target: 'parseConfig', cwd: root });
+    const a = brief.suggested_files_to_read.find((f) => f.path === 'src/a.ts');
+    assert.ok(a, 'the exact-match file is present');
+    assert.match(a!.reason, /defines matching symbol parseConfig\b/, 'a.ts is the defining file');
+    // b.ts (parseConfigFile) must NOT be presented as a defining match for parseConfig.
+    const b = brief.suggested_files_to_read.find((f) => f.path === 'src/b.ts');
+    if (b) assert.doesNotMatch(b.reason, /defines matching symbol/, 'same-token sibling is not "defining"');
+  });
 });
 
 describe('code-map lazy read-path freshness (spec §6.1)', () => {
