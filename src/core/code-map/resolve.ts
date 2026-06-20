@@ -10,26 +10,39 @@
  *
  * For each `module` node (an import) it asks the owning provider's `resolveImport`
  * to map the specifier → a project-internal target FILE path, then emits
- * `module --resolves_to--> <target file node>`. The PROVIDER returns paths only;
- * the CORE mints the edge + target file-node id (dec#108/#109 boundary).
+ * `module --resolves_to--> <target file node>` (A, file-level). The PROVIDER returns
+ * paths only; the CORE mints the edge + target file-node id (dec#108/#109 boundary).
+ *
+ * P1c-B (symbol-level, additive): for that SAME-RUN resolved target file, each NAMED
+ * imported symbol (`mod.imported_names`, excluding `'default'`/`'*'`) is bound to its
+ * definition via `module --imports_symbol--> <def symbol node>` — but only when the
+ * target file has exactly ONE importable symbol of that name (ambiguous/absent → no
+ * edge). "Importable" is the TARGET provider's `isImportableSymbol` (TS: exported &&
+ * not a synthetic export; Python: top-level). B's confidence INHERITS the A
+ * file-resolution confidence (never higher than the resolution it rides on).
  *
  * Idempotency (Codex R1 #4): edge ids are deterministic by (project, from, to,
- * kind) only, so each shard is rewritten by KEEPING every non-`resolves_to`
- * node/edge byte-identical (same order), FILTERING old `resolves_to`, then
- * appending the freshly computed edges in a deterministic order. A shard is only
- * written when its edge array actually changed — so a project with no resolver is
- * a pure no-op (nothing rewritten), and re-runs are byte-identical.
+ * kind) only, so each shard is rewritten by KEEPING every non-pass-owned node/edge
+ * byte-identical (same order), FILTERING old pass-owned edges (BOTH `resolves_to`
+ * AND `imports_symbol` — else a renamed/deleted symbol leaves a stale B edge), then
+ * appending the freshly computed A+B edges in a single deterministic order. A shard
+ * is only written when its edge array actually changed — so a project with no
+ * resolver is a pure no-op, and re-runs are byte-identical.
  *
  * Recompute-all (Codex R1): the pass resolves over ALL shards every refresh (even
- * `--changed`) and rewrites only the shards whose `resolves_to` set changed. That
+ * `--changed`) and rewrites only the shards whose pass-owned set changed. That
  * removes the moved/deleted-target stale-edge problem without a reverse-dependency
  * scheduler — the pass already holds the full current file set.
  */
 import { edgeId, fileNodeId } from './ids.js';
 import { writeShard } from './store.js';
-import type { CodeEdge, CodeLang, FileShard } from './types.js';
+import { buildImportableIndex, lookupImportable } from './importable.js';
+import type { CodeEdge, CodeLang, CodeNode, FileShard } from './types.js';
 import { EdgeSchema } from './types.js';
 import type { CodeLanguageRegistry, ResolveImportContext } from './lang/provider.js';
+
+/** Edge kinds this pass OWNS — stale-stripped + recomputed every run (A + B). */
+const PASS_OWNED_EDGE_KINDS = new Set<string>(['resolves_to', 'imports_symbol']);
 
 function toPosix(p: string): string {
   return p.replace(/\\/g, '/');
@@ -67,7 +80,10 @@ export interface ResolveProjectImportsInput {
 export interface ResolveProjectImportsResult {
   rewroteAny: boolean;
   shardsRewritten: number;
+  /** Total pass-owned edges emitted (A `resolves_to` + B `imports_symbol`). */
   edgesEmitted: number;
+  /** Subset: B `imports_symbol` edges emitted. */
+  symbolEdgesEmitted: number;
 }
 
 /**
@@ -91,17 +107,34 @@ export async function resolveProjectImports(
     langOfFile: (rel) => fileLang.get(toPosix(rel)),
   };
 
+  // Target-file lookups for B: path -> shard, and a memoized importable index
+  // (name -> importable symbols) per target file (built lazily, reused across importers).
+  const shardByPath = new Map<string, FileShard>();
+  for (const s of shards) shardByPath.set(toPosix(s.path), s);
+  const importableCache = new Map<string, Map<string, CodeNode[]>>();
+  const importableFor = (targetPath: string, targetLang: CodeLang): Map<string, CodeNode[]> => {
+    let idx = importableCache.get(targetPath);
+    if (!idx) {
+      const targetShard = shardByPath.get(targetPath);
+      idx = buildImportableIndex(targetShard?.nodes ?? [], registry.providerForLang(targetLang));
+      importableCache.set(targetPath, idx);
+    }
+    return idx;
+  };
+
   let shardsRewritten = 0;
   let edgesEmitted = 0;
+  let symbolEdgesEmitted = 0;
 
   for (const shard of shards) {
     const provider = registry.providerForLang(shard.lang);
-    // Non-resolves_to edges are preserved byte-identical (same order).
-    const kept = shard.edges.filter((e) => e.kind !== 'resolves_to');
+    // Non-pass-owned edges are preserved byte-identical (same order). Filtering BOTH
+    // pass-owned kinds also strips any stale A/B edge from a prior run (idempotency).
+    const kept = shard.edges.filter((e) => !PASS_OWNED_EDGE_KINDS.has(e.kind));
 
-    // Fresh resolves_to set (empty when no resolver — which also strips any stale
-    // resolves_to from a prior run, keeping the pass idempotent).
+    // Fresh pass-owned set (A resolves_to + B imports_symbol). Empty when no resolver.
     const fresh: CodeEdge[] = [];
+    let freshSymbolCount = 0;
     if (provider?.resolveImport) {
       const seen = new Set<string>();
       for (const mod of shard.nodes) {
@@ -122,24 +155,40 @@ export async function resolveProjectImports(
           if (!targetLang) continue; // target not an indexed file → no edge
           const confidence = clampConfidence(r.confidence);
           if (confidence <= 0) continue; // preserves the resolves_to confidence invariant: (0, 1]
+          const source = { path: toPosix(shard.path), line: mod.span?.start_line ?? null };
+
+          // A — file-level resolves_to.
           const to = fileNodeId(projectId, targetPath, targetLang);
           const id = edgeId({ projectId, from: mod.id, to, kind: 'resolves_to' });
-          if (seen.has(id)) continue; // dedup (same module → same target)
-          seen.add(id);
-          fresh.push({
-            id,
-            from: mod.id,
-            to,
-            kind: 'resolves_to',
-            confidence,
-            source: { path: toPosix(shard.path), line: mod.span?.start_line ?? null },
-          });
+          if (!seen.has(id)) {
+            seen.add(id);
+            fresh.push({ id, from: mod.id, to, kind: 'resolves_to', confidence, source });
+          }
+
+          // B — symbol-level imports_symbol, off the SAME-RUN resolved target file.
+          // Skip default/namespace (no single named symbol). Bind a name only when the
+          // target has exactly ONE importable symbol with it (ambiguous/absent → skip).
+          const idx = importableFor(targetPath, targetLang);
+          for (const name of mod.imported_names ?? []) {
+            if (name === 'default' || name === '*') continue;
+            const target = lookupImportable(idx, name);
+            if (!target) continue;
+            const symId = edgeId({ projectId, from: mod.id, to: target.id, kind: 'imports_symbol' });
+            if (seen.has(symId)) continue; // dedup (duplicate names / re-imports)
+            seen.add(symId);
+            fresh.push({ id: symId, from: mod.id, to: target.id, kind: 'imports_symbol', confidence, source });
+            freshSymbolCount++;
+          }
         }
       }
     }
 
-    // Deterministic order so re-runs are byte-identical.
-    fresh.sort((a, b) => (a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from)));
+    // Single deterministic order over A+B so re-runs are byte-identical (from, to, kind).
+    fresh.sort((a, b) => {
+      if (a.from !== b.from) return a.from.localeCompare(b.from);
+      if (a.to !== b.to) return a.to.localeCompare(b.to);
+      return a.kind.localeCompare(b.kind);
+    });
 
     const nextEdges = [...kept, ...fresh];
     if (!edgesArrayEqual(shard.edges, nextEdges)) {
@@ -149,7 +198,8 @@ export async function resolveProjectImports(
       shardsRewritten++;
     }
     edgesEmitted += fresh.length;
+    symbolEdgesEmitted += freshSymbolCount;
   }
 
-  return { rewroteAny: shardsRewritten > 0, shardsRewritten, edgesEmitted };
+  return { rewroteAny: shardsRewritten > 0, shardsRewritten, edgesEmitted, symbolEdgesEmitted };
 }

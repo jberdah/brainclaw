@@ -11,7 +11,7 @@
  * `resolveImport` is DECLARED but never called in P1a (import resolution EXECUTION
  * is P1c) — it pins the shape so P1c is additive.
  */
-import type { CodeLang, Span } from '../types.js';
+import type { CodeLang, CodeNode, Span } from '../types.js';
 import type { CaptureMapping, ProviderVocabularyDeclaration } from '../vocabulary.js';
 import type { ExtractionDraft } from '../drafts.js';
 
@@ -180,6 +180,30 @@ export interface CodeLanguageProvider {
     req: ImportResolutionRequest,
     ctx: ResolveImportContext,
   ): Promise<readonly ImportResolution[]>;
+
+  /**
+   * P1c-B symbol-level resolution: is `node` (a symbol in `fileSymbols`, that file's
+   * full symbol set) IMPORTABLE from outside its file — i.e. a legitimate binding
+   * target for `module --imports_symbol--> node`? Language semantics live here
+   * (dec#108/#109: provider answers "importable?", core mints the edge/id).
+   *
+   * Default when a provider does NOT implement it ({@link defaultImportableSymbol}):
+   * `node.kind === 'symbol' && node.exported === true && node.subtype !== 'export'`
+   * — the TS rule (the `subtype !== 'export'` guard excludes synthetic export-clause
+   * placeholder nodes, which are NOT real definitions). Python overrides it (no export
+   * keyword → top-level-module test via `fileSymbols` span containment). PHP/Java have
+   * no resolver yet, so this is never reached for them (B is a no-op there).
+   */
+  isImportableSymbol?(node: CodeNode, fileSymbols: readonly CodeNode[]): boolean;
+}
+
+/**
+ * The default {@link CodeLanguageProvider.isImportableSymbol}: a real, externally
+ * importable definition. Excludes synthetic `subtype:'export'` placeholders (TS
+ * export-clause nodes) so B never binds to a non-definition (Codex cadrage review).
+ */
+export function defaultImportableSymbol(node: CodeNode): boolean {
+  return node.kind === 'symbol' && node.exported === true && node.subtype !== 'export';
 }
 
 /** Shape of one `Manifest['languages']` entry (kept loose to avoid a cycle). */
