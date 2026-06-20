@@ -1,8 +1,9 @@
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isolateAgentEnv } from '../../helpers/workspace.js';
 import { refresh } from '../../../src/core/code-map/refresh.js';
 import { runCodeMap } from '../../../src/commands/code-map.js';
 import { executeMcpToolCall } from '../../../src/commands/mcp.js';
@@ -12,6 +13,19 @@ import { readManifest, writeManifest } from '../../../src/core/code-map/store.js
 import { codeMapDir, lockPath } from '../../../src/core/code-map/paths.js';
 
 const cleanupDirs: string[] = [];
+
+// Isolate HOME + agent/BRAINCLAW_* env so the MCP resolution path (executeMcpToolCall
+// → resolveEffectiveCwdInfo) cannot walk up to a real user-level ~/.brainclaw store.
+// A stale global active-project there made these MCP tests environment-dependent —
+// green on clean CI, but failing on a dev machine. Each test gets a fresh fake home.
+let restoreEnv: (() => void) | undefined;
+beforeEach(() => {
+  restoreEnv = isolateAgentEnv().restore;
+});
+afterEach(() => {
+  restoreEnv?.();
+  restoreEnv = undefined;
+});
 
 function tmpProject(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-codemap-surface-'));
