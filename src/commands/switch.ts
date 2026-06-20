@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
-import { buildOperationalIdentity, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
+import { buildOperationalIdentity, loadCurrentSession, loadSessionById, resolveCurrentSessionId, saveCurrentSession } from '../core/identity.js';
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
@@ -11,8 +11,19 @@ import { loadConfig } from '../core/config.js';
 export interface SwitchOptions {
   list?: boolean;
   clear?: boolean;
-  /** Scope switch to session only (default: true when a session is active). */
+  /**
+   * Force session-scoped switch. This is now the DEFAULT for the CLI (F3): a
+   * switch never touches the shared global pointer unless `global` is set.
+   * Retained for back-compat / explicitness.
+   */
   session?: boolean;
+  /**
+   * Opt-in: write/clear the SHARED workspace default (active-project.json) that
+   * every agent on the host sees. This is the ONLY CLI path that mutates the
+   * global pointer; it bypasses the session. Intended for a human/operator
+   * setting a workspace-wide default, not for per-agent work.
+   */
+  global?: boolean;
   json?: boolean;
   cwd?: string;
 }
@@ -204,62 +215,60 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
 
   // --list: show available projects
   if (options.list) {
-    listProjects(wsRoot, options.json ?? false);
+    listProjects(wsRoot, cwd, options.json ?? false);
     return;
   }
 
-  // --clear: remove active project
+  // --clear: remove active project. Session-scoped by default (F3) — clearing
+  // the SHARED global pointer is an opt-in (--global) so one agent's clear no
+  // longer wipes every other agent's resolution.
   if (options.clear) {
-    const session = loadCurrentSession(cwd);
-    if (session?.active_project) {
-      const { active_project: _removed, ...rest } = session;
-      saveCurrentSession(rest, cwd);
-    }
-    clearActiveProject(wsRoot);
-    if (options.json) {
-      console.log(JSON.stringify({ cleared: true }));
+    let scope: 'session' | 'global';
+    if (options.global) {
+      clearActiveProject(wsRoot);
+      scope = 'global';
     } else {
-      console.log('✔ Active project cleared. Commands will use current directory.');
+      const session = loadCurrentSession(cwd);
+      if (session?.active_project) {
+        const { active_project: _removed, ...rest } = session;
+        saveCurrentSession(rest, cwd);
+      }
+      scope = 'session';
+    }
+    if (options.json) {
+      console.log(JSON.stringify({ cleared: true, scope }));
+    } else {
+      const hint = scope === 'session' ? ' (session-scoped)' : ' (global)';
+      console.log(`✔ Active project cleared${hint}. Commands will use current directory.`);
     }
     return;
   }
 
   // No argument: show current active project
   if (!projectRef) {
-    showCurrent(wsRoot, options.json ?? false);
+    showCurrent(wsRoot, cwd, options.json ?? false);
     return;
   }
 
   // Switch to project
-  const resolved = resolveProjectRef(projectRef, cwd);
-  if (!resolved) {
-    console.error(`Error: cannot resolve project "${projectRef}".`);
-    console.error('Use `brainclaw switch --list` to see available projects.');
-    process.exit(1);
-  }
-
-  let projectName: string | undefined;
-  try {
-    const config = loadConfig(resolved);
-    projectName = config.project_name;
-  } catch {
-    // name is optional
-  }
-
   const now = new Date().toISOString();
-  const session = loadCurrentSession(cwd);
-  const scopedToSession = options.session ?? !!session;
   let scope: 'session' | 'global';
+  let switchedPath: string;
+  let switchedName: string | undefined;
 
-  if (scopedToSession && session) {
-    // Write to session state — only this agent sees this switch
-    saveCurrentSession({
-      ...session,
-      active_project: { path: resolved, name: projectName, switched_at: now },
-    }, cwd);
-    scope = 'session';
-  } else {
-    // Fall back to global active-project.json
+  if (options.global) {
+    // Opt-in, audited: set the SHARED workspace default for every agent on the
+    // host. Bypasses the session entirely (an operator setting a default).
+    const resolved = resolveProjectRef(projectRef, cwd);
+    if (!resolved) {
+      console.error(`Error: cannot resolve project "${projectRef}".`);
+      console.error('Use `brainclaw switch --list` to see available projects.');
+      process.exit(1);
+    }
+    let projectName: string | undefined;
+    try {
+      projectName = loadConfig(resolved).project_name;
+    } catch { /* name is optional */ }
     saveActiveProject(wsRoot, {
       path: resolved,
       name: projectName,
@@ -267,22 +276,47 @@ export function runSwitch(projectRef: string | undefined, options: SwitchOptions
       switched_by: process.env.BRAINCLAW_AGENT_NAME ?? process.env.USER ?? 'unknown',
     });
     scope = 'global';
+    switchedPath = resolved;
+    switchedName = projectName;
+  } else {
+    // F3 default: session-scoped + isolated. Delegate to switchProject — the
+    // safe model that auto-creates the session, honours an explicit
+    // BRAINCLAW_SESSION_ID (resolveCurrentSessionId returns it WITHOUT
+    // persisting, so the session file must be created), resolves cross-project
+    // links, and never touches the shared global pointer.
+    try {
+      const explicitSessionId = resolveCurrentSessionId(process.env, cwd) || undefined;
+      const result = switchProject(projectRef, { cwd, sessionOnly: true, sessionId: explicitSessionId });
+      scope = 'session';
+      switchedPath = result.path;
+      switchedName = result.name;
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      console.error('Use `brainclaw switch --list` to see available projects.');
+      process.exit(1);
+    }
   }
 
   if (options.json) {
-    console.log(JSON.stringify({ switched: true, path: resolved, name: projectName, scope }));
+    console.log(JSON.stringify({ switched: true, path: switchedPath, name: switchedName, scope }));
   } else {
-    const rel = path.relative(wsRoot, resolved) || '.';
-    const scopeHint = scope === 'session' ? ' (session-scoped)' : '';
-    console.log(`✔ Switched to ${projectName ? `"${projectName}" (${rel})` : rel}${scopeHint}`);
+    const rel = path.relative(wsRoot, switchedPath) || '.';
+    const scopeHint = scope === 'session' ? ' (session-scoped)' : ' (global — all agents)';
+    console.log(`✔ Switched to ${switchedName ? `"${switchedName}" (${rel})` : rel}${scopeHint}`);
   }
 }
 
-function showCurrent(wsRoot: string, json: boolean): void {
-  const active = loadActiveProject(wsRoot);
+function showCurrent(wsRoot: string, cwd: string, json: boolean): void {
+  // F5: prefer the session's own active project so an agent sees its own
+  // session-scoped switch, not just the shared global pointer.
+  const sessionActive = loadCurrentSession(cwd)?.active_project;
+  const globalActive = loadActiveProject(wsRoot);
+  const active = sessionActive ?? globalActive;
+  const source: 'session' | 'global' | 'none' = sessionActive ? 'session' : globalActive ? 'global' : 'none';
+
   if (!active) {
     if (json) {
-      console.log(JSON.stringify({ active: false }));
+      console.log(JSON.stringify({ active: false, scope: 'none' }));
     } else {
       console.log('No active project. Commands use current directory.');
       console.log('Use `brainclaw switch <project>` to set one.');
@@ -291,75 +325,44 @@ function showCurrent(wsRoot: string, json: boolean): void {
   }
 
   const rel = path.relative(wsRoot, active.path) || '.';
+  const switchedBy = 'switched_by' in active ? active.switched_by : undefined;
   if (json) {
-    console.log(JSON.stringify({ active: true, ...active, relative_path: rel }));
+    console.log(JSON.stringify({ active: true, ...active, relative_path: rel, scope: source }));
   } else {
-    console.log(`Active project: ${active.name ? `"${active.name}" (${rel})` : rel}`);
+    const scopeHint = source === 'session' ? ' (session-scoped)' : ' (global — all agents)';
+    console.log(`Active project: ${active.name ? `"${active.name}" (${rel})` : rel}${scopeHint}`);
     console.log(`  switched at: ${active.switched_at}`);
-    if (active.switched_by) console.log(`  switched by: ${active.switched_by}`);
+    if (switchedBy) console.log(`  switched by: ${switchedBy}`);
   }
 }
 
-function listProjects(wsRoot: string, json: boolean): void {
-  const active = loadActiveProject(wsRoot);
-  const projects: Array<{
-    name?: string;
-    path: string;
-    relative_path: string;
-    active: boolean;
-  }> = [];
-
-  // Add workspace root itself
-  if (memoryExists(wsRoot)) {
-    try {
-      const config = loadConfig(wsRoot);
-      projects.push({
-        name: config.project_name,
-        path: wsRoot,
-        relative_path: '.',
-        active: active?.path === wsRoot,
-      });
-    } catch {
-      projects.push({
-        path: wsRoot,
-        relative_path: '.',
-        active: active?.path === wsRoot,
-      });
-    }
-  }
-
-  // Discover child projects (depth 7 covers deep workspace layouts like /srv/dev/repos/global/applications/*/...)
-  const children = scanNestedBrainclawProjects(wsRoot, 7);
-  for (const child of children) {
-    const childPath = path.resolve(child.path);
-    if (childPath === wsRoot) continue;
-    const rel = path.relative(wsRoot, childPath) || '.';
-    projects.push({
-      name: child.project_name,
-      path: childPath,
-      relative_path: rel,
-      active: active?.path === childPath,
-    });
-  }
+function listProjects(wsRoot: string, cwd: string, json: boolean): void {
+  // F5: delegate to the session-aware lister so the active marker reflects the
+  // agent's own session active project, falling back to the global pointer.
+  const result = listAvailableProjectsForSession(cwd);
 
   if (json) {
-    console.log(JSON.stringify({ workspace: wsRoot, projects }, null, 2));
+    console.log(JSON.stringify({
+      workspace: result.workspace_root,
+      active_source: result.active_source,
+      projects: result.projects,
+    }, null, 2));
     return;
   }
 
-  if (projects.length === 0) {
+  if (result.projects.length === 0) {
     console.log('No brainclaw projects found in this workspace.');
     return;
   }
 
-  console.log(`Projects in ${wsRoot}:\n`);
-  for (const p of projects) {
+  console.log(`Projects in ${result.workspace_root}:\n`);
+  for (const p of result.projects) {
     const marker = p.active ? '→ ' : '  ';
     const name = p.name ? `${p.name} (${p.relative_path})` : p.relative_path;
     console.log(`${marker}${name}`);
   }
 
-  if (!active) {
+  if (result.active_source === 'none') {
     console.log('\nNo active project. Use `brainclaw switch <project>` to set one.');
   }
 }
