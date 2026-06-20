@@ -15,6 +15,7 @@ import { hashContent } from './extractor.js';
 import {
   readImportsIndex,
   readManifest,
+  readResolutionIndex,
   readShard,
   readSymbolsIndex,
 } from './store.js';
@@ -22,6 +23,7 @@ import type {
   FreshnessBadge,
   FreshnessStatus,
   ImportsIndex,
+  ResolutionIndex,
   SymbolIndexEntry,
   SymbolsIndex,
 } from './types.js';
@@ -456,45 +458,73 @@ interface RankedFile {
   file_id: string;
   reason: string;
   score: number;
+  /** Strongest single signal delta seen (so the reason tracks the dominant signal). */
+  bestDelta: number;
+  /** True iff EVERY signal for this path is graph-derived (P1d): such a row is
+   *  suppressed when it fails lazy validation (no silent stale graph hints). A path
+   *  that is also a defining/heuristic/same-dir row is NOT graph-only → not suppressed. */
+  graphDerived: boolean;
+}
+
+/** A graph-derived candidate (forward dependency or reverse dependent). */
+export interface GraphRow {
+  path: string;
+  file_id: string;
+  reason: string;
 }
 
 /**
- * Build the ranked suggested_files_to_read for a brief (spec §9).
+ * Build the ranked suggested_files_to_read for a brief (spec §9; P1d graph signals).
  *
  * Relevance signals, highest first:
- *  - a file that DEFINES the matching symbol (from the symbols index)
- *  - files that import a module whose path/name relates, or are imported by it
- *  - files that share the directory of a defining file
+ *  - defining file of the matching symbol (+12)
+ *  - reverse dependent — a file that imports the target (+5, blast radius; P1d)
+ *  - forward dependency — a file the target imports, resolved (+4; P1d)
+ *  - import-specifier heuristic (+3, weak fallback)
+ *  - same directory as a defining file (+1)
+ *
+ * `bump` accumulates score but keeps the reason of the STRONGEST single signal
+ * (Codex review) and tracks whether a path is graph-only. Each signal class bumps a
+ * given path at most once (callers dedupe their rows), bounding score runaway.
  */
 function rankFiles(
   defining: SymbolIndexEntry[],
+  forwardRows: GraphRow[],
+  reverseRows: GraphRow[],
   symbolsIndex: SymbolsIndex,
   importsIndex: ImportsIndex | null,
   query: string,
 ): RankedFile[] {
   const byPath = new Map<string, RankedFile>();
-  const bump = (p: string, fileId: string, reason: string, delta: number): void => {
+  const bump = (p: string, fileId: string, reason: string, delta: number, graph: boolean): void => {
     const cur = byPath.get(p);
     if (cur) {
       cur.score += delta;
-      // keep the strongest (first-set) reason; defining always wins because it
-      // is bumped first with the largest delta.
+      if (delta > cur.bestDelta) {
+        cur.bestDelta = delta;
+        cur.reason = reason;
+      }
+      cur.graphDerived = cur.graphDerived && graph; // graph-only iff every signal is graph
     } else {
-      byPath.set(p, { path: p, file_id: fileId, reason, score: delta });
+      byPath.set(p, { path: p, file_id: fileId, reason, score: delta, bestDelta: delta, graphDerived: graph });
     }
   };
 
-  // 1. defining files — strongest.
+  // 1. defining files — strongest, non-graph.
   const definingDirs = new Set<string>();
   for (const entry of defining) {
     const subtypeNote = entry.subtype ? ` (${entry.subtype})` : '';
-    bump(entry.path, entry.file_id, `defines matching symbol ${entry.name}${subtypeNote}`, 12);
+    bump(entry.path, entry.file_id, `defines matching symbol ${entry.name}${subtypeNote}`, 12, false);
     definingDirs.add(path.posix.dirname(entry.path.replace(/\\/g, '/')));
   }
 
-  // 2. files that import the same module specifier as the symbol name, OR import
-  //    a module that resolves (by basename) to a defining file. P0 keeps this
-  //    cheap: match the query token against import module specifiers.
+  // 2. reverse dependents (P1d) — who imports the target = blast radius.
+  for (const r of reverseRows) bump(r.path, r.file_id, r.reason, 5, true);
+
+  // 3. forward dependencies (P1d) — files the target imports (resolved).
+  for (const f of forwardRows) bump(f.path, f.file_id, f.reason, 4, true);
+
+  // 4. import-specifier heuristic — weak fallback (kept; real graph rows outrank it).
   if (importsIndex) {
     const qLower = query.toLowerCase();
     for (const [moduleSpec, entries] of Object.entries(importsIndex.entries)) {
@@ -504,18 +534,18 @@ function rankFiles(
         [...definingDirs].some((d) => moduleSpec.includes(path.posix.basename(d)));
       if (!relevant) continue;
       for (const e of entries) {
-        bump(e.path, e.file_id, `imports ${moduleSpec}`, 3);
+        bump(e.path, e.file_id, `imports ${moduleSpec}`, 3, false);
       }
     }
   }
 
-  // 3. files that share a directory with a defining file.
+  // 5. files that share a directory with a defining file.
   if (definingDirs.size > 0) {
     for (const bucket of Object.values(symbolsIndex.entries)) {
       for (const entry of bucket) {
         const dir = path.posix.dirname(entry.path.replace(/\\/g, '/'));
         if (definingDirs.has(dir)) {
-          bump(entry.path, entry.file_id, `shares directory with the matching symbol`, 1);
+          bump(entry.path, entry.file_id, `shares directory with the matching symbol`, 1, false);
         }
       }
     }
@@ -524,6 +554,78 @@ function rankFiles(
   return [...byPath.values()].sort(
     (a, b) => b.score - a.score || a.path.localeCompare(b.path),
   );
+}
+
+/** Build a node-id → symbol index entry map (deduped; entries repeat across token buckets). */
+function buildNodeIdIndex(symbolsIndex: SymbolsIndex): Map<string, SymbolIndexEntry> {
+  const out = new Map<string, SymbolIndexEntry>();
+  for (const bucket of Object.values(symbolsIndex.entries)) {
+    for (const entry of bucket) if (!out.has(entry.node_id)) out.set(entry.node_id, entry);
+  }
+  return out;
+}
+
+/**
+ * Forward dependencies of the target: files the defining symbols import. Read from
+ * each (already-validated) defining shard's `imports_symbol` edges, mapped to the
+ * target symbol's own index entry (path + file_id + name). Deduped by path. Reading
+ * only confident defining shards is the graph-SOURCE freshness gate (Codex review):
+ * a stale importer shard's edge list is not trusted.
+ */
+function forwardDeps(
+  confidentDefiningFileIds: Map<string, string>, // path -> file_id of confident defining files
+  nodeIndex: Map<string, SymbolIndexEntry>,
+  cwd: string | undefined,
+  preferredDirName: string | undefined,
+): GraphRow[] {
+  const byPath = new Map<string, GraphRow>();
+  for (const fileId of new Set(confidentDefiningFileIds.values())) {
+    const shard = readShard(fileId, cwd, preferredDirName);
+    if (!shard) continue;
+    for (const edge of shard.edges) {
+      if (edge.kind !== 'imports_symbol') continue;
+      const target = nodeIndex.get(edge.to);
+      if (!target) continue;
+      if (byPath.has(target.path)) continue;
+      byPath.set(target.path, {
+        path: target.path,
+        file_id: target.file_id,
+        reason: `imported by the matching symbol (resolved): ${target.name}`,
+      });
+    }
+  }
+  return [...byPath.values()];
+}
+
+/**
+ * Reverse dependents of the target (blast radius), from the P1d resolution index:
+ * files that import any defining file (`dependents_by_file`) or any defining symbol
+ * (`dependents_by_symbol`). Deduped by importer path; the strongest-named reason wins.
+ */
+function reverseDeps(
+  resolutionIndex: ResolutionIndex | null,
+  definingPaths: Set<string>,
+  definingByNodeId: Map<string, SymbolIndexEntry>,
+): GraphRow[] {
+  if (!resolutionIndex) return [];
+  const byPath = new Map<string, GraphRow>();
+  const add = (importerPath: string, fileId: string, reason: string): void => {
+    if (!byPath.has(importerPath)) byPath.set(importerPath, { path: importerPath, file_id: fileId, reason });
+  };
+  // by symbol — more precise (names the symbol).
+  for (const [nodeId, entry] of definingByNodeId) {
+    for (const dep of resolutionIndex.dependents_by_symbol[nodeId] ?? []) {
+      add(dep.path, dep.file_id, `imports the matching symbol ${entry.name}`);
+    }
+  }
+  // by file — covers default/namespace imports + path-target briefs.
+  for (const p of definingPaths) {
+    const base = path.posix.basename(p.replace(/\\/g, '/'));
+    for (const dep of resolutionIndex.dependents_by_file[p] ?? []) {
+      add(dep.path, dep.file_id, `imports ${base}`);
+    }
+  }
+  return [...byPath.values()];
 }
 
 /** Find files whose path matches the target directly (path-target briefs). */
@@ -560,6 +662,7 @@ export function brief(
     };
   }
   const importsIndex = readImportsIndex(ctx.cwd, ctx.preferredDirName);
+  const resolutionIndex = readResolutionIndex(ctx.cwd, ctx.preferredDirName);
 
   // Resolve target -> defining symbol entries (symbol query first, then path).
   let defining = gatherSymbolEntries(symbolsIndex, target);
@@ -570,10 +673,28 @@ export function brief(
   const checker = makeLazyChecker();
   const acc = newAccumulator();
 
-  const ranked = rankFiles(defining, symbolsIndex, importsIndex, target);
+  // P1d graph signals. FORWARD: read from defining shards — but only CONFIDENT ones
+  // (validate first; a stale importer shard's edge list is not trusted). REVERSE: from
+  // the resolution index (each importer row is lazy-validated below like any other).
+  const definingPaths = new Set(defining.map((e) => e.path));
+  const definingByNodeId = new Map(defining.map((e) => [e.node_id, e] as const));
+  const confidentDefiningFileIds = new Map<string, string>();
+  for (const e of defining) {
+    if (confidentDefiningFileIds.has(e.path)) continue;
+    const ok = validateEntry(
+      { path: e.path, file_id: e.file_id }, checker, acc, root, maxBytes, ctx.cwd, ctx.preferredDirName,
+    );
+    if (ok) confidentDefiningFileIds.set(e.path, e.file_id);
+  }
+  const nodeIndex = buildNodeIdIndex(symbolsIndex);
+  const fwd = forwardDeps(confidentDefiningFileIds, nodeIndex, ctx.cwd, ctx.preferredDirName);
+  const rev = reverseDeps(resolutionIndex, definingPaths, definingByNodeId);
 
-  // §6.1 — lazy validate each suggested file; exclude deletions from the
-  // confident list (still recorded in the badge).
+  const ranked = rankFiles(defining, fwd, rev, symbolsIndex, importsIndex, target);
+
+  // §6.1 — lazy validate each suggested file; exclude deletions from the confident
+  // list (still recorded in the badge). P1d: a GRAPH-ONLY row that fails validation
+  // (stale / unchecked / deleted) is SUPPRESSED — no silent stale graph hints (Codex).
   const confident: RankedFile[] = [];
   for (const rf of ranked) {
     const ok = validateEntry(
@@ -586,9 +707,9 @@ export function brief(
       ctx.preferredDirName,
     );
     if (acc.missingPaths.has(rf.path)) continue; // deletion: exclude entirely.
-    // stale_changed / unchecked still appear (with the badge flagging them) so
-    // the agent knows the file exists but may be out of date.
-    void ok;
+    if (rf.graphDerived && !ok) continue; // graph-only + not confident → suppress.
+    // Non-graph stale/unchecked rows still appear (badge flags them) so the agent
+    // knows the file exists but may be out of date.
     confident.push(rf);
   }
 
