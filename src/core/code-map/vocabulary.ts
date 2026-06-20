@@ -58,6 +58,7 @@ export const UniversalEdgeKinds = [
   'imports',
   'exports',
   'resolves_to',
+  'imports_symbol',
   'tests_for',
   'extends',
   'implements',

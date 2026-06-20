@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Node as TsNode } from 'web-tree-sitter';
-import type { CodeLang, NodeSubtype } from '../../types.js';
+import type { CodeLang, CodeNode, NodeSubtype, Span } from '../../types.js';
 import type { ExtractionDraft, DefinitionDraft } from '../../drafts.js';
 import { loadGrammarWasm, grammarHashForWasm } from '../../wasm-loader.js';
 import { extractWithQueries } from '../query-runtime.js';
@@ -337,6 +337,46 @@ export class PythonProvider implements CodeLanguageProvider {
     const resolvedPath = resolvePyImport(req.source, req.fromPath, ctx);
     return [{ source: req.source, resolvedPath, confidence: resolvedPath ? 1.0 : 0 }];
   }
+
+  /**
+   * P1c-B importability for Python (overrides the `exported`-based default).
+   * Python has no export statement — `node.exported` is always false — so a symbol
+   * is importable iff it is TOP-LEVEL in its module: no OTHER symbol's span STRICTLY
+   * contains it. (A class method / nested function is contained by its class/func and
+   * is therefore NOT importable as `from .mod import X`.) Cadrage D2: span containment
+   * is the SOUND mechanism — the finalizer's file→contains/defines edges are emitted
+   * for EVERY symbol (not just top-level), so they cannot prove top-level status.
+   * A symbol lacking a usable span is SKIPPED (can't prove top-level → never guess).
+   */
+  isImportableSymbol(node: CodeNode, fileSymbols: readonly CodeNode[]): boolean {
+    if (node.kind !== 'symbol') return false;
+    if (node.subtype === 'export') return false; // defensive (Python never emits it)
+    const span = node.span;
+    if (!span) return false;
+    for (const other of fileSymbols) {
+      if (other === node || other.id === node.id) continue;
+      if (other.kind !== 'symbol') continue;
+      if (other.span && spanStrictlyContains(other.span, span)) return false; // nested → not top-level
+    }
+    return true;
+  }
+}
+
+/** True iff `outer` strictly contains `inner` (covers it on both ends, larger on ≥1). */
+function spanStrictlyContains(outer: Span, inner: Span): boolean {
+  const startsAtOrBefore =
+    outer.start_line < inner.start_line ||
+    (outer.start_line === inner.start_line && outer.start_col <= inner.start_col);
+  const endsAtOrAfter =
+    outer.end_line > inner.end_line ||
+    (outer.end_line === inner.end_line && outer.end_col >= inner.end_col);
+  if (!startsAtOrBefore || !endsAtOrAfter) return false;
+  const strictlyLarger =
+    outer.start_line < inner.start_line ||
+    outer.start_col < inner.start_col ||
+    outer.end_line > inner.end_line ||
+    outer.end_col > inner.end_col;
+  return strictlyLarger;
 }
 
 function setSubtype(d: DefinitionDraft, subtype: NodeSubtype): DefinitionDraft {
