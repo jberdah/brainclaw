@@ -11,6 +11,13 @@ const requiredPaths = [
 const requiredPrefixes = [
   'dist/core/default-profiles/',
   'docs/',
+  // Code Map runtime assets: grammar WASM + curated query (.scm) trees. Without
+  // these the published/packed code-map is bricked (the providers read .scm from
+  // dist at runtime; there is no src/ fallback in an installed package). The
+  // .scm presence is asserted explicitly below (a prefix match alone is satisfied
+  // by the provider .js, which would hide a missing .scm).
+  'dist/wasm/',
+  'dist/core/code-map/lang/',
 ];
 const forbiddenPrefixes = [
   '.github/',
@@ -71,6 +78,13 @@ const missing = [
     .filter((prefix) => !paths.some((path) => path.startsWith(prefix)))
     .map((prefix) => `${prefix}*`),
 ];
+
+// Code Map brick guard: at least one curated query asset must be packed. A
+// missing .scm passes every prefix check above (provider .js are present) but
+// silently bricks code-map at runtime — so assert it directly.
+if (!paths.some((path) => path.endsWith('.scm'))) {
+  missing.push('dist/core/code-map/lang/**/*.scm (no .scm query assets packed — code-map would be bricked)');
+}
 
 if (forbidden.length > 0 || missing.length > 0) {
   if (forbidden.length > 0) {

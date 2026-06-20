@@ -1,6 +1,6 @@
 {
   "name": "brainclaw",
-  "version": "1.9.1",
+  "version": "1.10.0-beta.codemap.1",
   "description": "Shared project memory for humans and coding agents.",
   "type": "module",
   "repository": {
@@ -18,6 +18,7 @@
   "files": [
     "dist/**/*.js",
     "dist/core/default-profiles/*.yaml",
+    "dist/core/code-map/lang/**/*.scm",
     "dist/wasm/*.wasm",
     "dist/vendor/web-tree-sitter/*.wasm",
     "dist/brainclaw-vscode.vsix",
