@@ -222,6 +222,13 @@ function deriveBadge(
     details.partial_reason = 'lazy_check_budget_exhausted';
     details.budget = { ...LAZY_BUDGET };
   }
+  // pln#593 #2 — distinguish INDEX freshness (manifest state) from THIS call's
+  // read-path spot-check. When the call-level status diverges from the index
+  // status (a budget-limited `partial`, or a per-file `stale_changed_files` over a
+  // `fresh` index), surface the index status so an agent does not read
+  // status()=fresh vs find()/brief()=partial as a contradiction: it's "index
+  // <index_status>, this call's spot-check <status>".
+  if (status !== base) details.index_status = base;
   void hadConfidentMatch;
   return { status, details };
 }
