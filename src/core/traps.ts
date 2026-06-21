@@ -5,7 +5,6 @@ import { generateId, generateIdWithLabel } from './ids.js';
 import { resolveEntityDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { TrapSchema, type MemoryVisibility, type Trap } from './schema.js';
-import { loadState } from './state.js';
 
 export interface TrapListOptions {
   visibility?: Extract<MemoryVisibility, 'machine' | 'private'> | 'all';

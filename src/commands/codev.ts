@@ -26,7 +26,7 @@ import type { CodevPersona } from '../core/codev-personas.js';
 import { buildContext } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { getDefaultInvokeTemplate, getSpawnableAgents, type DefaultInvokeTemplate } from '../core/agent-capability.js';
-import { executeRound, type RoundConfig } from '../core/codev-rounds.js';
+import { executeRound } from '../core/codev-rounds.js';
 import { buildWorkerIdentityEnv } from '../core/execution-profile.js';
 import { loadIdeationRound } from '../core/ideation.js';
 import { summarizeMetrics, summarizeMetricsByRound } from '../core/codev-metrics.js';

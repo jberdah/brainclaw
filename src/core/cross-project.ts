@@ -106,7 +106,7 @@ export function detectCrossProjectCycles(cwd?: string): string[][] {
   const cycles: string[][] = [];
 
   function walk(currentCwd: string, visited: string[]): void {
-    let links: ResolvedCrossProjectLink[] = [];
+    let links: ResolvedCrossProjectLink[];
     try {
       links = resolveCrossProjectLinks(currentCwd);
     } catch { return; }

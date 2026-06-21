@@ -132,7 +132,7 @@ export function parseLockfile(filePath: string): string[] {
   let parsed: unknown;
   try { parsed = JSON.parse(raw); }
   catch (err) {
-    throw new Error(`Failed to parse lockfile ${filePath}: ${(err as Error).message}`);
+    throw new Error(`Failed to parse lockfile ${filePath}: ${(err as Error).message}`, { cause: err });
   }
   if (!parsed || typeof parsed !== 'object') return [];
   const obj = parsed as Record<string, unknown>;
@@ -184,7 +184,7 @@ function readFileOrThrow(p: string, label: string): string {
   try {
     return fs.readFileSync(p, 'utf-8');
   } catch (err) {
-    throw new Error(`Could not read ${label} at ${p}: ${(err as Error).message}`);
+    throw new Error(`Could not read ${label} at ${p}: ${(err as Error).message}`, { cause: err });
   }
 }
 

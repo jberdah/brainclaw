@@ -6,18 +6,16 @@
  *
  * @module
  */
-import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
 import { buildAgentToolingContext, renderAgentToolingSummary } from '../core/agent-context.js';
 import { buildCoordinationSnapshot, buildCrossProjectSnapshot } from '../core/coordination.js';
 import { scanDescendantPlans } from './list-plans.js';
-import { buildContext, renderContextMarkdown, renderContextPromptTemplate } from '../core/context.js';
+import { buildContext } from '../core/context.js';
 import { buildExecutionContext, renderExecutionContextSummary } from '../core/execution-context.js';
-import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
+import { checkBrainclawInstallableUpdate, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { loadAllSessions, loadCurrentSession, loadSessionById, saveCurrentSession, gcStaleSessions } from '../core/identity.js';
 import { loadState } from '../core/state.js';
-import { memoryExists } from '../core/io.js';
 import { listArchivedCandidates, listCandidates, resolvedSource } from '../core/candidates.js';
 import type { CandidateSource } from '../core/schema.js';
 import { listClaims, assessClaimLiveness } from '../core/claims.js';
@@ -49,7 +47,7 @@ import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
 import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { listAvailableProjectsForSession, switchProject } from './switch.js';
-import { resolveEffectiveCwdInfo, resolveStoreChain } from '../core/store-resolution.js';
+import { resolveEffectiveCwdInfo } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';

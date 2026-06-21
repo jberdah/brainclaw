@@ -1,6 +1,6 @@
 import { memoryExists } from '../core/io.js';
 import { readAuditLog } from '../core/audit.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { loadState, persistState } from '../core/state.js';
 import { loadCandidate, saveCandidate } from '../core/candidates.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { buildOperationalIdentity } from '../core/identity.js';

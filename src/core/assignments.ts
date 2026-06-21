@@ -10,9 +10,7 @@
  *
  * @module
  */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 import { AssignmentSchema, type Assignment, type AssignmentStatus, type AssignmentArtifact } from './schema.js';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';

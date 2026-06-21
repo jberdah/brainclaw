@@ -36,7 +36,7 @@ export const BUILTIN_DETECTORS: TokenDetector[] = [
   { id: 'aws_temp_access_key',  label: 'AWS temporary access key ID',    pattern: /\bASIA[0-9A-Z]{16}\b/ },
 
   // Google
-  { id: 'google_api_key',       label: 'Google API key',                 pattern: /\bAIza[0-9A-Za-z_\-]{35}\b/ },
+  { id: 'google_api_key',       label: 'Google API key',                 pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
 
   // Slack
   { id: 'slack_token',          label: 'Slack token',                    pattern: /\bxox[abprs]-[0-9A-Za-z-]{10,}\b/ },
@@ -106,7 +106,7 @@ export interface EntropyMatch {
 }
 
 const SECRET_KEYWORD_CONTEXT = /(?:api[_-]?key|secret|token|password|passwd|auth|bearer|access[_-]?key|private[_-]?key)/i;
-const HIGH_ENTROPY_CANDIDATE = /[A-Za-z0-9_+/=\-]{16,}/g;
+const HIGH_ENTROPY_CANDIDATE = /[A-Za-z0-9_+/=-]{16,}/g;
 
 /**
  * Entropy-based detection. Scans `text` for token-shaped substrings near

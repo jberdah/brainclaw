@@ -14,7 +14,7 @@ import path from 'node:path';
 import { buildAgentToolingContext, type AgentToolingSnapshot } from './agent-context.js';
 import { assessAgentIntegrationReadiness, type AgentIntegrationReadiness } from './agent-integrations.js';
 import { loadConfig } from './config.js';
-import { memoryDir, memoryPath } from './io.js';
+import { memoryDir } from './io.js';
 import { nowISO } from './ids.js';
 
 // --- Native instruction file discovery (extracted from bootstrap.ts) ---

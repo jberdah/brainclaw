@@ -191,7 +191,7 @@ async function loadEngineGlue(): Promise<EngineGlue> {
     // '../../vendor/...' === dist/vendor/...
     let mod: EngineGlue;
     const vendored = new URL('../../vendor/web-tree-sitter/tree-sitter.js', import.meta.url);
-    let vendoredExists = false;
+    let vendoredExists: boolean;
     try {
       vendoredExists = fs.existsSync(fileURLToPath(vendored));
     } catch {

@@ -24,7 +24,7 @@ export interface CodeBackendContext {
   preferredDirName?: string;
 }
 
-export interface CodeStatusInput extends CodeBackendContext {}
+export type CodeStatusInput = CodeBackendContext;
 
 export interface CodeStatus {
   store_exists: boolean;

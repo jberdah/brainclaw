@@ -205,8 +205,8 @@ export function extractMcpCommandVal(agentName: string, expectedPath: string): {
   }
 
   if (expectedPath.endsWith('.toml')) {
-    const cmdMatch = content.match(/\[mcp_servers\.brainclaw\](?:[^\[]*)command\s*=\s*(["'])(.+?)\1/is);
-    const argsMatch = content.match(/\[mcp_servers\.brainclaw\](?:[^\[]*)args\s*=\s*\[(.+?)\]/is);
+    const cmdMatch = content.match(/\[mcp_servers\.brainclaw\](?:[^[]*)command\s*=\s*(["'])(.+?)\1/is);
+    const argsMatch = content.match(/\[mcp_servers\.brainclaw\](?:[^[]*)args\s*=\s*\[(.+?)\]/is);
     let args: string[] | undefined;
     if (argsMatch) {
       args = argsMatch[1]
@@ -324,7 +324,7 @@ export function assessAgentIntegrationReadiness(
     const missingSurfaces = surfaces.filter((surface) => !surface.exists);
     const driftingSurfaces = surfaces.filter((surface) => surface.drift_message != null);
       
-      let effectiveTier: EffectiveTier = 'tier-b';
+      let effectiveTier: EffectiveTier;
       const selfHealingGuidance: string[] = [];
       
       const hasMissingMcpOrHook = missingSurfaces.some((s) => s.kind === 'mcp' || s.kind === 'hook');

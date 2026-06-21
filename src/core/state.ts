@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ZodType } from 'zod';
 import { type State, ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema } from './schema.js';
-import { memoryDir, ensureMemoryDir, resolveEntityDir, writeFileAtomic } from './io.js';
+import { ensureMemoryDir, resolveEntityDir, writeFileAtomic } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { commitMemoryChange } from './memory-git.js';
 import { appendEvent, type EventItemType } from './event-log.js';

@@ -11,7 +11,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { generateIdWithLabel, generateId, nowISO } from './ids.js';
+import { generateIdWithLabel, nowISO } from './ids.js';
 import { memoryDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile, type VersionedDocumentType } from './migration.js';

@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 

@@ -52,7 +52,6 @@ export function runMetrics(options: MetricsOptions = {}): void {
 
   const config = loadConfig();
   const slaHours = config.governance?.review_sla_hours ?? 24;
-  const now = new Date();
   const report = buildMetricsReport(slaHours, options.since);
 
   if (options.json) {

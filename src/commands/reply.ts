@@ -4,7 +4,6 @@ import type { NextExpectedHint, ProvideInputResult } from '../core/loops/index.j
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import type {
   LoopArtifact,
-  LoopSlot,
   LoopThread,
   OperatorAnswerBody,
   OperatorQuestionBody,

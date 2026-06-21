@@ -34,7 +34,6 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import path from 'node:path';
 import { loadAgentRun, transitionAgentRun, type ListAgentRunsFilter, listAgentRuns } from './agentruns.js';
 import { loadClaim, releaseClaim } from './claims.js';
 import { loadAssignment } from './assignments.js';

@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { memoryExists, memoryPath } from '../core/io.js';
 import { loadState } from '../core/state.js';
 import { listRuntimeNotes } from '../core/runtime.js';

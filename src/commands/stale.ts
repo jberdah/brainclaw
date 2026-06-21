@@ -28,7 +28,6 @@ import {
   staleSummary,
   type StalenessEntity,
   type StalenessReport,
-  type StalenessWarning,
 } from '../core/staleness.js';
 
 export interface StaleOptions {

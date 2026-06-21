@@ -122,7 +122,7 @@ function validateEntry(
   if (cached !== undefined) return cached;
 
   const abs = path.join(projectRoot, entry.path);
-  let stat: fs.Stats | null = null;
+  let stat: fs.Stats;
   try {
     stat = fs.statSync(abs);
   } catch {

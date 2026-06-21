@@ -57,7 +57,6 @@ import {
   createPlan,
   deletePlan,
   updatePlan,
-  type UpdatePlanInput,
 } from './operations/plan.js';
 import {
   ENTITY_REGISTRY,
@@ -365,12 +364,6 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     default:
       throw new EntityOperationUnsupportedError(name, 'find');
   }
-}
-
-function applyFilter(items: unknown[], filter: EntityFilter): unknown[] {
-  return applyFieldFilter(items, filter).filter((item) =>
-    passesProvenanceFilter(item as Record<string, unknown>, filter),
-  );
 }
 
 function applyFieldFilter(items: unknown[], filter: EntityFilter): unknown[] {

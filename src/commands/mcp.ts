@@ -29,7 +29,7 @@ import {
 } from '../core/entity-operations.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
-import { generateClaimId, listClaims, loadClaim, releaseClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
+import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
 import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
@@ -41,7 +41,6 @@ import { startSession } from './session-start.js';
 import { endSession } from './session-end.js';
 import { applyHandoffUpdates } from './update-handoff.js';
 import {
-  agentCanWriteDirect,
   AgentIdentityResolutionError,
   AgentTrustError,
   findAgentIdentityById,
@@ -77,16 +76,16 @@ import { buildAgentInventory } from '../core/agent-inventory.js';
 import { resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveTargetStore, type ResolvedEffectiveCwd, type StoreTarget } from '../core/store-resolution.js';
 import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
-import type { CandidateType, MemoryVisibility, PlanStatus, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
+import type { CandidateType, MemoryVisibility, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
 import type { BriefMemoryProvider, LoopContextCategory, LoopThread } from '../core/loops/index.js';
-import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp, updatePlan as updatePlanOp } from '../core/operations/plan.js';
-import { sendMessage, ackMessage, countPending, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
-import { analyzeSequence, dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
+import { createPlan, addStep as addStepOp, completeStep as completeStepOp, updateStep as updateStepOp, deleteStep as deleteStepOp, deletePlan as deletePlanOp } from '../core/operations/plan.js';
+import { sendMessage, ackMessage, countActionable, getThread, hasActiveAssignment } from '../core/messaging.js';
+import { dispatch, dispatchReview, generateDispatchBrief } from '../core/dispatcher.js';
 import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
-import { compact as gcCompact, assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
+import { assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
-import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, resolveBriefMode, validateAgentForDispatch } from '../core/agent-capability.js';
+import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, validateAgentForDispatch } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { sweepDeadPidRunningAgentRunsAtRead } from '../core/agentrun-reconciler.js';
@@ -96,7 +95,6 @@ import {
   patchAssignmentMessageId,
   transitionAssignment,
   bumpActiveAssignmentHeartbeat,
-  getActiveAssignmentForAgent,
 } from '../core/assignments.js';
 import { harvestCandidates } from './harvest.js';
 
@@ -5863,7 +5861,6 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             }));
             continue;
           }
-          const profile = check.profile!;
           // Ensure target agent is registered before creating claims/messages
           ensureAgentRegisteredForDispatch(agentName, dispatchCwd);
           const assignScope = req.scope ?? req.task;

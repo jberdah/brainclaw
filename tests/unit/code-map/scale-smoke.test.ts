@@ -176,7 +176,7 @@ describe('code-map scale smoke (proxy for spec §12.2)', () => {
     // .brainclaw/code/ would be ignored (the spec §12.2 "no materialized JSONL
     // committed by default" guarantee). check-ignore exits 0 when ignored.
     const repoRoot = process.cwd();
-    let ignored = false;
+    let ignored: boolean;
     try {
       execFileSync(
         'git',

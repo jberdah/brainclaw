@@ -38,14 +38,14 @@ import { getActiveSequence } from './sequence.js';
 import { loadState, persistState } from './state.js';
 import { listClaims, createCoordinatorClaim, attachAssignmentMessageToClaim, linkClaimToAssignment, assessClaimLiveness, type ClaimLivenessStatus } from './claims.js';
 import { listAgentIdentities, ensureAgentRegisteredForDispatch } from './agent-registry.js';
-import { sendMessage, hasActiveAssignment, type SendMessageInput } from './messaging.js';
+import { sendMessage, hasActiveAssignment } from './messaging.js';
 import { memoryDir } from './io.js';
 import { loadVersionedJsonFile } from './migration.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildInvokeCommand, resolveBriefMode, getCapabilityProfile, dispatchHasMcp, dispatchCanCommit, isSandboxedSpawn, resolveConcurrencyLimit, resolveResourceKey, resolveModel, serializeConcurrencyLimit, type BriefMode, type InvokeCommand } from './agent-capability.js';
 import { getRuntimeSignalPath, getWorktreeHeartbeatPath } from './runtime-signals.js';
-import { attemptExecution, checkActiveInstance } from './execution.js';
+import { attemptExecution } from './execution.js';
 import { createAssignment, transitionAssignment, generateAssignmentId, patchAssignmentMessageId } from './assignments.js';
 import { createAgentRun, transitionAgentRun } from './agentruns.js';
 import * as loopsModule from './loops/index.js';
@@ -154,8 +154,6 @@ export interface DispatchResult {
   }>;
   warnings: string[];
 }
-
-const MAX_INLINE_BRIEF_LENGTH = 4000;
 
 /**
  * Build a cross-platform env prefix for BRAINCLAW_CLAIM_ID. Delegates to
@@ -758,8 +756,6 @@ export function scoreAgents(
   for (const claim of activeClaims) {
     claimCounts.set(claim.agent, (claimCounts.get(claim.agent) ?? 0) + 1);
   }
-  const maxClaims = Math.max(1, ...claimCounts.values());
-
   return agentPool.map(agent => {
     // Factor 1: Preference — is this the plan's assignee?
     const preference = (plan.assignee === agent) ? 1.0 : 0.0;

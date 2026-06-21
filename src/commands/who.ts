@@ -1,8 +1,7 @@
-import os from 'node:os';
 import { loadAllSessions, gcStaleSessions } from '../core/identity.js';
 import { listClaims } from '../core/claims.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
-import type { CurrentSessionState, Claim } from '../core/schema.js';
+import type { Claim } from '../core/schema.js';
 
 export interface WhoOptions {
   json?: boolean;
