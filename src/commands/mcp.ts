@@ -588,7 +588,7 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_code_status',
-    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale.',
+    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / stale_git_head / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',

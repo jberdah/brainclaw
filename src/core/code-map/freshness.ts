@@ -15,7 +15,14 @@
  *    extractor_config_hash + per-language grammar hashes.
  */
 import crypto from 'node:crypto';
-import type { CodeLang, ExtractorConfig, FileShard, FreshnessStatus, Manifest } from './types.js';
+import type {
+  CodeLang,
+  ExtractorConfig,
+  FileShard,
+  FreshnessBadge,
+  FreshnessStatus,
+  Manifest,
+} from './types.js';
 
 /** Stable serialization: sort object keys recursively so hashing is order-independent. */
 function stableStringify(value: unknown): string {
@@ -124,4 +131,44 @@ export function summarizeFreshness(
   if (staleExtractor >= staleGrammar && staleExtractor >= staleChanged) status = 'stale_extractor';
   else if (staleGrammar >= staleChanged) status = 'stale_grammar';
   return { status, stale_file_count: staleTotal, partial_reason: null };
+}
+
+/**
+ * Read-path git-HEAD drift (trp_42688015).
+ *
+ * The index records the commit it was built against (`manifest.git.head`). The
+ * per-file lazy read check (query.ts §6.1) only samples a query's candidate files
+ * within a bounded budget, and `status` reports ONLY the write-side manifest
+ * freshness (extractor/grammar hashes) — neither keys on git HEAD. So a whole-tree
+ * move such as `git checkout <other-branch>` left the index reported `fresh`, and
+ * find/brief could serve OLD-branch paths/symbols. This compares the index head to
+ * the working tree's current head and, when they differ, sets a clean `fresh` badge
+ * to the dedicated `stale_git_head` reason, recording the precise cause in
+ * `details.git_head_changed`.
+ *
+ * `stale_git_head` is kept DISTINCT from `stale_changed_files` (review finding):
+ * the latter means CONFIRMED per-file content/path drift (and carries a real
+ * `stale_file_count`); a HEAD move is a weaker signal — "the index was built at
+ * another commit, refresh recommended" — and must not masquerade as confirmed file
+ * changes with a contradictory `stale_file_count: 0`.
+ *
+ * No-op when either head is unknown (non-git project, older manifest) or the heads
+ * match — so existing fresh/non-git behaviour is unchanged. A badge that is already
+ * non-`fresh` (stale_*, partial, missing_index) keeps its more-specific/equally-
+ * actionable status; only the cause detail is added.
+ */
+export function applyGitHeadDrift(
+  badge: FreshnessBadge,
+  indexHead: string | null | undefined,
+  currentHead: string | null | undefined,
+): FreshnessBadge {
+  if (!indexHead || !currentHead || indexHead === currentHead) return badge;
+  const status: FreshnessStatus = badge.status === 'fresh' ? 'stale_git_head' : badge.status;
+  return {
+    status,
+    details: {
+      ...badge.details,
+      git_head_changed: { index_head: indexHead, current_head: currentHead },
+    },
+  };
 }

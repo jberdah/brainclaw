@@ -70,6 +70,11 @@ export const FreshnessStatusSchema = z.enum([
   'stale_changed_files',
   'stale_extractor',
   'stale_grammar',
+  // Read-path only (trp_42688015): the index was built against a different git
+  // commit than the working tree's current HEAD (e.g. after `git checkout`). Kept
+  // DISTINCT from `stale_changed_files` (confirmed per-file content drift) so a
+  // HEAD move is not misreported as confirmed changes — see applyGitHeadDrift.
+  'stale_git_head',
   'partial',
   'missing_index',
 ]);
