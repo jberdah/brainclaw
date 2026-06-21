@@ -1,7 +1,7 @@
 # Code Map
 
-Code Map is a per-project structural index of your JavaScript / TypeScript /
-TSX codebase. It parses each supported file with Tree-sitter and records the
+Code Map is a per-project structural index of your JavaScript / TypeScript / JSX /
+TSX, Python, PHP, and Java codebase. It parses each supported file with Tree-sitter and records the
 symbols it defines (functions, classes, types, interfaces, React components and
 hooks), what it imports and exports, and how files relate — then answers fast
 "what should I read before I edit this?" questions for both human operators and
@@ -191,7 +191,7 @@ like any other directory.
 
 The parser is [Tree-sitter](https://tree-sitter.github.io/) compiled to
 WebAssembly. The engine glue (`web-tree-sitter`) and the prebuilt grammar `.wasm`
-files (TypeScript / TSX / JavaScript) are **bundled into the package** during the
+files (JavaScript / TypeScript / JSX / TSX, Python, PHP, Java) are **bundled into the package** during the
 build (`scripts/copy-code-map-wasm.mjs` copies them into `dist/wasm/` and vendors
 the engine glue into `dist/vendor/web-tree-sitter/`).
 
