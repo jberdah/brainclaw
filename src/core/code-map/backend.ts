@@ -8,12 +8,14 @@
  * return not-yet-implemented placeholders that still carry a real
  * `freshness_badge`, locking the response shape for later sprints.
  */
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { readManifest, storeExists } from './store.js';
 import { refresh as runRefresh } from './refresh.js';
+import { applyGitHeadDrift } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
 import { defaultMemoryReader } from './memory-reader.js';
-import type { FreshnessBadge, FreshnessStatus } from './types.js';
+import type { FreshnessBadge, FreshnessStatus, Manifest } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
 
@@ -116,6 +118,24 @@ function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): 
 }
 
 /**
+ * Read the working tree's current commit at `root` (read-path git-HEAD drift,
+ * trp_42688015). Returns null on any failure or a non-git project — the comparison
+ * is then a no-op, preserving existing behaviour.
+ */
+function readCurrentGitHead(root: string): string | null {
+  try {
+    const out = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * P0 JSONL-backed query backend. Reads the durable file store (manifest +
  * shards + indexes); no graph DB. find()/brief() are stubbed for Sprint 1.
  */
@@ -125,9 +145,14 @@ export class JsonlBackend implements CodeQueryBackend {
    * path; tests inject an in-memory reader to assert attachment without a store.
    */
   private readonly memoryReader: MemoryReader;
+  /** Read-path git-HEAD reader (injectable for tests). trp_42688015. */
+  private readonly gitHeadReader: (root: string) => string | null;
 
-  constructor(opts: { memoryReader?: MemoryReader } = {}) {
+  constructor(
+    opts: { memoryReader?: MemoryReader; gitHeadReader?: (root: string) => string | null } = {},
+  ) {
     this.memoryReader = opts.memoryReader ?? defaultMemoryReader;
+    this.gitHeadReader = opts.gitHeadReader ?? readCurrentGitHead;
   }
 
   async status(input: CodeStatusInput): Promise<CodeStatus> {
@@ -139,12 +164,13 @@ export class JsonlBackend implements CodeQueryBackend {
         stats: null,
       };
     }
+    const base = badge(manifest.freshness.status, {
+      stale_file_count: manifest.freshness.stale_file_count,
+      partial_reason: manifest.freshness.partial_reason,
+    });
     return {
       store_exists: true,
-      freshness_badge: badge(manifest.freshness.status, {
-        stale_file_count: manifest.freshness.stale_file_count,
-        partial_reason: manifest.freshness.partial_reason,
-      }),
+      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
       stats: {
         files_indexed: manifest.stats.files_indexed,
         nodes: manifest.stats.nodes,
@@ -199,10 +225,15 @@ export class JsonlBackend implements CodeQueryBackend {
   async find(input: CodeFindInput): Promise<CodeFindResult> {
     const ctx = this.queryContext(input);
     const out = runFind(input.query, input.limit, ctx);
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const base: FreshnessBadge = {
+      status: out.freshness_badge.status,
+      details: out.freshness_badge.details,
+    };
     return {
       query: out.query,
       matches: out.matches,
-      freshness_badge: { status: out.freshness_badge.status, details: out.freshness_badge.details },
+      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
     };
   }
 
@@ -214,12 +245,33 @@ export class JsonlBackend implements CodeQueryBackend {
   async brief(input: CodeBriefInput): Promise<CodeBrief> {
     const ctx = this.queryContext(input);
     const out = runBrief(input.target, input.limit, ctx, this.memoryReader);
+    const manifest = readManifest(input.cwd, input.preferredDirName);
+    const base: FreshnessBadge = {
+      status: out.freshness_badge.status,
+      details: out.freshness_badge.details,
+    };
     return {
       target: out.target,
       suggested_files_to_read: out.suggested_files_to_read,
       related_memory: out.related_memory,
-      freshness_badge: { status: out.freshness_badge.status, details: out.freshness_badge.details },
+      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
     };
+  }
+
+  /**
+   * Annotate a read badge with git-HEAD drift vs the commit the index was built
+   * against (`manifest.git.head`). trp_42688015 — a branch switch (whole-tree move)
+   * is otherwise unflagged because `status` reads only write-side freshness and the
+   * per-file lazy check is query-scoped + budgeted. No-op for non-git projects.
+   */
+  private withHeadDrift(
+    base: FreshnessBadge,
+    manifest: Manifest | null,
+    cwd: string | undefined,
+  ): FreshnessBadge {
+    if (!manifest) return base;
+    const root = manifest.project_root || cwd || process.cwd();
+    return applyGitHeadDrift(base, manifest.git.head, this.gitHeadReader(root));
   }
 
   private queryContext(input: CodeBackendContext): QueryContext {

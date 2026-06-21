@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  applyGitHeadDrift,
   computeExtractorConfigHash,
   shardFreshnessStatus,
   summarizeFreshness,
 } from '../../../src/core/code-map/freshness.js';
 import { refresh, DEFAULT_EXTRACTOR_CONFIG } from '../../../src/core/code-map/refresh.js';
+import { JsonlBackend } from '../../../src/core/code-map/backend.js';
 import { readManifest, listShards, writeManifest, writeShard } from '../../../src/core/code-map/store.js';
 import type { FileShard } from '../../../src/core/code-map/types.js';
 
@@ -86,6 +88,41 @@ describe('code-map freshness (unit)', () => {
       { freshness: { status: 'fresh', reason: null } },
     ];
     assert.equal(summarizeFreshness(fresh as FileShard[]).status, 'fresh');
+  });
+
+  // --- read-path git-HEAD drift (trp_42688015) ---
+
+  it('applyGitHeadDrift escalates a fresh badge to stale_changed_files on HEAD change', () => {
+    const out = applyGitHeadDrift({ status: 'fresh', details: {} }, 'aaa', 'bbb');
+    assert.equal(out.status, 'stale_changed_files');
+    assert.deepEqual(out.details.git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
+  });
+
+  it('applyGitHeadDrift is a no-op when heads match', () => {
+    const out = applyGitHeadDrift({ status: 'fresh', details: { keep: 1 } }, 'aaa', 'aaa');
+    assert.equal(out.status, 'fresh');
+    assert.equal(out.details.git_head_changed, undefined);
+    assert.equal(out.details.keep, 1);
+  });
+
+  it('applyGitHeadDrift is a no-op for a non-git project (null head either side)', () => {
+    assert.equal(applyGitHeadDrift({ status: 'fresh', details: {} }, null, 'bbb').status, 'fresh');
+    assert.equal(applyGitHeadDrift({ status: 'fresh', details: {} }, 'aaa', null).status, 'fresh');
+    assert.equal(applyGitHeadDrift({ status: 'fresh', details: {} }, undefined, undefined).status, 'fresh');
+  });
+
+  it('applyGitHeadDrift keeps a non-fresh status but records the cause', () => {
+    const out = applyGitHeadDrift({ status: 'partial', details: { partial_reason: 'x' } }, 'aaa', 'bbb');
+    assert.equal(out.status, 'partial', 'partial already signals refresh — not overwritten');
+    assert.deepEqual(out.details.git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
+    assert.equal(out.details.partial_reason, 'x');
+  });
+
+  it('applyGitHeadDrift does not escalate missing_index', () => {
+    assert.equal(
+      applyGitHeadDrift({ status: 'missing_index', details: {} }, 'aaa', 'bbb').status,
+      'missing_index',
+    );
   });
 });
 
@@ -190,5 +227,60 @@ describe('code-map freshness (write-side via refresh)', () => {
       after.every((s) => s.freshness.status === 'fresh'),
       'git.head change alone leaves shards fresh',
     );
+  });
+});
+
+describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
+  it('status flags stale_changed_files when the working tree HEAD differs from the index head', async () => {
+    const root = tmpProject();
+    await seed(root); // disableGit -> git.head null; stamp a known index head below.
+    const m = readManifest(root)!;
+    writeManifest({ ...m, git: { head: 'indexcommit', branch: 'feature', dirty: false } }, root);
+
+    const backend = new JsonlBackend({ gitHeadReader: () => 'currentcommit' });
+    const status = await backend.status({ cwd: root });
+    assert.equal(status.freshness_badge.status, 'stale_changed_files');
+    assert.deepEqual(status.freshness_badge.details.git_head_changed, {
+      index_head: 'indexcommit',
+      current_head: 'currentcommit',
+    });
+    // the index itself is untouched — only the read badge reflects the branch move.
+    assert.ok(listShards(root).every((s) => s.freshness.status === 'fresh'));
+  });
+
+  it('status stays fresh when the current HEAD matches the index head', async () => {
+    const root = tmpProject();
+    await seed(root);
+    const m = readManifest(root)!;
+    writeManifest({ ...m, git: { head: 'samecommit', branch: 'main', dirty: false } }, root);
+
+    const backend = new JsonlBackend({ gitHeadReader: () => 'samecommit' });
+    const status = await backend.status({ cwd: root });
+    assert.equal(status.freshness_badge.status, 'fresh');
+    assert.equal(status.freshness_badge.details.git_head_changed, undefined);
+  });
+
+  it('status stays fresh for a non-git project (reader returns null)', async () => {
+    const root = tmpProject();
+    await seed(root); // git.head null
+    const backend = new JsonlBackend({ gitHeadReader: () => null });
+    const status = await backend.status({ cwd: root });
+    assert.equal(status.freshness_badge.status, 'fresh');
+  });
+
+  it('find surfaces the HEAD drift on its badge', async () => {
+    const root = tmpProject();
+    await seed(root);
+    const m = readManifest(root)!;
+    writeManifest({ ...m, git: { head: 'idx', branch: 'b', dirty: false } }, root);
+
+    const backend = new JsonlBackend({ gitHeadReader: () => 'cur' });
+    const res = await backend.find({ query: 'add', cwd: root });
+    assert.ok(res.matches.length > 0, 'still returns the validated match');
+    assert.equal(res.freshness_badge.status, 'stale_changed_files');
+    assert.deepEqual(res.freshness_badge.details.git_head_changed, {
+      index_head: 'idx',
+      current_head: 'cur',
+    });
   });
 });
