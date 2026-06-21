@@ -119,8 +119,15 @@ function badge(status: FreshnessStatus, details: Record<string, unknown> = {}): 
 
 /**
  * Read the working tree's current commit at `root` (read-path git-HEAD drift,
- * trp_42688015). Returns null on any failure or a non-git project — the comparison
- * is then a no-op, preserving existing behaviour.
+ * trp_42688015). Returns null on any failure or a non-git project (also detached
+ * HEAD resolves to the commit sha, which is the correct comparison key) — a null
+ * makes the comparison a no-op, preserving existing behaviour.
+ *
+ * COST (review finding, LOW): one synchronous `git rev-parse HEAD` per status/
+ * find/brief call. These are interactive, human-/agent-paced reads (not a tight
+ * loop), so a single ~5–15ms spawn is acceptable and keeps branch-switch detection
+ * immediate. If this ever shows up on a profile, memoize per `root` behind a short
+ * TTL (a few seconds) — short enough that a checkout is still caught promptly.
  */
 function readCurrentGitHead(root: string): string | null {
   try {

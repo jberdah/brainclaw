@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   applyGitHeadDrift,
   computeExtractorConfigHash,
@@ -92,9 +93,13 @@ describe('code-map freshness (unit)', () => {
 
   // --- read-path git-HEAD drift (trp_42688015) ---
 
-  it('applyGitHeadDrift escalates a fresh badge to stale_changed_files on HEAD change', () => {
+  it('applyGitHeadDrift escalates a fresh badge to stale_git_head on HEAD change', () => {
     const out = applyGitHeadDrift({ status: 'fresh', details: {} }, 'aaa', 'bbb');
-    assert.equal(out.status, 'stale_changed_files');
+    assert.equal(
+      out.status,
+      'stale_git_head',
+      'distinct reason — NOT stale_changed_files (no confirmed per-file drift)',
+    );
     assert.deepEqual(out.details.git_head_changed, { index_head: 'aaa', current_head: 'bbb' });
   });
 
@@ -231,7 +236,7 @@ describe('code-map freshness (write-side via refresh)', () => {
 });
 
 describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
-  it('status flags stale_changed_files when the working tree HEAD differs from the index head', async () => {
+  it('status flags stale_git_head when the working tree HEAD differs from the index head', async () => {
     const root = tmpProject();
     await seed(root); // disableGit -> git.head null; stamp a known index head below.
     const m = readManifest(root)!;
@@ -239,7 +244,10 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
 
     const backend = new JsonlBackend({ gitHeadReader: () => 'currentcommit' });
     const status = await backend.status({ cwd: root });
-    assert.equal(status.freshness_badge.status, 'stale_changed_files');
+    assert.equal(status.freshness_badge.status, 'stale_git_head');
+    // distinct from stale_changed_files: no confirmed per-file drift, so the count
+    // stays 0 and is no longer internally contradictory (review finding #1).
+    assert.equal(status.freshness_badge.details.stale_file_count, 0);
     assert.deepEqual(status.freshness_badge.details.git_head_changed, {
       index_head: 'indexcommit',
       current_head: 'currentcommit',
@@ -277,10 +285,63 @@ describe('code-map read-path git-HEAD drift (backend, trp_42688015)', () => {
     const backend = new JsonlBackend({ gitHeadReader: () => 'cur' });
     const res = await backend.find({ query: 'add', cwd: root });
     assert.ok(res.matches.length > 0, 'still returns the validated match');
-    assert.equal(res.freshness_badge.status, 'stale_changed_files');
+    assert.equal(res.freshness_badge.status, 'stale_git_head');
     assert.deepEqual(res.freshness_badge.details.git_head_changed, {
       index_head: 'idx',
       current_head: 'cur',
     });
+  });
+
+  it('brief surfaces the HEAD drift on its badge (F3 — all three read paths wired)', async () => {
+    const root = tmpProject();
+    await seed(root);
+    const m = readManifest(root)!;
+    writeManifest({ ...m, git: { head: 'idx', branch: 'b', dirty: false } }, root);
+
+    const backend = new JsonlBackend({ gitHeadReader: () => 'cur' });
+    const res = await backend.brief({ target: 'add', cwd: root });
+    assert.equal(res.freshness_badge.status, 'stale_git_head');
+    assert.deepEqual(res.freshness_badge.details.git_head_changed, {
+      index_head: 'idx',
+      current_head: 'cur',
+    });
+  });
+
+  it('default reader: a real git commit flips status to stale_git_head (F2 — exercises readCurrentGitHead)', async () => {
+    const root = tmpProject();
+    const g = (args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+    };
+    g(['init', '-q']);
+    g(['config', 'user.email', 'test@example.com']);
+    g(['config', 'user.name', 'Test']);
+    writeSrc(root, 'src/util.ts', `export function add(a: number, b: number) { return a + b; }\n`);
+    g(['add', '-A']);
+    g(['commit', '-q', '-m', 'c1']);
+
+    // refresh WITH git enabled -> manifest.git.head captured = c1.
+    await refresh({ projectId: PROJECT, projectRoot: root, scope: 'all', cwd: root });
+    const indexHead = readManifest(root)!.git.head;
+    assert.ok(indexHead, 'refresh captured the git head');
+
+    // default backend (real readCurrentGitHead), still on c1 -> fresh.
+    const fresh = await new JsonlBackend().status({ cwd: root });
+    assert.equal(fresh.freshness_badge.status, 'fresh', 'same HEAD reads fresh via the real reader');
+
+    // move HEAD with a second commit (stands in for a branch switch / new work).
+    writeSrc(root, 'src/extra.ts', `export const k = 1;\n`);
+    g(['add', '-A']);
+    g(['commit', '-q', '-m', 'c2']);
+
+    const drifted = await new JsonlBackend().status({ cwd: root });
+    assert.equal(
+      drifted.freshness_badge.status,
+      'stale_git_head',
+      'real `git rev-parse HEAD` detects the HEAD move',
+    );
+    assert.equal(
+      (drifted.freshness_badge.details.git_head_changed as { index_head: string }).index_head,
+      indexHead,
+    );
   });
 });

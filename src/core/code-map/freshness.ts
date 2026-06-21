@@ -142,9 +142,15 @@ export function summarizeFreshness(
  * freshness (extractor/grammar hashes) — neither keys on git HEAD. So a whole-tree
  * move such as `git checkout <other-branch>` left the index reported `fresh`, and
  * find/brief could serve OLD-branch paths/symbols. This compares the index head to
- * the working tree's current head and, when they differ, escalates a clean `fresh`
- * badge to `stale_changed_files` (the existing "run refresh" signal agents already
- * handle) while recording the precise cause in `details.git_head_changed`.
+ * the working tree's current head and, when they differ, sets a clean `fresh` badge
+ * to the dedicated `stale_git_head` reason, recording the precise cause in
+ * `details.git_head_changed`.
+ *
+ * `stale_git_head` is kept DISTINCT from `stale_changed_files` (review finding):
+ * the latter means CONFIRMED per-file content/path drift (and carries a real
+ * `stale_file_count`); a HEAD move is a weaker signal — "the index was built at
+ * another commit, refresh recommended" — and must not masquerade as confirmed file
+ * changes with a contradictory `stale_file_count: 0`.
  *
  * No-op when either head is unknown (non-git project, older manifest) or the heads
  * match — so existing fresh/non-git behaviour is unchanged. A badge that is already
@@ -157,7 +163,7 @@ export function applyGitHeadDrift(
   currentHead: string | null | undefined,
 ): FreshnessBadge {
   if (!indexHead || !currentHead || indexHead === currentHead) return badge;
-  const status: FreshnessStatus = badge.status === 'fresh' ? 'stale_changed_files' : badge.status;
+  const status: FreshnessStatus = badge.status === 'fresh' ? 'stale_git_head' : badge.status;
   return {
     status,
     details: {
