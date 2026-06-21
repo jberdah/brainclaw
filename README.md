@@ -417,6 +417,13 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.10.1
+
+Code Map fast-follows from the 1.10.0 dogfood, plus a lint cleanup:
+
+- A git branch switch now flags the index stale (new `stale_git_head` freshness reason); `refresh` honors `.gitignore` (gitignored output dirs no longer indexed); `brief("<path>")` resolves the exact file instead of token-flooding; and the freshness badge distinguishes index freshness from a call's spot-check (`index_status`).
+- The `brainclaw-session` skill + agent instruction surface now point agents at `bclaw_code_find` / `bclaw_code_brief` before grep. Lint baseline cleared to zero (stylistic rules ratcheted to `error`); README doc links clickable; `docs/code-map.md` lists JS / TS / JSX / TSX · Python · PHP · Java.
+
 ### v1.10.0
 
 - **Code Map** — a new per-project [Tree-sitter](docs/code-map.md) symbol + import

@@ -5,6 +5,26 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] — 2026-06-21
+
+Code Map fast-follows from the 1.10.0 real-agent dogfood, plus a lint-baseline cleanup. No breaking changes.
+
+### Fixed
+
+- **Code Map flags a stale index after a git branch switch.** The index records the commit it was built at, but no read path compared it to the working tree's current HEAD — so `git checkout <other-branch>` left `bclaw_code_status` / `find` / `brief` reporting `fresh` (and possibly serving old-branch paths). Reads now compare HEADs and surface a dedicated `stale_git_head` reason, kept distinct from `stale_changed_files` so a HEAD move is not misreported as confirmed per-file drift.
+- **Code Map honors `.gitignore` during refresh.** Enumeration consulted only a hardcoded ignore list, so gitignored output dirs (e.g. a build `out/`) were indexed and polluted `brief`/`find`. Refresh now runs `git check-ignore` inside a git repo (nested files, negations, and global ignores all honored); non-git projects keep the hardcoded defaults.
+- **`brief("<path>")` resolves the exact file** instead of fuzzy-tokenizing the path and flooding the reading list with same-token symbols; its imports / dependents / direct tests rank below it.
+
+### Changed
+
+- **Freshness badge distinguishes index freshness from a call's spot-check** — `find` / `brief` add an `index_status` detail when their per-query spot-check status diverges from the index, so `status()=fresh` alongside `brief()=partial` reads as "index fresh, this call's spot-check incomplete", not a contradiction.
+- **Skills + agent instructions teach Code Map** — the `brainclaw-session` protocol skill and the generated instruction surface now point agents at `bclaw_code_brief` / `bclaw_code_find` (and the `code-map` CLI) before grepping unfamiliar code.
+- **Lint baseline cleared to zero** and the low-churn stylistic rules (`no-useless-assignment`, `preserve-caught-error`, `no-useless-escape`, `no-empty-object-type`) ratcheted to `error` so they cannot silently regress — a behaviour-preserving cleanup only.
+
+### Docs
+
+- README Documentation links are now clickable, and `docs/code-map.md` lists the full supported-language set (JS / TS / JSX / TSX · Python · PHP · Java) in its intro and WASM-bundling notes.
+
 ## [1.10.0] — 2026-06-20
 
 ### Added
