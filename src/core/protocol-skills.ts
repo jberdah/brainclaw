@@ -44,16 +44,18 @@ reachable (cold start, or a worktree without \`.brainclaw/\`).
 
 1. \`bclaw_work(intent='consult')\` — loads project memory and reports active claims. Read \`bootstrap_recommended\`: if true the project has no usable PROJECT.md (see \`brainclaw-multi-agent\` → bootstrap loop).
 2. If you will edit a scope, claim it: \`bclaw_work(intent='execute', scope='<path-or-feature>')\`. The response's \`claim_id\` is yours; \`claim_status='created'\` = new, \`'existing'\` = resumed.
-3. Do the work. Honor the \`warnings\` array (claim conflicts, sensitive paths, high-severity traps on your scope).
-4. When done (committed, tested), \`bclaw_session_end(autoRelease: true)\` — closes the session record and releases your remaining claims. \`autoRelease\` defaults to false; pass it explicitly or claims survive the session.
+3. Before editing unfamiliar code, orient with the **Code Map** instead of grepping blind: \`bclaw_code_brief(target='<symbol|path>')\` for a ranked reading list — the defining file, its importers, and related decisions/traps — or \`bclaw_code_find(query='<name>')\` to locate a symbol/class/component. A \`missing_index\`/stale badge means run \`bclaw_code_refresh\` first.
+4. Do the work. Honor the \`warnings\` array (claim conflicts, sensitive paths, high-severity traps on your scope).
+5. When done (committed, tested), \`bclaw_session_end(autoRelease: true)\` — closes the session record and releases your remaining claims. \`autoRelease\` defaults to false; pass it explicitly or claims survive the session.
 
-CLI fallback: \`brainclaw context --json\` · \`brainclaw claim create "<desc>" --scope <path>\` · \`brainclaw session-end --auto-release\`.
+CLI fallback: \`brainclaw context --json\` · \`brainclaw code-map brief <symbol>\` / \`brainclaw code-map find <name>\` · \`brainclaw claim create "<desc>" --scope <path>\` · \`brainclaw session-end --auto-release\`.
 
 ## Anti-rationalizations
 
 - **"I'm just exploring, I'll skip session-end."** → A live claim outlives a crash. The next agent sees your stale claim and is blocked. Calling \`bclaw_session_end(autoRelease: true)\` is the zero-cost guarantee — without the flag the claim survives.
 - **"I know the project, I don't need to consult."** → State changes between sessions (commits, new traps, new constraints). Consult is cheap and surfaces what you'd miss.
 - **"I'll claim later once I know the exact scope."** → Claim-before-edit IS the contract; it is exactly what prevents races with parallel agents.
+- **"I'll just grep for it."** → On an unfamiliar or large repo, grep floods you with noise and misses the blast radius. \`bclaw_code_brief\` returns the defining file + its importers + related memory in one ranked call; fall back to grep only when the Code Map index is missing.
 
 ## Red flags
 
