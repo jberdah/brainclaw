@@ -17,6 +17,8 @@ import {
   safeRemoveWorktreeDir,
   detachWorktreeJunctions,
   resetWorktreeToRef,
+  sanitizeBranchComponent,
+  resolveWorktreeAddTimeoutMs,
 } from '../../src/core/worktree.js';
 
 describe('worktreesBaseDir', () => {
@@ -664,6 +666,97 @@ describe('pln#480 — config override (additive + exclude)', () => {
       spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
       fs.rmSync(targetPath, { recursive: true, force: true });
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+// Dogfood 1.10.1 — the branch slug derived from a multi-file scope must be a
+// VALID git ref even after the 48-char length cap. Regression: the cap was the
+// LAST step, so it could re-introduce a trailing dot the sanitizer had removed
+// (`…IntegrationHubPage.astro` cut at 48 → `…IntegrationHubPage.` → git reject).
+describe('sanitizeBranchComponent — cap never produces an invalid ref', () => {
+  // Validate against real git ref-naming rules, not a hand-rolled regex.
+  const gitAcceptsBranch = (slug: string): boolean =>
+    spawnSync('git', ['check-ref-format', `refs/heads/feat/${slug}`], { encoding: 'utf-8' }).status === 0;
+
+  it('does not leave a trailing dot when the 48-char cut lands on one (cleanup lane repro)', () => {
+    const scope = 'src/data/agents.ts, src/views/IntegrationHubPage.astro';
+    const slug = sanitizeBranchComponent(scope);
+    assert.ok(slug.length <= 48, `slug too long: ${slug.length}`);
+    assert.doesNotMatch(slug, /[.-]$/, `slug must not end in dot/dash: "${slug}"`);
+    assert.ok(gitAcceptsBranch(slug), `git must accept feat/${slug}`);
+  });
+
+  it('keeps already-valid long multi-file scopes valid (docs-fixes / structure-init lanes)', () => {
+    for (const scope of [
+      'src/content/docs/canonical-grammar.mdx, src/content/docs/common-commands.mdx, src/content/docs/troubleshooting.mdx',
+      'src/components/WhatIsBrainclaw.astro, src/views/DocsPage.astro, src/content/docs/quickstart.mdx',
+    ]) {
+      const slug = sanitizeBranchComponent(scope);
+      assert.ok(slug.length <= 48, `slug too long for "${scope}": ${slug.length}`);
+      assert.ok(gitAcceptsBranch(slug), `git must accept feat/${slug}`);
+    }
+  });
+
+  it('still strips a leading dot (.github/workflows regression, can_45316d5c)', () => {
+    const slug = sanitizeBranchComponent('.github/workflows/ci.yml');
+    assert.doesNotMatch(slug, /^[.-]/, `slug must not start with dot/dash: "${slug}"`);
+    assert.ok(gitAcceptsBranch(slug), `git must accept feat/${slug}`);
+  });
+
+  it('does not end in .lock even when the cut creates a `.lock` suffix', () => {
+    // 43 chars + ".lock" = exactly 48 → the cap lands right after `.lock`.
+    const scope = 'a'.repeat(43) + '.lock-then-more-text-after-the-cut';
+    const slug = sanitizeBranchComponent(scope);
+    assert.doesNotMatch(slug, /\.lock$/i, `slug must not end in .lock: "${slug}"`);
+    assert.doesNotMatch(slug, /[.-]$/);
+    assert.ok(gitAcceptsBranch(slug), `git must accept feat/${slug}`);
+  });
+
+  it('falls back to "scope" when the input sanitizes to empty', () => {
+    assert.equal(sanitizeBranchComponent('...///...'), 'scope');
+  });
+});
+
+// Dogfood 1.10.1 — `git worktree add` checks out the whole tree; a flat 15s cap
+// killed 662-file checkouts mid-stream. The add timeout is its own, larger knob.
+describe('resolveWorktreeAddTimeoutMs', () => {
+  const KEY = 'BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS';
+  const restore = (prev: string | undefined): void => {
+    if (prev === undefined) delete process.env[KEY];
+    else process.env[KEY] = prev;
+  };
+
+  it('defaults to 120s and is far larger than the 15s query timeout', () => {
+    const prev = process.env[KEY];
+    delete process.env[KEY];
+    try {
+      assert.equal(resolveWorktreeAddTimeoutMs(), 120_000);
+      assert.ok(resolveWorktreeAddTimeoutMs() >= 15000 * 4);
+    } finally {
+      restore(prev);
+    }
+  });
+
+  it('honours a valid env override', () => {
+    const prev = process.env[KEY];
+    process.env[KEY] = '300000';
+    try {
+      assert.equal(resolveWorktreeAddTimeoutMs(), 300_000);
+    } finally {
+      restore(prev);
+    }
+  });
+
+  it('ignores a non-positive / non-numeric override and uses the default', () => {
+    const prev = process.env[KEY];
+    try {
+      for (const bad of ['0', '-5', 'abc', '']) {
+        process.env[KEY] = bad;
+        assert.equal(resolveWorktreeAddTimeoutMs(), 120_000, `bad value "${bad}" should fall back`);
+      }
+    } finally {
+      restore(prev);
     }
   });
 });

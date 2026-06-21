@@ -20,6 +20,13 @@ function gitPath(p: string): string {
  *
  * Rules covered: no leading dots/dashes, no trailing dots, no `..`, no
  * `@{`, no control/space/`~^:?*[\\` characters, no trailing `.lock`.
+ *
+ * Order matters: the 48-char length cap is applied BEFORE the trailing-dot/dash
+ * and `.lock` strips — never after. Dogfood 1.10.1: a multi-file scope ending in
+ * `…IntegrationHubPage.astro` sanitized fine, but the final `.slice(0, 48)` cut
+ * landed on the dot before `astro`, yielding `…IntegrationHubPage.` — a trailing
+ * dot git rejects (`fatal: not a valid branch name`). Truncating first, then
+ * stripping, guarantees the cap can never re-introduce an invalid ref.
  */
 export function sanitizeBranchComponent(raw: string, fallback = 'scope'): string {
   let slug = raw
@@ -29,10 +36,11 @@ export function sanitizeBranchComponent(raw: string, fallback = 'scope'): string
     .replace(/[^a-zA-Z0-9._-]/g, '-')   // conservative whitelist for the rest
     .replace(/-+/g, '-')                // collapse dashes
     .replace(/^[.-]+/, '')              // no leading dot/dash
-    .replace(/[.-]+$/, '');             // no trailing dot/dash
-  if (/\.lock$/i.test(slug)) slug = slug.slice(0, -'.lock'.length);
+    .slice(0, 48)                       // length cap BEFORE the trailing strips
+    .replace(/[.-]+$/, '');             // no trailing dot/dash (cut may have made one)
+  if (/\.lock$/i.test(slug)) slug = slug.slice(0, -'.lock'.length).replace(/[.-]+$/, '');
   if (!slug) slug = fallback;
-  return slug.slice(0, 48);
+  return slug;
 }
 
 /**
@@ -199,8 +207,46 @@ export function resolveWorktreePath(mainWorktreePath: string, branchName: string
   return path.join(worktreesBaseDir(mainWorktreePath), slug);
 }
 
-function runGit(args: string[], cwd: string): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf-8', timeout: 15000 });
+/**
+ * Default timeout for quick git metadata queries (rev-parse, status, branch…).
+ * `git worktree add` is the exception — it materialises the entire working tree
+ * and on a large repo / Windows (Defender) easily exceeds this, so it passes an
+ * explicit, much larger timeout (see resolveWorktreeAddTimeoutMs).
+ *
+ * Dogfood 1.10.1: a 662-file site checkout was SIGTERM-killed at ~94% by this
+ * flat 15s cap, surfacing as a misleading "git worktree add failed: …Updating
+ * files: 94%" — the branch name was fine; the checkout simply ran out of time.
+ */
+const GIT_QUERY_TIMEOUT_MS = 15000;
+
+/**
+ * Timeout for `git worktree add` (full working-tree checkout). Defaults to 120s;
+ * override with BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS (milliseconds) for very large
+ * repos or slow filesystems.
+ */
+export function resolveWorktreeAddTimeoutMs(): number {
+  const raw = process.env.BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+}
+
+function runGit(
+  args: string[],
+  cwd: string,
+  timeoutMs: number = GIT_QUERY_TIMEOUT_MS,
+): { ok: boolean; stdout: string; stderr: string } {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf-8', timeout: timeoutMs });
+  // spawnSync kills on timeout (SIGTERM) and sets error.code=ETIMEDOUT; the raw
+  // stderr is then just partial progress ("Updating files: …%"), which reads as
+  // a cryptic failure. Surface the real cause — the timeout — instead.
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+    const hint = args[0] === 'worktree' ? ' (large checkout? raise BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS)' : '';
+    return {
+      ok: false,
+      stdout: result.stdout ?? '',
+      stderr: `git ${args[0]} timed out after ${timeoutMs}ms and was killed${hint}.`,
+    };
+  }
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? '',
@@ -582,7 +628,7 @@ export function createWorktree(
     ? ['worktree', 'add', gitTargetPath, branchName]
     : ['worktree', 'add', '-b', branchName, gitTargetPath, baseRef];
 
-  const result = runGit(worktreeArgs, mainWorktreePath);
+  const result = runGit(worktreeArgs, mainWorktreePath, resolveWorktreeAddTimeoutMs());
   if (!result.ok) {
     throw new Error(`git worktree add failed: ${result.stderr.trim()}`);
   }
