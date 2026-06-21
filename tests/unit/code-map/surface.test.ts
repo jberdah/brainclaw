@@ -380,6 +380,13 @@ describe('codeMapRefreshNextActions (bclaw_work onboarding nudge, pln#588)', () 
     assert.equal((out[0]!.args as { scope?: string }).scope, 'changed');
   });
 
+  it('stale_git_head -> bclaw_code_refresh scope=changed (HEAD drift nudges refresh)', () => {
+    const out = codeMapRefreshNextActions(base({ freshness_badge: { status: 'stale_git_head', details: {} } }));
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.tool, 'bclaw_code_refresh');
+    assert.equal((out[0]!.args as { scope?: string }).scope, 'changed');
+  });
+
   it('fresh -> no nudge (do not nag a usable index)', () => {
     assert.deepEqual(codeMapRefreshNextActions(base({ freshness_badge: { status: 'fresh', details: {} } })), []);
   });
