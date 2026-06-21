@@ -635,6 +635,18 @@ function reverseDeps(
   return [...byPath.values()];
 }
 
+/**
+ * Heuristic: does the brief target denote a file PATH rather than a bare symbol
+ * name? A path separator or a supported source extension marks a path target —
+ * for which we resolve the exact file directly instead of fuzzy-tokenizing the
+ * name. Fuzzy-tokenizing a path floods the brief with unrelated same-token symbols
+ * (e.g. brief('src/commands/switch.ts') pulling in every `switch`-named symbol and
+ * code-map test). pln#593 1b.
+ */
+function looksLikePathTarget(target: string): boolean {
+  return /[\\/]/.test(target) || /\.(?:ts|tsx|js|jsx|mjs|cjs|py|php|java)$/i.test(target);
+}
+
 /** Find files whose path matches the target directly (path-target briefs). */
 function filesMatchingPath(symbolsIndex: SymbolsIndex, target: string): SymbolIndexEntry[] {
   const norm = target.replace(/\\/g, '/');
@@ -676,10 +688,20 @@ export function brief(
   // result with unrelated same-token symbols (e.g. `resolveProjectImports` would pull
   // in every `resolve*`), burying the real defining file + its graph signals. Fall
   // back to the fuzzy token set, then to a path match. (find() stays fuzzy by design.)
-  let defining = gatherSymbolEntries(symbolsIndex, target);
-  const exact = defining.filter((e) => e.name.toLowerCase() === target.toLowerCase());
-  if (exact.length > 0) defining = exact;
-  else if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
+  let defining: SymbolIndexEntry[];
+  if (looksLikePathTarget(target)) {
+    // PATH target (pln#593 1b): resolve the exact file; the graph signals (its
+    // imports / dependents / direct tests) then rank below it via rankFiles. Skip
+    // the fuzzy token gather entirely — it floods a path brief with same-token
+    // noise. Degrade to the fuzzy set only if the path resolves to nothing indexed.
+    defining = filesMatchingPath(symbolsIndex, target);
+    if (defining.length === 0) defining = gatherSymbolEntries(symbolsIndex, target);
+  } else {
+    defining = gatherSymbolEntries(symbolsIndex, target);
+    const exact = defining.filter((e) => e.name.toLowerCase() === target.toLowerCase());
+    if (exact.length > 0) defining = exact;
+    else if (defining.length === 0) defining = filesMatchingPath(symbolsIndex, target);
+  }
 
   const root = resolveRoot(ctx);
   const maxBytes = maxParseBytes(ctx);
