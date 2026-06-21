@@ -5,6 +5,15 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] — 2026-06-22
+
+A dispatch worktree-creation hardening patch from real-agent dogfooding (parallel-lane dispatch on a large multi-file repo). No breaking changes.
+
+### Fixed
+
+- **Parallel dispatch could fail to create a worktree on multi-file scopes.** The git branch slug derived from a claim's scope was length-capped (`.slice(0, 48)`) *after* its trailing-dot/dash strip — so a scope ending in e.g. `…IntegrationHubPage.astro` was cut mid-token to `feat/…IntegrationHubPage.`, a trailing dot git rejects (`fatal: not a valid branch name`), and the whole lane's worktree creation aborted. The cap now runs *before* the trailing strip (and the `.lock` re-strip), so truncation can never re-introduce an invalid ref. `sanitizeBranchComponent` is validated against `git check-ref-format`.
+- **`git worktree add` could be killed mid-checkout on large repos / Windows.** Every git invocation shared a flat 15s timeout, but a worktree add materializes the entire working tree — a several-hundred-file checkout exceeded it and was SIGTERM-killed partway, surfacing as a misleading `git worktree add failed: Updating files: 94%` even though the branch name was valid. Worktree creation now uses a dedicated timeout (120s default; override with `BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS`), and a timed-out git call reports the timeout explicitly instead of dumping partial progress output.
+
 ## [1.10.1] — 2026-06-21
 
 Code Map fast-follows from the 1.10.0 real-agent dogfood, plus a lint-baseline cleanup. No breaking changes.
