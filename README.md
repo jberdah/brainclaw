@@ -369,34 +369,34 @@ The same surface is available through the canonical grammar for agents: `bclaw_c
 
 ## Documentation
 
-The npm package includes the Markdown docs below under `docs/`. Public web docs on `brainclaw.dev` are still being rolled out, so the npm README does not depend on private GitHub links.
+The Markdown docs below ship in the npm package under `docs/` and are versioned in the repo. The links resolve on GitHub and are rewritten to the package repo on the npm page.
 
 If you are integrating Brainclaw into an agent workflow, start with the agent-facing docs first:
 
-|                                            |                                                                                               |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `docs/index.md`                          | Documentation index grouped by getting started, guides, reference, and design                 |
-| `docs/integrations/overview.md`          | Start here for agent integrations                                                             |
-| `docs/integrations/mcp.md`               | MCP runtime path for capable agents                                                           |
-| `docs/quickstart.md`                     | First-time setup on a new project (greenfield)                                                |
-| `docs/quickstart-existing-project.md`    | Joining a project that already has `.brainclaw/`                                            |
-| `docs/server-operations.md`              | Operator and remote-server workflow guide                                                     |
-| `docs/cli.md`                            | CLI reference for operators, scripts, and fallback use                                        |
-| `docs/code-map.md`                       | Code Map — symbol/import index, freshness model, monorepo behavior                            |
-| `docs/concepts/memory.md`                | What "memory" means in brainclaw                                                              |
-| `docs/concepts/plans-and-claims.md`      | Coordination layer                                                                            |
-| `docs/concepts/runtime-notes.md`         | Ephemeral observations                                                                        |
-| `docs/concepts/multi-agent-workflows.md` | The four common scenarios — orchestration, agent switching, project recovery, team async     |
-| `docs/concepts/troubleshooting.md`       | Runbook for degraded coordination state — stale claims, missing dist, octopus failures, etc. |
-| `docs/integrations/cursor.md`            | Cursor                                                                                        |
-| `docs/integrations/claude-code.md`       | Claude Code                                                                                   |
-| `docs/integrations/copilot.md`           | GitHub Copilot                                                                                |
-| `docs/integrations/codex.md`             | Codex                                                                                         |
-| `docs/storage.md`                        | Storage model                                                                                 |
-| `docs/security.md`                       | Security model                                                                                |
-| `docs/review.md`                         | Reflective review                                                                             |
-| `docs/reputation.md`                     | Reputation signals                                                                            |
-| `docs/playbooks/`                        | Audience design constraints for brainclaw development                                         |
+| Doc | What it covers |
+| --- | --- |
+| [docs/index.md](docs/index.md) | Documentation index grouped by getting started, guides, reference, and design |
+| [docs/integrations/overview.md](docs/integrations/overview.md) | Start here for agent integrations |
+| [docs/integrations/mcp.md](docs/integrations/mcp.md) | MCP runtime path for capable agents |
+| [docs/quickstart.md](docs/quickstart.md) | First-time setup on a new project (greenfield) |
+| [docs/quickstart-existing-project.md](docs/quickstart-existing-project.md) | Joining a project that already has `.brainclaw/` |
+| [docs/server-operations.md](docs/server-operations.md) | Operator and remote-server workflow guide |
+| [docs/cli.md](docs/cli.md) | CLI reference for operators, scripts, and fallback use |
+| [docs/code-map.md](docs/code-map.md) | Code Map — symbol/import index, freshness model, monorepo behavior |
+| [docs/concepts/memory.md](docs/concepts/memory.md) | What "memory" means in brainclaw |
+| [docs/concepts/plans-and-claims.md](docs/concepts/plans-and-claims.md) | Coordination layer |
+| [docs/concepts/runtime-notes.md](docs/concepts/runtime-notes.md) | Ephemeral observations |
+| [docs/concepts/multi-agent-workflows.md](docs/concepts/multi-agent-workflows.md) | The four common scenarios — orchestration, agent switching, project recovery, team async |
+| [docs/concepts/troubleshooting.md](docs/concepts/troubleshooting.md) | Runbook for degraded coordination state — stale claims, missing dist, octopus failures, etc. |
+| [docs/integrations/cursor.md](docs/integrations/cursor.md) | Cursor |
+| [docs/integrations/claude-code.md](docs/integrations/claude-code.md) | Claude Code |
+| [docs/integrations/copilot.md](docs/integrations/copilot.md) | GitHub Copilot |
+| [docs/integrations/codex.md](docs/integrations/codex.md) | Codex |
+| [docs/storage.md](docs/storage.md) | Storage model |
+| [docs/security.md](docs/security.md) | Security model |
+| [docs/review.md](docs/review.md) | Reflective review |
+| [docs/reputation.md](docs/reputation.md) | Reputation signals |
+| [docs/playbooks/](docs/playbooks/) | Audience design constraints for brainclaw development |
 
 ---
 

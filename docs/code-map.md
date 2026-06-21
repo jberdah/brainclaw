@@ -130,6 +130,17 @@ which is independent from a parser-binary change (`stale_grammar`). The badge
 surfaces the dominant reason; `--json` output and the manifest carry the per-file
 counts.
 
+**Index freshness vs this call's spot-check.** `bclaw_code_status` reports the
+*index* freshness (the manifest state). `bclaw_code_find` / `bclaw_code_brief`
+additionally run a bounded, per-query *spot-check* of the files they actually
+touch — so a single call can read `stale_changed_files` (a file it looked at
+changed on disk) or `partial` (the spot-check hit its budget) even while the index
+itself is `fresh`. When the call-level status diverges from the index, the badge
+carries an `index_status` detail so the two are not confused, e.g.
+`{ status: "partial", details: { index_status: "fresh", partial_reason:
+"lazy_check_budget_exhausted" } }` reads as *"index fresh, this call's spot-check
+incomplete (budget)"* — not a contradiction with a `fresh` `status()`.
+
 ## Lifecycle — pull-based, no daemon
 
 Code Map never runs in the background and never auto-reindexes. The model is lazy
