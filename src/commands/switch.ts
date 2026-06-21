@@ -1,9 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { loadActiveProject, saveActiveProject, clearActiveProject } from '../core/active-project.js';
 import { buildOperationalIdentity, loadCurrentSession, loadSessionById, resolveCurrentSessionId, saveCurrentSession } from '../core/identity.js';
-import { MEMORY_DIR, memoryExists } from '../core/io.js';
-import { resolveProjectRef, resolveWorkspaceRoot } from '../core/store-resolution.js';
+import { memoryExists } from '../core/io.js';
+import { resolveProjectRef } from '../core/store-resolution.js';
 import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
 import { scanNestedBrainclawProjects } from '../core/workspace-projects.js';
 import { loadConfig } from '../core/config.js';

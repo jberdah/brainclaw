@@ -18,7 +18,7 @@ import type {
 } from '../core/schema.js';
 import { runConstraint, type ConstraintOptions } from './constraint.js';
 import { runDecision, type DecisionOptions } from './decision.js';
-import { runHandoff, type HandoffOptions } from './handoff.js';
+import { runHandoff } from './handoff.js';
 import { runTrap, type TrapOptions } from './trap.js';
 
 type MemoryKind = 'decision' | 'constraint' | 'trap' | 'handoff';

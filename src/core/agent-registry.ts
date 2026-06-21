@@ -336,7 +336,7 @@ export function registerAgentIdentity(input: RegisterAgentIdentityInput): AgentI
   return created;
 }
 
-export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string, homeDir?: string): AgentIdentityDocument | undefined {
+export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: string, _homeDir?: string): AgentIdentityDocument | undefined {
   // env var takes priority over config — allows AI agent to self-identify
   const envAgentId = (process.env.BRAINCLAW_AGENT_ID ?? '').trim();
   const envAgentName = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT ?? '').trim();
@@ -643,7 +643,7 @@ export function resolveCurrentModel(cwd?: string): string | undefined {
  * Note: config.current_agent is intentionally NOT used here — it's a singleton
  * global that causes cross-agent confusion in multi-agent setups.
  */
-export function resolveCurrentAgentName(cwd?: string, _homeDir?: string): string {
+export function resolveCurrentAgentName(_cwd?: string, _homeDir?: string): string {
   const fromEnv = (process.env.BRAINCLAW_AGENT_NAME ?? process.env.BRAINCLAW_AGENT)?.trim();
   if (fromEnv) return fromEnv;
   const detected = detectAiAgent(process.env);

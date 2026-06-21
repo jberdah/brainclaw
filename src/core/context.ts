@@ -1802,7 +1802,7 @@ function isExecutionSensitiveTarget(target: string): boolean {
 function tokenise(input: string): string[] {
   return input
     .toLowerCase()
-    .split(/[^a-z0-9_\/-]+/)
+    .split(/[^a-z0-9_/-]+/)
     .map((x) => x.trim())
     .filter(Boolean);
 }

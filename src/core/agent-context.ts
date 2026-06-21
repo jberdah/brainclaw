@@ -101,7 +101,7 @@ function readAgentsMarkdown(cwd: string): { present: boolean; title?: string; ru
   // Only extract rules from actionable sections, not from descriptive sections
   // like "why this matters" which contain explanatory bullets, not instructions.
   const SKIP_SECTIONS = /why this matters|what it provides|what brainclaw/i;
-  let currentSection = '';
+  let currentSection: string;
   let skipSection = false;
 
   const rules: string[] = [];

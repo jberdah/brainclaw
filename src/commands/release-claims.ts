@@ -55,7 +55,7 @@ export function runReleaseClaims(options: ReleaseClaimsOptions = {}): void {
   let released = 0;
 
   mutate({ cwd: options.cwd }, () => {
-    let state = loadState(options.cwd);
+    let state: ReturnType<typeof loadState>;
 
     for (const claim of toRelease) {
       try {

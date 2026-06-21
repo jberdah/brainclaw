@@ -18,7 +18,7 @@
 import { ACTION_CLASS_BY_ACTION, readJournalRecords, type EventActionV2, type JournalRecord } from './journal.js';
 import {
   ConstraintSchema, DecisionSchema, TrapSchema, HandoffSchema, PlanItemSchema,
-  type State, type Constraint, type Decision, type Trap, type Handoff, type PlanItem,
+  type State,
 } from '../schema.js';
 import type { ZodType } from 'zod';
 

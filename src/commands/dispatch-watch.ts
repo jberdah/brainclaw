@@ -162,7 +162,7 @@ export async function runDispatchWatch(targetId: string, options: DispatchWatchO
   const baseRef = options.base ?? 'master';
   const startedAt = Date.now();
   let poll = 0;
-  let lastState: WatchState = 'running';
+  let lastState: WatchState;
   let lastStatus: DispatchStatus | undefined;
 
   for (;;) {

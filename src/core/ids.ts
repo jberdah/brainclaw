@@ -52,7 +52,7 @@ export function getNextShortLabel(prefix: string, cwd?: string, preferredDirName
       counter = JSON.parse(fs.readFileSync(fp, 'utf-8')) as Record<string, number>;
     } catch (error: unknown) {
       if (!(error instanceof Error) || !('code' in error) || (error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new Error(`Could not read short-label counter ${fp}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Could not read short-label counter ${fp}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
     }
     const next = (counter[prefix] ?? 0) + 1;

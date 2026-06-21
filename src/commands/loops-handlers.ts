@@ -26,10 +26,7 @@ import {
   VersionConflictError,
   withLoopLock,
   type LoopEvent,
-  type LoopPhase,
-  type LoopSlot,
   type LoopThread,
-  type NextExpectedHint,
 } from '../core/loops/index.js';
 import {
   BclawLoopRequestSchema,
@@ -164,7 +161,10 @@ function validateSemanticRequest(req: ValidRequest): string | null {
 }
 
 function requestPayload(req: ValidRequest): Record<string, unknown> {
-  const { agent, agentId, client_request_id, ...rest } = req;
+  const rest: Record<string, unknown> = { ...req };
+  delete rest.agent;
+  delete rest.agentId;
+  delete rest.client_request_id;
   return rest;
 }
 

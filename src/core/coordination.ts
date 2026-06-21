@@ -6,7 +6,7 @@ import { listAssignments } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
 import { listActionRequired } from './actions.js';
 import { getActiveSequence } from './sequence.js';
-import { resolveCrossProjectLinks, listIncomingCrossProjectSignals, type CrossProjectSignalEnvelope } from './cross-project.js';
+import { resolveCrossProjectLinks, listIncomingCrossProjectSignals } from './cross-project.js';
 import { inferProjectFromTarget, loadInstructions, resolveInstructions } from './instructions.js';
 import { buildReputationSummary, findAgentReputationSummary } from './reputation.js';
 import { listRuntimeNotes } from './runtime.js';

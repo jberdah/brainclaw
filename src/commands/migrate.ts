@@ -5,7 +5,6 @@ import { appendAuditEntry } from '../core/audit.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { loadConfig, saveConfig } from '../core/config.js';
 import { runGenesisMigration, runRegistryGenesisSupplement } from '../core/events/genesis.js';
-import type { Constraint, Decision, Trap } from '../core/schema.js';
 
 export interface MigrateOptions {
   promoteMachineItems?: boolean;

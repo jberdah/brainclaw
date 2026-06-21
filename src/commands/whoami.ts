@@ -1,5 +1,5 @@
 import { memoryExists } from '../core/io.js';
-import { resolveCurrentAgentIdentity, resolveExistingCurrentAgent, resolveCurrentModel } from '../core/agent-registry.js';
+import { resolveCurrentAgentIdentity, resolveCurrentModel } from '../core/agent-registry.js';
 import { loadConfig } from '../core/config.js';
 import { resolveCurrentHostId } from '../core/host.js';
 import { buildOperationalIdentity } from '../core/identity.js';

@@ -24,8 +24,8 @@ import {
   collectWorkspaceGitignoreEntries,
   BRAINCLAW_EXCLUSIVE_DIRECTORIES,
 } from '../core/agent-files.js';
-import { MEMORY_DIR, memoryExists, writeFileAtomic } from '../core/io.js';
-import { ensureUserStore, readSetupState, resolveHomeDir, type SetupState, writeSetupState } from '../core/setup-state.js';
+import { MEMORY_DIR, memoryExists } from '../core/io.js';
+import { ensureUserStore, readSetupState, resolveHomeDir, writeSetupState } from '../core/setup-state.js';
 import { writeDetectedAgentHooks } from './hooks.js';
 
 export { readSetupState } from '../core/setup-state.js';

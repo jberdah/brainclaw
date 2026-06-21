@@ -25,7 +25,7 @@ function parseItems(raw?: string): SequenceItemInput[] | undefined {
   try {
     parsed = JSON.parse(raw);
   } catch (error: unknown) {
-    throw new Error(`Invalid --items JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Invalid --items JSON: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 
   if (!Array.isArray(parsed)) {

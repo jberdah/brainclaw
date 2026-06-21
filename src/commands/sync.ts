@@ -76,7 +76,7 @@ export function runSync(options: SyncOptions = {}): void {
   }
 
   // Check git status of .brainclaw/
-  let gitStatus = '';
+  let gitStatus: string;
   try {
     // Security: execFileSync (no shell) + scopePaths spread as separate args so
     // path specs cannot inject (Socket 2026-06-08 class).

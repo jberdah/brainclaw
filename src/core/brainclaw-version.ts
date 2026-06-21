@@ -726,7 +726,7 @@ function readWorkspaceBrainclawPackage(cwd: string): { name: string; version: st
     parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as { name?: unknown; version?: unknown };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to read package.json: ${message}`);
+    throw new Error(`Failed to read package.json: ${message}`, { cause: error });
   }
 
   const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
@@ -796,7 +796,7 @@ function parseNpmDistTags(stdout: string): Record<string, string> {
     parsed = JSON.parse(stdout);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`npm view returned invalid JSON: ${message}`);
+    throw new Error(`npm view returned invalid JSON: ${message}`, { cause: error });
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {

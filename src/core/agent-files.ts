@@ -1317,7 +1317,7 @@ export function ensureClaudeCodeCommand(cwd: string): AutoConfigWriteResult {
   };
 }
 
-export function ensureClaudeCodeUserSettings(homeDir: string | undefined, env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | undefined {
+export function ensureClaudeCodeUserSettings(homeDir: string | undefined, _env: NodeJS.ProcessEnv = process.env): AutoConfigWriteResult | undefined {
   if (!homeDir) return undefined;
 
   const filePath = path.join(homeDir, '.claude', 'settings.json');
@@ -1846,7 +1846,6 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     const autoApprovedSet = new Set(getHeadlessAutoApprovedToolNames());
     const toolSectionRe = /^\[mcp_servers\.brainclaw\.tools\.([^\]]+)\]/gm;
     const approvalModeRe = /^\s*approval_mode\s*=\s*"([^"]+)"/m;
-    let m: RegExpExecArray | null;
     const warnings: string[] = [];
 
     // Split into sections to check each tool block

@@ -946,7 +946,6 @@ export function runDoctor(options: DoctorOptions = {}): void {
     const msg = e instanceof Error ? e.message : String(e);
     checks.push({ name: 'config', status: 'error', message: `config.yaml is invalid: ${msg}` });
     console.error(`✗ config.yaml is invalid: ${msg}`);
-    hasIssues = true;
     if (options.json) {
       console.log(JSON.stringify({ ok: false, checks, metrics: {} }, null, 2));
     }
@@ -1007,7 +1006,6 @@ export function runDoctor(options: DoctorOptions = {}): void {
     const msg = e instanceof Error ? e.message : String(e);
     checks.push({ name: 'state', status: 'error', message: `state is invalid: ${msg}` });
     console.error(`✗ state is invalid: ${msg}`);
-    hasIssues = true;
     if (options.json) {
       console.log(JSON.stringify({ ok: false, checks, metrics: {} }, null, 2));
     }
@@ -2400,7 +2398,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
       // Find duplicates (same text at different levels)
       const duplicates: Array<{ type: string; text: string; items: Array<{ id: string; store: string }> }> = [];
 
-      allConstraints.forEach((items, key) => {
+      allConstraints.forEach((items, _key) => {
         if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
           duplicates.push({
             type: 'constraint',
@@ -2409,7 +2407,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
           });
         }
       });
-      allDecisions.forEach((items, key) => {
+      allDecisions.forEach((items, _key) => {
         if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
           duplicates.push({
             type: 'decision',
@@ -2418,7 +2416,7 @@ export function runDoctor(options: DoctorOptions = {}): void {
           });
         }
       });
-      allTraps.forEach((items, key) => {
+      allTraps.forEach((items, _key) => {
         if (items.length > 1 && new Set(items.map((i) => i.store)).size > 1) {
           duplicates.push({
             type: 'trap',

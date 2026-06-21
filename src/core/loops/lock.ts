@@ -215,10 +215,6 @@ function readLockBlob(lockPath: string): LockBlob | null {
   return readJsonIfExists<LockBlob>(lockPath) ?? null;
 }
 
-function writeLockAtomic(lockPath: string, blob: LockBlob): void {
-  writeJsonAtomic(lockPath, blob);
-}
-
 function processIsAlive(pid: number): boolean {
   try {
     // Signal 0 just checks for the process's existence without actually sending a signal.

@@ -10,7 +10,7 @@
  * @module
  */
 import { memoryExists } from '../core/io.js';
-import { readInbox, ackMessage, archiveMessage, sendMessage, countPending, getThread } from '../core/messaging.js';
+import { readInbox, ackMessage, archiveMessage, sendMessage, getThread } from '../core/messaging.js';
 import { resolveCurrentAgentName } from '../core/agent-registry.js';
 import { resolveStoreChain } from '../core/store-resolution.js';
 import type { MessageType, MessageStatus, InboxMessage } from '../core/schema.js';

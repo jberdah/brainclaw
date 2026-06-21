@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { resolveEntityDir } from './io.js';
 import { mutate } from './mutation-pipeline.js';
 import { generateId } from './ids.js';
@@ -43,7 +42,6 @@ export function saveInstruction(entry: InstructionEntry, cwd?: string): void {
 }
 
 export function createInstruction(text: string, options: CreateInstructionOptions, cwd?: string): InstructionEntry {
-  const entries = loadInstructions(cwd);
   const timestamp = new Date().toISOString();
   const entry: InstructionEntry = {
     schema_version: 2,

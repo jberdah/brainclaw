@@ -6,7 +6,7 @@ import type {
   State,
 } from './schema.js';
 
-export interface ContradictionReport extends CandidateContradiction {}
+export type ContradictionReport = CandidateContradiction;
 
 interface ContradictionSignal {
   kind: string;

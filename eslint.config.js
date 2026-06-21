@@ -19,6 +19,8 @@ export default tseslint.config(
       'vscode-extension/**', // has its own toolchain
       '**/*.d.ts',
       'scripts/**', // build/release scripts — not part of the shipped surface
+      'internal-docs/**', // internal tooling + vendored compiled runtime copies
+                          // (desktop-extension mirror of dist) — not shipped source
       'tests/fixtures/**', // test INPUT data (e.g. Code Map extractor fixtures with
                            // intentional `var` / syntax errors) — not lintable source
     ],
@@ -48,12 +50,16 @@ export default tseslint.config(
       // produces false positives on TS globals/types/ambient decls. Disabling it
       // is the typescript-eslint-recommended setup for TS sources.
       'no-undef': 'off',
-      // Late lint adoption: these fire across existing code. Surface as warnings
-      // (visible, non-blocking) and ratchet to 'error' once each is cleared.
-      'no-useless-assignment': 'warn',
-      'preserve-caught-error': 'warn',
-      'no-useless-escape': 'warn',
-      '@typescript-eslint/no-empty-object-type': 'warn',
+      // Late lint adoption: cleared to zero across the codebase (pln#593 step 5)
+      // and ratcheted to 'error' so they cannot silently regress. These are
+      // low-churn rules, so the error gate adds little day-to-day friction.
+      // (`no-unused-vars` above is also cleared to zero but stays a warning by
+      // design — it fires often mid-edit; flip it to error later if the team wants
+      // the harder gate.)
+      'no-useless-assignment': 'error',
+      'preserve-caught-error': 'error',
+      'no-useless-escape': 'error',
+      '@typescript-eslint/no-empty-object-type': 'error',
     },
   },
   {

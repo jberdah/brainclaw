@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ensureMemoryDir, memoryDir, memoryExists, resolveEntityDir, storeLockPath } from '../core/io.js';
-import { loadState, persistState, saveState } from '../core/state.js';
+import { ensureMemoryDir, memoryDir, memoryExists, storeLockPath } from '../core/io.js';
+import { loadState, persistState } from '../core/state.js';
 import { scanMigrationStatus } from '../core/migration.js';
 import { commitMemoryChange, initMemoryRepo } from '../core/memory-git.js';
 import {
@@ -557,13 +557,6 @@ function upsertSection(existingContent: string, section: string): string {
   }
   const trimmed = existingContent.trimEnd();
   return trimmed.length > 0 ? `${trimmed}\n\n${section}\n` : `${section}\n`;
-}
-
-function listJsonFiles(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(f => f.endsWith('.json'))
-    .map(f => path.join(dir, f));
 }
 
 function listJsonFilesRecursive(dir: string): string[] {

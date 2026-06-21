@@ -6,7 +6,7 @@ import { detectAiAgent } from './ai-agent-detection.js';
 import { requireRegisteredAgentIdentity } from './agent-registry.js';
 import { loadConfig } from './config.js';
 import { resolveCurrentHostId } from './host.js';
-import { memoryDir, writeFileAtomic } from './io.js';
+import { memoryDir } from './io.js';
 import { loadVersionedJsonFile, saveVersionedJsonFile } from './migration.js';
 import { CurrentSessionStateSchema, type CurrentSessionState } from './schema.js';
 

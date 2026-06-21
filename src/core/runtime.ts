@@ -17,7 +17,7 @@ export interface RuntimeListOptions {
   includeAllHosts?: boolean;
 }
 
-export interface RuntimeLookupOptions extends RuntimeListOptions {}
+export type RuntimeLookupOptions = RuntimeListOptions;
 
 function sharedRuntimeDir(cwd?: string, mode: 'read' | 'write' = 'read'): string {
   return resolveEntityDir('runtime', cwd ?? process.cwd(), mode);

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { memoryDir } from './io.js';
 import { resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
 import { mutate } from './mutation-pipeline.js';
