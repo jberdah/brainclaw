@@ -273,14 +273,22 @@ export class JsonlBackend implements CodeQueryBackend {
         ownerAgentId: input.ownerAgentId ?? null,
       });
       const root = cascade.root_result;
+      const allProjects = [root, ...cascade.children];
+      // A cascade is only fully "acquired" when EVERY project got its lock; if a
+      // child or the root was skipped under a live writer, surface that instead
+      // of reporting a clean lock_acquired=true over a partial cascade (codex review).
+      const skipped = allProjects.filter((p) => !p.lock_acquired);
       return {
-        ran: root.ran || cascade.children.some((c) => c.ran),
+        ran: allProjects.some((p) => p.ran),
         scope,
-        lock_acquired: true,
+        lock_acquired: skipped.length === 0,
         freshness_badge: badge(root.freshness, {
           files_parsed: root.files_parsed,
           children_refreshed: cascade.children_refreshed,
         }),
+        ...(skipped.length > 0
+          ? { lock_status: `${skipped.length} project(s) skipped (lock held): ${skipped.map((p) => p.path).join(', ')}` }
+          : {}),
         cascade,
       };
     }

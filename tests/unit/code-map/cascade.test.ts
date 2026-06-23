@@ -52,6 +52,13 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     assert.ok(result.cascade, 'cascade result must be present');
     assert.equal(result.cascade!.children_refreshed, 3, 'all 3 nested projects refreshed');
     assert.equal(result.cascade!.root_result.files_parsed, 1, 'root indexes only the file no child owns');
+    // Lock state is propagated per project and aggregated (codex review): with no
+    // competing writers every project acquired its lock, so the top-level cascade
+    // reports lock_acquired=true and no lock_status — not a masked partial.
+    assert.equal(result.lock_acquired, true, 'all locks acquired → top-level lock_acquired');
+    assert.equal(result.lock_status, undefined, 'no skipped-project lock_status when all acquired');
+    assert.ok(result.cascade!.root_result.lock_acquired, 'root lock_acquired propagated');
+    assert.ok(result.cascade!.children.every((c) => c.lock_acquired), 'each child lock_acquired propagated');
 
     // Each symbol must resolve in EXACTLY ONE store — the most specific project.
     const stores: Record<string, string> = { root, app_a: appA, app_b: appB, nested_pkg: nested };

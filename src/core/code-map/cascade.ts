@@ -55,6 +55,8 @@ export interface CascadeProjectResult {
   project_id: string;
   is_root: boolean;
   ran: boolean;
+  /** False when this project's store lock was held by a live writer (skipped). */
+  lock_acquired: boolean;
   files_parsed: number;
   files_compacted: number;
   freshness: Manifest['freshness']['status'];
@@ -130,6 +132,7 @@ export async function refreshWorkspaceCascade(input: RefreshCascadeInput): Promi
       project_id: projectId,
       is_root: isRoot,
       ran: result.ran,
+      lock_acquired: result.lock_acquired,
       files_parsed: result.files_parsed,
       files_compacted: result.files_compacted,
       freshness: result.freshness.status,
