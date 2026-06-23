@@ -24,15 +24,21 @@ import { listClaims } from '../claims.js';
 import { listSequences } from '../sequence.js';
 
 /**
- * Relocatable entity → the candidate store subdirs to search for `<id>.json`.
- * Most have one; traps additionally live in host/private visibility variants, so
- * we search all and write back into the SAME variant we found it in.
+ * Relocatable entity → the store subdir holding its flat `<id>.json` files.
+ *
+ * v1 covers only the SHARED, flat-per-id stores. Trap is deliberately limited to
+ * the shared `traps/` dir: the host/private visibility variants are host-SCOPED
+ * (`traps-hosts/<host>/<id>.json`, `traps-private/<host>/<id>.json` — see
+ * saveOperationalTrap), so a flat `<variant>/<id>.json` lookup would both miss
+ * them and, if it found one, flatten away the host directory (codex review of
+ * pln#595). Host/private traps are deferred alongside candidate/runtime_note
+ * until relocation preserves the host scope.
  */
 const RELOCATABLE_SUBDIRS: Partial<Record<EntityName, readonly string[]>> = {
   plan: ['plans'],
   decision: ['decisions'],
   constraint: ['constraints'],
-  trap: ['traps', 'traps-hosts', 'traps-private'],
+  trap: ['traps'],
   handoff: ['handoffs'],
   sequence: ['sequences'],
 };

@@ -108,6 +108,20 @@ describe('relocateEntity (pln#595 — bclaw move)', () => {
     assert.ok(fs.existsSync(planFile(b, id)), 'moved with force');
   });
 
+  it('moves non-plan knowledge entities (decision, shared trap) preserving id + store subdir', () => {
+    const { a, b } = makeWorkspace();
+    const decId = createEntity('decision', { text: 'a decision', author: 'tester', outcome: 'pending' }, a).id as string;
+    const trapId = createEntity('trap', { text: 'a trap', author: 'tester', severity: 'medium' }, a).id as string;
+
+    relocateEntity({ entity: 'decision', id: decId, toProject: 'app_b', cwd: a, actor: 'tester' });
+    relocateEntity({ entity: 'trap', id: trapId, toProject: 'app_b', cwd: a, actor: 'tester' });
+
+    assert.ok(fs.existsSync(path.join(b, '.brainclaw', 'memory', 'decisions', `${decId}.json`)), 'decision in target');
+    assert.equal(fs.existsSync(path.join(a, '.brainclaw', 'memory', 'decisions', `${decId}.json`)), false, 'decision gone from source');
+    assert.ok(fs.existsSync(path.join(b, '.brainclaw', 'memory', 'traps', `${trapId}.json`)), 'shared trap in target/traps');
+    assert.equal((getEntity('decision', decId, b) as { text?: string }).text, 'a decision', 'decision content preserved');
+  });
+
   it('relocates end-to-end through the bclaw_move MCP verb', async () => {
     const { a, b } = makeWorkspace();
     const id = mkPlan(a, 'via mcp');
