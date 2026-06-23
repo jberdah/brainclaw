@@ -40,7 +40,8 @@ export type AuditAction =
   | 'promote_direct'
   | 'rollback'
   | 'agent_spawned'
-  | 'spawn_failed';
+  | 'spawn_failed'
+  | 'move';
 
 export interface AuditEntry {
   timestamp: string;

@@ -21,6 +21,7 @@ import { runUpdatePlan } from './commands/update-plan.js';
 import { runDeletePlan } from './commands/delete-plan.js';
 import { runPlanResource } from './commands/plan-resource.js';
 import { runCodeMap } from './commands/code-map.js';
+import { runMove } from './commands/move.js';
 import { runSequenceResource } from './commands/sequence.js';
 import { runAddStep } from './commands/add-step.js';
 import { runDeleteStep } from './commands/delete-step.js';
@@ -637,6 +638,16 @@ program
       process.exit(1);
     });
   });
+
+// --- move (cross-project relocation, pln#595) ---
+program
+  .command('move <entity> <id>')
+  .description('Relocate a brainclaw item to another project, id-preserving (multi-project workspaces). Relocatable: plan, decision, constraint, trap, handoff, sequence.')
+  .requiredOption('--to <project>', 'Target project (name, path, or basename)')
+  .option('--from <project>', 'Source project (defaults to the current project)')
+  .option('--force', 'Move even if an active claim references the item')
+  .option('--json', 'Output as JSON')
+  .action((entity, id, options) => runMove(entity, id, options));
 
 // --- list-plans ---
 program

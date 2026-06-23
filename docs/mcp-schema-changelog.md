@@ -10,6 +10,15 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — `bclaw_move` cross-project relocation (pln#595)**
+- New canonical-grammar verb `bclaw_move(entity, id, to_project, from_project?, force?)`:
+  relocates a brainclaw item to another project in a multi-project workspace,
+  PRESERVING its id. Relocatable: plan, decision, constraint, trap, handoff,
+  sequence. Execution-local entities (claim, assignment, agent_run, session) are
+  rejected. Refuses id collisions / active-claim moves (unless force); audits both
+  stores. Additive — no tool removed or renamed.
+- Surface fingerprint bumped in the `(current)` section below.
+
 **Changed — agent-UX read-path surface (pln#542)**
 - `bclaw_work`, `bclaw_context`, `bclaw_find`, `bclaw_get`, `bclaw_search`
   gain an optional `budget_tokens` argument (relevance-ranked fill).
@@ -104,10 +113,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:35fd83b0d124df94`
-  (updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
+- MCP public surface fingerprint: `sha256:41eb6d55010cdfb5`
+  (updated 2026-06-23: added `bclaw_move` — id-preserving cross-project relocation
+  of a brainclaw item (pln#595). Additive: a new tool; nothing removed or renamed.)
+  Previous: `sha256:35fd83b0d124df94`,
+  updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
   `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`, `bclaw_code_status`.
-  Additive: no tool removed or renamed.)
+  Additive: no tool removed or renamed.
   Previous: `sha256:70cf80b9615f631f`,
   updated 2026-06-18 for 1.9.1: monorepo project-scoping fix — session-aware
   effective-cwd resolution and read-path project scoping shift the published
