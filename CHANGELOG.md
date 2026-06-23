@@ -5,6 +5,12 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Auto-clean dispatched sub-agent worktrees when a loop closes** (pln#594). Review/dispatch loops left their sub-agent worktrees under `~/.brainclaw/worktrees/` to accumulate — observed in dogfooding as orphaned codex review-loop worktrees from closed sessions that were never removed. Closing a loop as **completed** now garbage-collects each slot-assignment's worktree (junction-safe, then deletes the redundant dispatch branch). Safe by default: it **keeps** a worktree (and warns via debug log) when the worker still looks alive (recent heartbeat), when there are un-harvested edits (anything beyond brainclaw birth-noise / `LANE-RESULT.json` / heartbeat), or when the lane branch carries commits not reachable from the main HEAD. A **cancelled/blocked** close keeps the worktree (and its run logs) for forensics. Best-effort — never blocks the close; opt out with `BRAINCLAW_NO_WORKTREE_GC=1`. New helper `gcWorktreeIfHarvested` in `core/worktree.ts`.
+
 ## [1.10.2] — 2026-06-22
 
 A dispatch worktree-creation hardening patch from real-agent dogfooding (parallel-lane dispatch on a large multi-file repo). No breaking changes.
