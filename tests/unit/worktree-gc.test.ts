@@ -96,6 +96,19 @@ describe('gcWorktreeIfHarvested (pln#594)', () => {
     assert.equal(fs.existsSync(wt), false);
   });
 
+  it('fails closed — keeps a directory whose git status cannot be read (never force-removes on a probe failure)', () => {
+    const { repo } = makeRepoWithWorktree('lane/failclosed');
+    // A real directory that is NOT a git worktree: `git status` errors, so the
+    // dirty-check cannot be proven. Pre-fix this fell through to a force remove;
+    // it must now KEEP the directory.
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-gc-failclosed-'));
+    cleanup.push(plain);
+    const d = gcWorktreeIfHarvested(repo, plain);
+    assert.equal(d.removed, false);
+    assert.match(d.reason, /fail-closed|could not (read|verify)/);
+    assert.equal(fs.existsSync(plain), true, 'directory preserved when status is unreadable');
+  });
+
   it('is a safe no-op for a path that no longer exists', () => {
     const d = gcWorktreeIfHarvested(os.tmpdir(), path.join(os.tmpdir(), 'bclaw-gc-missing-zzz'));
     assert.equal(d.removed, false);

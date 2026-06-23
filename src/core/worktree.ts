@@ -1177,21 +1177,31 @@ export function gcWorktreeIfHarvested(
   const branch = branchRes.ok ? branchRes.stdout.trim() : undefined;
 
   if (!options.force) {
+    // FAIL CLOSED (codex review): every safety probe that cannot be read must
+    // KEEP the worktree, never fall through to removal. A transient `git status`
+    // timeout on a real, dirty worktree previously skipped the dirty check and
+    // force-removed it — losing un-harvested edits. Same for the HEAD reads.
     const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
-    if (status.ok && !worktreeHasOnlyBirthNoise(status.stdout)) {
+    if (!status.ok) {
+      return out(false, 'could not read worktree status — keeping (fail-closed)', branch);
+    }
+    if (!worktreeHasOnlyBirthNoise(status.stdout)) {
       return out(false, 'un-harvested changes in worktree', branch);
     }
     // The lane HEAD must be reachable from the main repo HEAD, else the branch
     // carries un-integrated commits that `branch -D` would silently drop.
     const laneHead = runGit(['rev-parse', 'HEAD'], worktreePath);
     const mainHead = runGit(['rev-parse', 'HEAD'], mainWorktreePath);
-    if (laneHead.ok && mainHead.ok) {
-      const ancestor = runGit(
-        ['merge-base', '--is-ancestor', laneHead.stdout.trim(), mainHead.stdout.trim()],
-        mainWorktreePath,
-      );
-      if (!ancestor.ok) return out(false, 'lane branch has un-integrated commits', branch);
+    if (!laneHead.ok || !mainHead.ok) {
+      return out(false, 'could not verify merge status — keeping (fail-closed)', branch);
     }
+    const ancestor = runGit(
+      ['merge-base', '--is-ancestor', laneHead.stdout.trim(), mainHead.stdout.trim()],
+      mainWorktreePath,
+    );
+    // exit 0 = ancestor (safe). Non-zero = not an ancestor OR a git error — both
+    // mean "cannot prove integrated", so keep.
+    if (!ancestor.ok) return out(false, 'lane branch has un-integrated commits (or unverifiable)', branch);
   }
 
   try {
