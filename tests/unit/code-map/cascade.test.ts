@@ -119,6 +119,34 @@ describe('code-map cascade (DGX Finding 2 — monorepo-native refresh)', () => {
     assert.ok(!rootFind.matches.some((m) => m.name === 'alphaThing'), 'child symbol no longer in the root store');
   });
 
+  // Codex review (DGX Finding 2): the DEFAULT cascade scope is --changed, whose
+  // cheap compaction only removes git-proven deletes — so a prior monolithic root
+  // would keep the now-ignored child shards unless the cascade explicitly compacts
+  // newly-ignored files. Lock that the default scope migrates cleanly too.
+  it('migrates a prior monolithic root index on the default cascade --changed too', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cascmigchg-'));
+    cleanup.push(root);
+    makeStore(root, 'global', { projectMode: 'multi-project', projectStrategy: 'folder' });
+    writeFile(path.join(root, 'src', 'rootlib.ts'), 'export function rootThing(){return 0;}\n');
+    const appA = path.join(root, 'applications', 'app_a');
+    makeStore(appA, 'app_a');
+    writeFile(path.join(appA, 'src', 'a.ts'), 'export function alphaThing(){return 1;}\n');
+
+    const be = new JsonlBackend();
+    await be.refresh({ cwd: root, scope: 'all' });
+    assert.equal((await be.status({ cwd: root })).stats?.files_indexed, 2, 'monolithic root starts with root + child');
+
+    await be.refresh({ cwd: root, scope: 'changed', cascade: true });
+
+    assert.equal((await be.status({ cwd: root })).stats?.files_indexed, 1, 'default cascade compacts child-owned files out of root');
+    const owners: string[] = [];
+    for (const [label, cwd] of Object.entries({ root, app_a: appA })) {
+      const found = await be.find({ query: 'alphaThing', cwd });
+      if (found.matches.some((m) => m.name === 'alphaThing')) owners.push(label);
+    }
+    assert.deepEqual(owners, ['app_a'], 'child symbol must remain only in the child store');
+  });
+
   it('is a no-op in a single-project repo (cascade falls back to a normal refresh)', async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-cascsolo-'));
     cleanup.push(repo);
