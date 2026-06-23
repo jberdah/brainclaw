@@ -206,16 +206,42 @@ export function resolveEffectiveCwdInfo(
     if (resolved) return { cwd: resolved, active_source: 'env_project', resolved_project: projectInfo(resolved) };
   }
 
-  // 4. Session-scoped active project (per-agent, no cross-agent interference)
-  const session = options.sessionId
-    ? loadSessionById(options.sessionId, anchorCwd)
-    : loadCurrentSession(anchorCwd);
-  if (session?.active_project) {
-    const sp = session.active_project;
-    if (fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
+  // 4. Session-scoped active project (per-agent, no cross-agent interference).
+  //    A session can be persisted under a DIFFERENT store than the anchor we read
+  //    from: an agent physically inside a child project gets its session created
+  //    AND switched under that child (cwd_child / the switch handler use the
+  //    physical cwd), while resolution here anchors at the workspace
+  //    (BRAINCLAW_CWD). Sessions are stored per-cwd (sessionsDir(cwd)) with no
+  //    chain search, so reading only the anchor makes a successful bclaw_switch
+  //    invisible — resolution then silently falls through to cwd_child and pins
+  //    the agent to the wrong project (DGX Finding 1, 2026-06-22). Probe the
+  //    anchor, the physical baseCwd, and the workspace root for each; the first
+  //    session carrying a still-valid active_project wins (anchor first preserves
+  //    prior precedence when the session lives where we expect).
+  const probedSessionCwds = new Set<string>();
+  const probeSessionAt = (candidate: string | undefined): ResolvedEffectiveCwd | undefined => {
+    if (!candidate) return undefined;
+    const probeCwd = path.resolve(candidate);
+    if (probedSessionCwds.has(probeCwd)) return undefined; // dedup — no double read
+    probedSessionCwds.add(probeCwd);
+    const session = options.sessionId
+      ? loadSessionById(options.sessionId, probeCwd)
+      : loadCurrentSession(probeCwd);
+    const sp = session?.active_project;
+    if (sp && fs.existsSync(path.join(sp.path, MEMORY_DIR, 'config.yaml'))) {
       return { cwd: sp.path, active_source: 'session', resolved_project: { path: sp.path, name: sp.name } };
     }
-  }
+    return undefined;
+  };
+  // `??` short-circuits: the common case (agent at the anchor, session there)
+  // costs exactly one session load and never walks for the workspace root. The
+  // baseCwd / workspace-root probes only run when the cheap ones miss — i.e. the
+  // monorepo case where the session was stored under the physical child.
+  const sessionHit =
+    probeSessionAt(anchorCwd)
+    ?? probeSessionAt(baseCwd)
+    ?? probeSessionAt(resolveWorkspaceRoot(baseCwd, options.storeChainOptions));
+  if (sessionHit) return sessionHit;
 
   // 5. cwd_child — when anchored and the agent is physically inside a child store
   //    STRICTLY under the anchor, resolve THAT child rather than the shared global
@@ -331,6 +357,21 @@ export function resolveProjectRef(
   if (!isAtOrBelow(asPath, trustBoundary)) return undefined;
   if (fs.existsSync(path.join(asPath, MEMORY_DIR, 'config.yaml'))) {
     return asPath;
+  }
+
+  // The workspace root itself is a legal target — it is the "umbrella" project
+  // of a monorepo. The chain scan below deliberately skips wsRoot (so a child
+  // can never be shadowed by the root), but an agent must still be able to
+  // target the root by its own project_name/project_id. Without this, an agent
+  // working inside a child cannot switch UP to the monorepo root: bclaw_switch
+  // (and project="<root-name>" routing) failed with "Cannot resolve project"
+  // (DGX dogfood 2026-06-22, Finding 1). Matching by name/id — not by arbitrary
+  // path — preserves the path-injection trust boundary enforced above.
+  try {
+    const rootConfig = loadConfig(wsRoot);
+    if (rootConfig.project_name === ref || rootConfig.project_id === ref) return wsRoot;
+  } catch {
+    // unreadable workspace-root config — fall through to the child scan
   }
 
   // Try by project name or project ID: scan child stores

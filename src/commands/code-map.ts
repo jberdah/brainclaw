@@ -15,6 +15,8 @@ interface CodeMapOptions {
   changed?: boolean;
   limit?: number;
   cwd?: string;
+  /** Multi-project cascade for refresh/status (DGX Finding 2). */
+  cascade?: boolean;
 }
 
 const KNOWN_SUBCOMMANDS = new Set(['status', 'refresh', 'find', 'brief']);
@@ -43,14 +45,14 @@ export async function runCodeMap(
   const cwd = options.cwd;
 
   if (normalized === 'status') {
-    const status = await be.status({ cwd });
+    const status = await be.status({ cwd, cascade: options.cascade });
     printStatus(status, options);
     return;
   }
 
   if (normalized === 'refresh') {
     const scope: 'all' | 'changed' = options.all ? 'all' : 'changed';
-    const result = await be.refresh({ scope, cwd });
+    const result = await be.refresh({ scope, cwd, cascade: options.cascade });
     printRefresh(result, options);
     return;
   }
@@ -99,6 +101,13 @@ function printStatus(status: CodeStatus, options: CodeMapOptions): void {
   } else {
     console.log('  Stats:    (none — index not built)');
   }
+  if (status.cascade) {
+    console.log(`  Workspace: ${status.cascade.indexed_children}/${status.cascade.total_children} child project(s) indexed`);
+    for (const child of status.cascade.children) {
+      const files = child.files_indexed === null ? '' : ` (${child.files_indexed} files)`;
+      console.log(`    [${child.freshness}] ${child.path}${files}`);
+    }
+  }
 }
 
 function printRefresh(result: CodeRefreshResult, options: CodeMapOptions): void {
@@ -111,6 +120,14 @@ function printRefresh(result: CodeRefreshResult, options: CodeMapOptions): void 
   console.log(`  Lock:     ${result.lock_acquired ? 'acquired' : 'not acquired'}`);
   if (result.lock_status) console.log(`  Status:   ${result.lock_status}`);
   console.log(`  ${badgeLine(result.freshness_badge)}`);
+  if (result.cascade) {
+    const c = result.cascade;
+    console.log(`  Cascade:  ${c.children_refreshed} child project(s) + root (scoped)`);
+    console.log(`    [root] . — ${c.root_result.files_parsed} files parsed`);
+    for (const child of c.children) {
+      console.log(`    ${child.path} — ${child.files_parsed} files parsed (${child.freshness})`);
+    }
+  }
 }
 
 function printFind(result: CodeFindResult, options: CodeMapOptions): void {
