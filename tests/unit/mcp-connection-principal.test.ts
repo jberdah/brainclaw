@@ -43,13 +43,29 @@ describe('MCP connection principal (pln#562 step 3)', () => {
     workspace.cleanup();
   });
 
-  it('resolveCanonicalAuthor failure is a hard validation_error, not author:unknown', async () => {
-    // No env identity, no detected agent, no args.agent → must refuse loudly.
+  it('resolveCanonicalAuthor failure is a hard validation_error under genuine ambiguity (>=2 agents)', async () => {
+    // pln#596 added a single-registered-agent fallback, so the fail-loud contract
+    // now applies where identity is genuinely AMBIGUOUS: with >=2 registered agents
+    // and no env/detection/args signal, the principal must still refuse loudly —
+    // never silently pick one. (The spoof and claim-binding guards below are
+    // unchanged.) The workspace already has its default agent; add two more.
+    registerAgentIdentity({ agentName: 'claude-code', kind: 'agent', trustLevel: 'contributor', cwd: workspace.dir });
+    registerAgentIdentity({ agentName: 'codex', kind: 'agent', trustLevel: 'contributor', cwd: workspace.dir });
     const outcome = await createDecision();
     assert.equal(outcome.response.isError, true);
     const text = outcome.response.content?.[0]?.text ?? '';
     assert.match(text, /cannot resolve mutation author/);
     assert.equal(loadState(workspace.dir).recent_decisions.length, 0, 'no record written');
+  });
+
+  it('single registered agent resolves the principal with no signal (pln#596 fallback)', async () => {
+    // Solo setup: exactly one registered agent (the workspace default) and no
+    // env/detection/args signal. pln#596 resolves it (unambiguous) rather than
+    // failing loud — a solo dev never needs to set BRAINCLAW_AGENT_NAME.
+    setAgentTrustLevel(workspace.currentAgent.agent_name, 'contributor', workspace.dir);
+    const outcome = await createDecision();
+    assert.equal(outcome.response.isError, false, JSON.stringify(outcome.response));
+    assert.equal(lastDecisionAuthor(), workspace.currentAgent.agent_name, 'attributed to the sole registered agent');
   });
 
   it('non-curator caller args.agent cannot spoof the pinned principal', async () => {
