@@ -5,6 +5,17 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] — 2026-06-24
+
+Agent-identity / session-hook resilience + deeper repo discovery, from a fresh-CLI dogfood on the DGX-Spark monorepo (trp#917, trp#918). A new CLI install whose agent wasn't yet registered produced an endless `UserPromptSubmit hook error: Failed with non-blocking status code: No stderr output` on every prompt — four compounding causes, now fixed. No breaking changes.
+
+### Fixed
+
+- **The agent-identity error hint contradicted the resolver.** `AgentIdentityResolutionError` told users to run `register-agent <name> --set-current`, but the session-start resolver deliberately ignores `config.current_agent` (pln#562 multi-agent safety) — so following the hint printed `✔ … [current]` and then failed identically. The hint now points at what the resolver actually honors: `--agent` / `$BRAINCLAW_AGENT_NAME` / `register-agent`. **New: a single-registered-agent fallback** — when there is no identity signal at all (no env, no detected native agent) and exactly one agent is registered in scope, it resolves automatically. The pln#562 guard is intact: with ≥2 registered agents, resolution still stays `undefined` and never consults `config.current_agent`. A solo dev testing in the CLI no longer needs to know `register-agent`.
+- **Session hooks no longer hard-fail the prompt loop.** `session-start` / `context-diff` / `session-end` accept `--hook`: on any advisory failure (no identity, no diff baseline, store not initialised) they degrade to exit 0 and append one line to `~/.brainclaw/hook.log` instead of erroring. The generated Claude Code hooks pass `--hook`, so a misconfiguration is now silent-but-logged rather than a contentless warning on every prompt. (Previously `2>/dev/null` swallowed the *actionable* error too — the diagnostic now lands in the log, which survives the redirect.)
+- **`brainclaw doctor --fix-hooks`** — purges stale/broken/duplicate brainclaw session hooks across **all** Claude Code settings scopes (`~/.claude/settings*.json` **and** `<cwd>/.claude/settings*.json`) and rewrites the canonical entry, independent of git-repo discovery. Closes the gap where `setup` only sanitized the discovered git repos' settings, so the launch dir and user scope accumulated broken hooks (legacy `node session-start` with the `cli.js` arg dropped, dead install paths, N× stacked) exactly where the agent executes them. Only collapses events that already carry a brainclaw hook — never injects hooks into a file that lacked them.
+- **`setup` repo discovery is no longer depth-1 (trp#918).** It now recurses (bounded depth, skipping `node_modules`/build/hidden dirs) so repos nested in a workspace — e.g. `/srv/dev/repos/global/<svc>` — are found instead of silently missed when only shallow repos surfaced. After configuring agents, `setup` registers the detected agent (or, when none is detected, prints an actionable note) so the hooks it just installed can resolve an identity rather than being installed dead-on-arrival.
+
 ## [1.11.0] — 2026-06-24
 
 Monorepo Code Map + project-resolution improvements from real-agent dogfooding (multi-project workspace on DGX Spark). No breaking changes.

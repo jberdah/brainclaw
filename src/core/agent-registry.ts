@@ -379,6 +379,19 @@ export function resolveCurrentAgentIdentity(cwd?: string, preferredDirName?: str
   // The field remains in config for display (status, doctor) and for resolveExistingCurrentAgent
   // which is used during setup/init only.
 
+  // Single-registered-agent fallback (pln#596). When there is NO identity signal
+  // at all — no env id/name AND no detected native agent — but exactly one agent
+  // is registered in this scope, resolving it is unambiguous. This is the
+  // solo-dev / single-CLI case (a fresh hook with no BRAINCLAW_AGENT_NAME). The
+  // pln#562 guard against config.current_agent only matters at ≥2 agents, so this
+  // preserves multi-agent safety: ≥2 registered → still falls through to undefined.
+  if (!envAgentId && !envAgentName && !detected) {
+    const registered = listAgentIdentities(cwd, preferredDirName);
+    if (registered.length === 1) {
+      return registered[0];
+    }
+  }
+
   return undefined;
 }
 
@@ -510,7 +523,10 @@ export function requireRegisteredAgentIdentity(options: RegisteredAgentIdentityO
   }
 
   throw new AgentIdentityResolutionError(
-    'No registered agent identity resolved. Use --agent/--agent-id or configure a current agent with `brainclaw register-agent <name> --set-current`.',
+    'No registered agent identity resolved. Pass `--agent <name>` or `--agent-id <id>`, '
+    + 'set $BRAINCLAW_AGENT_NAME, or register an agent with `brainclaw register-agent <name>` '
+    + '— a single registered agent is then resolved automatically. '
+    + '(`--set-current` alone does NOT affect resolution.)',
   );
 }
 

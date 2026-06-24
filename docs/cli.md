@@ -264,13 +264,17 @@ Run health checks on config, state, and generated views.
 | `--json` | Output as JSON |
 | `--migration-check` | Check for pending migrations |
 | `--fix-agent-ignore` | Add missing `.gitignore` entries for generated local Brainclaw agent files |
+| `--fix-hooks` | Purge stale/broken/duplicate brainclaw session hooks across all Claude Code settings scopes (user + cwd) and rewrite the canonical ones |
 
 ```bash
 brainclaw doctor
 brainclaw doctor --json
 brainclaw doctor --migration-check
 brainclaw doctor --fix-agent-ignore
+brainclaw doctor --fix-hooks
 ```
+
+`--fix-hooks` collapses every recognized brainclaw session hook (across `UserPromptSubmit` / `Stop` / `PostToolUse`) in `~/.claude/settings.json`, `~/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, and `<cwd>/.claude/settings.local.json` down to a single canonical entry, repairing legacy/broken forms. It only touches files (and events) that already contain a brainclaw hook, so user-authored hooks and hook-less scopes are left untouched. Use it when you see repeated `UserPromptSubmit hook error` warnings.
 
 When Brainclaw detects generated local agent files such as `.mcp.json` or `.claude/settings.local.json` inside a Git repo, `doctor` warns if they are not ignored or are still tracked. `--fix-agent-ignore` only updates `.gitignore`; if a file is already tracked you still need to untrack it with `git rm --cached <path>`.
 

@@ -40,6 +40,7 @@ import { extractFilesFromDiff } from '../commands/handoff.js';
 import { capHandoffDiff } from '../core/handoff-snapshot.js';
 import { suggestCompaction } from '../core/memory-compactor.js';
 import { dispatchReview } from '../core/dispatcher.js';
+import { logHookDiagnostic } from '../core/hook-log.js';
 
 export interface SessionEndOptions {
   session?: string;
@@ -56,6 +57,11 @@ export interface SessionEndOptions {
   /** Include structured reflection questions in the result for the agent to answer. */
   reflect?: boolean;
   json?: boolean;
+  /**
+   * Hook mode (trp#917): running as the Stop hook. On any failure, degrade to
+   * exit 0 and log to ~/.brainclaw/hook.log instead of erroring.
+   */
+  hook?: boolean;
   cwd?: string;
 }
 
@@ -183,7 +189,13 @@ export async function runSessionEnd(options: SessionEndOptions = {}): Promise<vo
       console.log(`\n  → Answer with: brainclaw note "your reflection" --tag reflection --tag session:${result.session_id}`);
     }
   } catch (e: unknown) {
-    console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    const message = e instanceof Error ? e.message : String(e);
+    if (options.hook) {
+      // Advisory Stop hook (trp#917): never fail the prompt loop. Log + exit 0.
+      logHookDiagnostic(`session-end skipped: ${message}`);
+      return;
+    }
+    console.error(`Error: ${message}`);
     process.exit(1);
   }
 }

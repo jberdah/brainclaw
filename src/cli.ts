@@ -811,6 +811,7 @@ program
   .option('--json', 'Output as JSON dashboard')
   .option('--migration-check', 'Report versioned documents that need schema migration')
   .option('--fix-agent-ignore', 'Add missing .gitignore entries for generated local Brainclaw agent files')
+  .option('--fix-hooks', 'Purge stale/broken/duplicate brainclaw session hooks across all Claude Code settings scopes (user + cwd) and rewrite the canonical ones')
   .option('--fix', 'Fix auto-resolvable issues (e.g. drifting MCP configs)')
   .option('--repair', 'Rebuild dist/ when the MCP runtime is missing or stale')
   .option('--after-migration', 'Run the v1.0 post-migration health check only (exits non-zero on any failure)')
@@ -1526,6 +1527,7 @@ program
   .option('--model <id>', 'Model identifier (e.g. claude-sonnet-4-6)')
   .option('--maintenance-mode <mode>', 'Maintenance mode: full (default) or fast')
   .option('--include-context', 'Output full project context after starting session (replaces separate context call)')
+  .option('--hook', 'Hook mode: degrade to exit 0 + ~/.brainclaw/hook.log on failure (advisory session hooks)')
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     await runSessionStart(options);
@@ -1544,6 +1546,7 @@ program
   .option('--dispatch-review', 'When used with --reflect-handoff, auto-dispatch a code review if the handoff is reviewable')
   .option('--reviewer <name>', 'Explicit reviewer to route the reflected handoff review to')
   .option('--no-reflect', 'Suppress the dogfooding reflection prompt (project + your surfaces/skills/tools), shown by default')
+  .option('--hook', 'Hook mode: degrade to exit 0 + ~/.brainclaw/hook.log on failure (advisory Stop hook)')
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     await runSessionEnd({
@@ -1554,6 +1557,7 @@ program
       dispatchReview: options.dispatchReview,
       reviewer: options.reviewer,
       reflect: options.reflect,
+      hook: options.hook,
     });
   });
 
@@ -1872,9 +1876,10 @@ program
   .description('Show what changed in memory since last context read, a session start, or a given timestamp')
   .option('--since <date>', 'Show changes since this ISO date')
   .option('--session <id>', 'Show changes since the start of this session')
+  .option('--hook', 'Hook mode: exit 0 silently when there is no diff baseline (advisory session hooks)')
   .option('--json', 'Output as JSON')
   .action((options) => {
-    runContextDiff({ since: options.since, session: options.session, json: options.json });
+    runContextDiff({ since: options.since, session: options.session, json: options.json, hook: options.hook });
   });
 
 program
