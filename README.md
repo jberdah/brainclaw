@@ -417,6 +417,19 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.11.0
+
+Monorepo project-resolution + Code Map, cross-project relocation, and dispatch-worktree hygiene — from a multi-project (monorepo) dogfood:
+
+- **`bclaw_switch` to the monorepo root now works, and a switch is honored everywhere.** An agent inside a child project could not switch *up* to the workspace-root project, and a session-scoped switch was silently lost (sessions are stored per-cwd, but the resolver read them only at the workspace anchor). The resolver now matches the root project by `project_name`/`project_id` and probes the anchor / physical cwd / workspace root for the session, so `bclaw_switch` is authoritative for every subsequent call — including Code Map — without `--cwd`.
+- **`code-map refresh --cascade`** — monorepo-native, per-project indexing: one command at the root refreshes **every** nested project into its own store plus a child-scoped root store, with **zero double-indexing** (even under nesting). `code-map status --cascade` adds a per-child recap. Opt-in; single-project repos are unchanged.
+- **`brainclaw move <entity> <id> --to <project>` / `bclaw_move`** — id-preserving cross-project relocation, closing the gap the switch bug exposed (items created in the wrong store). Execution-local entities (claim/assignment/agent_run/session) stay put; refuses id collisions and active-claim moves; audits both stores.
+- **Sub-agent worktrees auto-clean on loop close** — a completed review/dispatch loop garbage-collects its worktrees (junction-safe; keeps any that are alive, un-harvested, or carry unmerged commits). Opt out with `BRAINCLAW_NO_WORKTREE_GC=1`.
+
+### v1.10.2
+
+Dispatch worktree-creation hardening (parallel-lane dispatch on a large repo): the claim-scope branch slug is length-capped *before* its trailing-dot strip (a scope ending in `…Page.astro` no longer truncates to an invalid `feat/…Page.` ref), and `git worktree add` gets a dedicated timeout (120s default; override `BRAINCLAW_WORKTREE_ADD_TIMEOUT_MS`) so a several-hundred-file checkout isn't SIGTERM-killed mid-materialize.
+
 ### v1.10.1
 
 Code Map fast-follows from the 1.10.0 dogfood, plus a lint cleanup:
