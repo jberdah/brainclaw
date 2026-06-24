@@ -4,7 +4,9 @@ import path from 'node:path';
 
 import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
-import { convergeAssignmentToTerminal } from '../assignments.js';
+import { logger } from '../logger.js';
+import { convergeAssignmentToTerminal, loadAssignment } from '../assignments.js';
+import { gcWorktreeIfHarvested } from '../worktree.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
 import {
@@ -556,6 +558,31 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     try {
       convergeAssignmentToTerminal(slot.assignment_id, assignmentTerminal, `loop ${input.id} closed (${input.final_status})`, cwd);
     } catch { /* never block loop close on assignment convergence */ }
+  }
+
+  // pln#594: GC the dispatched sub-agent worktrees now the loop is done, so
+  // review/dispatch worktrees stop accumulating under ~/.brainclaw/worktrees/.
+  // Only on a COMPLETED close — cancelled/blocked keep their worktree (+ run
+  // logs) for forensics. Best-effort (never blocks the close) and each removal
+  // is guarded inside gcWorktreeIfHarvested (skips alive / dirty / un-integrated
+  // worktrees, junction-safe). Opt out with BRAINCLAW_NO_WORKTREE_GC=1.
+  if (input.final_status === 'completed' && process.env.BRAINCLAW_NO_WORKTREE_GC !== '1') {
+    const mainCwd = cwd ?? process.cwd();
+    const seen = new Set<string>();
+    for (const slot of next.slots) {
+      if (!slot.assignment_id) continue;
+      try {
+        const worktreePath = loadAssignment(slot.assignment_id, cwd)?.worktree_path;
+        if (!worktreePath || seen.has(worktreePath)) continue;
+        seen.add(worktreePath);
+        const decision = gcWorktreeIfHarvested(mainCwd, worktreePath);
+        if (decision.removed) {
+          logger.info(`loop ${input.id} close: removed worktree ${decision.path} (${decision.reason})`);
+        } else if (decision.reason !== 'already gone') {
+          logger.debug(`loop ${input.id} close: kept worktree ${decision.path} — ${decision.reason}`);
+        }
+      } catch { /* never block loop close on worktree GC */ }
+    }
   }
 
   return next;

@@ -1115,6 +1115,108 @@ export function cleanMergedWorktrees(
   return result;
 }
 
+/** A worker whose heartbeat file was touched within this window looks alive. */
+const WORKTREE_GC_LIVENESS_WINDOW_MS = 120_000;
+
+export interface WorktreeGcDecision {
+  path: string;
+  branch?: string;
+  removed: boolean;
+  /** Why it was removed, or why it was kept. */
+  reason: string;
+}
+
+/**
+ * A worker still looks alive when a `.brainclaw-heartbeat-*` sentinel in its
+ * worktree was modified within `windowMs`. Cheap liveness signal that needs no
+ * agent_run lookup — the spawn wrapper touches the heartbeat periodically.
+ */
+function workerLooksAlive(worktreePath: string, windowMs: number): boolean {
+  try {
+    const now = Date.now();
+    for (const name of fs.readdirSync(worktreePath)) {
+      if (!name.startsWith('.brainclaw-heartbeat-')) continue;
+      try {
+        if (now - fs.statSync(path.join(worktreePath, name)).mtimeMs < windowMs) return true;
+      } catch { /* ignore unreadable sentinel */ }
+    }
+  } catch { /* worktree dir unreadable — treat as not-alive */ }
+  return false;
+}
+
+/**
+ * Garbage-collect a single dispatched sub-agent worktree once its work is safely
+ * harvested (pln#594). Used by the loop-close cascade so review/dispatch
+ * worktrees stop accumulating under ~/.brainclaw/worktrees/.
+ *
+ * SAFE BY DEFAULT — returns { removed: false, reason } instead of removing when:
+ *   - a worker still looks alive (recent heartbeat) — never bypassed, even by force;
+ *   - the worktree has un-harvested edits (anything beyond brainclaw birth-noise /
+ *     LANE-RESULT.json / heartbeat — i.e. real uncommitted work);
+ *   - the lane branch has commits NOT reachable from the main repo HEAD
+ *     (un-integrated work that `branch -D` would drop).
+ * `force` bypasses the dirty + unmerged guards (NOT the liveness guard).
+ * Removal is junction-safe (delegates to removeWorktree → detachWorktreeJunctions).
+ */
+export function gcWorktreeIfHarvested(
+  mainWorktreePath: string,
+  worktreePath: string,
+  options: { force?: boolean; livenessWindowMs?: number } = {},
+): WorktreeGcDecision {
+  const out = (removed: boolean, reason: string, branch?: string): WorktreeGcDecision => ({
+    path: worktreePath, branch, removed, reason,
+  });
+
+  if (!worktreePath || !fs.existsSync(worktreePath)) return out(false, 'already gone');
+
+  if (workerLooksAlive(worktreePath, options.livenessWindowMs ?? WORKTREE_GC_LIVENESS_WINDOW_MS)) {
+    return out(false, 'worker still active (recent heartbeat)');
+  }
+
+  const branchRes = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
+  const branch = branchRes.ok ? branchRes.stdout.trim() : undefined;
+
+  if (!options.force) {
+    // FAIL CLOSED (codex review): every safety probe that cannot be read must
+    // KEEP the worktree, never fall through to removal. A transient `git status`
+    // timeout on a real, dirty worktree previously skipped the dirty check and
+    // force-removed it — losing un-harvested edits. Same for the HEAD reads.
+    const status = runGit(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], worktreePath);
+    if (!status.ok) {
+      return out(false, 'could not read worktree status — keeping (fail-closed)', branch);
+    }
+    if (!worktreeHasOnlyBirthNoise(status.stdout)) {
+      return out(false, 'un-harvested changes in worktree', branch);
+    }
+    // The lane HEAD must be reachable from the main repo HEAD, else the branch
+    // carries un-integrated commits that `branch -D` would silently drop.
+    const laneHead = runGit(['rev-parse', 'HEAD'], worktreePath);
+    const mainHead = runGit(['rev-parse', 'HEAD'], mainWorktreePath);
+    if (!laneHead.ok || !mainHead.ok) {
+      return out(false, 'could not verify merge status — keeping (fail-closed)', branch);
+    }
+    const ancestor = runGit(
+      ['merge-base', '--is-ancestor', laneHead.stdout.trim(), mainHead.stdout.trim()],
+      mainWorktreePath,
+    );
+    // exit 0 = ancestor (safe). Non-zero = not an ancestor OR a git error — both
+    // mean "cannot prove integrated", so keep.
+    if (!ancestor.ok) return out(false, 'lane branch has un-integrated commits (or unverifiable)', branch);
+  }
+
+  try {
+    removeWorktree(mainWorktreePath, worktreePath, { force: true });
+  } catch (err) {
+    return out(false, `removal failed: ${(err as Error).message}`, branch);
+  }
+  // Delete the now-redundant dispatch branch (force: it may be a squash-merge
+  // descendant that `-d` would refuse). Best-effort — a kept branch is harmless.
+  if (branch && branch !== 'HEAD' && branch !== '(detached)') {
+    runGit(['branch', '-D', branch], mainWorktreePath);
+  }
+  return out(true, options.force ? 'force-removed' : 'harvested + merged', branch);
+}
+
 /**
  * Removes brainclaw-managed worktree directories under ~/.brainclaw/worktrees/
  * that no longer have a corresponding git worktree entry.
