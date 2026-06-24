@@ -613,13 +613,13 @@ can ask "where is X / what should I read first" before editing. The MCP equivale
 are `bclaw_code_status` / `bclaw_code_find` / `bclaw_code_brief` / `bclaw_code_refresh`.
 Full reference (freshness model, supported languages, WASM bundling): [docs/code-map.md](code-map.md).
 
-### `brainclaw code-map status`
+### `brainclaw code-map status [--cascade]`
 
-Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only.
+Store presence, freshness badge (`fresh` / `stale_changed_files` / `stale_extractor` / `stale_grammar` / `partial` / `missing_index`), and index stats (files, nodes, edges). Read-only. In a multi-project workspace, `--cascade` adds a per-child recap (which nested projects have a built index vs `missing_index`, plus an aggregate count).
 
-### `brainclaw code-map refresh [--all|--changed]`
+### `brainclaw code-map refresh [--all|--changed] [--cascade]`
 
-Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock.
+Build or update the index. `--changed` (default) re-parses only touched files; `--all` does a full re-index. Run this when status shows `missing_index` or a stale badge. Fails fast (never blocks) if another writer holds the project lock. In a multi-project workspace, `--cascade` refreshes **every nested project** into its own store plus a root store scoped to the files no child owns (zero double-indexing) — one command at the root indexes the whole monorepo per-project. See [docs/code-map.md](code-map.md#cascading-a-multi-project-workspace---cascade).
 
 ### `brainclaw code-map find <query> [--limit <n>]`
 

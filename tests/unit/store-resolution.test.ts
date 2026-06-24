@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultConfig, saveConfig } from '../../src/core/config.js';
-import { resolveContextStoreCwd, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveStoreChain, resolvePrimaryStore, resolveWorkspaceRoot } from '../../src/core/store-resolution.js';
+import { resolveContextStoreCwd, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveStoreChain, resolvePrimaryStore, resolveWorkspaceRoot } from '../../src/core/store-resolution.js';
 import { saveActiveProject, clearActiveProject } from '../../src/core/active-project.js';
 import { saveCurrentSession } from '../../src/core/identity.js';
 
@@ -704,5 +704,77 @@ describe('core/store-resolution', () => {
         fs.rmSync(ws, { recursive: true, force: true });
       }
     });
+  });
+});
+
+// DGX dogfood 2026-06-22, Finding 1: an agent inside a monorepo child could not
+// make the workspace ROOT the active project, and a session switch was invisible
+// to resolution because the session is stored per-cwd while the resolver read it
+// only at the anchor. Two targeted fixes; one regression test each.
+describe('core/store-resolution — monorepo root switchability (DGX Finding 1)', () => {
+  const SESSION_ENV_KEYS = [
+    'BRAINCLAW_CWD', 'BRAINCLAW_PROJECT', 'BRAINCLAW_SESSION_ID',
+    'OPENCLAW_SESSION_ID', 'CLAUDE_SESSION_ID', 'COPILOT_SESSION_ID', 'BRAINCLAW_AGENT_NAME',
+  ];
+  function withCleanEnv<T>(vars: Record<string, string>, fn: () => T): T {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SESSION_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    try {
+      for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+      return fn();
+    } finally {
+      for (const k of SESSION_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+  function makeMono(): { root: string; child: string } {
+    const root = tmpDir('bclaw-dgxf1-');
+    saveConfig(defaultConfig('global', { projectId: 'prj_global', projectMode: 'multi-project', projectStrategy: 'folder' }), root);
+    const child = path.join(root, 'applications', 'marketing_visuals');
+    fs.mkdirSync(child, { recursive: true });
+    saveConfig(defaultConfig('marketing_visuals', { projectId: 'prj_marketing_visuals' }), child);
+    return { root, child };
+  }
+
+  it('resolveProjectRef resolves the workspace-root project by name AND id from inside a child', () => {
+    const { root, child } = makeMono();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: root }, () => {
+        // The umbrella/monorepo-root project must be reachable by its own name/id…
+        assert.equal(resolveProjectRef('global', child), path.resolve(root));
+        assert.equal(resolveProjectRef('prj_global', child), path.resolve(root));
+        // …without shadowing a child, which still resolves to itself.
+        assert.equal(resolveProjectRef('marketing_visuals', child), path.resolve(child));
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('honors a session switch to the root even when the session was stored under the child (anchor mismatch)', () => {
+    const { root, child } = makeMono();
+    try {
+      withCleanEnv({ BRAINCLAW_CWD: root }, () => {
+        const SID = 'sess_anchor_dgx';
+        const now = new Date().toISOString();
+        // Mirror the real flow: an agent physically inside the child gets its
+        // session created + switched UNDER THE CHILD, with active_project=root.
+        saveCurrentSession({
+          session_id: SID, started_at: now, last_seen_at: now,
+          agent: 'claude', agent_id: 'agt_dgx', host_id: 'host_dgx',
+          active_project: { path: root, name: 'global', switched_at: now },
+        }, child);
+
+        // Resolution anchored at the root (BRAINCLAW_CWD) must still see the switch
+        // — not silently fall through to cwd_child (the pre-fix bug).
+        const info = resolveEffectiveCwdInfo({ baseCwd: child, sessionId: SID });
+        assert.equal(info.cwd, path.resolve(root), 'switch to root must win over cwd_child');
+        assert.equal(info.active_source, 'session');
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

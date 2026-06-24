@@ -10,6 +10,16 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — Code Map monorepo cascade (DGX Finding 2)**
+- `bclaw_code_refresh` gains an optional `cascade: boolean`. In a
+  `project_mode: multi-project` workspace it refreshes every nested
+  brainclaw project into its own store + a child-scoped root store
+  (zero double-indexing). No-op outside a multi-project workspace.
+- `bclaw_code_status` gains an optional `cascade: boolean` that adds a
+  per-child store-presence / freshness recap.
+- No tool was added, removed, or renamed; no required argument changed.
+- Surface fingerprint bumped in the `(current)` section below.
+
 **Changed — agent-UX read-path surface (pln#542)**
 - `bclaw_work`, `bclaw_context`, `bclaw_find`, `bclaw_get`, `bclaw_search`
   gain an optional `budget_tokens` argument (relevance-ranked fill).
@@ -104,10 +114,14 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:35fd83b0d124df94`
-  (updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
+- MCP public surface fingerprint: `sha256:dffcc868ae90e013`
+  (updated 2026-06-22: Code Map monorepo cascade — `bclaw_code_refresh` and
+  `bclaw_code_status` gain an optional `cascade` boolean. Additive: no tool
+  added, removed, or renamed; no required argument changed.)
+  Previous: `sha256:35fd83b0d124df94`,
+  updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
   `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`, `bclaw_code_status`.
-  Additive: no tool removed or renamed.)
+  Additive: no tool removed or renamed.
   Previous: `sha256:70cf80b9615f631f`,
   updated 2026-06-18 for 1.9.1: monorepo project-scoping fix — session-aware
   effective-cwd resolution and read-path project scoping shift the published
