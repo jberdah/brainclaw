@@ -165,6 +165,32 @@ The on-behalf commit is guarded by the linked-worktree check (`isLinkedWorktree`
 
 Integration is strictly additive and opt-in. Plain `brainclaw harvest <assignment_id>` remains report-only; it reads and reports the lane result without committing or mutating assignment / claim state. The on-behalf commit and lifecycle completion happen only when the coordinator passes `--integrate`.
 
+### Worktree garbage collection on loop close (pln#594)
+
+Closing a loop as **`completed`** garbage-collects the worktrees of its slot
+assignments, so review/dispatch worktrees stop accumulating under
+`~/.brainclaw/worktrees/`. The cascade runs inside `closeLoop` (so it covers MCP,
+CLI, and reconciler-driven closes) and is **safe by default** — each worktree is
+removed only when all of these hold:
+
+- the worker no longer looks alive (no `.brainclaw-heartbeat-*` touched within the
+  liveness window) — this guard is never bypassed, even with force;
+- the worktree has no un-harvested edits — anything beyond brainclaw birth-noise
+  (`.gitignore`, the sidecar), `LANE-RESULT.json`, and the heartbeat counts as
+  real work and is preserved;
+- the lane branch carries no commits unreachable from the main repo HEAD (so
+  deleting the branch can't drop un-integrated work).
+
+A worktree that fails a guard is **kept** (with a debug-log reason) so you can
+harvest or inspect it. A **`cancelled`/`blocked`** close keeps the worktree and
+its run logs for forensics. Removal is junction-safe (`removeWorktree` detaches
+`node_modules`/`dist` junctions first), then the redundant dispatch branch is
+deleted. The whole step is best-effort — it never blocks the close — and can be
+disabled with `BRAINCLAW_NO_WORKTREE_GC=1`. The reusable primitive is
+`gcWorktreeIfHarvested(mainWorktreePath, worktreePath, { force? })` in
+`core/worktree.ts`; `brainclaw worktree clean` remains the manual/TTL backstop
+for anything the cascade keeps.
+
 ---
 
 ## Diagnostic playbook

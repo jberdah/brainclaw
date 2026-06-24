@@ -17,6 +17,15 @@ guarantees this changelog follows.
   sequence. Execution-local entities (claim, assignment, agent_run, session) are
   rejected. Refuses id collisions / active-claim moves (unless force); audits both
   stores. Additive — no tool removed or renamed.
+
+**Changed — Code Map monorepo cascade (DGX Finding 2)**
+- `bclaw_code_refresh` gains an optional `cascade: boolean`. In a
+  `project_mode: multi-project` workspace it refreshes every nested
+  brainclaw project into its own store + a child-scoped root store
+  (zero double-indexing). No-op outside a multi-project workspace.
+- `bclaw_code_status` gains an optional `cascade: boolean` that adds a
+  per-child store-presence / freshness recap.
+- No tool was removed or renamed; no required argument changed.
 - Surface fingerprint bumped in the `(current)` section below.
 
 **Changed — agent-UX read-path surface (pln#542)**
@@ -113,9 +122,12 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:41eb6d55010cdfb5`
-  (updated 2026-06-23: added `bclaw_move` — id-preserving cross-project relocation
-  of a brainclaw item (pln#595). Additive: a new tool; nothing removed or renamed.)
+- MCP public surface fingerprint: `sha256:188d2eba8828e4fe`
+  (updated 2026-06-24 for 1.11.0: `bclaw_move` added (pln#595) AND a `cascade`
+  boolean added to `bclaw_code_refresh` / `bclaw_code_status` (DGX Finding 2).
+  Additive: one new tool; nothing removed or renamed; no required argument changed.
+  Supersedes the per-branch interim hashes sha256:dffcc868ae90e013 and
+  sha256:41eb6d55010cdfb5.)
   Previous: `sha256:35fd83b0d124df94`,
   updated 2026-06-20 for 1.10.0: Code Map tools added to the published surface —
   `bclaw_code_find`, `bclaw_code_brief`, `bclaw_code_refresh`, `bclaw_code_status`.
