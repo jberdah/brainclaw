@@ -417,6 +417,14 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.11.1
+
+Agent-identity & session-hook resilience, from a fresh-CLI dogfood on a monorepo:
+
+- **Session hooks no longer spam `UserPromptSubmit hook error` on every prompt.** Root cause was an agent-identity error whose own remediation (`register-agent --set-current`) the resolver ignored, swallowed by `2>/dev/null`. Now: the error hint points at what actually works (`--agent` / `$BRAINCLAW_AGENT_NAME`), a **single registered agent auto-resolves** with no env signal, and `session-start`/`context-diff`/`session-end` run with `--hook` so they degrade to exit 0 + `~/.brainclaw/hook.log` instead of erroring the prompt loop. Multi-agent safety (pln#562) is unchanged.
+- **`brainclaw doctor --fix-hooks`** purges stale/broken/duplicate brainclaw hooks across all Claude Code settings scopes (user + cwd) and rewrites the canonical ones — for the broken hooks that accumulate where `setup`'s git-repo discovery never reached.
+- **`setup` repo discovery recurses** (bounded, skipping `node_modules`/build dirs) so repos nested deep in a workspace are found instead of silently missed, and it registers the detected agent so the hooks it installs can resolve an identity.
+
 ### v1.11.0
 
 Monorepo project-resolution + Code Map, cross-project relocation, and dispatch-worktree hygiene — from a multi-project (monorepo) dogfood:

@@ -27,6 +27,7 @@ import {
 import { MEMORY_DIR, memoryExists } from '../core/io.js';
 import { ensureUserStore, readSetupState, resolveHomeDir, writeSetupState } from '../core/setup-state.js';
 import { writeDetectedAgentHooks } from './hooks.js';
+import { normalizeAgentName, findAgentIdentityByName, registerAgentIdentity } from '../core/agent-registry.js';
 
 export { readSetupState } from '../core/setup-state.js';
 
@@ -121,34 +122,59 @@ export function parseRoots(input: string, env: NodeJS.ProcessEnv = process.env):
 
 // ─── Step 2: Scan repos ───────────────────────────────────────────────────────
 
-export function scanGitRepos(roots: string[]): RepoInfo[] {
+/** Heavy / generated directories never worth descending into when hunting repos. */
+const SCAN_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'dist-test', 'build', 'out', '.next',
+  'coverage', 'vendor', '.venv', 'venv', '__pycache__', '.cache', 'target', '.gradle',
+]);
+
+/**
+ * Discover git repositories under each root, recursing up to `maxDepth` levels.
+ *
+ * trp#918: the previous scan was depth-1 only (root + immediate children), so in
+ * a workspace like /srv with repos nested at /srv/dev/repos/global/<svc> it found
+ * just the shallow ones and silently missed the rest. This walk descends (skipping
+ * heavy/build/hidden dirs, bounded by `maxDepth`) and surfaces every directory
+ * that contains a `.git`. It keeps descending past a found repo because a
+ * workspace repo can legitimately contain independent child repos (the prior
+ * depth-1 scan already surfaced depth-1 children); the user selects which to init.
+ */
+export function scanGitRepos(roots: string[], maxDepth = 6): RepoInfo[] {
   const repos: RepoInfo[] = [];
   const seen = new Set<string>();
-  for (const root of roots) {
-    const candidates = [root];
-    try {
-      const entries = fs.readdirSync(root, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        candidates.push(path.join(root, entry.name));
-      }
-    } catch {
-      // skip unreadable dirs
-    }
 
-    for (const candidate of candidates) {
-      const repoPath = path.resolve(candidate);
-      if (seen.has(repoPath)) continue;
-      if (isBrainclawInternalPath(repoPath)) continue;
-      if (!fs.existsSync(path.join(repoPath, '.git'))) continue;
+  const walk = (dir: string, depth: number): void => {
+    const repoPath = path.resolve(dir);
+    if (seen.has(repoPath)) return;
+    if (isBrainclawInternalPath(repoPath)) return;
 
+    if (fs.existsSync(path.join(repoPath, '.git'))) {
       seen.add(repoPath);
       repos.push({
         path: repoPath,
         name: path.basename(repoPath) || repoPath,
         alreadyInitialised: memoryExists(repoPath),
       });
+      // Keep descending — a workspace repo may contain independent child repos.
     }
+
+    if (depth >= maxDepth) return;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(repoPath, { withFileTypes: true });
+    } catch {
+      return; // unreadable dir — skip
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (SCAN_SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+      walk(path.join(repoPath, entry.name), depth + 1);
+    }
+  };
+
+  for (const root of roots) {
+    walk(root, 0);
   }
   return repos;
 }
@@ -368,6 +394,39 @@ export async function initReposAndConfigureAgents(
   }
 
   return { initialisedRepos, configActions };
+}
+
+/**
+ * Ensure a resolvable session identity exists (pln#596 / trp#917). setup installs
+ * session hooks that need an agent identity; a hook with no identity now degrades
+ * silently (exit 0, logs to ~/.brainclaw/hook.log) but won't inject context. If we
+ * detected the running agent, register it in each selected repo so the hook resolves
+ * immediately. Otherwise emit a clear, actionable note — we don't guess an agent (a
+ * wrong identity is worse than none, and the single-registered-agent fallback wants
+ * exactly one).
+ */
+export function ensureSessionIdentityForRepos(repoPaths: string[], detectedName: string | undefined): void {
+  if (detectedName) {
+    const normalized = normalizeAgentName(detectedName);
+    let registered = 0;
+    for (const repoPath of repoPaths) {
+      try {
+        if (!findAgentIdentityByName(normalized, repoPath)) {
+          registerAgentIdentity({ agentName: normalized, kind: 'agent', trustLevel: 'contributor', cwd: repoPath });
+          registered++;
+        }
+      } catch {
+        /* best-effort — identity registration must not abort setup */
+      }
+    }
+    if (registered > 0) {
+      console.log(`  ✔ Registered session identity '${normalized}' in ${registered} repo(s) so session hooks resolve immediately.`);
+    }
+    return;
+  }
+  console.log('\n⚠ No agent identity registered yet — session hooks will no-op (exit 0) until one resolves.');
+  console.log('  Set `export BRAINCLAW_AGENT_NAME=<agent>` in your shell, or run `brainclaw register-agent <name>`.');
+  console.log('  (A single registered agent then resolves automatically; running inside a detected agent auto-registers on first session.)');
 }
 
 // ─── Step 7: Reload reminder ──────────────────────────────────────────────────
@@ -619,6 +678,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     selectedAgents,
     env,
   );
+
+  // Step 6.5: ensure a resolvable session identity for the hooks we just installed.
+  ensureSessionIdentityForRepos(selectedRepos.map((r) => r.path), detectedName);
 
   // Step 7: VS Code extension
   installVscodeExtension();

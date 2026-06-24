@@ -10,7 +10,9 @@ import {
   getInstalledAgentNames,
   parseAgentSelection,
   scanGitRepos,
+  ensureSessionIdentityForRepos,
 } from '../../src/commands/setup.js';
+import { findAgentIdentityByName, listAgentIdentities } from '../../src/core/agent-registry.js';
 import type { AgentInventory } from '../../src/core/agent-inventory.js';
 import { sanitizedProcessEnv } from '../helpers/workspace.js';
 
@@ -86,6 +88,52 @@ describe('setup/init guardrails', () => {
       repos.map((repo) => repo.path).sort(),
       [dir, childRepo].sort(),
     );
+  });
+
+  it('scanGitRepos discovers repos nested deeper than one level and skips node_modules (trp#918)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-scan-deep-'));
+    try {
+      const shallow = path.join(root, 'shallow');
+      const deep = path.join(root, 'a', 'b', 'c', 'deep');
+      const inNodeModules = path.join(root, 'node_modules', 'pkg');
+      const parentRepo = path.join(root, 'parent');
+      const nested = path.join(parentRepo, 'nested-repo');
+      for (const d of [shallow, deep, inNodeModules, parentRepo, nested]) {
+        fs.mkdirSync(d, { recursive: true });
+        initGitRepo(d);
+      }
+
+      const found = scanGitRepos([root]).map((r) => r.path);
+      assert.ok(found.includes(shallow), 'depth-1 repo found');
+      assert.ok(found.includes(deep), 'deep (depth-4) repo found — the trp#918 fix');
+      assert.ok(found.includes(parentRepo), 'parent repo found');
+      assert.ok(found.includes(nested), 'independent repo nested inside another repo is surfaced');
+      assert.ok(!found.includes(inNodeModules), 'repo inside node_modules is skipped');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureSessionIdentityForRepos registers a detected agent so hooks resolve (fix #3, pln#596)', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-identity-'));
+    try {
+      fs.mkdirSync(path.join(repo, '.brainclaw'), { recursive: true });
+      ensureSessionIdentityForRepos([repo], 'claude-code');
+      assert.ok(findAgentIdentityByName('claude-code', repo), 'detected agent registered in the repo store');
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureSessionIdentityForRepos invents no identity when none is detected (fix #3)', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-identity-none-'));
+    try {
+      fs.mkdirSync(path.join(repo, '.brainclaw'), { recursive: true });
+      assert.doesNotThrow(() => ensureSessionIdentityForRepos([repo], undefined));
+      assert.equal(listAgentIdentities(repo).length, 0, 'no agent guessed/invented when none detected');
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   // Skipped: the second `setup --yes` invocation reliably hits ETIMEDOUT on

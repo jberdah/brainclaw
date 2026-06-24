@@ -9,6 +9,8 @@ import {
   requireRegisteredAgentIdentity,
   resolveCurrentAgentIdentity,
   resolveOrAutoRegisterAgentIdentity,
+  listAgentIdentities,
+  removeAgentIdentity,
 } from '../../src/core/agent-registry.js';
 import { upsertAgentIntegrationDeclaration } from '../../src/core/agent-integrations.js';
 import { startSession } from '../../src/commands/session-start.js';
@@ -49,6 +51,58 @@ describe('core/agent-registry identity contract', () => {
       agentId: claude.agent_id,
       cwd: workspace.dir,
     }), AgentIdentityResolutionError);
+  });
+
+  it('falls back to the sole registered agent when there is no identity signal (pln#596)', () => {
+    // Use an agent name detectAiAgent never returns ('solo-tester'), so even if
+    // the host env makes detection fire, the detected name is unregistered and
+    // resolution reaches the single-registered-agent fallback — the thing tested.
+    const solo = createTestWorkspace({ prefix: 'bclaw-fallback-solo-', currentAgent: 'solo-tester', isolateEnv: false });
+    // createTestWorkspace sets BRAINCLAW_AGENT_NAME/_ID — clear them so there is
+    // genuinely no identity signal (a real hook has no such env), reaching the fallback.
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT_ID;
+    delete process.env.BRAINCLAW_AGENT;
+    try {
+      const resolved = resolveCurrentAgentIdentity(solo.dir);
+      assert.ok(resolved, 'expected the sole registered agent to resolve');
+      assert.equal(resolved?.agent_id, solo.currentAgent.agent_id);
+    } finally {
+      solo.cleanup();
+    }
+  });
+
+  it('does NOT fall back when two agents are registered (pln#562 multi-agent guard intact)', () => {
+    const multi = createTestWorkspace({ prefix: 'bclaw-fallback-multi-', currentAgent: 'solo-tester', isolateEnv: false });
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT_ID;
+    delete process.env.BRAINCLAW_AGENT;
+    try {
+      multi.registerAgent('second-tester');
+      const resolved = resolveCurrentAgentIdentity(multi.dir);
+      assert.equal(resolved, undefined, 'with >=2 agents and no signal, resolution must stay ambiguous');
+    } finally {
+      multi.cleanup();
+    }
+  });
+
+  it('terminal error hint recommends env/--agent, not the no-op --set-current (pln#596)', () => {
+    // Empty the registry so resolution reaches the terminal "no identity" throw.
+    for (const agent of listAgentIdentities(workspace.dir)) {
+      removeAgentIdentity(agent.agent_id, { cwd: workspace.dir, force: true });
+    }
+    delete process.env.BRAINCLAW_AGENT_NAME;
+    delete process.env.BRAINCLAW_AGENT_ID;
+    delete process.env.BRAINCLAW_AGENT;
+    try {
+      requireRegisteredAgentIdentity({ cwd: workspace.dir, allowCurrent: true, allowEnv: true });
+      assert.fail('expected AgentIdentityResolutionError');
+    } catch (err) {
+      assert.ok(err instanceof AgentIdentityResolutionError);
+      assert.match(err.message, /BRAINCLAW_AGENT_NAME/);
+      assert.match(err.message, /--agent/);
+      assert.match(err.message, /register-agent/);
+    }
   });
 
   it('requires environment agents to be registered when no current agent is configured', () => {

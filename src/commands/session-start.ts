@@ -11,6 +11,7 @@ import { writeContextMarker } from '../core/freshness.js';
 import { saveRuntimeNote, generateRuntimeNoteId } from '../core/runtime.js';
 import { nowISO, generateId } from '../core/ids.js';
 import { appendAuditEntry } from '../core/audit.js';
+import { logHookDiagnostic } from '../core/hook-log.js';
 import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
@@ -37,6 +38,13 @@ export interface SessionStartOptions {
   json?: boolean;
   /** Output full project context (like `brainclaw context`) after starting the session. */
   includeContext?: boolean;
+  /**
+   * Hook mode (trp#917): this command is running as a session hook, not an
+   * interactive call. On any failure, degrade to exit 0 and log a line to
+   * ~/.brainclaw/hook.log instead of erroring — an advisory hook must never
+   * fail the agent's prompt loop.
+   */
+  hook?: boolean;
   cwd?: string;
   /**
    * Internal maintenance mode. `fast` keeps the critical session-start path short;
@@ -137,7 +145,13 @@ export async function runSessionStart(options: SessionStartOptions = {}): Promis
       }
     }
   } catch (e: unknown) {
-    console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    const message = e instanceof Error ? e.message : String(e);
+    if (options.hook) {
+      // Advisory hook (trp#917): never fail the prompt loop. Log + exit 0.
+      logHookDiagnostic(`session-start skipped: ${message}`);
+      return;
+    }
+    console.error(`Error: ${message}`);
     process.exit(1);
   }
 }

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { reconcileAllOpenRuns } from '../core/agentrun-reconciler.js';
@@ -35,7 +36,7 @@ import { assessBrainclawVersion, detectConcurrentInstallations } from '../core/b
 import { resolveStoreChain } from '../core/store-resolution.js';
 import { listWorktrees, detectSharedCheckoutRisk } from '../core/worktree.js';
 import { resolveCrossProjectLinks, detectCrossProjectCycles } from '../core/cross-project.js';
-import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs } from '../core/agent-files.js';
+import { auditLocalAgentWorkspaceFiles, ensureGitignoreEntries, patchAllMcpConfigs, fixClaudeCodeHooksAllScopes } from '../core/agent-files.js';
 import { summarizeWorkspaceProjects } from '../core/workspace-projects.js';
 import { detectStaleness, staleSummary } from '../core/staleness.js';
 import { InboxMessageSchema, type Handoff, type InboxMessage } from '../core/schema.js';
@@ -123,6 +124,8 @@ export interface DoctorOptions {
   cwd?: string;
   migrationCheck?: boolean;
   fixAgentIgnore?: boolean;
+  /** Purge stale/broken/duplicate brainclaw session hooks across all Claude Code settings scopes. */
+  fixHooks?: boolean;
   fix?: boolean;
   repair?: boolean;
   /**
@@ -851,6 +854,26 @@ export function runDoctor(options: DoctorOptions = {}): void {
       console.log(renderDispatchHealthHumanReport(report));
     }
     if (report.exit_code !== 0) process.exit(report.exit_code);
+    return;
+  }
+
+  if (options.fixHooks) {
+    const cwd = options.cwd ?? process.cwd();
+    const results = fixClaudeCodeHooksAllScopes(cwd, os.homedir());
+    const fixed = results.filter((r) => r.changed);
+    if (options.json) {
+      console.log(JSON.stringify({ ok: true, action: 'fix-hooks', results }, null, 2));
+    } else if (fixed.length === 0) {
+      console.log('✔ No stale/broken brainclaw session hooks found across Claude Code settings scopes.');
+    } else {
+      for (const r of fixed) {
+        const suffix = r.collapsed > 0
+          ? ` (collapsed ${r.collapsed} stale/duplicate entr${r.collapsed === 1 ? 'y' : 'ies'})`
+          : '';
+        console.log(`✔ Sanitized brainclaw session hooks in ${r.filePath}${suffix}`);
+      }
+      console.log('  → Restart your Claude Code session to pick up the canonical hooks.');
+    }
     return;
   }
 

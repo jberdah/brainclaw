@@ -4,11 +4,18 @@ import { loadInstructions, resolveInstructions } from '../core/instructions.js';
 import { memoryExists } from '../core/io.js';
 import { loadState } from '../core/state.js';
 import { isTrapActive } from '../core/traps.js';
+import { logHookDiagnostic } from '../core/hook-log.js';
 
 export interface ContextDiffOptions {
   since?: string;
   session?: string;
   json?: boolean;
+  /**
+   * Hook mode (trp#917): running as a session hook. When there is no diff
+   * baseline (e.g. the first prompt before a session marker exists) or any other
+   * advisory failure, exit 0 silently instead of erroring every prompt.
+   */
+  hook?: boolean;
   cwd?: string;
 }
 
@@ -18,13 +25,39 @@ export interface ContextDiffOptions {
  * delta since last context read.
  */
 export function runContextDiff(options: ContextDiffOptions = {}): void {
+  try {
+    contextDiffBody(options);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (options.hook) {
+      // Advisory hook (trp#917): any failure past the early guards — e.g. a
+      // corrupt session snapshot / claim / instruction file feeding buildContextDiff
+      // or buildCriticalAnchors — must NOT error the prompt loop. Log + exit 0.
+      logHookDiagnostic(`context-diff skipped: ${message}`);
+      return;
+    }
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+}
+
+function contextDiffBody(options: ContextDiffOptions): void {
   if (!memoryExists(options.cwd)) {
+    if (options.hook) {
+      logHookDiagnostic('context-diff skipped: .brainclaw/ not found');
+      return;
+    }
     console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
     process.exit(1);
   }
 
   const resolved = resolveContextDiffSince(options);
   if (!resolved.since) {
+    if (options.hook) {
+      // No diff baseline yet (e.g. first prompt before a session marker exists).
+      // Nothing to surface — exit 0 silently so the hook never errors (trp#917).
+      return;
+    }
     if (options.session) {
       console.error(`Error: session '${options.session}' not found in session snapshots or audit log.`);
       process.exit(1);
@@ -35,6 +68,10 @@ export function runContextDiff(options: ContextDiffOptions = {}): void {
 
   const diff = buildContextDiff({ ...options, includeItems: true });
   if (!diff) {
+    if (options.hook) {
+      logHookDiagnostic('context-diff skipped: unable to build diff');
+      return;
+    }
     console.error('Error: unable to build context diff.');
     process.exit(1);
   }

@@ -1247,6 +1247,108 @@ function replaceBrainclawHooks(entries: unknown[], canonical: JsonObject): unkno
   return kept;
 }
 
+/**
+ * Canonical Claude Code session-hook commands.
+ *
+ * `--hook` (pln#596) makes session-start / context-diff / session-end degrade to
+ * exit 0 + ~/.brainclaw/hook.log on failure instead of hard-erroring the prompt
+ * loop (trp#917). `2>/dev/null` is kept to suppress incidental stderr noise —
+ * the actionable diagnostic now goes to hook.log, not stderr, so it survives the
+ * redirect (the bug was the non-zero EXIT, not the stream).
+ */
+function buildClaudeCodeHookCommands(bclawBin: string): { session: string; stop: string; checkEvents: string } {
+  return {
+    session: `f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; ${bclawBin} session-start --include-context --hook 2>/dev/null; else ${bclawBin} context-diff --hook 2>/dev/null; fi`,
+    stop: `rm -f .claude/.bclaw-session; ${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review --hook 2>/dev/null`,
+    checkEvents: `${bclawBin} check-events 2>/dev/null`,
+  };
+}
+
+export interface HookFixResult {
+  filePath: string;
+  existed: boolean;
+  changed: boolean;
+  /** Number of stale/duplicate brainclaw hook entries collapsed away (N→1 per event). */
+  collapsed: number;
+}
+
+/**
+ * Sanitize the brainclaw session hooks in ONE Claude Code settings file: collapse
+ * every recognized brainclaw hook (across UserPromptSubmit / Stop / PostToolUse)
+ * to a single canonical entry, repairing stale/broken forms (e.g. the legacy
+ * `node session-start` with the cli.js arg dropped, or dead install paths).
+ *
+ * Only touches events that ALREADY contain a brainclaw hook — it never injects
+ * hooks into a file (or event) that lacked them, so user-scope settings without
+ * brainclaw hooks stay untouched. This is the cross-scope counterpart to
+ * `ensureClaudeCodeSettings`, which only rewrites the cwd project file (pln#596 /
+ * trp#918: setup's git-repo discovery never reaches the launch dir or user scope,
+ * so broken hooks accumulate exactly where the agent executes them).
+ */
+export function fixClaudeCodeHooksInFile(filePath: string): HookFixResult {
+  if (!fs.existsSync(filePath)) return { filePath, existed: false, changed: false, collapsed: 0 };
+  const existing = readJsonObject(filePath); // returns {} for missing, undefined for unparseable
+  if (existing === undefined) return { filePath, existed: true, changed: false, collapsed: 0 };
+  const hooksObj = isJsonObject(existing.hooks) ? existing.hooks : undefined;
+  if (!hooksObj) return { filePath, existed: true, changed: false, collapsed: 0 };
+
+  const bclawBin = getBclawCliParts().map(quoteShellArg).join(' ');
+  const cmds = buildClaudeCodeHookCommands(bclawBin);
+
+  const countBrainclawHooks = (arr: unknown): number =>
+    Array.isArray(arr)
+      ? arr.reduce<number>((n, e) => n + (isJsonObject(e) && Array.isArray(e.hooks)
+          ? (e.hooks as unknown[]).filter((h) => isJsonObject(h) && typeof h.command === 'string' && isBrainclawHookCommand(h.command)).length
+          : 0), 0)
+      : 0;
+
+  const events: Array<[string, JsonObject]> = [
+    ['UserPromptSubmit', buildCommandHookEntry(cmds.session)],
+    ['Stop', buildCommandHookEntry(cmds.stop)],
+    ['PostToolUse', buildMatchedCommandHookEntry('mcp__brainclaw__', cmds.checkEvents)],
+  ];
+
+  const nextHooks: JsonObject = { ...hooksObj };
+  let collapsed = 0;
+  let touched = false;
+  for (const [event, canonical] of events) {
+    const arr = Array.isArray(hooksObj[event]) ? hooksObj[event] as unknown[] : undefined;
+    if (!arr) continue;
+    const before = countBrainclawHooks(arr);
+    if (before === 0) continue; // never add hooks to an event that had none
+    nextHooks[event] = replaceBrainclawHooks(arr, canonical);
+    collapsed += Math.max(0, before - 1); // N brainclaw entries → 1 canonical
+    touched = true;
+  }
+  if (!touched) return { filePath, existed: true, changed: false, collapsed: 0 };
+
+  const { updated } = writeJsonFileIfChanged(filePath, { ...existing, hooks: nextHooks });
+  return { filePath, existed: true, changed: updated, collapsed };
+}
+
+/**
+ * Run `fixClaudeCodeHooksInFile` across every Claude Code settings scope that can
+ * carry brainclaw hooks: user-scope (`~/.claude/settings*.json`) and the cwd
+ * project (`<cwd>/.claude/settings*.json`). Independent of git-repo discovery.
+ */
+export function fixClaudeCodeHooksAllScopes(cwd: string, homeDir: string): HookFixResult[] {
+  const candidates = [
+    path.join(homeDir, '.claude', 'settings.json'),
+    path.join(homeDir, '.claude', 'settings.local.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(cwd, '.claude', 'settings.local.json'),
+  ];
+  const seen = new Set<string>();
+  const results: HookFixResult[] = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    results.push(fixClaudeCodeHooksInFile(resolved));
+  }
+  return results;
+}
+
 export function ensureProjectDevDependency(cwd: string): AutoConfigWriteResult | undefined {
   const filePath = path.join(cwd, 'package.json');
   if (!fs.existsSync(filePath)) return undefined;
@@ -1409,10 +1511,8 @@ export function ensureClaudeCodeSettings(cwd: string): AutoConfigWriteResult {
   // binary resolution succeeded (hidden by 2>/dev/null).
   const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
   const bclawBin = getBclawCliParts().map(quoteShellArg).join(' ');
-  const sessionCommand = `f=.claude/.bclaw-session; if [ ! -f "$f" ]; then touch "$f"; ${bclawBin} session-start --include-context 2>/dev/null; else ${bclawBin} context-diff 2>/dev/null; fi`;
-  const stopCommand = `rm -f .claude/.bclaw-session; ${bclawBin} session-end --auto-release --reflect --reflect-handoff --dispatch-review 2>/dev/null`;
   // PostToolUse — check for unseen events after any brainclaw MCP tool call
-  const checkEventsCommand = `${bclawBin} check-events 2>/dev/null`;
+  const { session: sessionCommand, stop: stopCommand, checkEvents: checkEventsCommand } = buildClaudeCodeHookCommands(bclawBin);
 
   hooks.UserPromptSubmit = replaceBrainclawHooks(
     Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as unknown[] : [],

@@ -213,18 +213,18 @@ describe('multi-agent identity on shared host', () => {
     // Simulate MCP process that only has VS Code env vars (no CLAUDECODE, no CODEX_*)
     clearAgentEnv();
 
-    // Even with config.current_agent set, should NOT resolve from config
+    // Register a SECOND agent so this is a genuine multi-agent host. pln#596 added
+    // a single-registered-agent fallback that fires only at exactly one agent; with
+    // >=2 registered agents and no env/detection signal, resolution must stay
+    // undefined — and crucially must NOT fall back to config.current_agent.
+    workspace.registerAgent('second-agent');
     workspace.updateConfig(c => {
       c.current_agent = 'ai_root';
       c.current_agent_id = workspace.currentAgent.agent_id;
     });
 
     const resolved = resolveCurrentAgentIdentity(workspace.dir);
-    // Should be undefined (no agent detected) or the auto-detect finds nothing
-    // It should NOT be ai_root from config
-    if (resolved) {
-      assert.notEqual(resolved.agent_name, 'ai_root',
-        'should NOT fall back to config.current_agent in MCP scenario');
-    }
+    assert.equal(resolved, undefined,
+      'multi-agent host with no env/detection resolves to undefined, never config.current_agent');
   });
 });
