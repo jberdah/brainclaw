@@ -165,11 +165,12 @@ Code Map is **per project**: the index lives at `<project>/.brainclaw/code/`, an
 into subdirectories but skipping `node_modules`, `dist`, `.git`, `.brainclaw`,
 `vendor`, `target`, … at any depth.
 
-There is no nested-project *boundary*, so the scope follows **where you run it**:
+By default there is no nested-project *boundary*, so a plain (non-cascade) scope
+follows **where you run it**:
 
 | You run refresh / find / brief … | … against |
 |---|---|
-| at the monorepo root | one index covering the whole tree (every child project's source) |
+| at the monorepo root (plain) | one index covering the whole tree (every child project's source) |
 | inside a child project (e.g. `apps/api`) | that child's own index, at `apps/api/.brainclaw/code/` |
 
 When an agent works inside a child project, brainclaw's project resolution routes
@@ -178,10 +179,33 @@ Code Map to **that child** — the same per-project scoping that powers `bclaw_w
 juggling. A submodule that is itself an application (under e.g. `apps/`) is indexed
 like any other directory.
 
+### Cascading a multi-project workspace (`--cascade`)
+
+In a `project_mode: multi-project` workspace, one refresh at the root can index
+the whole monorepo **per project** instead of building one monolithic root index:
+
+```bash
+brainclaw code-map refresh --all --cascade     # CLI
+# bclaw_code_refresh(scope="all", cascade=true) # MCP
+```
+
+This refreshes **every nested brainclaw project** into its own
+`<child>/.brainclaw/code/` store, and refreshes the **root** store *scoped to the
+files no child owns*. The rule is "each file is indexed by exactly the most
+specific brainclaw project that contains it" — so there is **zero
+double-indexing**, even when projects nest inside one another. `--cascade` is
+opt-in; without it, the root refresh keeps its single-tree behaviour (above), and
+single-project repos ignore the flag entirely.
+
+`status --cascade` (or `bclaw_code_status(cascade=true)`) adds a per-child recap —
+which nested projects have a built index vs `missing_index`, plus an aggregate
+count — so you can see workspace-wide freshness from the root.
+
 **Not yet supported** (roadmap):
 
-- A single aggregated view that keeps **separate per-child indexes and federates
-  them** at the root (a query spanning services without double-indexing).
+- A single **federated query** at the root that fans out across the per-child
+  indexes and merges the results (today, `--cascade` builds the per-child indexes;
+  `find` / `brief` still run against one store at a time).
 - **Cross-service edges** — e.g. linking an API call to the route that defines it in
   another service. Code Map indexes language *symbols* and *module imports*, not
   framework routes or runtime HTTP calls, so it does not (today) map "service A calls

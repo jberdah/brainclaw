@@ -586,11 +586,13 @@ export const MCP_READ_TOOLS = [
   },
   {
     name: 'bclaw_code_status',
-    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / stale_git_head / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale.',
+    description: 'Code Map status for this project: store presence, freshness badge (fresh / stale_changed_files / stale_extractor / stale_grammar / stale_git_head / partial / missing_index), and index stats (files, nodes, edges). Read-only; never refreshes. Pair with bclaw_code_refresh when freshness is missing_index or stale. In a multi-project workspace, cascade=true adds a per-child recap (which nested projects have a built index vs missing_index).',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        cascade: { type: 'boolean', description: 'Multi-project workspace recap: also report per-child store presence + freshness for every nested project. No-op outside a multi-project workspace.' },
+      },
     },
   },
   {
@@ -624,12 +626,13 @@ export const MCP_READ_TOOLS = [
 const MCP_WRITE_TOOLS = [
   {
     name: 'bclaw_code_refresh',
-    description: 'Rebuild the Code Map index for this project (Tree-sitter parse + shards + indexes, behind the per-project lock). scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. A live competing lock fails fast with a clear status — refresh never blocks. Returns the resulting freshness_badge.',
+    description: 'Rebuild the Code Map index for this project (Tree-sitter parse + shards + indexes, behind the per-project lock). scope="changed" (default) reparses changed files; scope="all" does a full refresh + compaction. A live competing lock fails fast with a clear status — refresh never blocks. Returns the resulting freshness_badge. In a multi-project workspace, cascade=true refreshes EVERY nested project into its own store + the root store scoped to files no child owns (zero double-indexing) — so one call at the root indexes the whole monorepo per-project.',
     annotations: { tier: 'standard', category: 'discovery', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
       properties: {
         scope: { type: 'string', enum: ['changed', 'all'], description: 'changed (default) reparses changed files only; all does a full refresh with orphan compaction.' },
+        cascade: { type: 'boolean', description: 'Multi-project cascade: refresh every nested brainclaw project + a child-scoped root store. No-op outside a multi-project workspace.' },
       },
     },
   },
@@ -3021,7 +3024,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const { JsonlBackend } = await import('../core/code-map/backend.js');
       const be = new JsonlBackend();
       if (name === 'bclaw_code_status') {
-        const status = await be.status({ cwd });
+        const status = await be.status({ cwd, cascade: args.cascade === true });
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `Code Map: ${status.store_exists ? 'store present' : 'no store'} — freshness=${status.freshness_badge.status}` }],
@@ -3031,10 +3034,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       }
       if (name === 'bclaw_code_refresh') {
         const scope = args.scope === 'all' ? 'all' : 'changed';
-        const result = await be.refresh({ scope, cwd });
+        const result = await be.refresh({ scope, cwd, cascade: args.cascade === true });
+        const cascadeNote = result.cascade ? ` cascade=${result.cascade.children_refreshed} child(ren)+root` : '';
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.status}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
+            content: [{ type: 'text', text: `Code Map refresh [${result.scope}]: ran=${result.ran} freshness=${result.freshness_badge.status}${cascadeNote}${result.lock_status ? ` (${result.lock_status})` : ''}` }],
             structuredContent: { ...result, freshness_badge: result.freshness_badge },
           }),
         };

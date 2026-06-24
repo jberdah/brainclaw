@@ -5,6 +5,18 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Monorepo Code Map + project-resolution improvements from real-agent dogfooding (multi-project workspace on DGX Spark). No breaking changes.
+
+### Added
+
+- **`code-map refresh --cascade` — monorepo-native, per-project indexing.** In a `project_mode: multi-project` workspace, a plain refresh at the root built one monolithic index that descended every child subtree while the sibling projects stayed `missing_index`. The new opt-in cascade (`code-map refresh --cascade`, or `bclaw_code_refresh(cascade=true)`) instead refreshes **every nested brainclaw project** into its own `<child>/.brainclaw/code/` store and refreshes the **root** store *scoped to the files no child owns* — each file is indexed by exactly the most specific project that contains it, so there is **zero double-indexing**, even under nesting. `code-map status --cascade` (`bclaw_code_status(cascade=true)`) adds a per-child recap (built-index vs `missing_index`, plus an aggregate). Opt-in: plain refresh keeps the single-tree behaviour, and single-project repos ignore the flag. A federated *query* across child indexes remains on the roadmap.
+
+### Fixed
+
+- **An agent inside a monorepo child could not make the workspace root the active project, and a project switch was silently ignored.** Two root causes: (1) `resolveProjectRef` skipped the workspace root when matching by name, so `bclaw_switch("<root-name>")` (or `project="<root-name>"`) failed with `Cannot resolve project` — an agent could never switch *up* to the umbrella/monorepo-root project. (2) Sessions are stored per-cwd, so an agent physically inside a child had its session (and its switch) persisted under the *child* store, while `resolveEffectiveCwdInfo` read it only under the workspace *anchor* (`BRAINCLAW_CWD`) — the switch was written and read in different stores, so resolution silently fell through to the physical child (`cwd_child`) and pinned the agent there. The resolver now matches the workspace-root project by its own `project_name`/`project_id` (still name/id-only — the path-injection trust boundary is unchanged), and probes the anchor, the physical cwd, and the workspace root for the session (first one carrying a still-valid `active_project` wins). Net effect: `bclaw_switch` is authoritative for every subsequent call in the session — including Code Map (`bclaw_code_status` / `find` / `brief`) — without needing `--cwd`.
+
 ## [1.10.2] — 2026-06-22
 
 A dispatch worktree-creation hardening patch from real-agent dogfooding (parallel-lane dispatch on a large multi-file repo). No breaking changes.

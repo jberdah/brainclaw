@@ -15,6 +15,8 @@ import { refresh as runRefresh } from './refresh.js';
 import { applyGitHeadDrift } from './freshness.js';
 import { brief as runBrief, find as runFind, type MemoryReader, type QueryContext } from './query.js';
 import { defaultMemoryReader } from './memory-reader.js';
+import { listNestedProjects, refreshWorkspaceCascade, type CascadeResult } from './cascade.js';
+import { loadConfig } from '../config.js';
 import type { FreshnessBadge, FreshnessStatus, Manifest } from './types.js';
 
 // --- Input / output types (spec §8, §9) ---
@@ -24,7 +26,21 @@ export interface CodeBackendContext {
   preferredDirName?: string;
 }
 
-export type CodeStatusInput = CodeBackendContext;
+export interface CodeStatusInput extends CodeBackendContext {
+  /**
+   * Multi-project workspace recap: also report per-child store presence /
+   * freshness for every nested brainclaw project under the root. Opt-in, mirrors
+   * `refresh(cascade)`. No-op outside a multi-project workspace.
+   */
+  cascade?: boolean;
+}
+
+export interface CodeStatusChild {
+  path: string;
+  store_exists: boolean;
+  freshness: FreshnessStatus | 'missing_index';
+  files_indexed: number | null;
+}
 
 export interface CodeStatus {
   store_exists: boolean;
@@ -34,6 +50,13 @@ export interface CodeStatus {
     nodes: number;
     edges: number;
   } | null;
+  /** Present only when `cascade` was requested in a multi-project workspace. */
+  cascade?: {
+    children: CodeStatusChild[];
+    /** Children that already have a built code index (manifest present). */
+    indexed_children: number;
+    total_children: number;
+  };
 }
 
 export interface CodeRefreshInput extends CodeBackendContext {
@@ -44,6 +67,13 @@ export interface CodeRefreshInput extends CodeBackendContext {
   projectId?: string;
   /** Source root to enumerate. Falls back to the manifest, then cwd. */
   projectRoot?: string;
+  /**
+   * Multi-project cascade: refresh EVERY nested brainclaw project into its own
+   * store and the root store scoped to the files no child owns (zero
+   * double-indexing). Opt-in. No-op (falls back to a single refresh) outside a
+   * multi-project workspace. DGX Finding 2.
+   */
+  cascade?: boolean;
 }
 
 export interface CodeRefreshResult {
@@ -53,6 +83,8 @@ export interface CodeRefreshResult {
   freshness_badge: FreshnessBadge;
   /** Present when the lock was held by a live competitor (spec §6 rule 7/12.3). */
   lock_status?: string;
+  /** Present only when a `cascade` refresh ran (multi-project workspace). */
+  cascade?: CascadeResult;
 }
 
 export interface CodeFindInput extends CodeBackendContext {
@@ -142,6 +174,31 @@ function readCurrentGitHead(root: string): string | null {
   }
 }
 
+/** True when `cwd` is a multi-project workspace (gates the cascade paths). */
+function isMultiProjectWorkspace(cwd?: string): boolean {
+  try {
+    return loadConfig(cwd).project_mode === 'multi-project';
+  } catch {
+    return false;
+  }
+}
+
+/** Per-child store recap for `status(cascade)` in a multi-project workspace. */
+function buildCascadeStatus(rootCwd?: string): NonNullable<CodeStatus['cascade']> {
+  const root = rootCwd ?? process.cwd();
+  const children: CodeStatusChild[] = listNestedProjects(root).map((abs) => {
+    const m = readManifest(abs);
+    return {
+      path: path.relative(root, abs).replace(/\\/g, '/') || '.',
+      store_exists: m ? true : storeExists(abs),
+      freshness: m ? m.freshness.status : 'missing_index',
+      files_indexed: m ? m.stats.files_indexed : null,
+    };
+  });
+  const indexed = children.filter((c) => c.freshness !== 'missing_index').length;
+  return { children, indexed_children: indexed, total_children: children.length };
+}
+
 /**
  * P0 JSONL-backed query backend. Reads the durable file store (manifest +
  * shards + indexes); no graph DB. find()/brief() are stubbed for Sprint 1.
@@ -164,26 +221,36 @@ export class JsonlBackend implements CodeQueryBackend {
 
   async status(input: CodeStatusInput): Promise<CodeStatus> {
     const manifest = readManifest(input.cwd, input.preferredDirName);
-    if (!manifest) {
-      return {
+    const result: CodeStatus = manifest
+      ? {
+        store_exists: true,
+        freshness_badge: this.withHeadDrift(
+          badge(manifest.freshness.status, {
+            stale_file_count: manifest.freshness.stale_file_count,
+            partial_reason: manifest.freshness.partial_reason,
+          }),
+          manifest,
+          input.cwd,
+        ),
+        stats: {
+          files_indexed: manifest.stats.files_indexed,
+          nodes: manifest.stats.nodes,
+          edges: manifest.stats.edges,
+        },
+      }
+      : {
         store_exists: storeExists(input.cwd, input.preferredDirName),
         freshness_badge: badge('missing_index'),
         stats: null,
       };
+
+    // Multi-project recap (opt-in): per-child store presence + freshness, so a
+    // status at the monorepo root surfaces the 27-children-missing-index state
+    // instead of just the (now child-scoped) root store. DGX Finding 2.
+    if (input.cascade && isMultiProjectWorkspace(input.cwd)) {
+      result.cascade = buildCascadeStatus(input.cwd);
     }
-    const base = badge(manifest.freshness.status, {
-      stale_file_count: manifest.freshness.stale_file_count,
-      partial_reason: manifest.freshness.partial_reason,
-    });
-    return {
-      store_exists: true,
-      freshness_badge: this.withHeadDrift(base, manifest, input.cwd),
-      stats: {
-        files_indexed: manifest.stats.files_indexed,
-        nodes: manifest.stats.nodes,
-        edges: manifest.stats.edges,
-      },
-    };
+    return result;
   }
 
   /**
@@ -194,6 +261,38 @@ export class JsonlBackend implements CodeQueryBackend {
    */
   async refresh(input: CodeRefreshInput): Promise<CodeRefreshResult> {
     const scope = input.scope ?? 'changed';
+
+    // Multi-project cascade (opt-in): refresh every nested brainclaw project +
+    // a child-scoped root store. No-op outside a multi-project workspace — fall
+    // through to the normal single-project refresh below. DGX Finding 2.
+    if (input.cascade && isMultiProjectWorkspace(input.cwd)) {
+      const cascade = await refreshWorkspaceCascade({
+        rootCwd: input.cwd ?? process.cwd(),
+        scope,
+        ownerAgent: input.ownerAgent ?? null,
+        ownerAgentId: input.ownerAgentId ?? null,
+      });
+      const root = cascade.root_result;
+      const allProjects = [root, ...cascade.children];
+      // A cascade is only fully "acquired" when EVERY project got its lock; if a
+      // child or the root was skipped under a live writer, surface that instead
+      // of reporting a clean lock_acquired=true over a partial cascade (codex review).
+      const skipped = allProjects.filter((p) => !p.lock_acquired);
+      return {
+        ran: allProjects.some((p) => p.ran),
+        scope,
+        lock_acquired: skipped.length === 0,
+        freshness_badge: badge(root.freshness, {
+          files_parsed: root.files_parsed,
+          children_refreshed: cascade.children_refreshed,
+        }),
+        ...(skipped.length > 0
+          ? { lock_status: `${skipped.length} project(s) skipped (lock held): ${skipped.map((p) => p.path).join(', ')}` }
+          : {}),
+        cascade,
+      };
+    }
+
     const manifest = readManifest(input.cwd, input.preferredDirName);
     const projectRoot = input.projectRoot ?? manifest?.project_root ?? input.cwd ?? process.cwd();
     const projectId =
