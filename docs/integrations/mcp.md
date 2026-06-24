@@ -107,6 +107,7 @@ Each tool also has an `annotations.category` field: `session`, `context`, `memor
 | `bclaw_update` | memory | Partially update mutable fields on a canonical entity |
 | `bclaw_remove` | memory | Archive or purge a canonical entity |
 | `bclaw_transition` | memory | Move an entity through its validated state machine |
+| `bclaw_move` | memory | Relocate an item to another project, id-preserving (multi-project) |
 | `bclaw_code_status` | discovery | Code Map freshness badge + index stats (store presence, files/nodes/edges) |
 | `bclaw_code_find` | discovery | Search the Code Map symbol index by name (function/class/component/hook/type) |
 | `bclaw_code_brief` | discovery | Ranked reading list + related decisions/traps before editing a symbol or path |
@@ -162,6 +163,7 @@ for the full 1.0.0 changelog.
 | `bclaw_update(entity, id, patch)` | Partial merge (updatable fields only) | `bclaw_update_plan`, `bclaw_update_memory` |
 | `bclaw_remove(entity, id, purge?)` | Archive (default) or hard-delete | `bclaw_delete_memory`, `bclaw_delete_plan` |
 | `bclaw_transition(entity, id, to, reason?)` | State machine transition with side-effect tags | `bclaw_accept`, `bclaw_reject`, status-update flows |
+| `bclaw_move(entity, id, to_project, from_project?, force?)` | Id-preserving cross-project relocation (plan/decision/constraint/trap/handoff/sequence; execution entities rejected) | — (new in 1.11.0) |
 
 Supported entities: plan, decision, constraint, trap, handoff,
 runtime_note, candidate, sequence, claim, action, assignment, agent_run

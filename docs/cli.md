@@ -65,6 +65,24 @@ brainclaw --cwd /other/path status   # one-off override without switching
 
 **MCP usage:** The active project also affects MCP tools. When `bclaw_context(kind="memory")` is called without an explicit path, it resolves context from the active project's store. Agents can also use the `BRAINCLAW_PROJECT=<name>` environment variable for the same effect.
 
+### `brainclaw move <entity> <id> --to <project>`
+
+Relocate a brainclaw item to another project in a multi-project workspace, **preserving its id** — so `pln#`/`dec#` references stay stable. Useful when an item was created in the wrong store (e.g. before a project switch took effect). MCP equivalent: `bclaw_move(entity, id, to_project, …)`.
+
+| Option | Description |
+|---|---|
+| `--to <project>` | Target project (name, path, or basename) — required |
+| `--from <project>` | Source project (defaults to the current project) |
+| `--force` | Move even if an active claim references the item |
+| `--json` | Output as JSON |
+
+Relocatable entities: `plan`, `decision`, `constraint`, `trap`, `handoff`, `sequence`. **Execution-local entities** (`claim`, `assignment`, `agent_run`, `session`) are rejected — they belong to the project where the work ran. The move refuses an id collision in the target or a plan under an active claim (unless `--force`), audits both stores, and warns about sequences that still reference a moved plan.
+
+```bash
+brainclaw move plan pln_a1b2c3d4 --to global          # move a misplaced plan to the root project
+brainclaw move decision dec_99 --from app_a --to app_b
+```
+
 ---
 
 ## Initialize and Inspect

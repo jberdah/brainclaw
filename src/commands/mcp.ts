@@ -27,6 +27,7 @@ import {
   updateEntity,
   type EntityFilter,
 } from '../core/entity-operations.js';
+import { relocateEntity } from '../core/operations/relocate.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
@@ -1401,6 +1402,22 @@ const MCP_WRITE_TOOLS = [
         project: { type: 'string', description: 'Optional: name of a linked project to transition the entity in. Defaults to the current project.' },
       },
       required: ['entity', 'id', 'to'],
+    },
+  },
+  {
+    name: 'bclaw_move',
+    description: 'Relocate a brainclaw item to another project in a multi-project workspace, PRESERVING its id (so pln#/dec# references stay stable). Relocatable entities: plan, decision, constraint, trap, handoff, sequence. Execution-local entities (claim, assignment, agent_run, session) are NOT relocatable — they stay in the project where the work ran. Refuses on id collision in the target, a missing source, or an active claim on the item (unless force). Audits both stores.',
+    annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'string', description: 'Entity name (plan, decision, constraint, trap, handoff, sequence).' },
+        id: { type: 'string', description: 'Entity id to move.' },
+        to_project: { type: 'string', description: 'Target project: name, path, or basename.' },
+        from_project: { type: 'string', description: 'Source project (defaults to the current project).' },
+        force: { type: 'boolean', description: 'Move even if an active claim references the item. Default false.' },
+      },
+      required: ['entity', 'id', 'to_project'],
     },
   },
 ] as const;
@@ -7235,6 +7252,27 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               resolved_project: targetScope.resolved_project,
               active_source: targetScope.active_source,
             },
+          }),
+        };
+      } catch (error: unknown) {
+        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
+      }
+    }
+
+    if (name === 'bclaw_move') {
+      try {
+        const entity = String(args.entity ?? '') as EntityName;
+        const id = String(args.id ?? '');
+        const toProject = String(args.to_project ?? '');
+        const fromProject = typeof args.from_project === 'string' ? args.from_project : undefined;
+        const force = args.force === true;
+        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const result = relocateEntity({ entity, id, toProject, fromProject, force, cwd, actor: agent_name, actorId: agent_id });
+        const warn = result.warnings.length ? ` (${result.warnings.length} warning(s))` : '';
+        return {
+          response: toolResponse({
+            content: [{ type: 'text', text: `✔ moved ${entity} ${id} → ${result.to}${warn}` }],
+            structuredContent: { ...result },
           }),
         };
       } catch (error: unknown) {
