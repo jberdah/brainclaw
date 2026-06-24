@@ -5,7 +5,7 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.0] — 2026-06-24
 
 Monorepo Code Map + project-resolution improvements from real-agent dogfooding (multi-project workspace on DGX Spark). No breaking changes.
 
