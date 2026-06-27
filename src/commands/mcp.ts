@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
-import { resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
+import { resolveCrossProjectLinks, resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -3011,6 +3011,27 @@ function blockCrossProjectExecution(entity: 'claim' | 'plan' | 'session', args: 
   }
 }
 
+function matchesCrossProjectLink(ref: string, cwd: string): boolean {
+  const trimmed = ref.trim();
+  if (!trimmed) return false;
+
+  const linkRoots = new Set([path.resolve(cwd), path.resolve(resolveWorkspaceAnchor(cwd))]);
+  for (const root of linkRoots) {
+    for (const link of resolveCrossProjectLinks(root)) {
+      if (
+        link.projectName === trimmed
+        || link.name === trimmed
+        || link.path === trimmed
+        || link.absolutePath === trimmed
+        || path.basename(link.absolutePath) === trimmed
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 interface ExecutionWriteTarget {
   /** When set, the caller must return this error response instead of writing. */
   block?: McpToolResponse;
@@ -3051,6 +3072,15 @@ function resolveExecutionWriteTarget(
   const targetProject = getCrossProjectArg(args, 'targetProject', 'target_project', 'crossProject', 'cross_project', 'project');
   if (!targetProject) {
     return { targetCwd: cwd, autoSwitched: false };
+  }
+
+  if (matchesCrossProjectLink(targetProject, cwd)) {
+    const block = blockCrossProjectExecution(entity, args);
+    return {
+      block: block ?? createToolErrorResponse('validation_error', `Cross-project execution write blocked: ${targetProject}`),
+      targetCwd: cwd,
+      autoSwitched: false,
+    };
   }
 
   // Workspace store-chain child (or the workspace root / the current project)?
@@ -3813,7 +3843,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const claimAutoSwitched = claimLoc.autoSwitched;
       const storeTarget = (args.store as StoreTarget | undefined) ?? 'local';
       const claimCwd = resolveTargetStore(effectiveClaimCwd, storeTarget);
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd, connectionSessionId);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -3828,10 +3858,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', descCheck.message) };
       }
       const resolvedIdentity = resolved.identity!;
-      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, claimCwd, {
-        agentId: resolvedIdentity.agent_id,
-        sessionId: connectionSessionId,
-      });
+      const identity = {
+        ...buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
+          agentId: resolvedIdentity.agent_id,
+          sessionId: connectionSessionId,
+        }),
+        project_id: loadConfig(claimCwd).project_id,
+      };
       const claimId = generateClaimId();
       let worktreePath: string | undefined;
       let worktreeWarn = '';

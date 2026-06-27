@@ -528,6 +528,41 @@ describe('commands/mcp protocol core', () => {
     }
   });
 
+  it('resolves bclaw_claim identity from the source cwd when auto-localizing to a child', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-autoloc-claim-', currentAgent: 'codex', projectName: 'global' });
+    workspace.updateConfig((c) => {
+      c.project_mode = 'multi-project';
+      c.projects.strategy = 'folder';
+    });
+    const childDir = path.join(workspace.dir, 'applications', 'claim_child');
+    fs.mkdirSync(path.join(childDir, '.brainclaw'), { recursive: true });
+    saveConfig(defaultConfig('claim_child', { projectId: 'prj_claim_child' }), childDir);
+    const savedCwd = process.env.BRAINCLAW_CWD;
+    process.env.BRAINCLAW_CWD = workspace.dir;
+    try {
+      const res = await executeMcpToolCall({
+        name: 'bclaw_claim',
+        args: {
+          project: 'claim_child',
+          agent: workspace.currentAgent.agent_name,
+          scope: 'src/core',
+          description: 'Claim work in a child project',
+          advisory: true,
+        },
+        cwd: workspace.dir,
+      });
+      assert.notEqual(res.response.isError, true, `expected success, got ${JSON.stringify(res.response.structuredContent)}`);
+      const sc = (res.response.structuredContent ?? res.response) as { claim_id: string; auto_switched?: boolean; resolved_project?: { name?: string } };
+      assert.equal(sc.auto_switched, true, 'claim reports the auto-switch');
+      assert.equal(sc.resolved_project?.name, 'claim_child', 'claim resolved into the child project');
+      assert.ok(fs.existsSync(path.join(childDir, '.brainclaw', 'coordination', 'claims', `${sc.claim_id}.json`)), 'claim written to the child store');
+      assert.equal(fs.existsSync(path.join(workspace.dir, '.brainclaw', 'coordination', 'claims', `${sc.claim_id}.json`)), false, 'claim not written to the root store');
+    } finally {
+      if (savedCwd === undefined) delete process.env.BRAINCLAW_CWD; else process.env.BRAINCLAW_CWD = savedCwd;
+      workspace.cleanup();
+    }
+  });
+
   it('still blocks an execution write to a federated cross_project_link', async () => {
     const workspace = createTestWorkspace({ prefix: 'bclaw-autoloc-fed-', currentAgent: 'codex' });
     const extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-ext-'));
@@ -554,6 +589,39 @@ describe('commands/mcp protocol core', () => {
       );
     } finally {
       fs.rmSync(extDir, { recursive: true, force: true });
+      workspace.cleanup();
+    }
+  });
+
+  it('blocks a federated cross_project_link even when folder discovery can see it', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-autoloc-nested-fed-', currentAgent: 'codex', projectName: 'global' });
+    workspace.updateConfig((c) => {
+      c.project_mode = 'multi-project';
+      c.projects.strategy = 'folder';
+    });
+    const linkedDir = path.join(workspace.dir, 'linked', 'nested_fed');
+    fs.mkdirSync(path.join(linkedDir, '.brainclaw'), { recursive: true });
+    saveConfig(defaultConfig('nested_fed', { projectId: 'prj_nested_fed' }), linkedDir);
+    workspace.updateConfig((c) => {
+      c.cross_project_links = [{ path: path.relative(workspace.dir, linkedDir), name: 'nested_fed', role: 'publisher' }];
+    });
+    try {
+      const res = await executeMcpToolCall({
+        name: 'bclaw_create',
+        args: {
+          entity: 'plan',
+          data: { text: 'should not bypass via folder discovery', type: 'feat' },
+          project: 'nested_fed',
+          agent: workspace.currentAgent.agent_name,
+        },
+        cwd: workspace.dir,
+      });
+      assert.equal(res.response.isError, true, 'configured federated link is blocked before workspace-child localization');
+      assert.match(
+        (res.response.structuredContent as { error: { message: string } }).error.message,
+        /signaling entities/,
+      );
+    } finally {
       workspace.cleanup();
     }
   });
