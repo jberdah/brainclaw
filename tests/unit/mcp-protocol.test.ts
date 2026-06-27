@@ -1,9 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadConfig, saveConfig } from '../../src/core/config.js';
+import { defaultConfig, loadConfig, saveConfig } from '../../src/core/config.js';
 import { listIncomingCrossProjectSignals } from '../../src/core/cross-project.js';
 import { listCandidates } from '../../src/core/candidates.js';
 import { loadState, saveState } from '../../src/core/state.js';
+import { getEntity } from '../../src/core/entity-operations.js';
+import { loadCurrentSession } from '../../src/core/identity.js';
 import {
   MCP_SERVER_NOT_INITIALIZED,
   McpServerConnection,
@@ -478,6 +480,80 @@ describe('commands/mcp protocol core', () => {
         /limited to signaling entities/,
       );
     } finally {
+      workspace.cleanup();
+    }
+  });
+
+  it('auto-localizes an execution write into a workspace sibling named by project=X', async () => {
+    // Mirrors the DGX /srv (root) → dev/repos/global/applications/<app> monorepo:
+    // an agent creating a plan for a sibling project should be switched into it
+    // and have the plan land THERE, not fall back to the default project.
+    const workspace = createTestWorkspace({ prefix: 'bclaw-autoloc-', currentAgent: 'codex', projectName: 'global' });
+    workspace.updateConfig((c) => {
+      c.project_mode = 'multi-project';
+      c.projects.strategy = 'folder';
+    });
+    const childDir = path.join(workspace.dir, 'applications', 'child_app');
+    fs.mkdirSync(path.join(childDir, '.brainclaw'), { recursive: true });
+    saveConfig(defaultConfig('child_app', { projectId: 'prj_child_app' }), childDir);
+    const savedCwd = process.env.BRAINCLAW_CWD;
+    process.env.BRAINCLAW_CWD = workspace.dir; // anchor, mirrors the MCP config
+    try {
+      const res = await executeMcpToolCall({
+        name: 'bclaw_create',
+        args: {
+          entity: 'plan',
+          data: { text: 'Plan that belongs in the child', type: 'feat', priority: 'low' },
+          project: 'child_app',
+          agent: workspace.currentAgent.agent_name,
+        },
+        cwd: workspace.dir,
+      });
+      assert.notEqual(res.response.isError, true, `expected success, got ${JSON.stringify(res.response.structuredContent)}`);
+      const sc = res.response.structuredContent as { id: string; auto_switched?: boolean; resolved_project?: { name?: string } };
+      assert.equal(sc.auto_switched, true, 'auto_switched flag is set');
+      assert.equal(sc.resolved_project?.name, 'child_app', 'resolved into the child project');
+      // The plan file landed in the CHILD store, not the root.
+      const childPlan = path.join(childDir, '.brainclaw', 'coordination', 'plans', `${sc.id}.json`);
+      const rootPlan = path.join(workspace.dir, '.brainclaw', 'coordination', 'plans', `${sc.id}.json`);
+      assert.ok(fs.existsSync(childPlan), 'plan written to the child store');
+      assert.equal(fs.existsSync(rootPlan), false, 'plan NOT written to the root store');
+      assert.ok(getEntity('plan', sc.id, childDir), 'plan readable from the child store');
+      // The session-scoped switch is sticky, persisted under the workspace anchor.
+      const session = loadCurrentSession(workspace.dir);
+      assert.equal(session?.active_project?.path, path.resolve(childDir), 'session is stuck to the child');
+    } finally {
+      if (savedCwd === undefined) delete process.env.BRAINCLAW_CWD; else process.env.BRAINCLAW_CWD = savedCwd;
+      workspace.cleanup();
+    }
+  });
+
+  it('still blocks an execution write to a federated cross_project_link', async () => {
+    const workspace = createTestWorkspace({ prefix: 'bclaw-autoloc-fed-', currentAgent: 'codex' });
+    const extDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-ext-'));
+    fs.mkdirSync(path.join(extDir, '.brainclaw'), { recursive: true });
+    saveConfig(defaultConfig('ext_project', { projectId: 'prj_ext' }), extDir);
+    workspace.updateConfig((c) => {
+      c.cross_project_links = [{ path: extDir, name: 'ext_project', role: 'publisher' }];
+    });
+    try {
+      const res = await executeMcpToolCall({
+        name: 'bclaw_create',
+        args: {
+          entity: 'plan',
+          data: { text: 'should not cross a federation boundary', type: 'feat' },
+          project: 'ext_project',
+          agent: workspace.currentAgent.agent_name,
+        },
+        cwd: workspace.dir,
+      });
+      assert.equal(res.response.isError, true, 'federated execution write is blocked');
+      assert.match(
+        (res.response.structuredContent as { error: { message: string } }).error.message,
+        /signaling entities/,
+      );
+    } finally {
+      fs.rmSync(extDir, { recursive: true, force: true });
       workspace.cleanup();
     }
   });
