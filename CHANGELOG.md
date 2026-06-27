@@ -5,6 +5,14 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-06-27
+
+Auto-localized execution writes for multi-project workspaces, from DGX-Spark dogfooding. An agent on a monorepo could not create a plan (or claim/step) in a sibling child project without first remembering to `bclaw_switch`: `bclaw_create(entity: "plan", project: "<child>")` was rejected as a cross-project execution write, so plans silently fell back to the default project. No breaking changes.
+
+### Changed
+
+- **Execution writes auto-localize into a workspace sibling named by `project=X`** (pln#597). `bclaw_create` / `bclaw_transition` (plan & claim), `bclaw_claim`, the step tools (`add`/`complete`/`update`/`delete_step`) and `bclaw_delete_plan` now accept `project=X` when X resolves to a **workspace store-chain child**: instead of the hard *"limited to signaling entities"* rejection, they open a session + a session-scoped (sticky) switch into X and write locally there, echoing `auto_switched` in the response. This re-scopes the `cross_project_signaling_vs_execution` boundary to what it was always about — **federation** (`cross_project_links` / other machines), not monorepo siblings. Federated links and unknown project names stay blocked; a configured link is matched (by name/path/basename, at both the effective cwd and the workspace anchor) **before** the workspace-child check, so a link whose target happens to sit under the workspace tree can't be folder-discovered into a local sibling. Trust/identity for an auto-localized `bclaw_claim` resolve against the **source** cwd while the claim is tagged with the target child's `project_id`. Closes the DGX-Spark dogfood gap where an agent had to manually `bclaw_switch` before it could create a plan in a child project (the same monorepo that, separately, had a stale global active-project pin shadowing the root).
+
 ## [1.11.1] — 2026-06-24
 
 Agent-identity / session-hook resilience + deeper repo discovery, from a fresh-CLI dogfood on the DGX-Spark monorepo (trp#917, trp#918). A new CLI install whose agent wasn't yet registered produced an endless `UserPromptSubmit hook error: Failed with non-blocking status code: No stderr output` on every prompt — four compounding causes, now fixed. No breaking changes.

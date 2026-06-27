@@ -7,14 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
-import { resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
+import { resolveCrossProjectLinks, resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
 import { collectLoadValidationWarnings, findLoadValidationWarning, loadState, persistState, saveState } from '../core/state.js';
 import { generateIdWithLabel } from '../core/ids.js';
-import { memoryExists } from '../core/io.js';
+import { memoryExists, MEMORY_DIR } from '../core/io.js';
 import { generateCandidateIdWithLabel, loadCandidate, saveCandidate } from '../core/candidates.js';
 import {
   createEntity,
@@ -74,7 +74,8 @@ import {
   ALL_KNOWN_AGENTS,
 } from './setup.js';
 import { buildAgentInventory } from '../core/agent-inventory.js';
-import { resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveTargetStore, type ResolvedEffectiveCwd, type StoreTarget } from '../core/store-resolution.js';
+import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, resolveTargetStore, type ResolvedEffectiveCwd, type StoreTarget } from '../core/store-resolution.js';
+import { switchProject } from './switch.js';
 import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
 import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
 import type { CandidateType, MemoryVisibility, PlanStepStatus, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
@@ -3010,6 +3011,122 @@ function blockCrossProjectExecution(entity: 'claim' | 'plan' | 'session', args: 
   }
 }
 
+function matchesCrossProjectLink(ref: string, cwd: string): boolean {
+  const trimmed = ref.trim();
+  if (!trimmed) return false;
+
+  const linkRoots = new Set([path.resolve(cwd), path.resolve(resolveWorkspaceAnchor(cwd))]);
+  for (const root of linkRoots) {
+    for (const link of resolveCrossProjectLinks(root)) {
+      if (
+        link.projectName === trimmed
+        || link.name === trimmed
+        || link.path === trimmed
+        || link.absolutePath === trimmed
+        || path.basename(link.absolutePath) === trimmed
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+interface ExecutionWriteTarget {
+  /** When set, the caller must return this error response instead of writing. */
+  block?: McpToolResponse;
+  /** Store cwd the execution write must target. */
+  targetCwd: string;
+  /** True when a session-scoped switch into the target project was performed. */
+  autoSwitched: boolean;
+  /** Resolved project echoed back to the caller for visibility. */
+  resolvedProject?: { path: string; name?: string };
+}
+
+/**
+ * Resolve the destination store for an execution-entity write (plan / claim and
+ * their sub-objects: steps).
+ *
+ * The signaling-only boundary (cnd cross_project_signaling_vs_execution) forbids
+ * driving execution entities into ANOTHER project — but that rule is about
+ * FEDERATION (cross_project_links / other machines), not about workspace siblings
+ * in the same monorepo. Switching into a sibling and creating a plan there is a
+ * purely local operation, and the one the agent actually wants.
+ *
+ * So when `project=X` resolves to a workspace store-chain child (resolveProjectRef
+ * hits — it only matches projects reachable WITHIN this workspace, never a
+ * federated link), we AUTO-LOCALIZE: open a session + session-scoped switch into X
+ * (sticky, per-agent — switchProject auto-creates the session if missing), then
+ * write locally in X. Federated links and unknown names stay blocked.
+ *
+ * DGX dogfood 2026-06-27: without this an agent on the /srv monorepo cannot
+ * `bclaw_create(entity=plan, project=<child>)` — it was rejected as cross-project —
+ * so plans silently fell back to the default project instead.
+ */
+function resolveExecutionWriteTarget(
+  entity: 'claim' | 'plan',
+  args: Record<string, unknown>,
+  cwd: string,
+  connectionSessionId?: string,
+): ExecutionWriteTarget {
+  const targetProject = getCrossProjectArg(args, 'targetProject', 'target_project', 'crossProject', 'cross_project', 'project');
+  if (!targetProject) {
+    return { targetCwd: cwd, autoSwitched: false };
+  }
+
+  if (matchesCrossProjectLink(targetProject, cwd)) {
+    const block = blockCrossProjectExecution(entity, args);
+    return {
+      block: block ?? createToolErrorResponse('validation_error', `Cross-project execution write blocked: ${targetProject}`),
+      targetCwd: cwd,
+      autoSwitched: false,
+    };
+  }
+
+  // Workspace store-chain child (or the workspace root / the current project)?
+  const wsHit = resolveProjectRef(targetProject, cwd);
+  if (wsHit) {
+    // Same-workspace → auto-localize. Switch the session into X (sticky,
+    // session-scoped) so subsequent un-qualified writes follow, and persist the
+    // session under the workspace anchor where resolveEffectiveCwd probes for it
+    // — NOT the effective child cwd, or stickiness would be invisible on the next
+    // call. The switch is best-effort: the write still localizes to wsHit below.
+    let autoSwitched = false;
+    try {
+      const anchor = resolveWorkspaceAnchor(cwd);
+      const sessionId = connectionSessionId ?? explicitSessionIdFromEnv();
+      switchProject(targetProject, { cwd: anchor, sessionOnly: true, sessionId });
+      autoSwitched = true;
+    } catch {
+      /* sticky switch is best-effort */
+    }
+    return { targetCwd: wsHit, autoSwitched, resolvedProject: projectInfoForCwd(wsHit) };
+  }
+
+  // Not a workspace child → federated link or unknown name. The signaling-only
+  // boundary stands: execution entities never cross a federation boundary.
+  const block = blockCrossProjectExecution(entity, args);
+  return {
+    block: block ?? createToolErrorResponse('validation_error', `Unknown project: ${targetProject}`),
+    targetCwd: cwd,
+    autoSwitched: false,
+  };
+}
+
+/**
+ * Workspace anchor for persisting a session switch — mirrors resolveEffectiveCwd's
+ * anchor selection (BRAINCLAW_CWD when it is a real store, else the outermost
+ * store walking up from cwd) so an auto-switch is found on the next resolution.
+ */
+function resolveWorkspaceAnchor(cwd: string): string {
+  const env = process.env.BRAINCLAW_CWD?.trim();
+  if (env) {
+    const resolved = path.resolve(env);
+    if (fs.existsSync(path.join(resolved, MEMORY_DIR, 'config.yaml'))) return resolved;
+  }
+  return findOutermostBrainclawRoot(cwd) ?? cwd;
+}
+
 // Read handlers moved to mcp-read-handlers.ts
 import { handleMcpReadToolCall } from './mcp-read-handlers.js';
 export { handleMcpReadToolCall };
@@ -3716,20 +3833,17 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_claim') {
-      const crossProjectError = blockCrossProjectExecution('claim', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      // project=X naming a workspace sibling auto-localizes (session+switch then
+      // claim locally); federated links / unknown names stay blocked.
+      const claimLoc = resolveExecutionWriteTarget('claim', args, cwd, connectionSessionId);
+      if (claimLoc.block) {
+        return { response: claimLoc.block };
       }
-      // Resolve project-scoped cwd before store resolution (fixes worktree in wrong project)
-      let effectiveClaimCwd = cwd;
-      const claimProjectArg = args.project as string | undefined;
-      if (claimProjectArg) {
-        const resolvedProject = resolveProjectRef(claimProjectArg, cwd);
-        if (resolvedProject) effectiveClaimCwd = resolvedProject;
-      }
+      const effectiveClaimCwd = claimLoc.targetCwd;
+      const claimAutoSwitched = claimLoc.autoSwitched;
       const storeTarget = (args.store as StoreTarget | undefined) ?? 'local';
       const claimCwd = resolveTargetStore(effectiveClaimCwd, storeTarget);
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', claimCwd, connectionSessionId);
+      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
       }
@@ -3744,10 +3858,13 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         return { response: createToolErrorResponse('validation_error', descCheck.message) };
       }
       const resolvedIdentity = resolved.identity!;
-      const identity = buildOperationalIdentity(resolvedIdentity.agent_name, claimCwd, {
-        agentId: resolvedIdentity.agent_id,
-        sessionId: connectionSessionId,
-      });
+      const identity = {
+        ...buildOperationalIdentity(resolvedIdentity.agent_name, cwd, {
+          agentId: resolvedIdentity.agent_id,
+          sessionId: connectionSessionId,
+        }),
+        project_id: loadConfig(claimCwd).project_id,
+      };
       const claimId = generateClaimId();
       let worktreePath: string | undefined;
       let worktreeWarn = '';
@@ -3852,7 +3969,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const worktreeNote = worktreePath ? `\n  Worktree: ${worktreePath}` : '';
       const expiryNote = claimExpiresAt ? `\n  Expires: ${claimExpiresAt.slice(0, 16).replace('T', ' ')} UTC` : '';
       const handoffNote = handoffMode ? `\n  Handoff: ${handoffMode} (another agent will review and merge)` : '';
-      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${handoffNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
+      const autoSwitchNote = claimAutoSwitched ? `\n  Auto-switched → ${projectInfoForCwd(effectiveClaimCwd).name ?? effectiveClaimCwd}` : '';
+      const claimText = `✔ Claimed scope [${claimId}]${worktreeNote}${expiryNote}${handoffNote}${autoSwitchNote}${noPlanWarn}${worktreeWarn}${branchWarn}${staleBranchWarn}${policyWarn}${postClaimText ? `\n${postClaimText}` : ''}`;
 
       return {
         response: appendLegacyMcpToolWarning(toolResponse({
@@ -3861,6 +3979,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           session_id: identity.session_id,
           worktree_path: worktreePath,
           triggered_items: postClaimItems,
+          ...(claimAutoSwitched ? { auto_switched: true, resolved_project: projectInfoForCwd(effectiveClaimCwd) } : {}),
         }), name),
         nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : identity.session_id,
       };
@@ -4680,9 +4799,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_add_step') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      const stepLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+      if (stepLoc.block) {
+        return { response: stepLoc.block };
       }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4702,7 +4821,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const stepActual = (stepData.actual_effort ?? args.actual_effort) as string | undefined;
       if (!stepPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!stepText) return { response: createToolErrorResponse('validation_error', 'Missing required argument: data.text') };
-      const stepTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+      const stepTargetCwd = stepLoc.targetCwd;
       try {
         const result = addStepOp({ planId: stepPlanId, text: stepText, assignee: stepAssignee, estimatedEffort: stepEstimated, actualEffort: stepActual }, stepTargetCwd);
         return {
@@ -4723,9 +4842,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_complete_step') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      const csLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+      if (csLoc.block) {
+        return { response: csLoc.block };
       }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4735,7 +4854,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const csStepId = String(args.stepId ?? '').trim();
       if (!csPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!csStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-      const csTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+      const csTargetCwd = csLoc.targetCwd;
       try {
         const result = completeStepOp({ planId: csPlanId, stepId: csStepId }, csTargetCwd);
         return {
@@ -4757,9 +4876,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_update_step') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      const usLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+      if (usLoc.block) {
+        return { response: usLoc.block };
       }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4773,7 +4892,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (args.status && !validStatuses.includes(String(args.status))) {
         return { response: createToolErrorResponse('validation_error', `Invalid status: ${args.status}. Valid: ${validStatuses.join(', ')}`) };
       }
-      const usTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+      const usTargetCwd = usLoc.targetCwd;
       try {
         const result = updateStepOp({
           planId: usPlanId,
@@ -4809,9 +4928,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_delete_step') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      const dsLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+      if (dsLoc.block) {
+        return { response: dsLoc.block };
       }
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
       if (resolved.error) {
@@ -4821,7 +4940,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const dsStepId = String(args.stepId ?? '').trim();
       if (!dsPlanId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: planId') };
       if (!dsStepId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: stepId') };
-      const dsTargetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
+      const dsTargetCwd = dsLoc.targetCwd;
       try {
         const result = deleteStepOp({ planId: dsPlanId, stepId: dsStepId }, dsTargetCwd);
         return {
@@ -4842,10 +4961,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_delete_plan') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
+      const dpLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
+      if (dpLoc.block) {
+        return { response: dpLoc.block };
       }
+      const dpTargetCwd = dpLoc.targetCwd;
       const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
       if (resolved.error) {
         return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
@@ -4853,7 +4973,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       const dpId = String(args.id ?? '').trim();
       if (!dpId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
       try {
-        const result = deletePlanOp(dpId, cwd);
+        const result = deletePlanOp(dpId, dpTargetCwd);
         return {
           response: toolResponse({
             content: [{ type: 'text', text: `✔ Plan deleted: [${result.id}] ${result.text.slice(0, 80)}` }],
@@ -7149,14 +7269,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_create') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
-        // Execution entities stay local: the signaling-only cross-project
-        // boundary applies to the canonical verbs too, not just legacy tools.
+        // Execution entities (plan/claim) auto-localize into a workspace sibling
+        // when project=X names one: session+switch then write locally. Only
+        // federated links / unknown names are blocked (signaling-only boundary).
+        let targetCwd: string;
+        let autoSwitched = false;
         if (entity === 'claim' || entity === 'plan') {
-          const crossProjectError = blockCrossProjectExecution(entity, args);
-          if (crossProjectError) return { response: crossProjectError };
+          const loc = resolveExecutionWriteTarget(entity, args, cwd, connectionSessionId);
+          if (loc.block) return { response: loc.block };
+          targetCwd = loc.targetCwd;
+          autoSwitched = loc.autoSwitched;
+        } else {
+          targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         }
         const rawData = (args.data ?? {}) as Record<string, unknown>;
-        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
 
         // Auto-fill identity fields. Without this, a caller who omits author/agent
@@ -7190,11 +7316,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         );
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ created ${entity} ${result.id}` }],
+            content: [{ type: 'text', text: `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
-              active_source: targetScope.active_source,
+              active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
+              ...(autoSwitched ? { auto_switched: true } : {}),
             },
           }),
         };
@@ -7283,16 +7410,22 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     if (name === 'bclaw_transition') {
       try {
         const entity = String(args.entity ?? '') as EntityName;
-        // Same signaling-only boundary as bclaw_create: no remote lifecycle
-        // driving of execution entities through the canonical grammar.
+        // Same auto-localize as bclaw_create: a workspace sibling named by
+        // project=X is switched into and transitioned locally; only federated
+        // links / unknown names are blocked (signaling-only boundary).
+        let targetCwd: string;
+        let autoSwitched = false;
         if (entity === 'claim' || entity === 'plan') {
-          const crossProjectError = blockCrossProjectExecution(entity, args);
-          if (crossProjectError) return { response: crossProjectError };
+          const loc = resolveExecutionWriteTarget(entity, args, cwd, connectionSessionId);
+          if (loc.block) return { response: loc.block };
+          targetCwd = loc.targetCwd;
+          autoSwitched = loc.autoSwitched;
+        } else {
+          targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         }
         const id = String(args.id ?? '');
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
-        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = transitionEntity(entity, id, to, targetCwd, reason);
@@ -7302,11 +7435,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         );
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}` }],
+            content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
-              active_source: targetScope.active_source,
+              active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
+              ...(autoSwitched ? { auto_switched: true } : {}),
             },
           }),
         };
