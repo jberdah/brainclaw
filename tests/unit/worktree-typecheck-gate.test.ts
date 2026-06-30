@@ -58,7 +58,7 @@ describe('installWorktreeTypecheckGate (pln#479)', () => {
       const wt = createWorktree(repo, 'feat/gate'); // tsconfig.json checked out from HEAD
 
       const res = installWorktreeTypecheckGate(repo, wt);
-      assert.equal(res.installed, true, res.reason);
+      assert.equal(res.installed, true, res.reason ?? '');
 
       // Hook file written into the worktree-local hooks dir.
       const hook = path.join(wt, WORKTREE_HOOKS_DIRNAME, 'pre-commit');
