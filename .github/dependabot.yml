@@ -9,6 +9,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # web-tree-sitter 0.26 ships a new tree-sitter ABI that can't load the
+      # grammar .wasm files from tree-sitter-wasms (built with tree-sitter-cli
+      # 0.20.x) — Code Map fails to load grammars at runtime. It also moved
+      # tree-sitter.wasm out of its exports map, breaking copy-code-map-wasm.mjs.
+      # Pin to 0.25.x until the grammars are rebuilt against the new ABI.
+      - dependency-name: "web-tree-sitter"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       production-dependencies:
         dependency-type: "production"

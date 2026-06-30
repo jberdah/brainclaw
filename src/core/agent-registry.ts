@@ -197,7 +197,13 @@ function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env,
   let publicKeyPem: string;
   if (!forceRegenerate && fs.existsSync(filepath)) {
     const privateKey = crypto.createPrivateKey(fs.readFileSync(filepath, 'utf-8'));
-    publicKeyPem = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString();
+    // @types/node 26 dropped the KeyObject overload from createPublicKey's signature
+    // (regression — Node accepts a private KeyObject to derive its public key, as documented).
+    // Cast to a parameter type the .d.ts still accepts; runtime behaviour is unchanged.
+    publicKeyPem = crypto
+      .createPublicKey(privateKey as unknown as crypto.PublicKeyInput)
+      .export({ type: 'spki', format: 'pem' })
+      .toString();
   } else {
     const generated = crypto.generateKeyPairSync('ed25519');
     const privateKeyPem = generated.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
