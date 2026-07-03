@@ -8,11 +8,13 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
+  FIND_MAX_PAGES,
   STALE_MS,
   agentFreshness,
   formatRelativeAge,
   isAutoCandidate,
   isStale,
+  paginatedFind,
   timeAgo,
 } from './tree-helpers';
 
@@ -122,5 +124,83 @@ describe('tree-helpers — isAutoCandidate', () => {
   });
   it('returns false for empty candidate (legacy default is human)', () => {
     assert.equal(isAutoCandidate({}), false);
+  });
+});
+
+describe('tree-helpers — paginatedFind (trp#925)', () => {
+  // The board tree used to make a single bclaw_find call and drop has_more,
+  // so a size-bounded page (~40k chars) truncated the Backlog/Sprints/Live
+  // sections silently — oldest-first plans hid the recent ones. paginatedFind
+  // now walks has_more/next_offset with a hard MAX_PAGES safety cap.
+  type Page = { items: unknown[]; has_more?: boolean; next_offset?: number };
+
+  function mockClient(pages: Page[]): {
+    client: { callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> };
+    calls: Array<{ name: string; args: Record<string, unknown> }>;
+  } {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const remaining = [...pages];
+    return {
+      calls,
+      client: {
+        async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+          calls.push({ name, args });
+          const next = remaining.shift();
+          if (!next) throw new Error(`unexpected extra callTool: ${name}`);
+          return next as unknown as Record<string, unknown>;
+        },
+      },
+    };
+  }
+
+  it('concatenates items across three pages while has_more=true', async () => {
+    const { client, calls } = mockClient([
+      { items: ['a', 'b'], has_more: true, next_offset: 2 },
+      { items: ['c', 'd'], has_more: true, next_offset: 4 },
+      { items: ['e'], has_more: false },
+    ]);
+    const out = await paginatedFind<string>(client, 'plan', { status: 'todo', limit: 50 });
+    assert.deepEqual(out, ['a', 'b', 'c', 'd', 'e']);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].name, 'bclaw_find');
+    // Initial call carries no offset; subsequent calls thread next_offset.
+    assert.equal((calls[0].args.filter as Record<string, unknown>).offset, undefined);
+    assert.equal((calls[1].args.filter as Record<string, unknown>).offset, 2);
+    assert.equal((calls[2].args.filter as Record<string, unknown>).offset, 4);
+    // Original filter fields must be preserved across pages.
+    assert.equal((calls[2].args.filter as Record<string, unknown>).status, 'todo');
+    assert.equal((calls[2].args.filter as Record<string, unknown>).limit, 50);
+    assert.equal((calls[0].args as Record<string, unknown>).entity, 'plan');
+  });
+
+  it('stops after FIND_MAX_PAGES even when the server keeps advertising has_more', async () => {
+    // Force one more page than MAX_PAGES to prove we never fetch it.
+    const runaway: Page[] = Array.from({ length: FIND_MAX_PAGES + 3 }, (_, i) => ({
+      items: [`p${i}`],
+      has_more: true,
+      next_offset: (i + 1) * 10,
+    }));
+    const { client, calls } = mockClient(runaway);
+    const out = await paginatedFind<string>(client, 'plan');
+    assert.equal(out.length, FIND_MAX_PAGES);
+    assert.equal(calls.length, FIND_MAX_PAGES);
+  });
+
+  it('stops when has_more=true but next_offset is missing (defensive)', async () => {
+    const { client, calls } = mockClient([
+      { items: [1], has_more: true /* next_offset omitted — malformed server response */ },
+    ]);
+    const out = await paginatedFind<number>(client, 'plan');
+    assert.deepEqual(out, [1]);
+    assert.equal(calls.length, 1);
+  });
+
+  it('returns the single page unchanged when has_more=false', async () => {
+    const { client, calls } = mockClient([
+      { items: [{ id: 'pln#1' }, { id: 'pln#2' }], has_more: false },
+    ]);
+    const out = await paginatedFind<{ id: string }>(client, 'plan');
+    assert.deepEqual(out.map((p) => p.id), ['pln#1', 'pln#2']);
+    assert.equal(calls.length, 1);
   });
 });

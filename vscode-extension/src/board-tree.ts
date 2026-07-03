@@ -9,6 +9,7 @@ import {
   formatRelativeAge,
   isAutoCandidate,
   isStale,
+  paginatedFind,
   priorityLetter,
   timeAgo,
   type Freshness,
@@ -1712,8 +1713,11 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     entity: CanonicalEntity,
     filter: Record<string, unknown> = {},
   ): Promise<T[]> {
-    const result = await client.callTool('bclaw_find', { entity, filter });
-    return Array.isArray(result.items) ? result.items as T[] : [];
+    // trp#925 — bclaw_find size-bounds each page to ~40k chars and plan lists
+    // sort oldest-first, so a single call silently truncates recent items and
+    // the Backlog/SPRINTS/LIVE sections miss the newest work. Walk has_more /
+    // next_offset until exhausted (cap FIND_MAX_PAGES to bound the loop).
+    return paginatedFind<T>(client, entity, filter);
   }
 
   private async _runSectionBoardLoad(projectPath: string, sectionId: string): Promise<BoardData> {

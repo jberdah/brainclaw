@@ -81,3 +81,43 @@ export function agentFreshness(agent: { has_open_session?: boolean; claim_count?
 export function isAutoCandidate(candidate: { source?: string; origin?: string }): boolean {
   return candidate.source === 'auto' || String(candidate.origin ?? '').startsWith('session-end');
 }
+
+/**
+ * Server-imposed page cap for board-tree pagination follow-ups.
+ *
+ * Why: bclaw_find size-bounds each page to ~40k chars (DEFAULT_FIND_CHAR_BUDGET,
+ * pln#491) and plan lists sort oldest-first (state.ts:151). A single call
+ * therefore truncates recent items silently — the operator saw the Backlog stuck
+ * on old plans and never noticed the new ones (trp#925). The pager below walks
+ * has_more/next_offset; MAX_PAGES caps the walk so a runaway server (or a
+ * pathological filter) can't spin the tree forever.
+ */
+export const FIND_MAX_PAGES = 5;
+
+interface FindPagerClient {
+  callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+
+/**
+ * Walk bclaw_find pages until has_more=false or MAX_PAGES is reached, and
+ * concatenate the items. The initial filter is preserved across pages; only
+ * `offset` is threaded from the previous response's `next_offset`.
+ */
+export async function paginatedFind<T = unknown>(
+  client: FindPagerClient,
+  entity: string,
+  filter: Record<string, unknown> = {},
+  maxPages: number = FIND_MAX_PAGES,
+): Promise<T[]> {
+  const items: T[] = [];
+  let currentFilter: Record<string, unknown> = { ...filter };
+  for (let page = 0; page < maxPages; page++) {
+    const result = await client.callTool('bclaw_find', { entity, filter: currentFilter });
+    if (Array.isArray(result.items)) items.push(...(result.items as T[]));
+    if (!result.has_more) return items;
+    const nextOffset = result.next_offset;
+    if (typeof nextOffset !== 'number') return items;
+    currentFilter = { ...currentFilter, offset: nextOffset };
+  }
+  return items;
+}
