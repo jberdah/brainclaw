@@ -1,11 +1,17 @@
 import { loadState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import type { PlanItem } from '../core/schema.js';
+import type { PlanItem, State } from '../core/schema.js';
 
 export interface EstimationReportOptions {
   agent?: string;
   json?: boolean;
   cwd?: string;
+  /**
+   * Already-loaded store state to reuse (pln#578). The report only consumes
+   * plan_items; without this, callers that already hold a full State (e.g.
+   * buildContext) paid a second complete projection read just for the plans.
+   */
+  state?: State;
   /**
    * Wall-clock outlier threshold in minutes (pln#495 step 7). A plan whose
    * `actual` came from plan-level wall-clock AND exceeds this is dropped from
@@ -151,7 +157,7 @@ export function renderRatioBar(ratio: number, width = 40): string {
 }
 
 export function buildEstimationReport(options: EstimationReportOptions = {}): EstimationReportResult {
-  const state = loadState(options.cwd);
+  const state = options.state ?? loadState(options.cwd);
   const done = state.plan_items.filter((p: PlanItem) =>
     p.status === 'done' && (!options.agent || p.author === options.agent)
   );
