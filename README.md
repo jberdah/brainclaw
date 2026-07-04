@@ -431,6 +431,24 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.13.0
+
+Operator-maturity batch from two days of heavy multi-agent dogfooding — dispatch/worktree lifecycle, claim parity, write-path auto-repair, model routing, benchmark gate, 2× faster context reads:
+
+- **Model selection for codex and copilot spawns** (pln#606) — `dispatch run --model <m>` now reaches codex (`exec -m`) and copilot argv, verified on the installed binaries. The codex `--add-dir` writable-roots spike closed negative on Windows: file-first stays the codex transport.
+- **Auto-repair identity & session on canonical writes** (pln#608) — `bclaw_create`/`update`/`remove`/`transition` auto-register + auto-session instead of throwing "Start a session first", with an explicit `session auto-created` warning; the trust boundary for unknown identities is unchanged.
+- **Time-to-first-value benchmark with blocking CI budgets** (pln#604) — seeded synthetic stores, three scenarios (cold_onboard / warm_work / first_edit), budgets versioned in `bench-budgets.json`.
+- **Claim lifecycle parity** (trp#928) — `bclaw_transition(entity='claim')` wired, `coordinator_override` (trusted+) on release/transition, cascade release with per-claim logging on plan-done / loop close / assignment-completed / harvest, entity-scoped `bclaw_find` filter rejections.
+- **Squash-aware worktree GC + junction-safe removal** (trp#926) — squash-merged lanes are finally collected (content-based detection), and the Windows `node_modules`-junction wipe class is closed for good; `dispatch_status` compares against the worktree's creation ref.
+- **VS Code extension** — Backlog pagination (recent plans were invisible, trp#925) and probe/spawn parity with classified, actionable resolver failures (trp#927).
+- **Context read 2× faster on large stores** (pln#578) — 3 of the 4 full-store read passes per context build eliminated (disabled-reputation sweep ×2, estimation reload, triple candidate scan): 23.9 s → 11.9 s, 196 MB → 49 MB parsed, byte-identical output.
+
+### v1.12.0
+
+Auto-localized execution writes for multi-project workspaces (pln#597), from DGX-Spark dogfooding:
+
+- **Execution writes auto-localize into a workspace sibling named by `project=X`** — `bclaw_create`/`bclaw_transition` (plan & claim), `bclaw_claim`, the step tools and `bclaw_delete_plan` open a session + sticky switch into a workspace store-chain child instead of rejecting with "limited to signaling entities", echoing `auto_switched`. The signaling-vs-execution boundary is re-scoped to federation (`cross_project_links`): federated links and unknown names stay blocked.
+
 ### v1.11.1
 
 Agent-identity & session-hook resilience, from a fresh-CLI dogfood on a monorepo:
