@@ -53,13 +53,15 @@ import {
   resolveCurrentAgentIdentity,
   resolveCurrentModel,
   ensureAgentRegisteredForDispatch,
+  resolveOrAutoRegisterAgentIdentity,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateId } from '../core/ids.js';
-import { buildOperationalIdentity, loadAllSessions, loadSessionById } from '../core/identity.js';
+import { buildOperationalIdentity, loadAllSessions, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { isObserverMode } from '../core/observer-mode.js';
 import {
   checkGitPresence,
   scanGitRepos,
@@ -2072,22 +2074,58 @@ function ensureTrust(
 }
 
 /**
+ * Auto-repair outcome for a canonical-grammar mutation.
+ *
+ * Populated when `resolveCanonicalAuthor` had to fall through from the strict
+ * `resolveMutationIdentity` path onto `resolveOrAutoRegisterAgentIdentity` +
+ * auto-session. The doctrine (pln#608): mechanical + non-ambiguous + cheap +
+ * scoped precondition → the engine satisfies it AND announces it — never
+ * silence. Callers surface these fields as a warning in the response text
+ * and in structuredContent.auto_repair.
+ */
+export interface CanonicalAuthorAutoRepair {
+  /** True if the agent identity itself was auto-registered (first use). */
+  agent_auto_registered?: boolean;
+  /** Session id that was materialized by the auto-repair path, if any. */
+  session_auto_created?: string;
+}
+
+export interface CanonicalAuthorResolution {
+  agent_name: string;
+  agent_id?: string;
+  /** Undefined when the strict path resolved cleanly (no announcement needed). */
+  auto_repair?: CanonicalAuthorAutoRepair;
+}
+
+/**
  * Resolve the agent identity for canonical-grammar mutation verbs
  * (bclaw_create/update/remove/transition), so handlers can auto-fill required
  * fields (e.g. plan.author) instead of letting the create land on disk with a
  * missing field — which would then be silently GC'd by the state sync loop
  * (see fix plan pln_5f44426c).
  *
- * pln#562 step 3 — resolution failure is a HARD error. The old fallback to
- * author:'unknown' produced records that passed creation but were schema-
- * invalid on read and silently GC'd: a write that lies about succeeding.
- * Callers map the throw to a validation_error tool response.
+ * pln#562 step 3 — a write that would create a record with a missing/'unknown'
+ * author must never be silent (that produced records that passed creation but
+ * were schema-invalid on read and silently GC'd from disk).
+ *
+ * pln#608 — extended with auto-repair: when the caller has no session but a
+ * derivable agent name (arg / $BRAINCLAW_AGENT_NAME / detected AI agent),
+ * fall through to `resolveOrAutoRegisterAgentIdentity` and materialize the
+ * session via `buildOperationalIdentity({ persistImplicitSession: true })`
+ * (same mechanic as switchProject:86-106 and session-start). The freshly-
+ * created session is tagged `auto_created` so aggressive harvesting can
+ * distinguish it from operator sessions (pln#602). The caller receives
+ * `auto_repair` and surfaces it as a warning — never silent.
+ *
+ * KEEP (still a hard error, doctrine boundary): the identity is ambiguous
+ * (no name in args, no env signal, no detectable agent). We do not invent
+ * an identity — invoke intent is unclear and the write would misattribute.
  */
 function resolveCanonicalAuthor(
   args: Record<string, unknown>,
   cwd?: string,
   connectionSessionId?: string,
-): { agent_name: string; agent_id?: string } {
+): CanonicalAuthorResolution {
   const resolved = resolveMutationIdentity(
     args,
     { nameField: 'agent', idField: 'agentId' },
@@ -2100,11 +2138,107 @@ function resolveCanonicalAuthor(
       agent_id: resolved.identity.agent_id,
     };
   }
-  const detail = 'error' in resolved && resolved.error ? resolved.error.message : 'no registered agent identity resolved';
-  throw new Error(
-    `cannot resolve mutation author: ${detail} `
-    + 'Start a session (bclaw_session_start) or pass a registered agent before writing.',
-  );
+
+  const strictError = 'error' in resolved && resolved.error ? resolved.error : undefined;
+
+  // KEEP (doctrine boundary): a pinned principal that rejected the caller args
+  // is a SPOOF/MISMATCH, not an ambiguous first-write. Never auto-repair over
+  // it — silently re-attributing would defeat pln#562 step 3. The strict error
+  // already carries the pointer to a curator override.
+  if (resolveConnectionPrincipal(cwd, connectionSessionId)) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'principal mismatch'}`,
+    );
+  }
+
+  // Observer processes are read-only dashboards/inspectors. Even when an env
+  // variable leaks an agent name into the observer process, canonical writes
+  // must not use the auto-repair path because it can mint identity/session
+  // state as a side effect.
+  if (isObserverMode()) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'observer mode cannot auto-repair identity/session state'}`,
+    );
+  }
+
+  const explicitName = typeof args.agent === 'string' ? args.agent : undefined;
+  const explicitId = typeof args.agentId === 'string' ? args.agentId : undefined;
+  // resolveOrAutoRegisterAgentIdentity's fall-through helper only reads
+  // BRAINCLAW_AGENT / OPENCLAW_AGENT. resolveCurrentAgentIdentity also honors
+  // BRAINCLAW_AGENT_NAME, and dispatched workers set both. Normalize here so
+  // an env-declared name is a first-class signal to the auto-repair path.
+  const envAgentName = explicitName
+    ?? (process.env.BRAINCLAW_AGENT_NAME?.trim() || undefined)
+    ?? (process.env.BRAINCLAW_AGENT?.trim() || undefined);
+
+  let identity;
+  let autoRegistered: boolean;
+  try {
+    const outcome = resolveOrAutoRegisterAgentIdentity({
+      agentName: envAgentName,
+      agentId: explicitId,
+      cwd,
+      allowCurrent: true,
+      allowEnv: true,
+    });
+    identity = outcome.identity;
+    autoRegistered = outcome.auto_registered;
+  } catch (err) {
+    // Genuine ambiguity — no derivable name. Stays a hard error (KEEP: doctrine
+    // boundary is "ambiguous intent → refuse with next_action", not silence).
+    const detail = err instanceof Error ? err.message : (strictError?.message ?? String(err));
+    throw new Error(
+      `cannot resolve mutation author: ${detail} `
+      + 'Pass a registered agent, set $BRAINCLAW_AGENT_NAME, '
+      + 'or register with `brainclaw register-agent <name>` before writing.',
+      { cause: err },
+    );
+  }
+
+  const explicitSessionId = connectionSessionId?.trim() || explicitSessionIdFromEnv();
+  const hadSessionBefore = explicitSessionId
+    ? Boolean(loadSessionById(explicitSessionId, cwd))
+    : Boolean(loadCurrentSession(cwd));
+
+  let sessionAutoCreated: string | undefined;
+  try {
+    const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
+      agentId: identity.agent_id,
+      sessionId: explicitSessionId,
+      persistImplicitSession: true,
+    });
+    if (!hadSessionBefore && opIdentity.session_id) {
+      sessionAutoCreated = opIdentity.session_id;
+      const session = loadSessionById(opIdentity.session_id, cwd);
+      if (session && !session.auto_created) {
+        saveCurrentSession({ ...session, auto_created: true }, cwd);
+      }
+    }
+  } catch { /* best-effort — write can still proceed without a persisted session */ }
+
+  const autoRepair: CanonicalAuthorAutoRepair | undefined = (autoRegistered || sessionAutoCreated)
+    ? {
+        ...(autoRegistered ? { agent_auto_registered: true } : {}),
+        ...(sessionAutoCreated ? { session_auto_created: sessionAutoCreated } : {}),
+      }
+    : undefined;
+
+  return {
+    agent_name: identity.agent_name,
+    agent_id: identity.agent_id,
+    ...(autoRepair ? { auto_repair: autoRepair } : {}),
+  };
+}
+
+function renderAutoRepairWarning(auto_repair: CanonicalAuthorAutoRepair, agent_name: string): string {
+  const parts: string[] = [];
+  if (auto_repair.agent_auto_registered) {
+    parts.push(`agent '${agent_name}' auto-registered (first use). Run \`brainclaw register-agent ${agent_name}\` to set capabilities and trust level.`);
+  }
+  if (auto_repair.session_auto_created) {
+    parts.push(`session ${auto_repair.session_auto_created} auto-created for this write.`);
+  }
+  return `⚠️ auto-repair: ${parts.join(' ')}`;
 }
 
 function explicitSessionIdFromEnv(): string | undefined {
@@ -7385,13 +7519,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const data: Record<string, unknown> = { ...rawData };
         let actor = typeof data.author === 'string' ? data.author : undefined;
         let actorId = typeof data.agent_id === 'string' ? data.agent_id : undefined;
+        let autoRepair: CanonicalAuthorAutoRepair | undefined;
         if (data.author === undefined) {
-          const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-          data.author = agent_name;
-          if (data.agent === undefined) data.agent = agent_name;
-          if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
-          actor = agent_name;
-          actorId = agent_id;
+          const author = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+          data.author = author.agent_name;
+          if (data.agent === undefined) data.agent = author.agent_name;
+          if (data.agent_id === undefined && author.agent_id) data.agent_id = author.agent_id;
+          actor = author.agent_name;
+          actorId = author.agent_id;
+          autoRepair = author.auto_repair;
         } else if (data.agent === undefined) {
           data.agent = data.author;
         }
@@ -7401,14 +7537,19 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           { actor: actor ?? 'unknown', ...(actorId ? { actor_id: actorId } : {}), action: 'create', item_id: result.id, item_type: entity },
           targetCwd,
         );
+        const createText = `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
+        const createContent = autoRepair
+          ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
+          : [{ type: 'text' as const, text: createText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
+            content: createContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
               ...(autoSwitched ? { auto_switched: true } : {}),
+              ...(autoRepair ? { auto_repair: autoRepair } : {}),
             },
           }),
         };
@@ -7424,19 +7565,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const patch = (args.patch ?? {}) as Record<string, unknown>;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = updateEntity(entity, id, patch, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
           targetCwd,
         );
+        const updateText = `✔ updated ${entity} ${id}`;
+        const updateContent = auto_repair
+          ? [{ type: 'text' as const, text: updateText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: updateText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ updated ${entity} ${id}` }],
+            content: updateContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: targetScope.active_source,
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };
@@ -7452,19 +7598,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const purge = args.purge === true;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = removeEntity(entity, id, targetCwd, purge);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
           targetCwd,
         );
+        const removeText = `✔ removed ${entity} ${id}`;
+        const removeContent = auto_repair
+          ? [{ type: 'text' as const, text: removeText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: removeText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ removed ${entity} ${id}` }],
+            content: removeContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: targetScope.active_source,
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };
@@ -7480,13 +7631,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const toProject = String(args.to_project ?? '');
         const fromProject = typeof args.from_project === 'string' ? args.from_project : undefined;
         const force = args.force === true;
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = relocateEntity({ entity, id, toProject, fromProject, force, cwd, actor: agent_name, actorId: agent_id });
         const warn = result.warnings.length ? ` (${result.warnings.length} warning(s))` : '';
+        const moveText = `✔ moved ${entity} ${id} → ${result.to}${warn}`;
+        const moveContent = auto_repair
+          ? [{ type: 'text' as const, text: moveText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: moveText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ moved ${entity} ${id} → ${result.to}${warn}` }],
-            structuredContent: { ...result },
+            content: moveContent,
+            structuredContent: {
+              ...result,
+              ...(auto_repair ? { auto_repair } : {}),
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7514,7 +7672,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         // trp#928 — claim transitions consume the ReleaseClaimAuth ownership
         // check (released/stale both mutate a claim owned by SOME agent). Reuse
         // the same coordinator_override opt-in as bclaw_release_claim so both
@@ -7549,14 +7707,19 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
           targetCwd,
         );
+        const transitionText = `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
+        const transitionContent = auto_repair
+          ? [{ type: 'text' as const, text: transitionText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: transitionText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
+            content: transitionContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
               ...(autoSwitched ? { auto_switched: true } : {}),
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };
