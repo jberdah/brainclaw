@@ -13,6 +13,8 @@
  */
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as cp from 'child_process';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -96,6 +98,54 @@ describe('brainclaw-resolver — probe classification (trp#927 fix)', () => {
       const attempt = await probeScriptCandidate('workspace-dist', script, root);
       assert.equal(attempt.outcome, 'ok');
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('probes with the same spawn options/env used for the real MCP spawn', async () => {
+    const root = tmpDir();
+    const previousAgent = process.env.BRAINCLAW_AGENT;
+    const previousAgentId = process.env.BRAINCLAW_AGENT_ID;
+    const previousAgentName = process.env.BRAINCLAW_AGENT_NAME;
+    process.env.BRAINCLAW_AGENT = 'parent-agent';
+    process.env.BRAINCLAW_AGENT_ID = 'parent-agent-id';
+    process.env.BRAINCLAW_AGENT_NAME = 'parent-agent-name';
+    try {
+      const script = path.join(root, 'dist', 'cli.js');
+      writeCliOk(script);
+      const calls: Array<{ command: string; args: readonly string[]; options: cp.SpawnOptions }> = [];
+      const spawnFn = ((command: string, args?: readonly string[], options?: cp.SpawnOptions) => {
+        calls.push({ command, args: args ?? [], options: options ?? {} });
+        const proc = new EventEmitter() as cp.ChildProcess;
+        (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
+        (proc as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
+        (proc as unknown as { kill: () => boolean }).kill = () => true;
+        process.nextTick(() => proc.emit('exit', 0));
+        return proc;
+      }) as typeof cp.spawn;
+
+      const attempt = await probeScriptCandidate('workspace-dist', script, root, { spawnFn });
+
+      assert.equal(attempt.outcome, 'ok');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].command, 'node');
+      assert.deepEqual(calls[0].args, [script, '--version']);
+      assert.equal(calls[0].options.cwd, root);
+      assert.equal(calls[0].options.shell, false);
+      assert.deepEqual(calls[0].options.stdio, ['pipe', 'pipe', 'pipe']);
+      assert.equal(calls[0].options.windowsHide, true);
+      const env = calls[0].options.env as NodeJS.ProcessEnv;
+      assert.equal(env.BRAINCLAW_OBSERVER, '1');
+      assert.equal(env.BRAINCLAW_AGENT, undefined);
+      assert.equal(env.BRAINCLAW_AGENT_ID, undefined);
+      assert.equal(env.BRAINCLAW_AGENT_NAME, undefined);
+    } finally {
+      if (previousAgent === undefined) delete process.env.BRAINCLAW_AGENT;
+      else process.env.BRAINCLAW_AGENT = previousAgent;
+      if (previousAgentId === undefined) delete process.env.BRAINCLAW_AGENT_ID;
+      else process.env.BRAINCLAW_AGENT_ID = previousAgentId;
+      if (previousAgentName === undefined) delete process.env.BRAINCLAW_AGENT_NAME;
+      else process.env.BRAINCLAW_AGENT_NAME = previousAgentName;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -191,6 +241,32 @@ describe('brainclaw-resolver — resolveBrainclawSpawnPlan tiers', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(globalPrefix, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to global via POSIX npm prefix bin shim → lib/node_modules cli.js target', async () => {
+    const root = tmpDir();
+    const base = tmpDir();
+    const globalPrefix = path.join(base, 'prefix with spaces');
+    try {
+      const shimPath = path.join(globalPrefix, 'bin', 'brainclaw');
+      fs.mkdirSync(path.dirname(shimPath), { recursive: true });
+      fs.writeFileSync(shimPath, '#!/bin/sh\n');
+      const globalCli = path.join(globalPrefix, 'lib', 'node_modules', 'brainclaw', 'dist', 'cli.js');
+      writeCliOk(globalCli);
+
+      const result = await resolveBrainclawSpawnPlan(root, {
+        whichBrainclaw: async () => shimPath,
+      });
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+      assert.equal(result.plan.tier, 'global');
+      assert.equal(result.plan.script, globalCli);
+      assert.equal(result.plan.command, 'node');
+      assert.deepEqual(result.plan.args, [globalCli]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(base, { recursive: true, force: true });
     }
   });
 

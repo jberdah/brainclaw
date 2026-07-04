@@ -61,6 +61,7 @@ export type ResolveResult =
 
 export interface ResolveOptions {
   probeTimeoutMs?: number;
+  whichTimeoutMs?: number;
   spawnFn?: typeof cp.spawn;
   whichBrainclaw?: () => Promise<string | undefined>;
   resolveShimTarget?: (shimPath: string) => string | undefined;
@@ -84,50 +85,108 @@ export function workspaceDistCandidate(cwd: string): string {
   return path.join(cwd, 'dist', 'cli.js');
 }
 
+export function brainclawSpawnEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv, BRAINCLAW_OBSERVER: '1' };
+  // Strip parent-shell agent identity so the MCP server never resolves to
+  // the agent whose terminal launched VS Code (otherwise the extension's
+  // polling consumes that agent's event-log cursor and runtime state).
+  delete env.BRAINCLAW_AGENT;
+  delete env.BRAINCLAW_AGENT_ID;
+  delete env.BRAINCLAW_AGENT_NAME;
+  return env;
+}
+
+export function brainclawSpawnOptions(cwd: string): cp.SpawnOptions {
+  return {
+    cwd,
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: brainclawSpawnEnv(),
+  };
+}
+
 /**
  * Default global-shim locator. Uses `where brainclaw` on win32 and
  * `command -v brainclaw` on POSIX; both are read via the shell (this is safe
  * — we only consume the *output* to derive a `.js` script path, we never
  * spawn the shim itself).
  */
-async function defaultWhichBrainclaw(): Promise<string | undefined> {
+async function defaultWhichBrainclaw(timeoutMs = 3000): Promise<string | undefined> {
   return new Promise<string | undefined>((resolve) => {
+    let settled = false;
+    let proc: cp.ChildProcess | undefined;
+    const finish = (value: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { proc?.kill(); } catch { /* ignore */ }
+      finish(undefined);
+    }, timeoutMs);
     const [cmd, args]: [string, string[]] =
       process.platform === 'win32'
         ? ['where', ['brainclaw']]
         : ['command', ['-v', 'brainclaw']];
     let out = '';
-    let proc: cp.ChildProcess;
     try {
       proc = cp.spawn(cmd, args, { shell: true, windowsHide: true });
     } catch {
-      return resolve(undefined);
+      return finish(undefined);
     }
     proc.stdout?.on('data', (d: Buffer) => { out += d.toString('utf-8'); });
     proc.stderr?.on('data', () => { /* drain */ });
-    proc.on('error', () => resolve(undefined));
+    proc.on('error', () => finish(undefined));
     proc.on('exit', (code) => {
-      if (code !== 0) return resolve(undefined);
+      if (code !== 0) return finish(undefined);
       const first = out
         .split(/\r?\n/)
         .map((line) => line.trim())
         .find((line) => line.length > 0);
-      resolve(first);
+      finish(first);
     });
   });
 }
 
 /**
  * Given a shim path returned by `where brainclaw` / `command -v brainclaw`,
- * derive the concrete `cli.js` target. Both the win32 (.cmd) and POSIX
- * shims npm installs follow the convention `<dir>/node_modules/brainclaw/dist/cli.js`
- * (see the sh shim body). If the .cmd shim itself is what came back on win32
- * we peel off the extension to derive the same base directory.
+ * derive the concrete `cli.js` target. Win32 npm shims typically live beside
+ * `<prefix>/node_modules`; POSIX npm shims typically live in `<prefix>/bin`
+ * while packages live under `<prefix>/lib/node_modules`. Symlinked shims may
+ * already resolve straight to the package's `dist/cli.js`.
  */
 function defaultResolveShimTarget(shimPath: string): string | undefined {
+  const direct = cliTargetIfPresent(shimPath);
+  if (direct) return direct;
+
+  try {
+    const real = fs.realpathSync.native(shimPath);
+    const realTarget = cliTargetIfPresent(real);
+    if (realTarget) return realTarget;
+  } catch {
+    // The shim itself may not be readable as a realpath; fall back to
+    // package-manager layout conventions below.
+  }
+
   const dir = path.dirname(shimPath);
-  const candidate = path.join(dir, ...CLI_TAIL);
-  return fs.existsSync(candidate) ? candidate : undefined;
+  const parent = path.dirname(dir);
+  const candidates = [
+    // Windows npm/nvm/Volta-style prefixes: <prefix>/brainclaw.cmd plus
+    // <prefix>/node_modules/brainclaw/dist/cli.js.
+    path.join(dir, ...CLI_TAIL),
+    // POSIX npm/nvm prefixes: <prefix>/bin/brainclaw plus
+    // <prefix>/lib/node_modules/brainclaw/dist/cli.js.
+    path.join(parent, 'lib', ...CLI_TAIL),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+function cliTargetIfPresent(candidate: string): string | undefined {
+  const normalized = path.normalize(candidate);
+  const tail = path.join(...CLI_TAIL);
+  return normalized.endsWith(tail) && fs.existsSync(normalized) ? candidate : undefined;
 }
 
 /**
@@ -152,20 +211,23 @@ export async function probeScriptCandidate(
 
   return new Promise<ProbeAttempt>((resolve) => {
     let settled = false;
+    let proc: cp.ChildProcess | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (attempt: ProbeAttempt) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       resolve(attempt);
     };
 
-    let proc: cp.ChildProcess;
+    timer = setTimeout(() => {
+      try { proc?.kill(); } catch { /* ignore */ }
+      finish({ tier, script, outcome: 'timeout' });
+    }, timeoutMs);
+
     try {
       proc = spawnFn(nodeBinary, [script, '--version'], {
-        cwd,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
+        ...brainclawSpawnOptions(cwd),
       });
     } catch (err) {
       return finish({
@@ -198,11 +260,6 @@ export async function probeScriptCandidate(
         detail,
       });
     });
-
-    const timer = setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
-      finish({ tier, script, outcome: 'timeout' });
-    }, timeoutMs);
   });
 }
 
@@ -224,8 +281,8 @@ export async function resolveBrainclawSpawnPlan(
     { tier: 'workspace-dist', script: workspaceDistCandidate(cwd) },
   ];
 
-  const which = opts.whichBrainclaw ?? defaultWhichBrainclaw;
-  const shimPath = await which();
+  const which = opts.whichBrainclaw;
+  const shimPath = await (which ? which() : defaultWhichBrainclaw(opts.whichTimeoutMs));
   if (shimPath) {
     const resolveShim = opts.resolveShimTarget ?? defaultResolveShimTarget;
     const target = resolveShim(shimPath);
