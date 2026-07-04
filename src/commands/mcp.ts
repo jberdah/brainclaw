@@ -4019,10 +4019,16 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       //   - non-owner releases with coordinator_override:true and trusted+:
       //     allowed, audited (auditReleaseOverride).
       const releaseIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, cwd, connectionSessionId);
+      if ('error' in releaseIdentity && releaseIdentity.error) {
+        const { kind, message, details } = releaseIdentity.error;
+        return { response: createToolErrorResponse(kind, message, details) };
+      }
+      if (!('identity' in releaseIdentity) || !releaseIdentity.identity) {
+        return { response: createToolErrorResponse('identity_error', 'No registered agent identity resolved for bclaw_release_claim.') };
+      }
       const coordinatorOverrideRequested = args.coordinator_override === true;
       if (coordinatorOverrideRequested) {
-        const identity = 'identity' in releaseIdentity ? releaseIdentity.identity : undefined;
-        const trustLevel = identity?.trust_level ?? 'contributor';
+        const trustLevel = releaseIdentity.identity.trust_level ?? 'contributor';
         if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
           return {
             response: createToolErrorResponse(
@@ -4032,14 +4038,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           };
         }
       }
-      const releaseAuth = 'identity' in releaseIdentity && releaseIdentity.identity
-        ? {
-            agent: releaseIdentity.identity.agent_name,
-            agent_id: releaseIdentity.identity.agent_id,
-            session_id: connectionSessionId,
-            override: coordinatorOverrideRequested,
-          }
-        : undefined;
+      const releaseAuth = {
+        agent: releaseIdentity.identity.agent_name,
+        agent_id: releaseIdentity.identity.agent_id,
+        session_id: connectionSessionId,
+        override: coordinatorOverrideRequested,
+      };
       let cascadeResult;
       try {
         cascadeResult = releaseClaimWithCascade(claimId, {

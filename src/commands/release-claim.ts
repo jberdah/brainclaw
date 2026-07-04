@@ -3,9 +3,11 @@ import { mutate } from '../core/mutation-pipeline.js';
 import { loadClaim, listClaims, releaseClaim } from '../core/claims.js';
 import { rebuildProjectMd } from '../core/markdown.js';
 import { loadState, mutateState } from '../core/state.js';
+import { requireMinimumTrustLevel, requireRegisteredAgentIdentity } from '../core/agent-registry.js';
 
 export interface ReleaseClaimOptions {
   planStatus?: 'todo' | 'in_progress' | 'blocked' | 'done' | 'dropped';
+  coordinatorOverride?: boolean;
   cwd?: string;
 }
 
@@ -16,10 +18,19 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
   }
 
   try {
+    const identity = requireRegisteredAgentIdentity({ cwd: options.cwd, allowCurrent: true, allowEnv: true });
+    if (options.coordinatorOverride) {
+      requireMinimumTrustLevel(identity, 'trusted');
+    }
+    const releaseAuth = {
+      agent: identity.agent_name,
+      agent_id: identity.agent_id,
+      override: options.coordinatorOverride === true,
+    };
     let claim = loadClaim(id, options.cwd);
     mutate({ cwd: options.cwd }, () => {
       const existing = loadClaim(id, options.cwd);
-      claim = releaseClaim(id, options.cwd);
+      claim = releaseClaim(id, options.cwd, releaseAuth);
       if (existing.plan_id) {
         const updated = mutateState((state) => {
           const plan = state.plan_items.find((item) => item.id === existing.plan_id);

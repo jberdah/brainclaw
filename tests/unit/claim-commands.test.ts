@@ -8,6 +8,7 @@ import { runReleaseClaim } from '../../src/commands/release-claim.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { generateMarkdown } from '../../src/core/markdown.js';
 import { loadState, saveState } from '../../src/core/state.js';
+import { setAgentTrustLevel } from '../../src/core/agent-registry.js';
 import type { Claim } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -183,6 +184,41 @@ describe('claim commands', () => {
     const updatedState = loadState(workspace.dir);
     assert.equal(updatedState.plan_items[0].status, 'done');
     assert.equal(updatedState.plan_items[0].assignee, undefined);
+  });
+
+  it('release-claim enforces ownership unless trusted coordinator override is explicit', () => {
+    saveClaim({
+      id: 'clm_foreign_cli',
+      agent: 'claude',
+      agent_id: 'agt_claude',
+      project_id: 'prj_claim_test',
+      scope: 'src/foreign-cli/',
+      description: 'Foreign claim',
+      created_at: iso(2),
+      status: 'active',
+    }, workspace.dir);
+
+    assert.throws(() => {
+      captureConsole(() => {
+        runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir });
+      });
+    }, /coordinator_override:true/);
+    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'active');
+
+    assert.throws(() => {
+      captureConsole(() => {
+        runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir, coordinatorOverride: true });
+      });
+    }, /Insufficient trust/);
+    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'active');
+
+    setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
+    const released = captureConsole(() => {
+      runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir, coordinatorOverride: true });
+    });
+
+    assert.ok(released.logs[0].includes('released'));
+    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'released');
   });
 
   it('rejects overlapping active claims on the same scope', () => {
