@@ -433,9 +433,9 @@ describe('detachWorktreeJunctions (pln#498)', () => {
     fs.rmSync(fakeWorktree, { recursive: true, force: true });
   });
 
-  it('does not descend into nested directories', () => {
-    // Nested junction inside a regular subdir should NOT be touched.
-    // Only top-level shared paths (symlinked at worktree birth) are in scope.
+  it('unlinks nested symlinks while preserving the target', () => {
+    // trp#926 — nested monorepo shared paths must be detached too; leaving
+    // these in place lets git's recursive remove follow them into the main repo.
     const target = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-nested-target-'));
     fs.writeFileSync(path.join(target, 't.txt'), 'nested');
 
@@ -447,13 +447,28 @@ describe('detachWorktreeJunctions (pln#498)', () => {
 
     detachWorktreeJunctions(fakeWorktree);
 
-    // Nested symlink survives — top-level walk only.
-    assert.equal(fs.existsSync(nestedLink), true, 'nested symlink survives');
-    assert.equal(fs.lstatSync(nestedLink).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(nestedLink), false, 'nested symlink unlinked');
+    assert.equal(fs.existsSync(path.join(target, 't.txt')), true, 'target survived');
 
-    fs.rmSync(nestedLink, { force: true });
     fs.rmSync(fakeWorktree, { recursive: true, force: true });
     fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('throws when the recursive scan exceeds its depth cap', () => {
+    const fakeWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-detach-deep-'));
+    let deep = fakeWorktree;
+    for (let i = 0; i < 10; i++) {
+      deep = path.join(deep, `d${i}`);
+      fs.mkdirSync(deep);
+    }
+
+    assert.throws(
+      () => detachWorktreeJunctions(fakeWorktree),
+      /scan depth exceeded/,
+      'an incomplete scan must fail closed before git worktree remove can run',
+    );
+
+    fs.rmSync(fakeWorktree, { recursive: true, force: true });
   });
 
   it('is idempotent on a missing path', () => {

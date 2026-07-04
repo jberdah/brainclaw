@@ -946,8 +946,10 @@ export function safeRemoveWorktreeDir(dirPath: string): void {
 /**
  * Depth cap for detachWorktreeJunctions' recursive walk. 8 covers realistic
  * monorepo trees (apps/<pkg>/packages/<pkg>/node_modules, pnpm nested links)
- * while keeping the walk bounded on pathological structures. .git is skipped
- * outright — it never contains user junctions and can be very deep.
+ * while keeping the walk bounded on pathological structures. Hitting the cap
+ * is a hard failure: continuing to `git worktree remove` after an incomplete
+ * scan would re-open the junction-follow wipe class. .git is skipped outright
+ * — it never contains user junctions and can be very deep.
  */
 const JUNCTION_SCAN_MAX_DEPTH = 8;
 
@@ -969,19 +971,29 @@ const JUNCTION_SCAN_MAX_DEPTH = 8;
  * The recursion NEVER descends into a symlink (lstat + unlink at the entry
  * itself), so it cannot follow a junction into the main repo. `.git/` is
  * skipped entirely — git manages its own state and it never holds user
- * junctions. Depth is capped defensively at JUNCTION_SCAN_MAX_DEPTH.
+ * junctions. Depth is capped defensively at JUNCTION_SCAN_MAX_DEPTH; hitting
+ * the cap aborts removal rather than silently leaving deeper links in place.
  */
 export function detachWorktreeJunctions(worktreePath: string): void {
-  detachJunctionsRecursively(worktreePath, 0);
+  if (!fs.existsSync(worktreePath)) return;
+  const failures: string[] = [];
+  detachJunctionsRecursively(worktreePath, 0, failures);
+  if (failures.length > 0) {
+    throw new Error(`could not safely detach worktree junctions: ${failures.join('; ')}`);
+  }
 }
 
-function detachJunctionsRecursively(dir: string, depth: number): void {
-  if (depth > JUNCTION_SCAN_MAX_DEPTH) return;
+function detachJunctionsRecursively(dir: string, depth: number, failures: string[]): void {
+  if (depth > JUNCTION_SCAN_MAX_DEPTH) {
+    failures.push(`scan depth exceeded at ${dir}`);
+    return;
+  }
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return; // dir gone or unreadable — nothing to detach here
+  } catch (err) {
+    failures.push(`could not read ${dir}: ${(err as Error).message}`);
+    return;
   }
 
   for (const entry of entries) {
@@ -1000,13 +1012,19 @@ function detachJunctionsRecursively(dir: string, depth: number): void {
       // link back into the main repo — the exact class we're preventing).
       try {
         fs.unlinkSync(child);
-      } catch {
-        try { fs.rmdirSync(child); } catch { /* best effort */ }
+      } catch (unlinkErr) {
+        try {
+          fs.rmdirSync(child);
+        } catch (rmdirErr) {
+          failures.push(
+            `could not detach link ${child}: unlink=${(unlinkErr as Error).message}; rmdir=${(rmdirErr as Error).message}`,
+          );
+        }
       }
       continue;
     }
     if (stat.isDirectory()) {
-      detachJunctionsRecursively(child, depth + 1);
+      detachJunctionsRecursively(child, depth + 1, failures);
     }
   }
 }
@@ -1114,7 +1132,25 @@ export function isBranchMergedByContent(
   const lines = cherry.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return true; // no commits ahead of base → fully merged
   // A `+` line means "patch not on base" — one is enough to disqualify.
-  return !lines.some((l) => l.startsWith('+ '));
+  if (!lines.some((l) => l.startsWith('+ '))) return true;
+
+  // Multi-commit squash merges often do not produce per-commit patch-id
+  // matches: the squash commit's aggregate patch differs from each individual
+  // branch commit. As a second, still content-only signal, compare the final
+  // content of files changed by the branch. If every branch-touched path now
+  // matches baseRef, removing the worktree cannot drop unique file content.
+  const mergeBase = runGit(['merge-base', baseRef, branchName], mainWorktreePath);
+  if (!mergeBase.ok || !mergeBase.stdout.trim()) return false;
+  const changed = runGit(['diff', '--name-only', '-z', mergeBase.stdout.trim(), branchName], mainWorktreePath);
+  if (!changed.ok) return false;
+  const paths = changed.stdout.split('\0').filter(Boolean);
+  if (paths.length === 0) return true;
+  for (let i = 0; i < paths.length; i += 100) {
+    const chunk = paths.slice(i, i + 100);
+    const diff = runGit(['diff', '--quiet', branchName, baseRef, '--', ...chunk], mainWorktreePath);
+    if (!diff.ok) return false;
+  }
+  return true;
 }
 
 /**

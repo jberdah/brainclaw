@@ -85,8 +85,9 @@ export interface DispatchRuntimeSnapshot {
    * refined via patch-id: a squash-merged commit whose patch is already on
    * base counts as 0, not 1 — the fix for the observed `worker delivered`
    * false-positive after squash-merge (rtn_c5542b05). Base ref is the
-   * worktree's recorded creation SHA when the sidecar carries one, else the
-   * caller-supplied `base_ref` (default `master`).
+   * worktree's recorded creation SHA when the sidecar carries one. Legacy
+   * sidecars without that SHA report unknown instead of falling back to moving
+   * `master`.
    */
   commits_ahead?: number;
   /**
@@ -97,9 +98,10 @@ export interface DispatchRuntimeSnapshot {
   commits_ahead_raw?: number;
   /**
    * trp#926 — the base ref actually used for the ahead computation. Reflects
-   * the sidecar's recorded creation SHA when present; falls back to the caller
-   * default. Emitted so a diagnosis reader can see WHY commits_ahead is what
-   * it is (comparison to creation ref vs. current master).
+   * the sidecar's recorded creation SHA when present. Emitted so a diagnosis
+   * reader can see WHY commits_ahead is what it is (comparison to creation ref
+   * vs. current master). Omitted for legacy sidecars whose creation ref is
+   * unknown.
    */
   commits_ahead_base?: string;
   /**
@@ -163,18 +165,44 @@ const DEFAULT_BASE_REF = 'master';
  * "ahead of master" long after they were squash-merged, so dispatch_status
  * reported "worker delivered" for a fully integrated lane.
  *
- * Returns the SHA if the sidecar exists AND records a resolvable base_ref_sha.
- * Falls back to undefined otherwise; callers then use their supplied baseRef.
+ * Returns the SHA when the sidecar records `base_ref_sha`. A legacy sidecar
+ * without that field means "unknown": falling back to the caller's moving
+ * `master` would recreate the false `worker delivered` signal this fixes.
  */
-function readWorktreeBaseRef(worktreePath: string): string | undefined {
+function readWorktreeBaseRef(worktreePath: string): { ref?: string; legacySidecar: boolean } {
+  const sidecar = path.join(worktreePath, '.brainclaw-worktree.json');
   try {
-    const sidecar = path.join(worktreePath, '.brainclaw-worktree.json');
     const meta = JSON.parse(fs.readFileSync(sidecar, 'utf-8')) as { base_ref_sha?: unknown };
     if (typeof meta.base_ref_sha === 'string' && meta.base_ref_sha.length > 0) {
-      return meta.base_ref_sha;
+      return { ref: meta.base_ref_sha, legacySidecar: false };
     }
-  } catch { /* no sidecar / unreadable — caller falls back */ }
-  return undefined;
+    return { legacySidecar: true };
+  } catch {
+    return { legacySidecar: fs.existsSync(sidecar) };
+  }
+}
+
+function aggregateChangesMatchIntegrationBase(
+  worktreePath: string,
+  creationBase: string,
+  integrationBase: string,
+): boolean {
+  try {
+    const changed = execFileSync('git', ['-C', worktreePath, 'diff', '--name-only', '-z', creationBase, 'HEAD'], {
+      encoding: 'utf-8', timeout: 15000,
+    });
+    const paths = changed.split('\0').filter(Boolean);
+    if (paths.length === 0) return true;
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      execFileSync('git', ['-C', worktreePath, 'diff', '--quiet', 'HEAD', integrationBase, '--', ...chunk], {
+        encoding: 'utf-8', timeout: 15000,
+      });
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -186,9 +214,13 @@ function readWorktreeBaseRef(worktreePath: string): string | undefined {
  * a failed read).
  *
  * The comparison anchor is:
- *   1. the worktree sidecar's recorded creation SHA (`base_ref_sha`), when
- *      present — the truthful anchor a worker was born at;
- *   2. otherwise `commits_ahead_base` (caller-supplied, default `master`).
+ *   1. the worktree sidecar's recorded creation SHA (`base_ref_sha`) — the
+ *      truthful anchor a worker was born at;
+ *   2. otherwise `commits_ahead_base` (caller-supplied, default `master`) ONLY
+ *      when there is no brainclaw sidecar at all (plain/non-brainclaw git
+ *      evidence callers).
+ * A legacy sidecar without `base_ref_sha` returns undefined. That is deliberate:
+ * unknown is safer than silently comparing to a moving `master`.
  * Anchoring on the creation ref is what avoids the "worker delivered"
  * false-positive after a squash-merge advanced master.
  *
@@ -204,14 +236,20 @@ export function gitEvidence(
 ): { commitsAhead: number; commitsAheadRaw: number; dirtyTracked: number; baseRef: string } | undefined {
   if (!worktreePath) return undefined;
   // Two DIFFERENT anchors:
-  //   - creationBase: sidecar `base_ref_sha`, else caller `baseRef` — the
+  //   - creationBase: sidecar `base_ref_sha`, else caller `baseRef` for
+  //     non-brainclaw paths only. A legacy sidecar without the SHA is unknown.
   //     stable anchor for "how much did the worker add?" (raw ahead count).
   //   - integrationBase: caller `baseRef` (default `master`) — the moving
   //     integration target the patch-id refinement compares against ("still
   //     un-integrated?"). Using the creation SHA here would falsely count a
   //     squash-merged commit as un-integrated (its patch is on master, but
   //     master isn't the creation ref).
-  const creationBase = readWorktreeBaseRef(worktreePath) ?? baseRef;
+  const recordedBase = readWorktreeBaseRef(worktreePath);
+  if (recordedBase.legacySidecar && !recordedBase.ref) {
+    logger.debug('dispatch status: git evidence unavailable: legacy worktree sidecar lacks base_ref_sha');
+    return undefined;
+  }
+  const creationBase = recordedBase.ref ?? baseRef;
   const integrationBase = baseRef;
   try {
     const aheadRaw = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${creationBase}..HEAD`], {
@@ -234,6 +272,9 @@ export function gitEvidence(
         });
         const plusLines = cherry.split(/\r?\n/).filter((l) => l.startsWith('+ '));
         refined = plusLines.length;
+        if (refined > 0 && aggregateChangesMatchIntegrationBase(worktreePath, creationBase, integrationBase)) {
+          refined = 0;
+        }
       } catch { /* keep raw count */ }
     }
     return {

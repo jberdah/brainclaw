@@ -15,7 +15,7 @@
  *      recorded creation SHA (sidecar `base_ref_sha`), not on a moved master,
  *      and refines the count via patch-id (squash-merged commits → 0).
  */
-import { afterEach, describe, it } from 'node:test';
+import { after, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,27 +27,34 @@ import {
   detachWorktreeJunctions,
   gcWorktreeIfHarvested,
   isBranchMergedByContent,
-  resolveWorktreePath,
 } from '../../src/core/worktree.js';
 import { gitEvidence } from '../../src/core/dispatch-status.js';
 
 const cleanup: string[] = [];
+const gitGlobalConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-git-global-'));
+const gitGlobalConfig = path.join(gitGlobalConfigDir, 'config');
+fs.writeFileSync(gitGlobalConfig, '');
+const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: gitGlobalConfig };
+
+after(() => {
+  fs.rmSync(gitGlobalConfigDir, { recursive: true, force: true });
+});
 
 afterEach(() => {
   while (cleanup.length > 0) {
     const p = cleanup.pop() as string;
-    try { spawnSync('git', ['worktree', 'remove', '--force', p], { cwd: path.dirname(p), encoding: 'utf-8' }); } catch { /* ignore */ }
+    try { spawnSync('git', ['worktree', 'remove', '--force', p], { cwd: path.dirname(p), encoding: 'utf-8', env: gitEnv }); } catch { /* ignore */ }
     fs.rmSync(p, { recursive: true, force: true });
   }
 });
 
 function git(args: string[], cwd: string): void {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf-8', env: gitEnv });
   assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
 }
 
 function gitOk(args: string[], cwd: string): string {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf-8', env: gitEnv });
   assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
   return r.stdout.trim();
 }
@@ -100,13 +107,42 @@ describe('trp#926 — isBranchMergedByContent (patch-id detection)', () => {
     squashMerge(repo, 'lane/squashed', 'src/x.ts', 'export const x = 42;\n');
 
     // Sanity: ancestry says NOT merged.
-    const ancestry = spawnSync('git', ['branch', '--merged', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).stdout;
+    const ancestry = spawnSync('git', ['branch', '--merged', 'HEAD'], { cwd: repo, encoding: 'utf-8', env: gitEnv }).stdout;
     assert.ok(!ancestry.includes('lane/squashed'), 'ancestry check must NOT flag squash-merged lanes — that is the whole bug');
 
     // Content check: patch is on master → merged.
     assert.equal(isBranchMergedByContent(repo, 'lane/squashed', 'HEAD'), true);
     // Silence the "unused" lint on wt via a defensive existence check.
     assert.ok(fs.existsSync(wt));
+  });
+
+  it('returns true for a multi-commit lane squashed into one aggregate commit', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-squash-multi-'));
+    cleanup.push(repo);
+    git(['init', '-b', 'master'], repo);
+    git(['config', 'user.email', 't@e.com'], repo);
+    git(['config', 'user.name', 'T'], repo);
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\n');
+    git(['add', 'f.txt'], repo);
+    git(['commit', '-m', 'init'], repo);
+
+    const wt = path.join(repo, '..', `${path.basename(repo)}-wt`);
+    cleanup.push(wt);
+    git(['worktree', 'add', '-b', 'lane/multi-squash', wt, 'HEAD'], repo);
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'base\none\n');
+    git(['add', 'f.txt'], wt);
+    git(['commit', '-m', 'one'], wt);
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'base\none\ntwo\n');
+    git(['add', 'f.txt'], wt);
+    git(['commit', '-m', 'two'], wt);
+
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\none\ntwo\n');
+    git(['add', 'f.txt'], repo);
+    git(['commit', '-m', 'squash lane/multi-squash'], repo);
+
+    const cherry = spawnSync('git', ['cherry', 'HEAD', 'lane/multi-squash'], { cwd: repo, encoding: 'utf-8', env: gitEnv }).stdout;
+    assert.match(cherry, /^\+ /m, 'sanity: per-commit patch-id alone does not detect this squash');
+    assert.equal(isBranchMergedByContent(repo, 'lane/multi-squash', 'HEAD'), true);
   });
 
   it('returns false for a lane whose commit patch is genuinely new to base', () => {
@@ -259,6 +295,32 @@ describe('trp#926 — gitEvidence anchors on the worktree creation ref', () => {
     assert.equal(ev.baseRef, sidecar.base_ref_sha, 'baseRef used must be the sidecar-recorded creation SHA');
   });
 
+  it('reports unknown for legacy sidecars without base_ref_sha instead of falling back to master', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-legacy-anchor-'));
+    cleanup.push(repo);
+    git(['init', '-b', 'master'], repo);
+    git(['config', 'user.email', 't@e.com'], repo);
+    git(['config', 'user.name', 'T'], repo);
+    git(['commit', '--allow-empty', '-m', 'init'], repo);
+
+    const wt = path.join(repo, '..', `${path.basename(repo)}-legacy-wt`);
+    cleanup.push(wt);
+    git(['worktree', 'add', '-b', 'feat/legacy-sidecar', wt, 'HEAD'], repo);
+    fs.writeFileSync(path.join(wt, '.brainclaw-worktree.json'), JSON.stringify({
+      session_id: 'ses_legacy',
+      base_ref: 'master',
+    }));
+    fs.writeFileSync(path.join(wt, 'work.txt'), 'legacy work\n');
+    git(['add', 'work.txt'], wt);
+    git(['commit', '-m', 'legacy work'], wt);
+
+    fs.writeFileSync(path.join(repo, 'main.txt'), 'master moved\n');
+    git(['add', 'main.txt'], repo);
+    git(['commit', '-m', 'advance master'], repo);
+
+    assert.equal(gitEvidence(wt, 'master'), undefined);
+  });
+
   it('refines commits_ahead via patch-id: a squash-merged commit counts as 0', () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-refine-'));
     cleanup.push(repo);
@@ -288,6 +350,35 @@ describe('trp#926 — gitEvidence anchors on the worktree creation ref', () => {
     assert.ok(ev);
     assert.equal(ev.commitsAheadRaw, 1, 'raw ancestry count still sees the lane commit');
     assert.equal(ev.commitsAhead, 0, 'patch-id refinement must collapse squash-merged commits to 0');
+  });
+
+  it('refines commits_ahead for a multi-commit lane squashed into one aggregate commit', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-refine-multi-'));
+    cleanup.push(repo);
+    git(['init', '-b', 'master'], repo);
+    git(['config', 'user.email', 't@e.com'], repo);
+    git(['config', 'user.name', 'T'], repo);
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\n');
+    git(['add', 'f.txt'], repo);
+    git(['commit', '-m', 'init'], repo);
+
+    const wt = createWorktree(repo, 'feat/multi-squash-refine');
+    cleanup.push(wt);
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'base\none\n');
+    git(['add', 'f.txt'], wt);
+    git(['commit', '-m', 'one'], wt);
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'base\none\ntwo\n');
+    git(['add', 'f.txt'], wt);
+    git(['commit', '-m', 'two'], wt);
+
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\none\ntwo\n');
+    git(['add', 'f.txt'], repo);
+    git(['commit', '-m', 'squash feat/multi-squash-refine'], repo);
+
+    const ev = gitEvidence(wt, 'master');
+    assert.ok(ev);
+    assert.equal(ev.commitsAheadRaw, 2, 'raw ancestry count still sees both lane commits');
+    assert.equal(ev.commitsAhead, 0, 'aggregate content refinement must collapse multi-commit squash to 0');
   });
 
   it('flags a truly un-integrated lane: commits_ahead>0, dirty_tracked=0', () => {
