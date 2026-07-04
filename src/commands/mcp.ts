@@ -791,13 +791,17 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_release_claim',
-    description: 'Release a work claim.',
+    description: 'Release a work claim. Callers own their own claims; a trusted+ coordinator releasing another agent\'s claim MUST pass coordinator_override:true (audited).',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Claim ID to release.' },
         planStatus: { type: 'string', description: 'Optional: update linked plan status.' },
+        coordinator_override: {
+          type: 'boolean',
+          description: 'Opt-in override for a trusted+ caller releasing a claim they do NOT own (cross-agent teardown, ghost-claim cleanup). Rejected for contributor-level callers; audited when used. trp#928.',
+        },
       },
       required: ['id'],
     },
@@ -1391,7 +1395,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_transition',
-    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one.',
+    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one. For entity="claim": released/stale transitions are ownership-checked — non-owners must pass coordinator_override:true (trusted+ trust level required).',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1401,6 +1405,7 @@ const MCP_WRITE_TOOLS = [
         to: { type: 'string', description: 'Target status.' },
         reason: { type: 'string', description: 'Optional free-text reason, audited alongside the transition.' },
         project: { type: 'string', description: 'Optional: name of a linked project to transition the entity in. Defaults to the current project.' },
+        coordinator_override: { type: 'boolean', description: 'entity="claim" only: opt-in override for a trusted+ caller releasing/staling a claim they do NOT own. Audited when used. trp#928.' },
       },
       required: ['entity', 'id', 'to'],
     },
@@ -3999,16 +4004,40 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      // pln#562 step 5 — release is ownership-checked like acquisition and
-      // adoption. The resolved principal must own the claim; trusted+ callers
-      // (coordinators) may release others' claims, with an audit entry.
+      // pln#562 step 5 + trp#928 — release is ownership-checked like acquisition
+      // and adoption. Under the trp#928 tightening the coordinator override is
+      // OPT-IN via coordinator_override:true (implicit "trusted+ = always
+      // override" was too magic — a coordinator releasing a worker's claim
+      // should be a visible act, not a silent side-effect of trust). The
+      // ownership check still enforces:
+      //   - owner-of-claim releases (identity matches): allowed, no override needed
+      //   - non-owner releases without coordinator_override: rejected loudly (the
+      //     error message points the caller at coordinator_override so it is
+      //     executable — pln#607 rule).
+      //   - non-owner releases with coordinator_override:true but not trusted+:
+      //     trust_error (privilege escalation prevention).
+      //   - non-owner releases with coordinator_override:true and trusted+:
+      //     allowed, audited (auditReleaseOverride).
       const releaseIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, cwd, connectionSessionId);
+      const coordinatorOverrideRequested = args.coordinator_override === true;
+      if (coordinatorOverrideRequested) {
+        const identity = 'identity' in releaseIdentity ? releaseIdentity.identity : undefined;
+        const trustLevel = identity?.trust_level ?? 'contributor';
+        if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
+          return {
+            response: createToolErrorResponse(
+              'trust_error',
+              `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'. Ask a curator to elevate the agent, or have the claim owner release it.`,
+            ),
+          };
+        }
+      }
       const releaseAuth = 'identity' in releaseIdentity && releaseIdentity.identity
         ? {
             agent: releaseIdentity.identity.agent_name,
             agent_id: releaseIdentity.identity.agent_id,
             session_id: connectionSessionId,
-            override: hasMinimumTrustLevel(releaseIdentity.identity.trust_level ?? 'contributor', 'trusted'),
+            override: coordinatorOverrideRequested,
           }
         : undefined;
       let cascadeResult;
@@ -4533,6 +4562,39 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           actor: callerAgent,
           actor_id: resolved.identity!.agent_id,
         }, cwd);
+
+        // trp#928 — cascade-release the assignment's linked claim on completion.
+        // Before this landing an obedient worker had to make TWO calls to close
+        // the loop (bclaw_assignment_update status=completed AND
+        // bclaw_release_claim); dispatch briefs enumerate both, but not every
+        // sandboxed worker gets through both, and the coordinator's harvest path
+        // only releases on --integrate — so contributor-driven completions left
+        // claims active. The worker's own identity owns the claim (session
+        // adoption), so ownership matches and no coordinator_override is needed.
+        // Silent success/failure is unacceptable: log per-claim outcome.
+        if (status === 'completed' && assignment.claim_id) {
+          try {
+            const { releaseClaimsCascade, logCascadeReleaseResult } = await import('../core/claims.js');
+            const cascade = releaseClaimsCascade([assignment.claim_id], {
+              cwd,
+              planStatus: 'done',
+              auth: {
+                agent: callerAgent,
+                agent_id: resolved.identity!.agent_id,
+                session_id: effectiveSessionId,
+                override: false,
+              },
+            });
+            logCascadeReleaseResult({
+              actor: callerAgent,
+              trigger: 'assignment_completed',
+              assignment_id: assignmentId,
+              claim_id: assignment.claim_id,
+              cascade,
+              cwd,
+            });
+          } catch { /* never block the update on cascade release */ }
+        }
 
         // When accepted: auto-acknowledge the inbox message (replaces bclaw_ack_message)
         if (status === 'accepted' && assignment.message_id) {
@@ -7428,7 +7490,36 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const reason = args.reason as string | undefined;
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
         const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = transitionEntity(entity, id, to, targetCwd, reason);
+        // trp#928 — claim transitions consume the ReleaseClaimAuth ownership
+        // check (released/stale both mutate a claim owned by SOME agent). Reuse
+        // the same coordinator_override opt-in as bclaw_release_claim so both
+        // paths have identical trust semantics and the same executable error.
+        let transitionAuth: import('../core/entity-operations.js').TransitionAuth | undefined;
+        if (entity === 'claim') {
+          const transitionIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, targetCwd, connectionSessionId);
+          const coordinatorOverrideRequested = args.coordinator_override === true;
+          if (coordinatorOverrideRequested) {
+            const identity = 'identity' in transitionIdentity ? transitionIdentity.identity : undefined;
+            const trustLevel = identity?.trust_level ?? 'contributor';
+            if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
+              return {
+                response: createToolErrorResponse(
+                  'trust_error',
+                  `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'.`,
+                ),
+              };
+            }
+          }
+          transitionAuth = 'identity' in transitionIdentity && transitionIdentity.identity
+            ? {
+                agent: transitionIdentity.identity.agent_name,
+                agent_id: transitionIdentity.identity.agent_id,
+                session_id: connectionSessionId,
+                override: coordinatorOverrideRequested,
+              }
+            : undefined;
+        }
+        const result = transitionEntity(entity, id, to, targetCwd, reason, transitionAuth);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
           targetCwd,

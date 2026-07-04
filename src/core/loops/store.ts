@@ -6,6 +6,7 @@ import { memoryDir, writeFileAtomic } from '../io.js';
 import { nowISO } from '../ids.js';
 import { logger } from '../logger.js';
 import { convergeAssignmentToTerminal, loadAssignment } from '../assignments.js';
+import { logCascadeReleaseResult, releaseClaimsCascade } from '../claims.js';
 import { gcWorktreeIfHarvested } from '../worktree.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
@@ -558,6 +559,35 @@ export function closeLoop(input: CloseLoopInput, cwd?: string): LoopThread {
     try {
       convergeAssignmentToTerminal(slot.assignment_id, assignmentTerminal, `loop ${input.id} closed (${input.final_status})`, cwd);
     } catch { /* never block loop close on assignment convergence */ }
+  }
+
+  // trp#928 — cascade-release claims linked to slots + slot-linked assignments.
+  // Before this landing, loop close converged the assignment lifecycle but left
+  // reviewer claims active indefinitely (dogfooding 2026-07: 23 ghost claims,
+  // most from closed review loops). System-actor release: no auth → the
+  // ownership check is skipped, matching convergeAssignmentToTerminal's contract
+  // above (loop close is a system action, not a user-driven release).
+  const claimIdsFromSlots: string[] = [];
+  for (const slot of next.slots) {
+    if (slot.claim_id) claimIdsFromSlots.push(slot.claim_id);
+    if (slot.assignment_id) {
+      try {
+        const assignment = loadAssignment(slot.assignment_id, cwd);
+        if (assignment?.claim_id) claimIdsFromSlots.push(assignment.claim_id);
+      } catch { /* assignment gone — skip */ }
+    }
+  }
+  if (claimIdsFromSlots.length > 0) {
+    try {
+      const cascade = releaseClaimsCascade(claimIdsFromSlots, { cwd });
+      logCascadeReleaseResult({
+        actor: input.actor,
+        trigger: 'loop_close',
+        loop_id: input.id,
+        cascade,
+        cwd,
+      });
+    } catch { /* never block loop close on cascade release */ }
   }
 
   // pln#594: GC the dispatched sub-agent worktrees now the loop is done, so
