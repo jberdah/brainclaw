@@ -3,10 +3,16 @@
  *
  * Spawns `brainclaw mcp` and communicates over JSON-RPC 2.0 (newline-delimited).
  * One instance per project directory.
+ *
+ * The command to spawn is passed in as a structured `BrainclawSpawnPlan` — see
+ * `./brainclaw-resolver`. The plan is always shaped as `node <cli.js>` so
+ * `cp.spawn(..., { shell: false })` works uniformly on win32 and POSIX
+ * (never a `.cmd` shim — trp#927, 2026-07-03).
  */
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { BrainclawSpawnPlan } from './brainclaw-resolver';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -48,7 +54,7 @@ export class McpClient {
 
   constructor(
     private readonly _cwd: string,
-    private readonly _bclawCmd: string,
+    private readonly _plan: BrainclawSpawnPlan,
   ) {}
 
   /** Ensure the MCP server is started and initialized. */
@@ -221,18 +227,15 @@ export class McpClient {
   }
 
   /**
-   * Build [command, ...args] from the brainclaw command string (e.g. `brainclaw`,
-   * `"path/to/brainclaw"`, or `node "path/to/dist/cli.js"`).
+   * Build [command, ...args] from the resolved spawn plan.
+   *
+   * The plan is always `node <cli.js>` shape, so the resulting spawn call
+   * works under `{ shell: false }` on every OS — no `.cmd`/`.ps1` shims are
+   * handed to spawn (which would break on win32 with modern Node, see the
+   * ENOENT trap that motivated `brainclaw-resolver.ts`).
    */
   private _buildSpawnArgs(): [string, ...string[]] {
-    const cmd = this._bclawCmd.trim();
-    if (cmd.startsWith('node ')) {
-      const script = cmd.slice(5).replace(/^"|"$/g, '');
-      return ['node', script, 'mcp'];
-    }
-    // Strip wrapping quotes from paths like `"/path/to/brainclaw"`
-    const bin = cmd.replace(/^"|"$/g, '');
-    return [bin, 'mcp'];
+    return [this._plan.command, ...this._plan.args, 'mcp'];
   }
 }
 

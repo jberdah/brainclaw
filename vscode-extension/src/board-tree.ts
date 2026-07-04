@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { McpClient } from './mcp-client';
+import {
+  resolveBrainclawSpawnPlan,
+  type BrainclawSpawnPlan,
+  type ResolveResult,
+} from './brainclaw-resolver';
 import {
   STALE_MS,
   agentFreshness,
@@ -385,8 +389,13 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private readonly _sectionLoadPromises = new Map<string, Promise<BoardData | null>>();
   private readonly _loadingProjects = new Set<string>();
   private readonly _mcpClients = new Map<string, McpClient>();
-  private readonly _resolvedCmds = new Map<string, string | null>();
-  private readonly _resolvingCmds = new Map<string, Promise<string | undefined>>();
+  // Resolved brainclaw spawn plan per project (null = confirmed failure, so
+  // we don't re-probe on every fetch). The parallel `_resolveErrors` map
+  // holds the classified error message for failed cases so callers can
+  // surface WHY resolution failed (trp#927 speaking-degradation fix).
+  private readonly _resolvedPlans = new Map<string, BrainclawSpawnPlan | null>();
+  private readonly _resolvingPlans = new Map<string, Promise<BrainclawSpawnPlan | undefined>>();
+  private readonly _resolveErrors = new Map<string, string>();
   // Incremental refresh (pln#457):
   //   _sectionItems caches BrainclawTreeItem instances per section so that the
   //   same reference is returned from getChildren() across refreshes — that's
@@ -509,7 +518,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(targetCwd));
       return;
     }
     try {
@@ -525,7 +534,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(targetCwd));
       return;
     }
 
@@ -577,7 +586,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(targetCwd));
       return;
     }
 
@@ -628,7 +637,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const targetCwd = this._normalizePath(this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(targetCwd));
       return;
     }
 
@@ -660,7 +669,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   private async _execViaMcp(command: string, targetCwd: string): Promise<void> {
     const client = await this._getMcpClient(targetCwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(targetCwd));
       return;
     }
 
@@ -720,7 +729,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(cwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(cwd));
       return;
     }
     const board = this._workspaceBoard;
@@ -753,7 +762,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(cwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(cwd));
       return;
     }
     try {
@@ -773,7 +782,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(cwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(cwd));
       return;
     }
     try {
@@ -796,7 +805,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const cwd = this._normalizePath(projectPath ?? this._rootProjectPath ?? this._workspaceRoot);
     const client = await this._getMcpClient(cwd);
     if (!client) {
-      vscode.window.showErrorMessage('Brainclaw: no brainclaw command found');
+      vscode.window.showErrorMessage(this._noBclawMessage(cwd));
       return;
     }
     output.clear();
@@ -1047,35 +1056,62 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     const existing = this._mcpClients.get(normalizedPath);
     if (existing) return existing;
 
-    const bclaw = await this._resolveCmd(normalizedPath);
-    if (!bclaw) return null;
+    const plan = await this._resolvePlan(normalizedPath);
+    if (!plan) return null;
 
-    const client = new McpClient(normalizedPath, bclaw);
+    const client = new McpClient(normalizedPath, plan);
     this._mcpClients.set(normalizedPath, client);
     return client;
   }
 
-  private async _resolveCmd(cwd: string): Promise<string | undefined> {
+  private async _resolvePlan(cwd: string): Promise<BrainclawSpawnPlan | undefined> {
     const normalizedPath = this._normalizePath(cwd);
-    if (this._resolvedCmds.has(normalizedPath)) {
-      const resolved = this._resolvedCmds.get(normalizedPath);
-      return resolved ?? undefined;
+    if (this._resolvedPlans.has(normalizedPath)) {
+      const cached = this._resolvedPlans.get(normalizedPath);
+      return cached ?? undefined;
     }
 
-    const pending = this._resolvingCmds.get(normalizedPath);
+    const pending = this._resolvingPlans.get(normalizedPath);
     if (pending) return pending;
 
-    const resolvePromise = resolveBrainclawCmd(normalizedPath)
-      .then((resolved) => {
-        this._resolvedCmds.set(normalizedPath, resolved ?? null);
-        return resolved;
+    const resolvePromise = resolveBrainclawSpawnPlan(normalizedPath)
+      .then((result: ResolveResult) => {
+        if (result.ok) {
+          this._resolvedPlans.set(normalizedPath, result.plan);
+          this._resolveErrors.delete(normalizedPath);
+          return result.plan;
+        }
+        this._resolvedPlans.set(normalizedPath, null);
+        this._resolveErrors.set(normalizedPath, result.error);
+        return undefined;
       })
       .finally(() => {
-        this._resolvingCmds.delete(normalizedPath);
+        this._resolvingPlans.delete(normalizedPath);
       });
 
-    this._resolvingCmds.set(normalizedPath, resolvePromise);
+    this._resolvingPlans.set(normalizedPath, resolvePromise);
     return resolvePromise;
+  }
+
+  /**
+   * Speaking-degradation surface (trp#927 fix): callers that got `null` from
+   * `_getMcpClient` (or the public `getMcpClient`) can look up the classified
+   * reason resolution failed — listing every candidate the resolver tried and
+   * why each one failed. Returns undefined if resolution has not been
+   * attempted yet, or succeeded.
+   */
+  public getResolveError(projectPath: string): string | undefined {
+    return this._resolveErrors.get(this._normalizePath(projectPath));
+  }
+
+  /**
+   * Build the message shown to the user when no MCP client could be created.
+   * If the resolver classified WHY, we include that; otherwise the legacy
+   * short message.
+   */
+  private _noBclawMessage(projectPath: string): string {
+    const detail = this.getResolveError(projectPath);
+    return detail ? `Brainclaw: ${detail}` : 'Brainclaw: no brainclaw command found';
   }
 
   private _startWatches(): void {
@@ -2866,28 +2902,17 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
   }
 }
 
-function canRunCommand(command: string, cwd: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    cp.exec(command, { cwd, timeout: 3000, windowsHide: true }, (err) => {
-      resolve(!err);
-    });
-  });
-}
-
-export async function resolveBrainclawCmd(cwd: string): Promise<string | undefined> {
-  const local = path.join(cwd, 'node_modules', '.bin', 'brainclaw');
-  if (await canRunCommand(`"${local}" --version`, cwd)) {
-    return `"${local}"`;
-  }
-
-  const distCli = path.join(cwd, 'dist', 'cli.js');
-  if (await canRunCommand(`node "${distCli}" --version`, cwd)) {
-    return `node "${distCli}"`;
-  }
-
-  if (await canRunCommand('brainclaw --version', cwd)) {
-    return 'brainclaw';
-  }
-
-  return undefined;
+/**
+ * Compatibility shim retained for callers that construct their own
+ * `McpClient`s outside `BrainclawBoardProvider`. New code should call
+ * `resolveBrainclawSpawnPlan` directly (see `./brainclaw-resolver`) — the
+ * structured plan is what fixes trp#927 (probe/spawn share the same
+ * mechanic, `node <cli.js>` under `shell:false`, never a `.cmd` shim).
+ *
+ * Returns the plan itself (or undefined on failure). The classified error
+ * message is discarded here; use `resolveBrainclawSpawnPlan` if you need it.
+ */
+export async function resolveBrainclawPlan(cwd: string): Promise<BrainclawSpawnPlan | undefined> {
+  const result = await resolveBrainclawSpawnPlan(cwd);
+  return result.ok ? result.plan : undefined;
 }
