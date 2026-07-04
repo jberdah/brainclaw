@@ -9,7 +9,7 @@
  *
  * Sprint 0 of pln_7fdfd70d (site content-as-data + facts-contract).
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -40,6 +40,34 @@ const agentProfiles = getAllAgentCapabilityProfiles()
   }))
   .sort((a, b) => a.name.localeCompare(b.name))
 
+// Bench report is optional: when scripts/bench.mjs has run, we publish a
+// summary alongside tools/entities so the site can render a measured
+// "time-to-first-value" section. Absent when the bench hasn't run yet.
+const benchReportPath = path.resolve('./dist/bench-report.json')
+let benchSummary
+if (existsSync(benchReportPath)) {
+  try {
+    const raw = JSON.parse(readFileSync(benchReportPath, 'utf-8'))
+    benchSummary = {
+      schema: raw.schema,
+      generated_at: raw.generated_at,
+      node_version: raw.node_version,
+      platform: raw.platform,
+      repeats: raw.repeats,
+      scenarios: raw.scenarios.map((s) => ({
+        name: s.name,
+        volume: s.volume,
+        description: s.description,
+        duration_ms_median: s.duration_ms.median,
+        payload_chars_median: s.payload_chars.median,
+        payload_tokens_est_median: s.payload_tokens_est.median,
+      })),
+    }
+  } catch (err) {
+    console.warn(`[emit-site-facts] failed to parse bench report: ${err instanceof Error ? err.message : err}`)
+  }
+}
+
 const facts = {
   version: pkg.version,
   generated_at: new Date().toISOString(),
@@ -60,6 +88,7 @@ const facts = {
     names: agentProfiles.map((profile) => profile.name),
     profiles: agentProfiles,
   },
+  ...(benchSummary ? { bench: benchSummary } : {}),
 }
 
 const jsContent =
@@ -72,5 +101,5 @@ writeFileSync('./dist/facts.js', jsContent, 'utf-8')
 writeFileSync('./dist/facts.json', JSON.stringify(facts, null, 2) + '\n', 'utf-8')
 
 console.log(
-  `✓ Generated dist/facts.js + dist/facts.json (v${facts.version}, ${facts.tools.count} tools, ${facts.entities.count} entities, ${facts.agent_integrations.count} agent integrations)`,
+  `✓ Generated dist/facts.js + dist/facts.json (v${facts.version}, ${facts.tools.count} tools, ${facts.entities.count} entities, ${facts.agent_integrations.count} agent integrations${benchSummary ? `, bench: ${benchSummary.scenarios.length} scenario(s)` : ''})`,
 )
