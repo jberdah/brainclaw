@@ -290,6 +290,10 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     // Aligning with the regular spawn template (workspace-write) is the
     // accepted pattern per agent_spawn_inventory memory.
     invoke_review_template: 'codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"',
+    // pln#606: `codex exec -m <MODEL>` / `--model` (verified empirically on
+    // codex 0.130). We use the long form `--model` for symmetry with the
+    // other agent profiles and readability.
+    model_flag: '--model',
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
@@ -319,6 +323,10 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_template: 'copilot -p "{prompt}" --allow-all --no-ask-user',
     invoke_binary: 'copilot',
     invoke_review_template: 'copilot -p "{prompt}" --allow-all --no-ask-user',
+    // pln#606: `copilot --model <model>` (verified on Copilot CLI 1.0.35+).
+    // 'auto' lets Copilot pick automatically; concrete ids come from the
+    // entitled catalog fetched by the CLI at startup.
+    model_flag: '--model',
   },
 
   kilocode: {

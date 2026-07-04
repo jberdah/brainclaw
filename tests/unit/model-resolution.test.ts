@@ -70,4 +70,51 @@ describe('buildInvokeCommand model injection (pln#520 step 3)', () => {
     const occurrences = cmd!.args.filter((a) => a === '--model').length;
     assert.equal(occurrences, 1, `expected a single --model, got: ${cmd!.args.join(' ')}`);
   });
+
+  // pln#606 — model_flag rolled out to codex and github-copilot (verified
+  // empirically: `codex exec -m|--model`, `copilot --model`).
+  it('injects the model flag right after the binary for codex', () => {
+    const cmd = buildInvokeCommand('codex', 'do the thing', {
+      model: 'gpt-5-codex',
+      platform: 'linux',
+    });
+    assert.ok(cmd, 'expected an invoke command');
+    assert.equal(cmd!.executable, 'codex');
+    const idx = cmd!.args.indexOf('--model');
+    assert.ok(idx >= 0, `expected --model in args, got: ${cmd!.args.join(' ')}`);
+    assert.equal(cmd!.args[idx + 1], 'gpt-5-codex');
+    // Injection lands before the existing -c / --sandbox flags; the sandbox
+    // switch must still be present so we don't accidentally strip it.
+    assert.ok(
+      cmd!.args.includes('--sandbox'),
+      `sandbox flag must survive model injection, got: ${cmd!.args.join(' ')}`,
+    );
+  });
+
+  it('injects the model flag right after the binary for github-copilot', () => {
+    const cmd = buildInvokeCommand('github-copilot', 'do the thing', {
+      model: 'gpt-5.4',
+      platform: 'linux',
+    });
+    assert.ok(cmd);
+    assert.equal(cmd!.executable, 'copilot');
+    const idx = cmd!.args.indexOf('--model');
+    assert.ok(idx >= 0, `expected --model in args, got: ${cmd!.args.join(' ')}`);
+    assert.equal(cmd!.args[idx + 1], 'gpt-5.4');
+    // The permission switches that make copilot spawn headless must survive.
+    assert.ok(cmd!.args.includes('--allow-all'));
+    assert.ok(cmd!.args.includes('--no-ask-user'));
+  });
+
+  it('is a no-op for codex when no model is supplied', () => {
+    const cmd = buildInvokeCommand('codex', 'do the thing', { platform: 'linux' });
+    assert.ok(cmd);
+    assert.ok(!cmd!.args.includes('--model'), 'no --model when none requested');
+  });
+
+  it('is a no-op for github-copilot when no model is supplied', () => {
+    const cmd = buildInvokeCommand('github-copilot', 'do the thing', { platform: 'linux' });
+    assert.ok(cmd);
+    assert.ok(!cmd!.args.includes('--model'), 'no --model when none requested');
+  });
 });
