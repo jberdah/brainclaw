@@ -26,7 +26,17 @@ import {
   resolveCrossProjectLinks,
   type ResolvedCrossProjectLink,
 } from './cross-project.js';
-import { listClaims, loadClaim, saveClaim } from './claims.js';
+import {
+  findActiveClaimsForPlan,
+  listClaims,
+  loadClaim,
+  logCascadeReleaseResult,
+  markClaimStale,
+  releaseClaimsCascade,
+  releaseClaimWithCascade,
+  saveClaim,
+  type ReleaseClaimAuth,
+} from './claims.js';
 import { listActionRequired } from './actions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
@@ -784,12 +794,26 @@ export function removeEntity(
 
 // ─── TRANSITION ───────────────────────────────────────────────────────
 
+/**
+ * Optional caller identity threaded into a transitionEntity call. Currently
+ * only `claim` transitions consume it (release ownership + coordinator override
+ * audit trail — pln#562 step 5 / trp#928). Other entities ignore it.
+ */
+export interface TransitionAuth {
+  agent?: string;
+  agent_id?: string;
+  session_id?: string;
+  /** Coordinator override: allowed to release/stale another principal's claim. Audited. */
+  override?: boolean;
+}
+
 export function transitionEntity(
   name: EntityName,
   id: string,
   to: string,
   cwd: string,
   _reason?: string,
+  auth?: TransitionAuth,
 ): TransitionResult {
   const spec = ENTITY_REGISTRY[name];
   if (!spec.statusField) {
@@ -811,6 +835,32 @@ export function transitionEntity(
   switch (name) {
     case 'plan': {
       updatePlan({ id, status: to as PlanItem['status'] }, cwd);
+      // trp#928 — implement the `release_linked_claims_if_last` cascade tag.
+      // Before this landing the tag was advertised by the entity registry but
+      // the imperative cascade never ran, so a plan closed while its worker
+      // claims stayed active (ghost claims). The cascade now:
+      //  - runs only on plan → done (the tag's actual trigger)
+      //  - releases each active claim linked via plan_id
+      //  - LOGS per claim (released / skipped+reason / error) via the runtime
+      //    event journal so `bclaw_find(entity=agent_run)` and dashboards can
+      //    observe silent ownership failures instead of guessing at them.
+      // Ownership check: this path runs from bclaw_transition, so it inherits
+      // the caller's TransitionAuth (populated for entity='claim' but not for
+      // entity='plan'). auth undefined = system convergence (bypass ownership),
+      // matching the historical implicit contract for plan cascades.
+      if (to === 'done') {
+        const linked = findActiveClaimsForPlan(id, cwd);
+        if (linked.length > 0) {
+          const cascade = releaseClaimsCascade(linked.map((c) => c.id), { cwd });
+          logCascadeReleaseResult({
+            actor: 'system',
+            trigger: 'plan_done',
+            plan_id: id,
+            cascade,
+            cwd,
+          });
+        }
+      }
       return { entity: name, id, from, to, side_effects: sideEffects };
     }
     case 'decision':
@@ -846,6 +896,29 @@ export function transitionEntity(
       // (draft→active|archived, active→archived); updateSequence persists it.
       updateSequence({ id, status: to as SequenceStatus }, cwd);
       return { entity: name, id, from, to, side_effects: sideEffects };
+    }
+    case 'claim': {
+      // trp#928 — the entity registry advertised `active → released|stale` but
+      // transitionEntity never routed for entity=claim. The isValidTransition
+      // check above passed for anyone calling `bclaw_transition(entity='claim',
+      // to='released')`, but the transition then fell through to the
+      // EntityOperationUnsupportedError default. Now: released hits the same
+      // cascade path bclaw_release_claim uses (audit + plan-done cascade); stale
+      // uses markClaimStale (audit + `stale` terminal status). Reuses ReleaseClaimAuth
+      // so a trusted+ coordinator can release across ownership with override.
+      const releaseAuth: ReleaseClaimAuth | undefined = auth
+        ? { agent: auth.agent, agent_id: auth.agent_id, session_id: auth.session_id, override: auth.override }
+        : undefined;
+      if (to === 'released') {
+        releaseClaimWithCascade(id, { planStatus: _reason === 'done' ? 'done' : undefined, cwd, auth: releaseAuth });
+        return { entity: name, id, from, to, side_effects: sideEffects };
+      }
+      if (to === 'stale') {
+        markClaimStale(id, cwd, releaseAuth);
+        return { entity: name, id, from, to, side_effects: sideEffects };
+      }
+      // isValidTransition already excluded every other target — belt-and-braces:
+      throw new InvalidTransitionError(name, from, to);
     }
     default:
       throw new EntityOperationUnsupportedError(

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadState, saveState } from '../../src/core/state.js';
-import { saveClaim, releaseClaimWithCascade } from '../../src/core/claims.js';
+import { saveClaim, releaseClaimWithCascade, releaseClaimsCascade, logCascadeReleaseResult } from '../../src/core/claims.js';
+import { listRuntimeEvents } from '../../src/core/events.js';
 import { nowISO } from '../../src/core/ids.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
@@ -136,6 +137,77 @@ describe('claims cascade — last-claim rule', () => {
     // The function should not crash even though claim is already released
     assert.doesNotThrow(() => {
       releaseClaimWithCascade(claimId, { planStatus: 'done', cwd: workspace.dir });
+    });
+  });
+
+  describe('releaseClaimsCascade + logCascadeReleaseResult (trp#928)', () => {
+    it('emits a per-claim entry with reason=released for each released active claim', () => {
+      const planId = makePlanId('cascadelog_1');
+      seedPlan(workspace, planId);
+      const claimIds = ['clm_batch_a', 'clm_batch_b', 'clm_batch_c'];
+      for (const id of claimIds) seedClaim(workspace, id, planId);
+
+      const cascade = releaseClaimsCascade(claimIds, { cwd: workspace.dir });
+
+      assert.equal(cascade.released_count, 3);
+      assert.equal(cascade.entries.length, 3);
+      for (const entry of cascade.entries) {
+        assert.equal(entry.released, true);
+        assert.equal(entry.reason, 'released');
+      }
+    });
+
+    it('logs skipped for an already-terminal claim (does not fail the batch)', () => {
+      const planId = makePlanId('cascadelog_2');
+      seedPlan(workspace, planId);
+      seedClaim(workspace, 'clm_terminal_a', planId);
+      seedClaim(workspace, 'clm_terminal_b', planId);
+      // Release one manually so it is already terminal by the time the cascade runs.
+      releaseClaimWithCascade('clm_terminal_a', { cwd: workspace.dir });
+
+      const cascade = releaseClaimsCascade(['clm_terminal_a', 'clm_terminal_b'], { cwd: workspace.dir });
+
+      assert.equal(cascade.released_count, 1, 'only the active one released');
+      const skipped = cascade.entries.find((e) => e.claim_id === 'clm_terminal_a');
+      assert.ok(skipped);
+      assert.equal(skipped.released, false);
+      assert.equal(skipped.reason, 'already_terminal');
+    });
+
+    it('logs ownership_denied for a foreign claim without coordinator_override + surfaces via runtime event', () => {
+      const claimId = 'clm_denied_owner';
+      saveClaim({
+        id: claimId,
+        agent: 'other-worker',
+        scope: 'src/foreign',
+        description: 'foreign claim',
+        created_at: nowISO(),
+        status: 'active',
+      }, workspace.dir);
+
+      const cascade = releaseClaimsCascade([claimId], {
+        cwd: workspace.dir,
+        auth: { agent: 'coordinator', override: false },
+      });
+      assert.equal(cascade.released_count, 0);
+      assert.equal(cascade.error_count, 1);
+      const entry = cascade.entries[0];
+      assert.ok(entry);
+      assert.equal(entry.reason, 'ownership_denied');
+      assert.ok(entry.error && /coordinator_override/i.test(entry.error), 'error must expose the executable hint');
+
+      logCascadeReleaseResult({
+        actor: 'coordinator',
+        trigger: 'plan_done',
+        cascade,
+        cwd: workspace.dir,
+      });
+      const events = listRuntimeEvents(workspace.dir);
+      const cascadeEvents = events.filter((e) => Array.isArray(e.tags) && e.tags.includes('cascade'));
+      assert.ok(cascadeEvents.length > 0, 'a cascade runtime event must be emitted');
+      const evt = cascadeEvents[cascadeEvents.length - 1]!;
+      assert.ok(evt.tags?.includes('ownership-issue'), 'event must carry ownership-issue tag');
+      assert.ok(evt.text?.includes(claimId), 'event text should name the denied claim');
     });
   });
 
