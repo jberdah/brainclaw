@@ -196,10 +196,16 @@ function assertReleaseOwnership(claim: Claim, auth: ReleaseClaimAuth | undefined
     || (auth.agent !== undefined && claim.agent === auth.agent);
   if (ownerMatches) return { overrideUsed: false };
   if (auth.override) return { overrideUsed: true };
+  // pln#607 rule + trp#928 — the error must be executable as-is: the caller
+  // should be able to copy the coordinator_override:true param straight from the
+  // message into their next bclaw_release_claim call. "Coordinator-level callers
+  // may release with override" was diagnostically useless before — no param name,
+  // no path forward. Ghost claim clm_ed9b8386 stayed active for weeks because
+  // this error was raised, swallowed by a best-effort catch, and never surfaced.
   throw new Error(
     `claim '${claim.id}' is held by '${claim.agent}'${claim.session_id ? ` (session ${claim.session_id})` : ''}; `
     + `caller '${auth.agent ?? auth.agent_id ?? auth.session_id ?? 'unknown'}' does not own it. `
-    + 'Coordinator-level callers may release with override.',
+    + `Retry with coordinator_override:true (requires trusted+ trust level; the release is audited).`,
   );
 }
 
@@ -233,6 +239,47 @@ export function releaseClaim(id: string, cwd?: string, auth?: ReleaseClaimAuth):
     auditReleaseOverride(released, auth, cwd);
   }
   return released;
+}
+
+/**
+ * Mark an active claim as `stale` — a distinct terminal state from `released`
+ * used when a claim is being torn down because its owner is gone (session
+ * expired, worker died, coordinator abandoned the lane). Same ownership rules
+ * as releaseClaim (trusted+ coordinators may override with audit).
+ *
+ * trp#928 — the `active → stale` transition documented on the entity registry
+ * had no imperative path before; callers had to fall back to mass sweeps
+ * (`expireStaleActiveClaims`) or write status directly. Now bclaw_transition
+ * (entity=claim, to='stale') reaches this function via entity-operations.
+ */
+export function markClaimStale(id: string, cwd?: string, auth?: ReleaseClaimAuth): Claim {
+  let overrideUsed = false;
+  const staled = mutate({ cwd }, () => {
+    const claim = loadClaim(id, cwd);
+    overrideUsed = assertReleaseOwnership(claim, auth).overrideUsed;
+    claim.status = 'stale';
+    claim.released_at = nowISO();
+    saveClaimUnlocked(claim, cwd);
+    return claim;
+  });
+  appendAuditEntry(
+    {
+      actor: staled.agent,
+      actor_id: staled.agent_id,
+      action: 'release_claim',
+      item_id: staled.id,
+      item_type: 'claim',
+      scope: staled.scope,
+      session_id: staled.session_id,
+      host_id: staled.host_id,
+      after: { status: 'stale' },
+    },
+    cwd,
+  );
+  if (overrideUsed && auth) {
+    auditReleaseOverride(staled, auth, cwd);
+  }
+  return staled;
 }
 
 export interface ReleaseClaimCascadeOptions {
@@ -391,6 +438,164 @@ export function generateClaimId(): string {
 export function isClaimExpired(claim: Claim): boolean {
   if (!claim.expires_at) return false;
   return new Date(claim.expires_at) < new Date();
+}
+
+/**
+ * Per-claim outcome of a cascade release attempt. trp#928 — the previous silent
+ * cascade produced no evidence when a claim failed to release (clm_ed9b8386
+ * remained active for weeks after the plan closed). Return one entry per claim
+ * so the caller can log/report which released and which skipped and why.
+ */
+export interface CascadeReleaseEntry {
+  claim_id: string;
+  released: boolean;
+  /** 'released' | 'already_terminal' | 'ownership_denied' | 'not_found' | 'error' */
+  reason: string;
+  /** Present when reason='error' — the error's Error.message. */
+  error?: string;
+  /** Present when a claim's release used the coordinator override. */
+  override_used?: boolean;
+}
+
+export interface CascadeReleaseResult {
+  entries: CascadeReleaseEntry[];
+  released_count: number;
+  skipped_count: number;
+  error_count: number;
+}
+
+/**
+ * Release every ACTIVE claim linked to a given target (plan / assignment / loop
+ * slot claim). trp#928 — the cascade must LOG per-claim (released or
+ * skipped+reason) so a silent ownership failure is observable at the harvest /
+ * loop-close boundary. Ownership follows the same ReleaseClaimAuth contract as
+ * releaseClaim: a system caller (auth undefined) bypasses the check; a caller
+ * with auth honors ownership + coordinator_override.
+ */
+export function releaseClaimsCascade(
+  claimIds: readonly string[],
+  options: {
+    cwd?: string;
+    auth?: ReleaseClaimAuth;
+    /** Passed through to releaseClaimWithCascade for the last-claim rule when relevant. */
+    planStatus?: string;
+  } = {},
+): CascadeReleaseResult {
+  const entries: CascadeReleaseEntry[] = [];
+  // Deduplicate — callers may pass the same claim id via both an assignment and
+  // a slot; a duplicate would double-audit.
+  const seen = new Set<string>();
+  for (const id of claimIds) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    let claim: Claim | undefined;
+    try {
+      claim = loadClaim(id, options.cwd);
+    } catch {
+      entries.push({ claim_id: id, released: false, reason: 'not_found' });
+      continue;
+    }
+    if (claim.status !== 'active') {
+      entries.push({ claim_id: id, released: false, reason: 'already_terminal' });
+      continue;
+    }
+    try {
+      const rel = releaseClaimWithCascade(id, {
+        planStatus: options.planStatus,
+        cwd: options.cwd,
+        auth: options.auth,
+      });
+      const overrideUsed = options.auth?.override === true
+        && !ownerMatches(claim, options.auth);
+      entries.push({
+        claim_id: id,
+        released: rel.claim.status === 'released',
+        reason: rel.claim.status === 'released' ? 'released' : 'error',
+        ...(overrideUsed ? { override_used: true } : {}),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // The specific ownership-check error thrown by assertReleaseOwnership
+      // gets its own reason bucket so a caller can surface an executable hint
+      // (retry with coordinator_override:true) instead of a generic error.
+      const reason = /coordinator_override/i.test(message) ? 'ownership_denied' : 'error';
+      entries.push({ claim_id: id, released: false, reason, error: message });
+    }
+  }
+  const released_count = entries.filter((e) => e.released).length;
+  const error_count = entries.filter((e) => e.reason === 'error' || e.reason === 'ownership_denied').length;
+  return {
+    entries,
+    released_count,
+    skipped_count: entries.length - released_count - error_count,
+    error_count,
+  };
+}
+
+/**
+ * Extract of assertReleaseOwnership's owner check without the throw. Used by
+ * releaseClaimsCascade to know whether a successful release used the override
+ * path (so it can be reported in the per-claim log).
+ */
+function ownerMatches(claim: Claim, auth: ReleaseClaimAuth): boolean {
+  return (
+    (auth.session_id !== undefined && claim.session_id !== undefined && auth.session_id === claim.session_id)
+    || (auth.agent_id !== undefined && claim.agent_id !== undefined && auth.agent_id === claim.agent_id)
+    || (auth.agent !== undefined && claim.agent === auth.agent)
+  );
+}
+
+/**
+ * Find every active claim linked to a plan (via plan_id). Used by
+ * bclaw_transition(entity='plan', to='done') to implement the
+ * `release_linked_claims_if_last` cascade tag advertised on the entity
+ * registry (before trp#928 the tag was documentation only; the imperative
+ * cascade never ran).
+ */
+export function findActiveClaimsForPlan(planId: string, cwd?: string): Claim[] {
+  return listClaims(cwd).filter((c) => c.plan_id === planId && c.status === 'active');
+}
+
+/**
+ * Emit a runtime event summarising a cascade release outcome, one entry per
+ * claim in the metadata. trp#928 — every cascade caller (plan-done,
+ * loop close, assignment→completed, harvest --integrate) MUST log per-claim
+ * status so silent failures are observable via bclaw_find(entity='agent_run')
+ * / bclaw_find(entity='claim'). Best-effort: never breaks the parent flow.
+ */
+export function logCascadeReleaseResult(input: {
+  actor: string;
+  trigger: 'plan_done' | 'loop_close' | 'assignment_completed' | 'harvest_integrate';
+  plan_id?: string;
+  loop_id?: string;
+  assignment_id?: string;
+  claim_id?: string;
+  cascade: CascadeReleaseResult;
+  cwd?: string;
+}): void {
+  const { released_count, skipped_count, error_count, entries } = input.cascade;
+  if (entries.length === 0) return;
+  const text = `cascade[${input.trigger}]: released=${released_count} skipped=${skipped_count} errors=${error_count}`
+    + ` — ${entries.map((e) => `${e.claim_id}:${e.reason}`).join(', ')}`;
+  try {
+    createRuntimeEvent({
+      agent: input.actor,
+      event_type: 'assignment_progress',
+      text,
+      tags: ['cascade', 'claim-release', input.trigger, ...(error_count > 0 ? ['ownership-issue'] : [])],
+      plan_id: input.plan_id,
+      assignment_id: input.assignment_id,
+      claim_id: input.claim_id,
+      metadata: {
+        trigger: input.trigger,
+        released_count,
+        skipped_count,
+        error_count,
+        entries,
+        ...(input.loop_id ? { loop_id: input.loop_id } : {}),
+      },
+    }, input.cwd);
+  } catch { /* best-effort logging — never break the parent flow */ }
 }
 
 /** Mark active claims past their expires_at as released. Returns count of expired claims. */

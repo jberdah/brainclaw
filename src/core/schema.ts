@@ -1314,6 +1314,13 @@ export const CurrentSessionStateSchema = z.object({
   branch: z.string().optional(),
   /** Isolation mode: shared-checkout (default) or dedicated-worktree. */
   isolation_mode: IsolationModeSchema.optional(),
+  /**
+   * True when the session was materialized by an auto-repair path (e.g. a
+   * canonical write arriving without a prior session). Tag lets aggressive
+   * harvesting distinguish worker-authored sessions from operator sessions
+   * (pln#602 lesson on the pln#578 887-file blowup).
+   */
+  auto_created: z.boolean().optional(),
 });
 export type CurrentSessionState = z.infer<typeof CurrentSessionStateSchema>;
 

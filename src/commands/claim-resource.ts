@@ -46,6 +46,7 @@ export function runClaimResource(subcommand: string, args: string[], options: Cl
     }
     runReleaseClaim(id, {
       planStatus: options.planStatus,
+      coordinatorOverride: options.coordinatorOverride,
       cwd: options.cwd,
     });
     return;
