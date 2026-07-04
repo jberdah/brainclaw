@@ -1327,7 +1327,7 @@ const MCP_WRITE_TOOLS = [
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | sequence | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
-        filter: { type: 'object', description: 'Filter keys: status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). entity=agent_run also accepts assignment_id, claim_id, message_id.' },
+        filter: { type: 'object', description: 'Filter keys (ANY entity): status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). ENTITY-SCOPED keys (rejected with a validation_error if used with any other entity): assignment_id, claim_id, message_id — ONLY for entity="agent_run". Unknown/mis-scoped keys are rejected loudly.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the page payload (~4 chars/token). Tightens the default size cap; pagination metadata (has_more/next_offset) still applies.' },
       },
@@ -7207,22 +7207,43 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // only checks known keys), letting the caller believe the filter had
         // applied when it hadn't. Under the new contract, an unknown key is
         // a validation_error listing the keys actually honored.
+        // trp#928 — the entity-scoping error is now first-class: the doc says
+        // assignment_id/claim_id/message_id are entity='agent_run' only, but
+        // before this the rejection message called them 'unknown', misleading
+        // callers who'd cross-reference the description. Now the message names
+        // the constraint AND the entity that DOES accept the key so the user
+        // can fix the call without hunting through docs. (pln#599 docs-vs-facts.)
         const KNOWN_FILTER_KEYS = new Set([
           'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
           'assignment_id', 'claim_id', 'message_id',
           'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
         ]);
         const agentRunOnlyFilterKeys = new Set(['assignment_id', 'claim_id', 'message_id']);
-        const unknownKeys = Object.keys(filter).filter((k) =>
-          !KNOWN_FILTER_KEYS.has(k) || (agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run')
-        );
-        if (unknownKeys.length > 0) {
+        const providedKeys = Object.keys(filter);
+        const unknownKeys = providedKeys.filter((k) => !KNOWN_FILTER_KEYS.has(k));
+        const misScopedKeys = providedKeys.filter((k) => agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run');
+        if (unknownKeys.length > 0 || misScopedKeys.length > 0) {
+          const parts: string[] = [];
+          if (unknownKeys.length > 0) {
+            parts.push(`Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`);
+          }
+          if (misScopedKeys.length > 0) {
+            parts.push(
+              `Filter key(s) ${misScopedKeys.map((k) => `"${k}"`).join(', ')} are only valid for entity="agent_run" `
+              + `(this call used entity="${entity}"). `
+              + `Retry with entity="agent_run", or drop the ${misScopedKeys.join('/')} filter.`,
+            );
+          }
           return {
             response: createToolErrorResponse(
               'validation_error',
-              `Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. ` +
-              `Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`,
-              { unknown_keys: unknownKeys, accepted_keys: [...KNOWN_FILTER_KEYS].sort() },
+              parts.join(' '),
+              {
+                unknown_keys: unknownKeys,
+                mis_scoped_keys: misScopedKeys,
+                accepted_keys: [...KNOWN_FILTER_KEYS].sort(),
+                agent_run_only_keys: [...agentRunOnlyFilterKeys],
+              },
             ),
           };
         }
