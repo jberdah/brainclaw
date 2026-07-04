@@ -39,6 +39,8 @@ const report = readJson(reportFile);
 const budgets = readJson(budgetsFile);
 
 const defaultTolerance = budgets.default_tolerance ?? 0.2;
+const defaultDurationTolerance = budgets.default_duration_tolerance ?? defaultTolerance;
+const defaultPayloadTolerance = budgets.default_payload_tolerance ?? defaultTolerance;
 const violations = [];
 const passes = [];
 
@@ -48,13 +50,23 @@ for (const scenario of report.scenarios) {
     console.log(`  ${scenario.name}: no budget entry — skipping`);
     continue;
   }
-  const tolerance = budget.tolerance ?? defaultTolerance;
   const checks = [
-    { key: 'duration_ms', value: scenario.duration_ms.median, limit: budget.duration_ms_median },
-    { key: 'payload_chars', value: scenario.payload_chars.median, limit: budget.payload_chars_median },
+    {
+      key: 'duration_ms',
+      value: scenario.duration_ms.median,
+      limit: budget.duration_ms_median,
+      tolerance: budget.duration_tolerance ?? budget.tolerance ?? defaultDurationTolerance,
+    },
+    {
+      key: 'payload_chars',
+      value: scenario.payload_chars.median,
+      limit: budget.payload_chars_median,
+      tolerance: budget.payload_tolerance ?? budget.tolerance ?? defaultPayloadTolerance,
+    },
   ];
   for (const c of checks) {
     if (c.limit == null) continue;
+    const tolerance = c.tolerance;
     const ceiling = c.limit * (1 + tolerance);
     const ok = c.value <= ceiling;
     const record = {

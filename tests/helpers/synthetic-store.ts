@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createFastStore } from './fast-store.js';
 import { isolateAgentEnv } from './workspace.js';
-import type { Claim, Handoff, PlanItem, State } from '../../src/core/schema.js';
+import { saveAgentIdentity } from '../../src/core/agent-registry.js';
+import type { AgentIdentityDocument, Claim, Handoff, PlanItem, State } from '../../src/core/schema.js';
 
 /**
  * Volumes calibrated on the real store measured on pln#578 (2026-06 snapshot):
@@ -166,16 +167,24 @@ export function createSyntheticStore(options: SyntheticStoreOptions): SyntheticS
   const seed = options.seed ?? 42;
   const rand = mulberry32(seed);
   const base = baseTimestamp();
+  const agentName = options.agentName ?? 'bench-agent';
+  const agentId = `agt_bench_${volume}_${seed}`;
 
   const envIsolation = options.isolateEnv !== false ? isolateAgentEnv() : undefined;
   const fakeHome = envIsolation?.fakeHome;
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `bclaw-bench-${volume}-`));
+  if (envIsolation) process.env.BRAINCLAW_SESSION_ID = `ses_bench_${volume}_${seed}`;
 
   // Realistic fixture: a fresh brainclaw store lives in a git repo. Without
   // this, session-start's three `git rev-parse` calls each emit a "not a git
   // repository" line to stderr on every run, polluting CI logs. The init is
   // ~15 ms and stays in the fixture noise floor.
-  const gitOpts = { cwd, stdio: 'ignore' as const };
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_DATE: new Date(base).toISOString(),
+    GIT_COMMITTER_DATE: new Date(base).toISOString(),
+  };
+  const gitOpts = { cwd, stdio: 'ignore' as const, env: gitEnv };
   execFileSync('git', ['init', '--quiet'], gitOpts);
   execFileSync('git', ['config', 'user.email', 'bench@local'], gitOpts);
   execFileSync('git', ['config', 'user.name', 'bench'], gitOpts);
@@ -185,8 +194,20 @@ export function createSyntheticStore(options: SyntheticStoreOptions): SyntheticS
     cwd,
     projectName: options.projectName ?? `bench-${volume}`,
     projectId: `prj_bench_${volume}`,
-    agentName: options.agentName ?? 'bench-agent',
+    agentName,
+    agentId,
   });
+  const agentIdentity: AgentIdentityDocument = {
+    schema_version: 2,
+    version: 1,
+    agent_id: agentId,
+    agent_name: agentName,
+    created_at: isoAt(base, seed),
+    kind: 'agent',
+    trust_level: 'contributor',
+    capabilities: [],
+  };
+  saveAgentIdentity(agentIdentity, cwd);
 
   const plans: PlanItem[] = [];
   const handoffs: Handoff[] = [];

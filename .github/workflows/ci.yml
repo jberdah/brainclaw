@@ -116,10 +116,6 @@ jobs:
   bench:
     name: Bench — time-to-first-value (Linux, Node 24)
     runs-on: ubuntu-latest
-    # Non-blocking on push to feature branches — allowed to redden without
-    # blocking merges while budgets settle on the master baseline. Once master
-    # has a stable series flip continue-on-error off.
-    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -142,12 +138,17 @@ jobs:
       - name: Check bench budgets
         run: npm run bench:check
 
+      - name: Emit bench facts
+        run: node scripts/emit-site-facts.mjs
+
       - name: Upload bench report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-report-${{ github.run_id }}
-          path: dist/bench-report.json
+          path: |
+            dist/bench-report.json
+            dist/facts.json
           retention-days: 30
 
   release-package:

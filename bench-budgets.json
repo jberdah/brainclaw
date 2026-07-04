@@ -1,19 +1,21 @@
 {
-  "$schema_notes": "Budgets for scripts/bench-check.mjs. duration_ms_median is a wall-clock ceiling (Linux CI). payload_chars_median is a per-scenario payload weight ceiling (~4 chars = 1 token). tolerance is a per-scenario override; default_tolerance is applied when a scenario does not set one. Calibrate on the master baseline: an intentional trade-off updates the numbers in the same PR, so the diff explains the move.",
-  "$calibration_notes": "Initial values seeded from a first Windows dev run (Node 24, noisy machine). CI runs Linux; first CI pass on master seeds the durable baseline.",
+  "$schema_notes": "Budgets for scripts/bench-check.mjs. duration_ms_median is a wall-clock ceiling (Linux CI). payload_chars_median is a per-scenario payload weight ceiling (~4 chars = 1 token). duration_tolerance and payload_tolerance are per-scenario overrides; defaults are applied when a scenario does not set one. Calibrate on the master baseline: an intentional trade-off updates the numbers in the same PR, so the diff explains the move.",
+  "$calibration_notes": "Initial values seeded from measured local runs. Latest validation: 2026-07-04 Windows, Node 24, scripts/bench.mjs --repeats=3: cold_onboard 395ms/1651c, warm_work 10397ms/2628c, first_edit 52ms/442c. First Linux CI artifact should tighten these if materially different.",
   "default_tolerance": 0.2,
+  "default_duration_tolerance": 0.5,
+  "default_payload_tolerance": 0.1,
   "scenarios": {
     "cold_onboard": {
       "duration_ms_median": 3500,
-      "payload_chars_median": 3000
+      "payload_chars_median": 1800
     },
     "warm_work": {
       "duration_ms_median": 13000,
-      "payload_chars_median": 10000
+      "payload_chars_median": 2900
     },
     "first_edit": {
-      "duration_ms_median": 50,
-      "payload_chars_median": 1000
+      "duration_ms_median": 75,
+      "payload_chars_median": 500
     }
   }
 }
