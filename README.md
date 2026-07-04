@@ -66,6 +66,20 @@ Capable agents use the MCP equivalents `bclaw_code_find` / `bclaw_code_brief`, e
 
 ---
 
+## Measured agent experience
+
+The onboarding path a fresh agent takes — init, first `bclaw_work`, first `code_find` — is exercised on every CI run by a reproducible bench (`scripts/bench.mjs`) against a synthetic store calibrated on the shape of a real production project (~200 plans, ~500 handoffs, ~450 claims). Budgets (`bench-budgets.json`) live in the repo alongside the coverage gate; a regression beyond a per-scenario tolerance fails the build. The latest report ships as `dist/facts.json` under `facts.bench` so the site can render current numbers.
+
+The bench covers three scenarios:
+
+- **Cold onboard** — fresh machine → init → first useful context. Measures the baseline time-to-first-value.
+- **Warm work** — `bclaw_work` consult over a real-shaped store. Tracks the cost of building context when the store is non-empty (the surface `pln#578`/`pln#566` optimise).
+- **First edit** — `code_find` + `code_brief` on the fresh-agent path. Tracks payload compactness (`pln#598`) and match relevance (`pln#601`).
+
+Reproduce locally with `npm run bench` (writes `dist/bench-report.json`); check budgets with `npm run bench:check`. The bench runs in-process against synthetic fixtures, so it is deterministic per seed and safe to run on any machine.
+
+---
+
 ## Agent Surfaces
 
 brainclaw exposes the same collaboration state through three surfaces, but they do not have the same role in an agent-first workflow.

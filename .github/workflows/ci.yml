@@ -113,6 +113,43 @@ jobs:
       - name: Run e2e tests
         run: node scripts/run-tests.mjs e2e
 
+  bench:
+    name: Bench — time-to-first-value (Linux, Node 24)
+    runs-on: ubuntu-latest
+    # Non-blocking on push to feature branches — allowed to redden without
+    # blocking merges while budgets settle on the master baseline. Once master
+    # has a stable series flip continue-on-error off.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run bench (3 repeats)
+        run: npm run bench -- --repeats=3
+
+      - name: Check bench budgets
+        run: npm run bench:check
+
+      - name: Upload bench report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report-${{ github.run_id }}
+          path: dist/bench-report.json
+          retention-days: 30
+
   release-package:
     name: Release Package Check (Linux, Node 24)
     runs-on: ubuntu-latest

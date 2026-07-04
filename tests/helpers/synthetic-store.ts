@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -169,6 +170,16 @@ export function createSyntheticStore(options: SyntheticStoreOptions): SyntheticS
   const envIsolation = options.isolateEnv !== false ? isolateAgentEnv() : undefined;
   const fakeHome = envIsolation?.fakeHome;
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `bclaw-bench-${volume}-`));
+
+  // Realistic fixture: a fresh brainclaw store lives in a git repo. Without
+  // this, session-start's three `git rev-parse` calls each emit a "not a git
+  // repository" line to stderr on every run, polluting CI logs. The init is
+  // ~15 ms and stays in the fixture noise floor.
+  const gitOpts = { cwd, stdio: 'ignore' as const };
+  execFileSync('git', ['init', '--quiet'], gitOpts);
+  execFileSync('git', ['config', 'user.email', 'bench@local'], gitOpts);
+  execFileSync('git', ['config', 'user.name', 'bench'], gitOpts);
+  execFileSync('git', ['commit', '--allow-empty', '-m', 'bench-fixture', '--quiet'], gitOpts);
 
   createFastStore({
     cwd,
