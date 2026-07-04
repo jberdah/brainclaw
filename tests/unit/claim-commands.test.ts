@@ -186,7 +186,12 @@ describe('claim commands', () => {
     assert.equal(updatedState.plan_items[0].assignee, undefined);
   });
 
-  it('release-claim enforces ownership unless trusted coordinator override is explicit', () => {
+  it('release-claim keeps operator semantics on CLI; coordinator override still requires trusted+', () => {
+    // Surface contract (trp#928 follow-up): the ownership gate lives on the
+    // MCP surface. The CLI is the operator/scripting surface and releases
+    // cross-agent claims unguarded — the long-standing e2e contract
+    // (collaboration.test.ts release-claim suite). `--coordinator-override`
+    // remains an EXPLICIT, audited path and keeps its trusted+ gate.
     saveClaim({
       id: 'clm_foreign_cli',
       agent: 'claude',
@@ -198,27 +203,39 @@ describe('claim commands', () => {
       status: 'active',
     }, workspace.dir);
 
-    assert.throws(() => {
-      captureConsole(() => {
-        runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir });
-      });
-    }, /coordinator_override:true/);
-    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'active');
+    // Bare operator release of a foreign claim succeeds (historic contract).
+    const releasedPlain = captureConsole(() => {
+      runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir });
+    });
+    assert.ok(releasedPlain.logs[0].includes('released'));
+    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'released');
+
+    // Explicit coordinator override still requires trusted+.
+    saveClaim({
+      id: 'clm_foreign_cli2',
+      agent: 'claude',
+      agent_id: 'agt_claude',
+      project_id: 'prj_claim_test',
+      scope: 'src/foreign-cli-2/',
+      description: 'Foreign claim 2',
+      created_at: iso(2),
+      status: 'active',
+    }, workspace.dir);
 
     assert.throws(() => {
       captureConsole(() => {
-        runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir, coordinatorOverride: true });
+        runReleaseClaim('clm_foreign_cli2', { cwd: workspace.dir, coordinatorOverride: true });
       });
     }, /Insufficient trust/);
-    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'active');
+    assert.equal(loadClaim('clm_foreign_cli2', workspace.dir).status, 'active');
 
     setAgentTrustLevel(workspace.currentAgent.agent_name, 'trusted', workspace.dir);
     const released = captureConsole(() => {
-      runReleaseClaim('clm_foreign_cli', { cwd: workspace.dir, coordinatorOverride: true });
+      runReleaseClaim('clm_foreign_cli2', { cwd: workspace.dir, coordinatorOverride: true });
     });
 
     assert.ok(released.logs[0].includes('released'));
-    assert.equal(loadClaim('clm_foreign_cli', workspace.dir).status, 'released');
+    assert.equal(loadClaim('clm_foreign_cli2', workspace.dir).status, 'released');
   });
 
   it('rejects overlapping active claims on the same scope', () => {

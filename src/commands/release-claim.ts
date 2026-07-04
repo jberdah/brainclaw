@@ -18,15 +18,25 @@ export function runReleaseClaim(id: string, options: ReleaseClaimOptions = {}): 
   }
 
   try {
-    const identity = requireRegisteredAgentIdentity({ cwd: options.cwd, allowCurrent: true, allowEnv: true });
+    // Surface split (trp#928 follow-up): the ownership gate lives on the MCP
+    // surface (bclaw_release_claim / bclaw_transition), where agent callers
+    // carry a session-bound identity. The CLI `release-claim <id>` is the
+    // operator/scripting surface and keeps its historic unguarded semantics —
+    // the e2e contract (collaboration.test.ts) has always released cross-agent
+    // claims from an env-identified CLI. Deriving an ambient identity here and
+    // gating on it turned every operator release into a false ownership
+    // mismatch (silent-default anti-pattern, pln#607). `--coordinator-override`
+    // stays available to make a cross-agent release explicit and audited.
+    let releaseAuth: { agent?: string; agent_id?: string; override: boolean } | undefined;
     if (options.coordinatorOverride) {
+      const identity = requireRegisteredAgentIdentity({ cwd: options.cwd, allowCurrent: true, allowEnv: true });
       requireMinimumTrustLevel(identity, 'trusted');
+      releaseAuth = {
+        agent: identity.agent_name,
+        agent_id: identity.agent_id,
+        override: true,
+      };
     }
-    const releaseAuth = {
-      agent: identity.agent_name,
-      agent_id: identity.agent_id,
-      override: options.coordinatorOverride === true,
-    };
     let claim = loadClaim(id, options.cwd);
     mutate({ cwd: options.cwd }, () => {
       const existing = loadClaim(id, options.cwd);
