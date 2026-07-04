@@ -5,6 +5,28 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] — 2026-07-04
+
+Operator-maturity batch from two days of heavy multi-agent dogfooding (pln#598–613): dispatch/worktree lifecycle fixes, claim-lifecycle parity, write-path auto-repair, model routing for spawns, a reproducible agent-experience benchmark with blocking CI budgets, and a 2× faster context read on large stores. No breaking changes (MCP surface fingerprint bumped, additive only).
+
+### Added
+
+- **Model selection for codex and copilot spawns** (pln#606, #41). `model_flag` added to the codex and github-copilot capability profiles so the existing `resolveModel` → `buildInvokeCommand` chain (pln#520) reaches them: `dispatch run --model <m>` now injects the model into codex/copilot spawn argv (codex needs `exec -m`, handled by a per-profile `model_flag_insert_index`; flag support verified empirically on the installed binaries). The companion `--add-dir` writable-roots spike closed **negative** on Windows (codex 0.130's restricted-token sandbox ignores it) — the file-first protocol stays the codex transport, MCP write access remains the pln#497 IPC track.
+- **Auto-repair identity and session on canonical writes** (pln#608 P0, #42). `bclaw_create`/`update`/`remove`/`transition` without a resolvable identity/session no longer throw "Start a session first": the engine falls through to the same auto-register + auto-session mechanic as `session-start`, announces it in the response (`session auto-created` warning), and tags the session `auto_created` for aggressive GC (pln#602). Unknown identities without a reliable signal still refuse — the trust boundary is unchanged.
+- **Reproducible time-to-first-value benchmark with blocking CI budgets** (pln#604, #43). Seeded synthetic stores calibrated on the real store shape, a harness measuring wall-clock / call count / serialized MCP `structuredContent` chars, three scenarios (`cold_onboard`, `warm_work`, `first_edit`), and a CI gate against versioned `bench-budgets.json`. First calibrated baseline: cold_onboard ≈3.3 s · warm_work ≈6.5 s · first_edit ≈48 ms.
+
+### Fixed
+
+- **Claim lifecycle parity** (trp#928, #44). Four gaps behind the ghost-claims reports (claims surviving merged+done plans): `transitionEntity` now routes `entity='claim'` (released via the release cascade, stale via `markClaimStale`); explicit `coordinator_override: true` on `bclaw_release_claim` + `bclaw_transition` (gated trusted+, and the rejection error is now executable as written); **real cascade release with per-claim logging** wired into plan→done, loop close, assignment-completed and `harvest --integrate`/`--orphaned`; `bclaw_find` mis-scoped filter keys (`assignment_id` outside `agent_run`, …) get a first-class entity-scoping rejection naming the caller's entity.
+- **Worktree GC on squash-merge workflows** (trp#926, #40). Merged-lane detection is now content-based (`git cherry`/patch-id) so squash-merged lanes are actually collected; the manual-removal fallback is junction-recursive-safe on Windows (never follows `node_modules` junctions into the main repo again — the pln#498 incident class); `dispatch_status` `commits_ahead` compares against the worktree's **creation ref** instead of `master`, killing false "worker delivered" verdicts.
+- **VS Code extension: Backlog no longer hides recent plans** (trp#925, pln#610, #38). `_findEntities` walks `has_more`/`next_offset` through a unit-testable `paginatedFind` helper instead of reading a single size-bounded page sorted oldest-first.
+- **VS Code extension: probe/spawn parity + classified resolver failures** (trp#927, pln#611, #39). The command probe now uses the exact spawn mechanic McpClient uses (`node <cli.js>`, `shell: false`); win32 `.cmd` shims are derived to the real global `cli.js`; every probe failure is classified (`binary-missing` / `module-missing` / `timeout` / …) with a targeted hint instead of an opaque `spawn ENOENT`.
+- **@types/node 26 type regression unblocked**; `web-tree-sitter` pinned to 0.25.x (#33, #35, dependabot #29/#31/#34/#36/#37).
+
+### Changed
+
+- **Context read: 3 of 4 full-store read passes eliminated** (pln#578, #45). Instrumenting fs reads on the real 4300-file store showed one `context --json` performed **four** complete projection passes — the disabled-reputation sweep ran twice and was discarded (`agents: []`), the estimation calibration reloaded the full state for its plans, and pending candidates were scanned three times. All three now reuse the single load: wall 23.9 s → 11.9 s on the reference store, handoff bytes parsed 196 MB → 49 MB, `context --json` output byte-identical. The remaining single 49 MB handoff pass belongs to the checkpointRead/journal track (pln#566).
+
 ## [1.12.0] — 2026-06-27
 
 Auto-localized execution writes for multi-project workspaces, from DGX-Spark dogfooding. An agent on a monorepo could not create a plan (or claim/step) in a sibling child project without first remembering to `bclaw_switch`: `bclaw_create(entity: "plan", project: "<child>")` was rejected as a cross-project execution write, so plans silently fell back to the default project. No breaking changes.
