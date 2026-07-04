@@ -122,8 +122,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:188d2eba8828e4fe`
-  (updated 2026-06-24 for 1.11.0: `bclaw_move` added (pln#595) AND a `cascade`
+- MCP public surface fingerprint: `sha256:2b0dfbd62acd71b7`
+  (updated 2026-07-04 for trp#928: explicit `coordinator_override` boolean added
+  to `bclaw_release_claim` and `bclaw_transition` input schemas — the coordinator
+  path to release/stale a non-owned claim is now opt-in and audited rather than
+  auto-derived from trust level. Additive: no tool added, removed, or renamed; no
+  required argument changed. Previous: `sha256:188d2eba8828e4fe`
+  updated 2026-06-24 for 1.11.0: `bclaw_move` added (pln#595) AND a `cascade`
   boolean added to `bclaw_code_refresh` / `bclaw_code_status` (DGX Finding 2).
   Additive: one new tool; nothing removed or renamed; no required argument changed.
   Supersedes the per-branch interim hashes sha256:dffcc868ae90e013 and

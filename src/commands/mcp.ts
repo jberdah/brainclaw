@@ -53,13 +53,15 @@ import {
   resolveCurrentAgentIdentity,
   resolveCurrentModel,
   ensureAgentRegisteredForDispatch,
+  resolveOrAutoRegisterAgentIdentity,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
 import { nowISO, generateId } from '../core/ids.js';
-import { buildOperationalIdentity, loadAllSessions, loadSessionById } from '../core/identity.js';
+import { buildOperationalIdentity, loadAllSessions, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { isObserverMode } from '../core/observer-mode.js';
 import {
   checkGitPresence,
   scanGitRepos,
@@ -791,13 +793,17 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_release_claim',
-    description: 'Release a work claim.',
+    description: 'Release a work claim. Callers own their own claims; a trusted+ coordinator releasing another agent\'s claim MUST pass coordinator_override:true (audited).',
     annotations: { tier: 'standard', category: 'coordination' , headlessApproval: 'auto' },
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Claim ID to release.' },
         planStatus: { type: 'string', description: 'Optional: update linked plan status.' },
+        coordinator_override: {
+          type: 'boolean',
+          description: 'Opt-in override for a trusted+ caller releasing a claim they do NOT own (cross-agent teardown, ghost-claim cleanup). Rejected for contributor-level callers; audited when used. trp#928.',
+        },
       },
       required: ['id'],
     },
@@ -1323,7 +1329,7 @@ const MCP_WRITE_TOOLS = [
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | sequence | claim | action | assignment | agent_run | cross_project_link. Others not yet wired.' },
-        filter: { type: 'object', description: 'Filter keys: status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). entity=agent_run also accepts assignment_id, claim_id, message_id.' },
+        filter: { type: 'object', description: 'Filter keys (ANY entity): status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). ENTITY-SCOPED keys (rejected with a validation_error if used with any other entity): assignment_id, claim_id, message_id — ONLY for entity="agent_run". Unknown/mis-scoped keys are rejected loudly.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the page payload (~4 chars/token). Tightens the default size cap; pagination metadata (has_more/next_offset) still applies.' },
       },
@@ -1391,7 +1397,7 @@ const MCP_WRITE_TOOLS = [
   },
   {
     name: 'bclaw_transition',
-    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one.',
+    description: 'Transition an entity to a new status. Validated against EntityRegistry.transitions. Returns the triggered side-effect tags. Pass `project` to transition an entity in a linked project instead of the current one. For entity="claim": released/stale transitions are ownership-checked — non-owners must pass coordinator_override:true (trusted+ trust level required).',
     annotations: { tier: 'standard', category: 'memory', headlessApproval: 'prompt' },
     inputSchema: {
       type: 'object',
@@ -1401,6 +1407,7 @@ const MCP_WRITE_TOOLS = [
         to: { type: 'string', description: 'Target status.' },
         reason: { type: 'string', description: 'Optional free-text reason, audited alongside the transition.' },
         project: { type: 'string', description: 'Optional: name of a linked project to transition the entity in. Defaults to the current project.' },
+        coordinator_override: { type: 'boolean', description: 'entity="claim" only: opt-in override for a trusted+ caller releasing/staling a claim they do NOT own. Audited when used. trp#928.' },
       },
       required: ['entity', 'id', 'to'],
     },
@@ -2067,22 +2074,58 @@ function ensureTrust(
 }
 
 /**
+ * Auto-repair outcome for a canonical-grammar mutation.
+ *
+ * Populated when `resolveCanonicalAuthor` had to fall through from the strict
+ * `resolveMutationIdentity` path onto `resolveOrAutoRegisterAgentIdentity` +
+ * auto-session. The doctrine (pln#608): mechanical + non-ambiguous + cheap +
+ * scoped precondition → the engine satisfies it AND announces it — never
+ * silence. Callers surface these fields as a warning in the response text
+ * and in structuredContent.auto_repair.
+ */
+export interface CanonicalAuthorAutoRepair {
+  /** True if the agent identity itself was auto-registered (first use). */
+  agent_auto_registered?: boolean;
+  /** Session id that was materialized by the auto-repair path, if any. */
+  session_auto_created?: string;
+}
+
+export interface CanonicalAuthorResolution {
+  agent_name: string;
+  agent_id?: string;
+  /** Undefined when the strict path resolved cleanly (no announcement needed). */
+  auto_repair?: CanonicalAuthorAutoRepair;
+}
+
+/**
  * Resolve the agent identity for canonical-grammar mutation verbs
  * (bclaw_create/update/remove/transition), so handlers can auto-fill required
  * fields (e.g. plan.author) instead of letting the create land on disk with a
  * missing field — which would then be silently GC'd by the state sync loop
  * (see fix plan pln_5f44426c).
  *
- * pln#562 step 3 — resolution failure is a HARD error. The old fallback to
- * author:'unknown' produced records that passed creation but were schema-
- * invalid on read and silently GC'd: a write that lies about succeeding.
- * Callers map the throw to a validation_error tool response.
+ * pln#562 step 3 — a write that would create a record with a missing/'unknown'
+ * author must never be silent (that produced records that passed creation but
+ * were schema-invalid on read and silently GC'd from disk).
+ *
+ * pln#608 — extended with auto-repair: when the caller has no session but a
+ * derivable agent name (arg / $BRAINCLAW_AGENT_NAME / detected AI agent),
+ * fall through to `resolveOrAutoRegisterAgentIdentity` and materialize the
+ * session via `buildOperationalIdentity({ persistImplicitSession: true })`
+ * (same mechanic as switchProject:86-106 and session-start). The freshly-
+ * created session is tagged `auto_created` so aggressive harvesting can
+ * distinguish it from operator sessions (pln#602). The caller receives
+ * `auto_repair` and surfaces it as a warning — never silent.
+ *
+ * KEEP (still a hard error, doctrine boundary): the identity is ambiguous
+ * (no name in args, no env signal, no detectable agent). We do not invent
+ * an identity — invoke intent is unclear and the write would misattribute.
  */
 function resolveCanonicalAuthor(
   args: Record<string, unknown>,
   cwd?: string,
   connectionSessionId?: string,
-): { agent_name: string; agent_id?: string } {
+): CanonicalAuthorResolution {
   const resolved = resolveMutationIdentity(
     args,
     { nameField: 'agent', idField: 'agentId' },
@@ -2095,11 +2138,107 @@ function resolveCanonicalAuthor(
       agent_id: resolved.identity.agent_id,
     };
   }
-  const detail = 'error' in resolved && resolved.error ? resolved.error.message : 'no registered agent identity resolved';
-  throw new Error(
-    `cannot resolve mutation author: ${detail} `
-    + 'Start a session (bclaw_session_start) or pass a registered agent before writing.',
-  );
+
+  const strictError = 'error' in resolved && resolved.error ? resolved.error : undefined;
+
+  // KEEP (doctrine boundary): a pinned principal that rejected the caller args
+  // is a SPOOF/MISMATCH, not an ambiguous first-write. Never auto-repair over
+  // it — silently re-attributing would defeat pln#562 step 3. The strict error
+  // already carries the pointer to a curator override.
+  if (resolveConnectionPrincipal(cwd, connectionSessionId)) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'principal mismatch'}`,
+    );
+  }
+
+  // Observer processes are read-only dashboards/inspectors. Even when an env
+  // variable leaks an agent name into the observer process, canonical writes
+  // must not use the auto-repair path because it can mint identity/session
+  // state as a side effect.
+  if (isObserverMode()) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'observer mode cannot auto-repair identity/session state'}`,
+    );
+  }
+
+  const explicitName = typeof args.agent === 'string' ? args.agent : undefined;
+  const explicitId = typeof args.agentId === 'string' ? args.agentId : undefined;
+  // resolveOrAutoRegisterAgentIdentity's fall-through helper only reads
+  // BRAINCLAW_AGENT / OPENCLAW_AGENT. resolveCurrentAgentIdentity also honors
+  // BRAINCLAW_AGENT_NAME, and dispatched workers set both. Normalize here so
+  // an env-declared name is a first-class signal to the auto-repair path.
+  const envAgentName = explicitName
+    ?? (process.env.BRAINCLAW_AGENT_NAME?.trim() || undefined)
+    ?? (process.env.BRAINCLAW_AGENT?.trim() || undefined);
+
+  let identity;
+  let autoRegistered: boolean;
+  try {
+    const outcome = resolveOrAutoRegisterAgentIdentity({
+      agentName: envAgentName,
+      agentId: explicitId,
+      cwd,
+      allowCurrent: true,
+      allowEnv: true,
+    });
+    identity = outcome.identity;
+    autoRegistered = outcome.auto_registered;
+  } catch (err) {
+    // Genuine ambiguity — no derivable name. Stays a hard error (KEEP: doctrine
+    // boundary is "ambiguous intent → refuse with next_action", not silence).
+    const detail = err instanceof Error ? err.message : (strictError?.message ?? String(err));
+    throw new Error(
+      `cannot resolve mutation author: ${detail} `
+      + 'Pass a registered agent, set $BRAINCLAW_AGENT_NAME, '
+      + 'or register with `brainclaw register-agent <name>` before writing.',
+      { cause: err },
+    );
+  }
+
+  const explicitSessionId = connectionSessionId?.trim() || explicitSessionIdFromEnv();
+  const hadSessionBefore = explicitSessionId
+    ? Boolean(loadSessionById(explicitSessionId, cwd))
+    : Boolean(loadCurrentSession(cwd));
+
+  let sessionAutoCreated: string | undefined;
+  try {
+    const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
+      agentId: identity.agent_id,
+      sessionId: explicitSessionId,
+      persistImplicitSession: true,
+    });
+    if (!hadSessionBefore && opIdentity.session_id) {
+      sessionAutoCreated = opIdentity.session_id;
+      const session = loadSessionById(opIdentity.session_id, cwd);
+      if (session && !session.auto_created) {
+        saveCurrentSession({ ...session, auto_created: true }, cwd);
+      }
+    }
+  } catch { /* best-effort — write can still proceed without a persisted session */ }
+
+  const autoRepair: CanonicalAuthorAutoRepair | undefined = (autoRegistered || sessionAutoCreated)
+    ? {
+        ...(autoRegistered ? { agent_auto_registered: true } : {}),
+        ...(sessionAutoCreated ? { session_auto_created: sessionAutoCreated } : {}),
+      }
+    : undefined;
+
+  return {
+    agent_name: identity.agent_name,
+    agent_id: identity.agent_id,
+    ...(autoRepair ? { auto_repair: autoRepair } : {}),
+  };
+}
+
+function renderAutoRepairWarning(auto_repair: CanonicalAuthorAutoRepair, agent_name: string): string {
+  const parts: string[] = [];
+  if (auto_repair.agent_auto_registered) {
+    parts.push(`agent '${agent_name}' auto-registered (first use). Run \`brainclaw register-agent ${agent_name}\` to set capabilities and trust level.`);
+  }
+  if (auto_repair.session_auto_created) {
+    parts.push(`session ${auto_repair.session_auto_created} auto-created for this write.`);
+  }
+  return `⚠️ auto-repair: ${parts.join(' ')}`;
 }
 
 function explicitSessionIdFromEnv(): string | undefined {
@@ -3999,18 +4138,46 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       } catch {
         return { response: createToolErrorResponse('not_found', `Claim not found: ${claimId}`) };
       }
-      // pln#562 step 5 — release is ownership-checked like acquisition and
-      // adoption. The resolved principal must own the claim; trusted+ callers
-      // (coordinators) may release others' claims, with an audit entry.
+      // pln#562 step 5 + trp#928 — release is ownership-checked like acquisition
+      // and adoption. Under the trp#928 tightening the coordinator override is
+      // OPT-IN via coordinator_override:true (implicit "trusted+ = always
+      // override" was too magic — a coordinator releasing a worker's claim
+      // should be a visible act, not a silent side-effect of trust). The
+      // ownership check still enforces:
+      //   - owner-of-claim releases (identity matches): allowed, no override needed
+      //   - non-owner releases without coordinator_override: rejected loudly (the
+      //     error message points the caller at coordinator_override so it is
+      //     executable — pln#607 rule).
+      //   - non-owner releases with coordinator_override:true but not trusted+:
+      //     trust_error (privilege escalation prevention).
+      //   - non-owner releases with coordinator_override:true and trusted+:
+      //     allowed, audited (auditReleaseOverride).
       const releaseIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, cwd, connectionSessionId);
-      const releaseAuth = 'identity' in releaseIdentity && releaseIdentity.identity
-        ? {
-            agent: releaseIdentity.identity.agent_name,
-            agent_id: releaseIdentity.identity.agent_id,
-            session_id: connectionSessionId,
-            override: hasMinimumTrustLevel(releaseIdentity.identity.trust_level ?? 'contributor', 'trusted'),
-          }
-        : undefined;
+      if ('error' in releaseIdentity && releaseIdentity.error) {
+        const { kind, message, details } = releaseIdentity.error;
+        return { response: createToolErrorResponse(kind, message, details) };
+      }
+      if (!('identity' in releaseIdentity) || !releaseIdentity.identity) {
+        return { response: createToolErrorResponse('identity_error', 'No registered agent identity resolved for bclaw_release_claim.') };
+      }
+      const coordinatorOverrideRequested = args.coordinator_override === true;
+      if (coordinatorOverrideRequested) {
+        const trustLevel = releaseIdentity.identity.trust_level ?? 'contributor';
+        if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
+          return {
+            response: createToolErrorResponse(
+              'trust_error',
+              `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'. Ask a curator to elevate the agent, or have the claim owner release it.`,
+            ),
+          };
+        }
+      }
+      const releaseAuth = {
+        agent: releaseIdentity.identity.agent_name,
+        agent_id: releaseIdentity.identity.agent_id,
+        session_id: connectionSessionId,
+        override: coordinatorOverrideRequested,
+      };
       let cascadeResult;
       try {
         cascadeResult = releaseClaimWithCascade(claimId, {
@@ -4533,6 +4700,39 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           actor: callerAgent,
           actor_id: resolved.identity!.agent_id,
         }, cwd);
+
+        // trp#928 — cascade-release the assignment's linked claim on completion.
+        // Before this landing an obedient worker had to make TWO calls to close
+        // the loop (bclaw_assignment_update status=completed AND
+        // bclaw_release_claim); dispatch briefs enumerate both, but not every
+        // sandboxed worker gets through both, and the coordinator's harvest path
+        // only releases on --integrate — so contributor-driven completions left
+        // claims active. The worker's own identity owns the claim (session
+        // adoption), so ownership matches and no coordinator_override is needed.
+        // Silent success/failure is unacceptable: log per-claim outcome.
+        if (status === 'completed' && assignment.claim_id) {
+          try {
+            const { releaseClaimsCascade, logCascadeReleaseResult } = await import('../core/claims.js');
+            const cascade = releaseClaimsCascade([assignment.claim_id], {
+              cwd,
+              planStatus: 'done',
+              auth: {
+                agent: callerAgent,
+                agent_id: resolved.identity!.agent_id,
+                session_id: effectiveSessionId,
+                override: false,
+              },
+            });
+            logCascadeReleaseResult({
+              actor: callerAgent,
+              trigger: 'assignment_completed',
+              assignment_id: assignmentId,
+              claim_id: assignment.claim_id,
+              cascade,
+              cwd,
+            });
+          } catch { /* never block the update on cascade release */ }
+        }
 
         // When accepted: auto-acknowledge the inbox message (replaces bclaw_ack_message)
         if (status === 'accepted' && assignment.message_id) {
@@ -7145,22 +7345,43 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // only checks known keys), letting the caller believe the filter had
         // applied when it hadn't. Under the new contract, an unknown key is
         // a validation_error listing the keys actually honored.
+        // trp#928 — the entity-scoping error is now first-class: the doc says
+        // assignment_id/claim_id/message_id are entity='agent_run' only, but
+        // before this the rejection message called them 'unknown', misleading
+        // callers who'd cross-reference the description. Now the message names
+        // the constraint AND the entity that DOES accept the key so the user
+        // can fix the call without hunting through docs. (pln#599 docs-vs-facts.)
         const KNOWN_FILTER_KEYS = new Set([
           'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
           'assignment_id', 'claim_id', 'message_id',
           'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
         ]);
         const agentRunOnlyFilterKeys = new Set(['assignment_id', 'claim_id', 'message_id']);
-        const unknownKeys = Object.keys(filter).filter((k) =>
-          !KNOWN_FILTER_KEYS.has(k) || (agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run')
-        );
-        if (unknownKeys.length > 0) {
+        const providedKeys = Object.keys(filter);
+        const unknownKeys = providedKeys.filter((k) => !KNOWN_FILTER_KEYS.has(k));
+        const misScopedKeys = providedKeys.filter((k) => agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run');
+        if (unknownKeys.length > 0 || misScopedKeys.length > 0) {
+          const parts: string[] = [];
+          if (unknownKeys.length > 0) {
+            parts.push(`Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`);
+          }
+          if (misScopedKeys.length > 0) {
+            parts.push(
+              `Filter key(s) ${misScopedKeys.map((k) => `"${k}"`).join(', ')} are only valid for entity="agent_run" `
+              + `(this call used entity="${entity}"). `
+              + `Retry with entity="agent_run", or drop the ${misScopedKeys.join('/')} filter.`,
+            );
+          }
           return {
             response: createToolErrorResponse(
               'validation_error',
-              `Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. ` +
-              `Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`,
-              { unknown_keys: unknownKeys, accepted_keys: [...KNOWN_FILTER_KEYS].sort() },
+              parts.join(' '),
+              {
+                unknown_keys: unknownKeys,
+                mis_scoped_keys: misScopedKeys,
+                accepted_keys: [...KNOWN_FILTER_KEYS].sort(),
+                agent_run_only_keys: [...agentRunOnlyFilterKeys],
+              },
             ),
           };
         }
@@ -7298,13 +7519,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const data: Record<string, unknown> = { ...rawData };
         let actor = typeof data.author === 'string' ? data.author : undefined;
         let actorId = typeof data.agent_id === 'string' ? data.agent_id : undefined;
+        let autoRepair: CanonicalAuthorAutoRepair | undefined;
         if (data.author === undefined) {
-          const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-          data.author = agent_name;
-          if (data.agent === undefined) data.agent = agent_name;
-          if (data.agent_id === undefined && agent_id) data.agent_id = agent_id;
-          actor = agent_name;
-          actorId = agent_id;
+          const author = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+          data.author = author.agent_name;
+          if (data.agent === undefined) data.agent = author.agent_name;
+          if (data.agent_id === undefined && author.agent_id) data.agent_id = author.agent_id;
+          actor = author.agent_name;
+          actorId = author.agent_id;
+          autoRepair = author.auto_repair;
         } else if (data.agent === undefined) {
           data.agent = data.author;
         }
@@ -7314,14 +7537,19 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           { actor: actor ?? 'unknown', ...(actorId ? { actor_id: actorId } : {}), action: 'create', item_id: result.id, item_type: entity },
           targetCwd,
         );
+        const createText = `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
+        const createContent = autoRepair
+          ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
+          : [{ type: 'text' as const, text: createText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
+            content: createContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
               ...(autoSwitched ? { auto_switched: true } : {}),
+              ...(autoRepair ? { auto_repair: autoRepair } : {}),
             },
           }),
         };
@@ -7337,19 +7565,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const patch = (args.patch ?? {}) as Record<string, unknown>;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = updateEntity(entity, id, patch, targetCwd);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
           targetCwd,
         );
+        const updateText = `✔ updated ${entity} ${id}`;
+        const updateContent = auto_repair
+          ? [{ type: 'text' as const, text: updateText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: updateText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ updated ${entity} ${id}` }],
+            content: updateContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: targetScope.active_source,
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };
@@ -7365,19 +7598,24 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const purge = args.purge === true;
         const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = removeEntity(entity, id, targetCwd, purge);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
           targetCwd,
         );
+        const removeText = `✔ removed ${entity} ${id}`;
+        const removeContent = auto_repair
+          ? [{ type: 'text' as const, text: removeText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: removeText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ removed ${entity} ${id}` }],
+            content: removeContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: targetScope.active_source,
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };
@@ -7393,13 +7631,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const toProject = String(args.to_project ?? '');
         const fromProject = typeof args.from_project === 'string' ? args.from_project : undefined;
         const force = args.force === true;
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
         const result = relocateEntity({ entity, id, toProject, fromProject, force, cwd, actor: agent_name, actorId: agent_id });
         const warn = result.warnings.length ? ` (${result.warnings.length} warning(s))` : '';
+        const moveText = `✔ moved ${entity} ${id} → ${result.to}${warn}`;
+        const moveContent = auto_repair
+          ? [{ type: 'text' as const, text: moveText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: moveText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ moved ${entity} ${id} → ${result.to}${warn}` }],
-            structuredContent: { ...result },
+            content: moveContent,
+            structuredContent: {
+              ...result,
+              ...(auto_repair ? { auto_repair } : {}),
+            },
           }),
         };
       } catch (error: unknown) {
@@ -7427,20 +7672,54 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const to = String(args.to ?? '');
         const reason = args.reason as string | undefined;
         const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = transitionEntity(entity, id, to, targetCwd, reason);
+        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+        // trp#928 — claim transitions consume the ReleaseClaimAuth ownership
+        // check (released/stale both mutate a claim owned by SOME agent). Reuse
+        // the same coordinator_override opt-in as bclaw_release_claim so both
+        // paths have identical trust semantics and the same executable error.
+        let transitionAuth: import('../core/entity-operations.js').TransitionAuth | undefined;
+        if (entity === 'claim') {
+          const transitionIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, targetCwd, connectionSessionId);
+          const coordinatorOverrideRequested = args.coordinator_override === true;
+          if (coordinatorOverrideRequested) {
+            const identity = 'identity' in transitionIdentity ? transitionIdentity.identity : undefined;
+            const trustLevel = identity?.trust_level ?? 'contributor';
+            if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
+              return {
+                response: createToolErrorResponse(
+                  'trust_error',
+                  `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'.`,
+                ),
+              };
+            }
+          }
+          transitionAuth = 'identity' in transitionIdentity && transitionIdentity.identity
+            ? {
+                agent: transitionIdentity.identity.agent_name,
+                agent_id: transitionIdentity.identity.agent_id,
+                session_id: connectionSessionId,
+                override: coordinatorOverrideRequested,
+              }
+            : undefined;
+        }
+        const result = transitionEntity(entity, id, to, targetCwd, reason, transitionAuth);
         appendAuditEntry(
           { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
           targetCwd,
         );
+        const transitionText = `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
+        const transitionContent = auto_repair
+          ? [{ type: 'text' as const, text: transitionText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
+          : [{ type: 'text' as const, text: transitionText }];
         return {
           response: toolResponse({
-            content: [{ type: 'text', text: `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}` }],
+            content: transitionContent,
             structuredContent: {
               ...result,
               resolved_project: targetScope.resolved_project,
               active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
               ...(autoSwitched ? { auto_switched: true } : {}),
+              ...(auto_repair ? { auto_repair } : {}),
             },
           }),
         };

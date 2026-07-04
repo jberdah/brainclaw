@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { executeMcpToolCall, __resetConnectionPrincipalForTests } from '../../src/commands/mcp.js';
 import { registerAgentIdentity, setAgentTrustLevel } from '../../src/core/agent-registry.js';
-import { saveClaim, generateClaimId } from '../../src/core/claims.js';
+import { saveClaim, generateClaimId, loadClaim } from '../../src/core/claims.js';
 import { loadState } from '../../src/core/state.js';
 
 // pln#562 step 3 — authenticated connection principal: identity is pinned from
@@ -117,5 +117,35 @@ describe('MCP connection principal (pln#562 step 3)', () => {
     } finally {
       delete process.env.BRAINCLAW_CLAIM_ID;
     }
+  });
+
+  it('bclaw_release_claim rejects pinned-principal spoofing instead of falling back to system release', async () => {
+    const claude = registerAgentIdentity({ agentName: 'claude-code', kind: 'agent', trustLevel: 'contributor', cwd: workspace.dir });
+    const codex = registerAgentIdentity({ agentName: 'codex', kind: 'agent', trustLevel: 'contributor', cwd: workspace.dir });
+    const claimId = generateClaimId();
+    saveClaim({
+      id: claimId,
+      agent: 'codex',
+      agent_id: codex.agent_id,
+      scope: 'src/release-spoof',
+      description: 'release spoof regression',
+      created_at: new Date().toISOString(),
+      status: 'active',
+    }, workspace.dir);
+    process.env.BRAINCLAW_AGENT_NAME = 'claude-code';
+    process.env.BRAINCLAW_AGENT = 'claude-code';
+    process.env.BRAINCLAW_AGENT_ID = claude.agent_id;
+    __resetConnectionPrincipalForTests();
+
+    const outcome = await executeMcpToolCall({
+      name: 'bclaw_release_claim',
+      args: { id: claimId, agent: 'codex' },
+      cwd: workspace.dir,
+    });
+
+    assert.equal(outcome.response.isError, true, JSON.stringify(outcome.response));
+    const text = outcome.response.content?.[0]?.text ?? '';
+    assert.match(text, /does not match the pinned connection principal 'claude-code'/);
+    assert.equal(loadClaim(claimId, workspace.dir).status, 'active', 'spoofed release must not mutate the claim');
   });
 });

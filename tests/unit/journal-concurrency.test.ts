@@ -154,7 +154,13 @@ describe('journal append concurrency (pln#565 — cutover gate)', { concurrency:
     const committedCount = () =>
       Array.from({ length: N }, (_, i) => markerPath(i)).filter((p) => fs.existsSync(p)).length;
     const QUORUM = 2;
-    const deadline = Date.now() + 90_000;
+    // Third flakiness refinement (after pln#573 quorum + pln#574 markers):
+    // 4× node ESM cold-starts under a loaded shared CI runner can exceed 90s
+    // before TWO children even commit once — observed 5× on 2026-07-04 across
+    // unrelated PRs (trp_ac59faf4), on both Linux-under-coverage and Windows.
+    // The deadline is startup budget, not invariant budget: scale it on CI.
+    // Kept within the 300s per-file unit budget (rest of this file is ms-scale).
+    const deadline = Date.now() + (process.env.CI ? 210_000 : 90_000);
     while (Date.now() < deadline) {
       if (committedCount() >= QUORUM) break;
       await new Promise((r) => setTimeout(r, 50));

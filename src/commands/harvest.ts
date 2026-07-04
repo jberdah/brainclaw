@@ -20,7 +20,7 @@ import { listCandidates, listArchivedCandidates, saveCandidate } from '../core/c
 import { createRuntimeEvent } from '../core/events.js';
 import { memoryExists } from '../core/io.js';
 import { loadAssignment, transitionAssignment } from '../core/assignments.js';
-import { releaseClaimWithCascade, loadClaim } from '../core/claims.js';
+import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir } from '../core/worktree.js';
 
@@ -565,11 +565,16 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         entry.assignment_completed = forceCompleteAssignment(
           lane.assignment_id, artifacts, `pln#534 on-behalf integration: ${lane.summary.slice(0, 120)}`, actor, cwd,
         );
-        try {
-          const rel = releaseClaimWithCascade(assignment.claim_id, { planStatus: 'done', cwd });
-          entry.claim_released = rel.claim.status === 'released';
-        } catch (err) {
-          reasons.push(`claim release failed: ${err instanceof Error ? err.message : String(err)}`);
+        // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
+        // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
+        // so a silent ownership failure is observable in the runtime event log
+        // rather than only in this in-memory `reasons` string).
+        const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
+        logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
+        const claimEntry = cascade.entries[0];
+        entry.claim_released = claimEntry?.released === true;
+        if (claimEntry && !claimEntry.released) {
+          reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
         }
       } else {
         // blocked / failed: best-effort lifecycle (FSM may reject from offered).
@@ -579,14 +584,15 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         } catch (err) {
           reasons.push(`assignment ${target} transition rejected: ${err instanceof Error ? err.message : String(err)}`);
         }
-        try {
-          const rel = releaseClaimWithCascade(assignment.claim_id, {
-            planStatus: lane.status === 'blocked' ? 'blocked' : undefined,
-            cwd,
-          });
-          entry.claim_released = rel.claim.status === 'released';
-        } catch (err) {
-          reasons.push(`claim release failed: ${err instanceof Error ? err.message : String(err)}`);
+        const cascade = releaseClaimsCascade([assignment.claim_id], {
+          cwd,
+          planStatus: lane.status === 'blocked' ? 'blocked' : undefined,
+        });
+        logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
+        const claimEntry = cascade.entries[0];
+        entry.claim_released = claimEntry?.released === true;
+        if (claimEntry && !claimEntry.released) {
+          reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
         }
       }
 
@@ -787,11 +793,16 @@ export function harvestOrphaned(options: OrphanedHarvestOptions): OrphanedHarves
         'pln#554 harvest --orphaned: worker died before delivering; work recovered from worktree',
         actor, cwd,
       );
-      try {
-        const rel = releaseClaimWithCascade(assignment.claim_id, { planStatus: 'done', cwd });
-        report.claim_released = rel.claim.status === 'released';
-      } catch (err) {
-        report.errors.push(`claim release failed: ${err instanceof Error ? err.message : String(err)}`);
+      // trp#928 — log per-claim via releaseClaimsCascade instead of the raw
+      // releaseClaimWithCascade so an ownership_denied outcome is visible in the
+      // runtime event log (previously trapped into report.errors only, which
+      // dies with the CLI invocation).
+      const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
+      logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: options.assignmentId, claim_id: assignment.claim_id, cascade, cwd });
+      const claimEntry = cascade.entries[0];
+      report.claim_released = claimEntry?.released === true;
+      if (claimEntry && !claimEntry.released) {
+        report.errors.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
       }
     } else {
       report.errors.push(`No assignment record for ${options.assignmentId} — recovered the worktree but skipped lifecycle/claim release.`);
