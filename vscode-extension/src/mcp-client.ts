@@ -3,10 +3,16 @@
  *
  * Spawns `brainclaw mcp` and communicates over JSON-RPC 2.0 (newline-delimited).
  * One instance per project directory.
+ *
+ * The command to spawn is passed in as a structured `BrainclawSpawnPlan` — see
+ * `./brainclaw-resolver`. The plan is always shaped as `node <cli.js>` so
+ * `cp.spawn(..., { shell: false })` works uniformly on win32 and POSIX
+ * (never a `.cmd` shim — trp#927, 2026-07-03).
  */
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { brainclawSpawnOptions, type BrainclawSpawnPlan } from './brainclaw-resolver';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -48,7 +54,7 @@ export class McpClient {
 
   constructor(
     private readonly _cwd: string,
-    private readonly _bclawCmd: string,
+    private readonly _plan: BrainclawSpawnPlan,
   ) {}
 
   /** Ensure the MCP server is started and initialized. */
@@ -103,20 +109,7 @@ export class McpClient {
     if (this._dead) throw new Error('MCP client is disposed');
 
     const [cmd, ...args] = this._buildSpawnArgs();
-    this._process = cp.spawn(cmd, args, {
-      cwd: this._cwd,
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      // BRAINCLAW_OBSERVER=1: the VS Code extension is a dashboard, not an
-      // agent. The server-side observer mode (src/core/observer-mode.ts)
-      // suppresses every read-path side effect — autoAcknowledge, lazy
-      // agent_run reconciliation, cursor advancement, implicit identity
-      // registration — so polling the board never mutates the store. Also
-      // strip BRAINCLAW_AGENT* so the extension cannot inherit the parent
-      // shell's identity and consume that agent's cursor.
-      env: this._spawnEnv(),
-    });
+    this._process = cp.spawn(cmd, args, brainclawSpawnOptions(this._cwd));
 
     this._process.stderr?.on('data', () => { /* drain stderr */ });
 
@@ -209,30 +202,16 @@ export class McpClient {
     this._pendingRequests.clear();
   }
 
-  private _spawnEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...process.env, BRAINCLAW_OBSERVER: '1' };
-    // Strip parent-shell agent identity so the MCP server never resolves to
-    // the agent whose terminal launched VS Code (otherwise the extension's
-    // polling consumes that agent's event-log cursor and runtime state).
-    delete env.BRAINCLAW_AGENT;
-    delete env.BRAINCLAW_AGENT_ID;
-    delete env.BRAINCLAW_AGENT_NAME;
-    return env;
-  }
-
   /**
-   * Build [command, ...args] from the brainclaw command string (e.g. `brainclaw`,
-   * `"path/to/brainclaw"`, or `node "path/to/dist/cli.js"`).
+   * Build [command, ...args] from the resolved spawn plan.
+   *
+   * The plan is always `node <cli.js>` shape, so the resulting spawn call
+   * works under `{ shell: false }` on every OS — no `.cmd`/`.ps1` shims are
+   * handed to spawn (which would break on win32 with modern Node, see the
+   * ENOENT trap that motivated `brainclaw-resolver.ts`).
    */
   private _buildSpawnArgs(): [string, ...string[]] {
-    const cmd = this._bclawCmd.trim();
-    if (cmd.startsWith('node ')) {
-      const script = cmd.slice(5).replace(/^"|"$/g, '');
-      return ['node', script, 'mcp'];
-    }
-    // Strip wrapping quotes from paths like `"/path/to/brainclaw"`
-    const bin = cmd.replace(/^"|"$/g, '');
-    return [bin, 'mcp'];
+    return [this._plan.command, ...this._plan.args, 'mcp'];
   }
 }
 

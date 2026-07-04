@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { resolveBrainclawCmd, type BoardProject } from './board-tree';
+import { type BoardProject } from './board-tree';
+import { resolveBrainclawSpawnPlan } from './brainclaw-resolver';
 import { McpClient } from './mcp-client';
 
 interface ClaimInfo {
@@ -89,9 +90,9 @@ export class BrainclawFileDecorationProvider implements vscode.FileDecorationPro
     }
     if (this._mcpResolved.get(projectRoot)) return this._mcpClients.get(projectRoot);
     this._mcpResolved.set(projectRoot, true);
-    const bclaw = await resolveBrainclawCmd(projectRoot);
-    if (!bclaw) return undefined;
-    const client = new McpClient(projectRoot, bclaw);
+    const result = await resolveBrainclawSpawnPlan(projectRoot);
+    if (!result.ok) return undefined;
+    const client = new McpClient(projectRoot, result.plan);
     this._mcpClients.set(projectRoot, client);
     return client;
   }
