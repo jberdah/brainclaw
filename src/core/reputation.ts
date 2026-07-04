@@ -449,6 +449,24 @@ export function buildReputationSnapshot(cwd?: string): ReputationSnapshot {
     resume_weight: 0.35,
     mcp_exposure: false,
   };
+  // pln#578 — disabled reputation (the default) must not pay for the sweep.
+  // Every consumer already treats a disabled snapshot as empty: agents is []
+  // (line below gates on enabled), so ranking bonuses are 0 and the resume
+  // summary is undefined. Yet the full signal sweep (pending + archived
+  // candidates, all runtime notes, all claims, a complete loadState) was still
+  // running — two of the four full-store read passes a single buildContext
+  // performed on a large store. Exit before any store read when disabled.
+  if (!reputationConfig.enabled) {
+    return {
+      enabled: false,
+      visibility: reputationConfig.visibility,
+      window_days: reputationConfig.decay_days,
+      generated_at: nowISO(),
+      project_id: config.project_id,
+      current_agent_id: resolveCurrentAgentIdentity(cwd)?.agent_id,
+      agents: [],
+    };
+  }
   const registered = listAgentIdentities(cwd);
   const currentAgent = resolveCurrentAgentIdentity(cwd);
   const resolvers = buildIdentityResolvers(registered);

@@ -398,8 +398,13 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     });
   }
 
+  // pln#578 — single pending-candidates read, reused by the includePending
+  // items, scoped activity, and staleness passes below (same idiom as the
+  // pln#564 runtime-notes reuse: one scan, three consumers).
+  const pendingCandidates = listCandidates('pending', contextCwd);
+
   if (options.includePending) {
-    for (const p of listCandidates('pending', contextCwd)) {
+    for (const p of pendingCandidates) {
       const meta: string[] = [`${p.type}`, `stars:${p.star_count ?? 0}`, `uses:${p.usage_count ?? 0}`];
       if (p.author_id) meta.push(`author_id:${p.author_id}`);
       if (p.session_id) meta.push(`session:${p.session_id}`);
@@ -608,7 +613,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
     project,
     state,
     runtimeNotes,
-    pendingCandidates: listCandidates('pending', contextCwd),
+    pendingCandidates,
   });
   // Density reflects what the store HAS, not what the char budget keeps:
   // classify pre-budget so a tight budget_tokens on a rich store never
@@ -762,7 +767,7 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
   // flows through the same surface.
   let staleWarnings: StalenessWarning[] | undefined;
   try {
-    const pendingCandidatesForStaleness = listCandidates('pending', contextCwd);
+    const pendingCandidatesForStaleness = pendingCandidates;
     // pln#564 step A — reuse the runtime notes already loaded above (line ~316)
     // instead of a second unfiltered full scan of the runtime-note tree. On a
     // store with thousands of notes that 2nd scan dominated buildContext cost
@@ -853,7 +858,10 @@ export function buildContext(options: ContextOptions = {}): ContextResult {
       : undefined,
     estimation_calibration: (() => {
       try {
-        const report = buildEstimationReport({ agent, cwd: contextCwd });
+        // pln#578 — reuse the state loaded at the top of buildContext; the
+        // report only reads plan_items and a fresh loadState here was one of
+        // the four full-store passes per context build.
+        const report = buildEstimationReport({ agent, cwd: contextCwd, state });
         return report.summary.with_both >= 3 ? report.summary.calibration_hint : undefined;
       } catch { return undefined; }
     })(),

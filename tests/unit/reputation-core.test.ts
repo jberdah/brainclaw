@@ -269,4 +269,62 @@ describe('core/reputation', () => {
     assert.equal(publicSummary?.agent_id, alice.agent_id);
     assert.ok(publicSummary && publicSummary.internal_trust > 0);
   });
+
+  it('pln#578 — disabled reputation short-circuits to an empty snapshot without sweeping signals', () => {
+    const disabled = createTestWorkspace({
+      prefix: 'bclaw-reputation-off-',
+      projectId: 'prj_reputation_off',
+      currentAgent: 'dana',
+      reputationEnabled: false,
+    });
+    try {
+      const dana = disabled.currentAgent;
+      // Signals that WOULD be aggregated if the sweep ran.
+      saveCandidate({
+        id: 'cnd_off_pending',
+        type: 'decision',
+        text: 'Pending while reputation is off',
+        created_at: iso(10),
+        author: dana.agent_name,
+        author_id: dana.agent_id,
+        project_id: 'prj_reputation_off',
+        tags: [],
+        status: 'pending',
+        star_count: 0,
+        starred_by: [],
+        usage_count: 0,
+        usage_events: [],
+      }, disabled.dir);
+      saveClaim({
+        id: 'clm_off_active',
+        agent: dana.agent_name,
+        agent_id: dana.agent_id,
+        project_id: 'prj_reputation_off',
+        scope: 'off-scope',
+        description: 'Active claim while reputation is off',
+        created_at: iso(9),
+        status: 'active',
+      }, disabled.dir);
+
+      const snapshot = buildReputationSnapshot(disabled.dir);
+      assert.equal(snapshot.enabled, false);
+      assert.deepEqual(snapshot.agents, []);
+      assert.equal(snapshot.current_agent, undefined);
+      assert.equal(snapshot.current_agent_id, dana.agent_id);
+
+      const ranking = buildReputationRankingLookup(disabled.dir);
+      assert.equal(ranking.enabled, false);
+      assert.equal(ranking.getInternalTrust(dana.agent_id, dana.agent_name), 0);
+      assert.equal(ranking.getRankingBonus(dana.agent_id, dana.agent_name), 0);
+
+      assert.equal(buildCurrentAgentResumeSummary(disabled.dir), undefined);
+
+      const summary = buildReputationSummary(disabled.dir);
+      assert.equal(summary.enabled, false);
+      assert.equal(summary.tracked_agents, 0);
+      assert.equal(summary.current_agent_trust, undefined);
+    } finally {
+      disabled.cleanup();
+    }
+  });
 });

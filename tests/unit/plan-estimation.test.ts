@@ -137,6 +137,28 @@ describe('buildEstimationReport', () => {
     assert.equal(report.summary.calibration_hint, undefined);
   });
 
+  it('pln#578 — reuses a provided state instead of reading the store', () => {
+    const state = loadState(workspace.dir);
+    state.plan_items.push(PlanItemSchema.parse({
+      id: 'pln_prewarmed',
+      text: 'plan carried by the provided state',
+      created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      updated_at: new Date().toISOString(),
+      author: 'test-agent',
+      status: 'done',
+      priority: 'medium',
+      tags: [],
+      estimated_effort: 30,
+      actual_effort: '30m',
+      completed_at: new Date().toISOString(),
+    }));
+    // cwd points nowhere: any store read would find nothing (or throw), so a
+    // report built from the injected plan proves loadState was skipped.
+    const report = buildEstimationReport({ state, cwd: workspace.dir + '-does-not-exist' });
+    assert.equal(report.summary.total, 1);
+    assert.ok(report.entries.some((entry) => entry.id === 'pln_prewarmed'));
+  });
+
   it('stores estimated_effort as integer minutes on plan creation', () => {
     runPlan('task with estimate', { estimate: 30 });
     const state = loadState(workspace.dir);
