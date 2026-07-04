@@ -61,6 +61,7 @@ import { buildOperationalIdentity, loadAllSessions, loadCurrentSession, loadSess
 import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
 import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
 import { detectAiAgent } from '../core/ai-agent-detection.js';
+import { isObserverMode } from '../core/observer-mode.js';
 import {
   checkGitPresence,
   scanGitRepos,
@@ -2142,6 +2143,16 @@ function resolveCanonicalAuthor(
   if (resolveConnectionPrincipal(cwd, connectionSessionId)) {
     throw new Error(
       `cannot resolve mutation author: ${strictError?.message ?? 'principal mismatch'}`,
+    );
+  }
+
+  // Observer processes are read-only dashboards/inspectors. Even when an env
+  // variable leaks an agent name into the observer process, canonical writes
+  // must not use the auto-repair path because it can mint identity/session
+  // state as a side effect.
+  if (isObserverMode()) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'observer mode cannot auto-repair identity/session state'}`,
     );
   }
 
