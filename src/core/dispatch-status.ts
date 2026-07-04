@@ -203,9 +203,18 @@ export function gitEvidence(
   baseRef: string,
 ): { commitsAhead: number; commitsAheadRaw: number; dirtyTracked: number; baseRef: string } | undefined {
   if (!worktreePath) return undefined;
-  const effectiveBase = readWorktreeBaseRef(worktreePath) ?? baseRef;
+  // Two DIFFERENT anchors:
+  //   - creationBase: sidecar `base_ref_sha`, else caller `baseRef` — the
+  //     stable anchor for "how much did the worker add?" (raw ahead count).
+  //   - integrationBase: caller `baseRef` (default `master`) — the moving
+  //     integration target the patch-id refinement compares against ("still
+  //     un-integrated?"). Using the creation SHA here would falsely count a
+  //     squash-merged commit as un-integrated (its patch is on master, but
+  //     master isn't the creation ref).
+  const creationBase = readWorktreeBaseRef(worktreePath) ?? baseRef;
+  const integrationBase = baseRef;
   try {
-    const aheadRaw = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${effectiveBase}..HEAD`], {
+    const aheadRaw = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${creationBase}..HEAD`], {
       encoding: 'utf-8', timeout: 15000,
     }).trim();
     const status = execFileSync('git', ['-C', worktreePath, 'status', '--short'], {
@@ -213,12 +222,14 @@ export function gitEvidence(
     });
     const dirty = status.split('\n').filter((l) => l.trim() && !l.startsWith('??')).length;
     const rawCount = Number.parseInt(aheadRaw, 10) || 0;
-    // Refine via patch-id: count only commits whose patch is NOT yet on base.
+    // Patch-id refinement against the INTEGRATION base: `git cherry` marks
+    // each commit in `base..HEAD` as `-` (patch on base — squash-merged /
+    // cherry-picked) or `+` (still un-integrated). Refined count = `+` lines.
     // Best-effort — a failed cherry falls back to the raw ancestry count.
     let refined = rawCount;
     if (rawCount > 0) {
       try {
-        const cherry = execFileSync('git', ['-C', worktreePath, 'cherry', effectiveBase, 'HEAD'], {
+        const cherry = execFileSync('git', ['-C', worktreePath, 'cherry', integrationBase, 'HEAD'], {
           encoding: 'utf-8', timeout: 15000,
         });
         const plusLines = cherry.split(/\r?\n/).filter((l) => l.startsWith('+ '));
@@ -229,7 +240,7 @@ export function gitEvidence(
       commitsAhead: refined,
       commitsAheadRaw: rawCount,
       dirtyTracked: dirty,
-      baseRef: effectiveBase,
+      baseRef: creationBase,
     };
   } catch (err) {
     logger.debug('dispatch status: git evidence unavailable:', err);
