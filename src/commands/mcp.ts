@@ -2167,7 +2167,7 @@ function resolveCanonicalAuthor(
     ?? (process.env.BRAINCLAW_AGENT?.trim() || undefined);
 
   let identity;
-  let autoRegistered = false;
+  let autoRegistered: boolean;
   try {
     const outcome = resolveOrAutoRegisterAgentIdentity({
       agentName: envAgentName,
@@ -2186,6 +2186,7 @@ function resolveCanonicalAuthor(
       `cannot resolve mutation author: ${detail} `
       + 'Pass a registered agent, set $BRAINCLAW_AGENT_NAME, '
       + 'or register with `brainclaw register-agent <name>` before writing.',
+      { cause: err },
     );
   }
 
