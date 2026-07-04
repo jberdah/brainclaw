@@ -12,6 +12,9 @@ import {
   updateEntity,
 } from '../../src/core/entity-operations.js';
 import { createAssignment, loadAssignment } from '../../src/core/assignments.js';
+import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { nowISO } from '../../src/core/ids.js';
+import { loadState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/entity-operations — CRUD verb dispatch', () => {
@@ -171,6 +174,102 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       assert.equal(result.archived, true);
       assert.equal(result.purged, false);
       assert.equal(loadAssignment(assignment.id, workspace.dir)?.status, 'cancelled');
+    });
+  });
+
+  describe('claim (trp#928)', () => {
+    // trp#928 regression: before this landing, bclaw_transition(entity='claim',
+    // to='released') passed isValidTransition (the check ran BEFORE the switch)
+    // but then the switch fell through to EntityOperationUnsupportedError. The
+    // symptom was tested indirectly via existing tests that already showed
+    // active-status claims not moving — but they hit the terminal-state check,
+    // not the actual missing case. This test hits transition on an ACTIVE claim.
+    function seedActiveClaim(workspace: TestWorkspace, id: string, opts?: { planId?: string; agent?: string }): void {
+      saveClaim({
+        id,
+        agent: opts?.agent ?? workspace.currentAgent.agent_name,
+        scope: `src/${id}`,
+        description: `Test claim ${id}`,
+        created_at: nowISO(),
+        status: 'active',
+        plan_id: opts?.planId,
+      }, workspace.dir);
+    }
+
+    it('transition on ACTIVE claim → released is wired (was falling through to Unsupported)', () => {
+      const claimId = 'clm_transactive_1';
+      seedActiveClaim(workspace, claimId);
+
+      const result = transitionEntity('claim', claimId, 'released', workspace.dir);
+      assert.equal(result.from, 'active');
+      assert.equal(result.to, 'released');
+      assert.ok(result.side_effects.includes('audit:claim_released'));
+
+      const reloaded = loadClaim(claimId, workspace.dir);
+      assert.equal(reloaded.status, 'released');
+      assert.ok(reloaded.released_at, 'released_at should be stamped');
+    });
+
+    it('transition on ACTIVE claim → stale marks stale (distinct from released)', () => {
+      const claimId = 'clm_transactive_2';
+      seedActiveClaim(workspace, claimId);
+
+      const result = transitionEntity('claim', claimId, 'stale', workspace.dir);
+      assert.equal(result.from, 'active');
+      assert.equal(result.to, 'stale');
+      assert.ok(result.side_effects.includes('audit:claim_stale'));
+
+      const reloaded = loadClaim(claimId, workspace.dir);
+      assert.equal(reloaded.status, 'stale');
+    });
+
+    it('coordinator override: non-owner without override is rejected with executable hint', () => {
+      const claimId = 'clm_transactive_3';
+      seedActiveClaim(workspace, claimId, { agent: 'other-worker' });
+
+      assert.throws(
+        () => transitionEntity('claim', claimId, 'released', workspace.dir, undefined, {
+          agent: 'coordinator',
+          override: false,
+        }),
+        (err: Error) => /coordinator_override:true/.test(err.message),
+        'error must point at the executable coordinator_override:true param',
+      );
+    });
+
+    it('coordinator override: non-owner with override succeeds', () => {
+      const claimId = 'clm_transactive_4';
+      seedActiveClaim(workspace, claimId, { agent: 'other-worker' });
+
+      const result = transitionEntity('claim', claimId, 'released', workspace.dir, undefined, {
+        agent: 'coordinator',
+        override: true,
+      });
+      assert.equal(result.to, 'released');
+      const reloaded = loadClaim(claimId, workspace.dir);
+      assert.equal(reloaded.status, 'released');
+    });
+
+    it('plan → done cascades to release linked active claims (release_linked_claims_if_last)', () => {
+      // Seed a plan + two claims linked to it, then transition plan → in_progress → done.
+      const created = createEntity('plan', { text: 'plan with claims', author: 'testuser' }, workspace.dir);
+      const planId = created.id;
+      seedActiveClaim(workspace, 'clm_planscope_a', { planId });
+      seedActiveClaim(workspace, 'clm_planscope_b', { planId });
+
+      transitionEntity('plan', planId, 'in_progress', workspace.dir);
+      transitionEntity('plan', planId, 'done', workspace.dir);
+
+      const a = loadClaim('clm_planscope_a', workspace.dir);
+      const b = loadClaim('clm_planscope_b', workspace.dir);
+      assert.equal(a.status, 'released', 'plan-done cascade must release claim A');
+      assert.equal(b.status, 'released', 'plan-done cascade must release claim B');
+
+      // Sanity: plan itself is done.
+      const state = loadState(workspace.dir);
+      const plan = state.plan_items.find((p) => p.id === planId);
+      assert.ok(plan);
+      assert.equal(plan.status, 'done');
     });
   });
 

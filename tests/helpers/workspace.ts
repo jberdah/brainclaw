@@ -127,6 +127,7 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   saved.BRAINCLAW_CWD = process.env.BRAINCLAW_CWD;
   saved.BRAINCLAW_PROJECT = process.env.BRAINCLAW_PROJECT;
   saved.BRAINCLAW_CLAIM_ID = process.env.BRAINCLAW_CLAIM_ID;
+  saved.BRAINCLAW_SESSION_ID = process.env.BRAINCLAW_SESSION_ID;
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
   delete process.env.HOMEDRIVE;
@@ -135,6 +136,7 @@ export function isolateAgentEnv(): { fakeHome: string; restore: () => void } {
   delete process.env.BRAINCLAW_CWD;
   delete process.env.BRAINCLAW_PROJECT;
   delete process.env.BRAINCLAW_CLAIM_ID;
+  delete process.env.BRAINCLAW_SESSION_ID;
   return {
     fakeHome,
     restore: () => cleanupTestEnv({ fakeHome, envBackup: saved }),

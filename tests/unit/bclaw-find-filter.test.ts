@@ -437,4 +437,34 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       assert.equal(isError, true, 'an unknown key anywhere in filter must be rejected');
     });
   });
+
+  describe('entity-scoped filter keys (trp#928)', () => {
+    // trp#928 doc-vs-facts (pln#599): the schema says assignment_id / claim_id /
+    // message_id are entity="agent_run" only. Before this landing the rejection
+    // classified them as "unknown" for other entities — misleading. The
+    // rejection now names the constraint AND points at the entity that DOES
+    // accept the key (executable path).
+    it('assignment_id on entity=plan is rejected with an entity-scoping error, not an "unknown key" error', async () => {
+      createEntity('plan', { text: 'one', author: 'claude-code' }, workspace.dir);
+
+      const { isError, content } = await find(workspace, 'plan', { assignment_id: 'asgn_test' });
+      assert.equal(isError, true);
+      const errorEnvelope = content as unknown as {
+        error?: { message?: string; details?: { mis_scoped_keys?: string[]; agent_run_only_keys?: string[] } };
+      };
+      const message = errorEnvelope.error?.message ?? '';
+      assert.match(message, /only valid for entity="agent_run"/i, `error must name the constraint: ${message}`);
+      assert.match(message, /entity="plan"/i, `error must name the caller's entity: ${message}`);
+      assert.match(message, /assignment_id/i, `error must name the mis-scoped key: ${message}`);
+      // Machine-readable details.
+      const details = errorEnvelope.error?.details;
+      assert.ok(details?.mis_scoped_keys?.includes('assignment_id'));
+      assert.ok(details?.agent_run_only_keys?.includes('assignment_id'));
+    });
+
+    it('claim_id on entity=agent_run still passes (positive baseline)', async () => {
+      const { isError } = await find(workspace, 'agent_run', { claim_id: 'clm_test' });
+      assert.equal(isError, false, 'agent_run must still accept the scoped keys');
+    });
+  });
 });

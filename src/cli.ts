@@ -1249,10 +1249,16 @@ program
   .option('--all', 'Include released claims in list')
   .option('--json', 'Output as JSON for list')
   .option('--plan-status <status>', 'Optional linked plan status when releasing: todo, in_progress, blocked, done, dropped')
+  .option('--coordinator-override', 'Trusted+ only: release a claim owned by another agent')
   .option('--store <target>', 'Target store level: local (default), repo, workspace')
   .option('--local-only', 'Read from local store only for list (skip parent stores in chain)')
   .action((subcommand, args, options) => {
-    runClaimResource(subcommand, args, { ...options, planStatus: options.planStatus, localOnly: options.localOnly });
+    runClaimResource(subcommand, args, {
+      ...options,
+      planStatus: options.planStatus,
+      coordinatorOverride: options.coordinatorOverride,
+      localOnly: options.localOnly,
+    });
   });
 
 // --- assignment ---
@@ -1295,8 +1301,9 @@ program
   .command('release-claim <id>')
   .description('Release a work claim')
   .option('--plan-status <status>', 'Optional linked plan status: todo, in_progress, blocked, done, dropped')
+  .option('--coordinator-override', 'Trusted+ only: release a claim owned by another agent')
   .action((id, options) => {
-    runReleaseClaim(id, options);
+    runReleaseClaim(id, { ...options, coordinatorOverride: options.coordinatorOverride });
   });
 
 // --- release-claims ---
