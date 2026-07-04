@@ -678,6 +678,17 @@ export function createWorktree(
     fs.copyFileSync(mainGitignorePath, targetGitignorePath);
   }
 
+  // trp#926 — record the RESOLVED base ref SHA at creation time. base_ref is
+  // usually "HEAD" or a branch name, both of which drift after creation and
+  // are useless for later "how many commits did the worker add?" comparisons.
+  // The resolved SHA is the stable anchor: `${base_ref_sha}..HEAD` on the lane
+  // deterministically counts the worker's contribution even as master advances.
+  // Best-effort — an unresolvable base_ref simply omits the field.
+  const baseRefSha = (() => {
+    const rev = runGit(['rev-parse', baseRef], mainWorktreePath);
+    return rev.ok ? rev.stdout.trim() : undefined;
+  })();
+
   // Write brainclaw metadata sidecar inside the worktree
   const meta = {
     session_id: options.sessionId,
@@ -686,6 +697,7 @@ export function createWorktree(
     created_at: new Date().toISOString(),
     main_worktree_path: mainWorktreePath,
     base_ref: baseRef,
+    ...(baseRefSha ? { base_ref_sha: baseRefSha } : {}),
     reset_existing_branch: options.resetExistingBranch === true,
     git_advice: 'git add ONLY specific files, NEVER git add -A.',
     // pln#523: surface any shared-path link failures (e.g. node_modules junction
@@ -932,36 +944,69 @@ export function safeRemoveWorktreeDir(dirPath: string): void {
 }
 
 /**
- * pln#498 — Detach top-level symlinks/junctions from a worktree before any
- * recursive removal. On Windows, `git worktree remove` performs its own
- * recursive rm and historically (git ≤ 2.38) followed NTFS junctions into
- * the main repo, wiping `node_modules`. Unlinking the junction entries
- * first leaves git only regular files/dirs to walk.
+ * Depth cap for detachWorktreeJunctions' recursive walk. 8 covers realistic
+ * monorepo trees (apps/<pkg>/packages/<pkg>/node_modules, pnpm nested links)
+ * while keeping the walk bounded on pathological structures. .git is skipped
+ * outright — it never contains user junctions and can be very deep.
+ */
+const JUNCTION_SCAN_MAX_DEPTH = 8;
+
+/**
+ * pln#498 + trp#926 (2026-07-03 incident) — Detach ALL symlinks/junctions from
+ * a worktree before any recursive removal. On Windows, `git worktree remove`
+ * performs its own recursive rm and historically (git ≤ 2.38) followed NTFS
+ * junctions into the main repo, wiping `node_modules`. Unlinking every
+ * junction entry first leaves git only regular files/dirs to walk.
  *
- * Only top-level entries are inspected — that's where shared paths are
- * symlinked at worktree birth (see createWorktree.trySymlinkSharedPath).
+ * Historically this only inspected top-level entries — that covered the
+ * classic single-stack shared `node_modules` case but MISSED:
+ *   - monorepo per-package junctions created by pln#523
+ *     (apps/<pkg>/node_modules, packages/<pkg>/node_modules);
+ *   - operator- or worker-created manual junctions at nested paths.
+ * The 2026-07-03 incident (node_modules racine rasé via the auto-junction)
+ * was a recurrence of the pln#498 class, extended one level of nesting.
+ *
+ * The recursion NEVER descends into a symlink (lstat + unlink at the entry
+ * itself), so it cannot follow a junction into the main repo. `.git/` is
+ * skipped entirely — git manages its own state and it never holds user
+ * junctions. Depth is capped defensively at JUNCTION_SCAN_MAX_DEPTH.
  */
 export function detachWorktreeJunctions(worktreePath: string): void {
+  detachJunctionsRecursively(worktreePath, 0);
+}
+
+function detachJunctionsRecursively(dir: string, depth: number): void {
+  if (depth > JUNCTION_SCAN_MAX_DEPTH) return;
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(worktreePath, { withFileTypes: true });
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return; // worktree already gone or unreadable
+    return; // dir gone or unreadable — nothing to detach here
   }
 
   for (const entry of entries) {
-    const child = path.join(worktreePath, entry.name);
+    // `.git` is a file (linked worktree pointer) at the worktree root or a
+    // real dir in the main repo — either way, do not walk it.
+    if (entry.name === '.git') continue;
+    const child = path.join(dir, entry.name);
     let stat: fs.Stats;
     try {
       stat = fs.lstatSync(child);
     } catch {
       continue;
     }
-    if (!stat.isSymbolicLink()) continue;
-    try {
-      fs.unlinkSync(child);
-    } catch {
-      try { fs.rmdirSync(child); } catch { /* best effort */ }
+    if (stat.isSymbolicLink()) {
+      // Unlink the junction. Do NOT descend into it (that would follow the
+      // link back into the main repo — the exact class we're preventing).
+      try {
+        fs.unlinkSync(child);
+      } catch {
+        try { fs.rmdirSync(child); } catch { /* best effort */ }
+      }
+      continue;
+    }
+    if (stat.isDirectory()) {
+      detachJunctionsRecursively(child, depth + 1);
     }
   }
 }
@@ -1041,12 +1086,50 @@ export function worktreeHasOnlyBirthNoise(statusZStdout: string): boolean {
 }
 
 /**
+ * trp#926 (squash-aware GC) — True when every commit on `branch` that is not
+ * an ancestor of `baseRef` has a patch-equivalent commit ALREADY on `baseRef`.
+ *
+ * `git branch --merged HEAD` and `merge-base --is-ancestor` are ancestry-only:
+ * a squash-merge on GitHub creates a NEW commit on master whose ancestry does
+ * not include the lane commits, so an ancestry probe returns "not merged" and
+ * the GC keeps the worktree forever. `git cherry <base> <branch>` uses
+ * patch-id equivalence — the same signal GitHub itself uses to say "this PR is
+ * merged". Output is one line per commit in `base..branch`:
+ *   `+ <sha>` = patch NOT yet on base (a real un-integrated commit)
+ *   `- <sha>` = patch already on base (via squash / cherry-pick / rebase)
+ * The branch is "merged by content" iff there are no `+` lines. An empty
+ * output (no commits ahead of base) is also merged.
+ *
+ * Returns `false` on any git failure — a probe that cannot prove merged must
+ * NEVER lie "yes" and cause a keep-me worktree to be GC'd. Callers combine
+ * this with ancestry ('git branch --merged') so both signals contribute.
+ */
+export function isBranchMergedByContent(
+  mainWorktreePath: string,
+  branchName: string,
+  baseRef = 'HEAD',
+): boolean {
+  const cherry = runGit(['cherry', baseRef, branchName], mainWorktreePath);
+  if (!cherry.ok) return false;
+  const lines = cherry.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return true; // no commits ahead of base → fully merged
+  // A `+` line means "patch not on base" — one is enough to disqualify.
+  return !lines.some((l) => l.startsWith('+ '));
+}
+
+/**
  * Removes worktrees whose branch has been fully merged into the current branch
  * (typically master/main after a merge). Also removes brainclaw-managed
  * worktree directories that no longer have a corresponding git worktree entry
  * (orphan dirs left behind by force-deleted branches).
  *
  * Safe by default: skips worktrees with uncommitted changes unless `force` is set.
+ *
+ * trp#926 — Merged detection is a UNION of two signals:
+ *   - ancestry (`git branch --merged HEAD`): catches fast-forward / merge-commit;
+ *   - content (`git cherry HEAD <branch>`, patch-id): catches squash merges,
+ *     which is GitHub's default merge strategy on this repo and previously left
+ *     every squashed lane un-GC-able forever.
  */
 export function cleanMergedWorktrees(
   mainWorktreePath: string,
@@ -1074,7 +1157,12 @@ export function cleanMergedWorktrees(
   for (const wt of worktrees) {
     if (wt.is_main) continue;
 
-    const isMerged = mergedBranches.has(wt.branch);
+    // trp#926 — a lane's branch is "merged" if EITHER git says its commits are
+    // ancestors of HEAD (fast-forward / merge-commit) OR every commit's patch
+    // is already on HEAD (squash-merge, catching GitHub's default strategy).
+    // Without the content probe, squashed lanes accumulate forever.
+    const isMerged = mergedBranches.has(wt.branch)
+      || isBranchMergedByContent(mainWorktreePath, wt.branch, 'HEAD');
     if (!isMerged) {
       continue;
     }
@@ -1200,8 +1288,14 @@ export function gcWorktreeIfHarvested(
       mainWorktreePath,
     );
     // exit 0 = ancestor (safe). Non-zero = not an ancestor OR a git error — both
-    // mean "cannot prove integrated", so keep.
-    if (!ancestor.ok) return out(false, 'lane branch has un-integrated commits (or unverifiable)', branch);
+    // mean "cannot prove integrated via ancestry". trp#926 — fall back to the
+    // content probe (patch-id): a squash-merged lane is not an ancestor but is
+    // fully integrated, and previously the GC kept it forever. Ancestry OR
+    // content, either signal is enough; a failed content probe still keeps the
+    // worktree (isBranchMergedByContent returns false on git failure).
+    if (!ancestor.ok && branch && !isBranchMergedByContent(mainWorktreePath, branch, mainHead.stdout.trim())) {
+      return out(false, 'lane branch has un-integrated commits (or unverifiable)', branch);
+    }
   }
 
   try {

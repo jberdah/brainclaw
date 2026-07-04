@@ -81,11 +81,27 @@ export interface DispatchRuntimeSnapshot {
    */
   lane_result?: { status: string; summary: string };
   /**
-   * pln#554 — worktree git evidence: commits on the lane branch ahead of the
-   * base ref (`git rev-list --count <base>..HEAD`). undefined when there is no
-   * worktree or git could not be queried.
+   * pln#554 + trp#926 — commits on the lane branch ahead of the base ref, but
+   * refined via patch-id: a squash-merged commit whose patch is already on
+   * base counts as 0, not 1 — the fix for the observed `worker delivered`
+   * false-positive after squash-merge (rtn_c5542b05). Base ref is the
+   * worktree's recorded creation SHA when the sidecar carries one, else the
+   * caller-supplied `base_ref` (default `master`).
    */
   commits_ahead?: number;
+  /**
+   * trp#926 — the ancestry-only count preserved for callers that need the raw
+   * `<base>..HEAD` number (telemetry, diff drivers). `commits_ahead` is the
+   * squash-aware refinement — use it for verdicts.
+   */
+  commits_ahead_raw?: number;
+  /**
+   * trp#926 — the base ref actually used for the ahead computation. Reflects
+   * the sidecar's recorded creation SHA when present; falls back to the caller
+   * default. Emitted so a diagnosis reader can see WHY commits_ahead is what
+   * it is (comparison to creation ref vs. current master).
+   */
+  commits_ahead_base?: string;
   /**
    * pln#554 — modified TRACKED files in the worktree (`git status --short`
    * minus untracked). commits_ahead>0 with dirty_tracked==0 means the worker
@@ -139,26 +155,82 @@ const DEFAULT_STALL_MS = 5 * 60_000;
 const DEFAULT_BASE_REF = 'master';
 
 /**
- * pln#554 — worktree git evidence, the signal that beats process/administrative
- * status: a worker that committed everything to its lane branch has DELIVERED,
- * whatever its pid/heartbeat/assignment.status say. Shared by dispatch-status
- * and `brainclaw dispatch watch`. Returns undefined when there is no worktree
- * or git could not be queried (never conclude "no commits" from a failed read).
+ * trp#926 — read the worktree's recorded creation ref (SHA) from its brainclaw
+ * sidecar so gitEvidence can measure "commits the worker added" against the
+ * anchor the worktree was BORN at, not the caller's moving default (which is
+ * usually `master`). Comparing to master after master advanced was the
+ * observed false-positive on rtn_c5542b05: lane HEAD's commits still appeared
+ * "ahead of master" long after they were squash-merged, so dispatch_status
+ * reported "worker delivered" for a fully integrated lane.
+ *
+ * Returns the SHA if the sidecar exists AND records a resolvable base_ref_sha.
+ * Falls back to undefined otherwise; callers then use their supplied baseRef.
+ */
+function readWorktreeBaseRef(worktreePath: string): string | undefined {
+  try {
+    const sidecar = path.join(worktreePath, '.brainclaw-worktree.json');
+    const meta = JSON.parse(fs.readFileSync(sidecar, 'utf-8')) as { base_ref_sha?: unknown };
+    if (typeof meta.base_ref_sha === 'string' && meta.base_ref_sha.length > 0) {
+      return meta.base_ref_sha;
+    }
+  } catch { /* no sidecar / unreadable — caller falls back */ }
+  return undefined;
+}
+
+/**
+ * pln#554 + trp#926 — worktree git evidence, the signal that beats process /
+ * administrative status: a worker that committed everything to its lane branch
+ * has DELIVERED, whatever its pid/heartbeat/assignment.status say. Shared by
+ * dispatch-status and `brainclaw dispatch watch`. Returns undefined when there
+ * is no worktree or git could not be queried (never conclude "no commits" from
+ * a failed read).
+ *
+ * The comparison anchor is:
+ *   1. the worktree sidecar's recorded creation SHA (`base_ref_sha`), when
+ *      present — the truthful anchor a worker was born at;
+ *   2. otherwise `commits_ahead_base` (caller-supplied, default `master`).
+ * Anchoring on the creation ref is what avoids the "worker delivered"
+ * false-positive after a squash-merge advanced master.
+ *
+ * Additionally, `commitsAhead` is refined via `git cherry <base> HEAD`
+ * (patch-id): a commit whose patch is already on `base` is treated as
+ * integrated even if its SHA is not an ancestor of `base` (squash-merge case).
+ * `commitsAheadRaw` preserves the historical ancestry-only count for callers /
+ * telemetry that need it.
  */
 export function gitEvidence(
   worktreePath: string | undefined,
   baseRef: string,
-): { commitsAhead: number; dirtyTracked: number } | undefined {
+): { commitsAhead: number; commitsAheadRaw: number; dirtyTracked: number; baseRef: string } | undefined {
   if (!worktreePath) return undefined;
+  const effectiveBase = readWorktreeBaseRef(worktreePath) ?? baseRef;
   try {
-    const ahead = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${baseRef}..HEAD`], {
+    const aheadRaw = execFileSync('git', ['-C', worktreePath, 'rev-list', '--count', `${effectiveBase}..HEAD`], {
       encoding: 'utf-8', timeout: 15000,
     }).trim();
     const status = execFileSync('git', ['-C', worktreePath, 'status', '--short'], {
       encoding: 'utf-8', timeout: 15000,
     });
     const dirty = status.split('\n').filter((l) => l.trim() && !l.startsWith('??')).length;
-    return { commitsAhead: Number.parseInt(ahead, 10) || 0, dirtyTracked: dirty };
+    const rawCount = Number.parseInt(aheadRaw, 10) || 0;
+    // Refine via patch-id: count only commits whose patch is NOT yet on base.
+    // Best-effort — a failed cherry falls back to the raw ancestry count.
+    let refined = rawCount;
+    if (rawCount > 0) {
+      try {
+        const cherry = execFileSync('git', ['-C', worktreePath, 'cherry', effectiveBase, 'HEAD'], {
+          encoding: 'utf-8', timeout: 15000,
+        });
+        const plusLines = cherry.split(/\r?\n/).filter((l) => l.startsWith('+ '));
+        refined = plusLines.length;
+      } catch { /* keep raw count */ }
+    }
+    return {
+      commitsAhead: refined,
+      commitsAheadRaw: rawCount,
+      dirtyTracked: dirty,
+      baseRef: effectiveBase,
+    };
   } catch (err) {
     logger.debug('dispatch status: git evidence unavailable:', err);
     return undefined;
@@ -483,6 +555,8 @@ export function getDispatchStatus(options: DispatchStatusOptions): DispatchStatu
     last_fs_activity_ms: lastFsActivityMs,
     lane_result: laneResult,
     commits_ahead: evidence?.commitsAhead,
+    commits_ahead_raw: evidence?.commitsAheadRaw,
+    commits_ahead_base: evidence?.baseRef,
     dirty_tracked: evidence?.dirtyTracked,
   };
 
