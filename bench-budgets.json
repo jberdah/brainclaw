@@ -1,0 +1,18 @@
+{
+  "$schema_notes": "Budgets for scripts/bench-check.mjs. duration_ms_median is a wall-clock ceiling (Linux CI). payload_chars_median is a per-scenario payload weight ceiling (~4 chars = 1 token). tolerance is a per-scenario override; default_tolerance is applied when a scenario does not set one. Calibrate on the master baseline, then commit revisions when a code change intentionally moves a number.",
+  "default_tolerance": 0.2,
+  "scenarios": {
+    "cold_onboard": {
+      "duration_ms_median": 400,
+      "payload_chars_median": 6000
+    },
+    "warm_work": {
+      "duration_ms_median": 1500,
+      "payload_chars_median": 60000
+    },
+    "first_edit": {
+      "duration_ms_median": 600,
+      "payload_chars_median": 4000
+    }
+  }
+}
