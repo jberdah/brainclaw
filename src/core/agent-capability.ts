@@ -96,12 +96,18 @@ export interface AgentCapabilityProfile {
   invoke_consult_template?: string;
   /**
    * pln#520 step 3 — flag this binary uses to select a model (e.g. `--model`).
-   * When set, a resolved model is injected right after the binary so model
-   * choice is decoupled from agent identity (run `claude-code` with any model
-   * instead of needing a per-model pseudo-identity like `claude-sonnet`).
+   * When set, a resolved model is injected into the parsed invoke template so
+   * model choice is decoupled from agent identity (run `claude-code` with any
+   * model instead of needing a per-model pseudo-identity like `claude-sonnet`).
    * Unset → the agent ignores model selection (model baked into its template).
    */
   model_flag?: string;
+  /**
+   * Parsed-token index where `<model_flag> <model>` should be inserted.
+   * Defaults to 1 (right after the binary). Set this for CLIs whose model flag
+   * belongs after a subcommand, e.g. `codex exec --model <model>`.
+   */
+  model_flag_insert_index?: number;
   /** Default model for this agent, last link in the model resolution chain. */
   default_model?: string;
 }
@@ -294,6 +300,7 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     // codex 0.130). We use the long form `--model` for symmetry with the
     // other agent profiles and readability.
     model_flag: '--model',
+    model_flag_insert_index: 2,
   },
   antigravity: {
     name: 'antigravity', category: 'code-agent', workflowModel: 'interactive',
@@ -589,8 +596,9 @@ export interface BuildInvokeCommandOptions {
   tempFilePath?: string;
   /**
    * pln#520 step 3 — model to run, decoupled from agent identity. Injected as
-   * `<profile.model_flag> <model>` right after the binary when the profile
-   * declares a `model_flag` and the template doesn't already pin a model.
+   * `<profile.model_flag> <model>` at the profile's model insertion point when
+   * the profile declares a `model_flag` and the template doesn't already pin a
+   * model.
    */
   model?: string;
 }
@@ -772,11 +780,16 @@ export function buildInvokeCommand(
   const rawTokens = parseTemplateString(templateStr);
   if (rawTokens.length === 0) return undefined;
 
-  // pln#520 step 3: inject the resolved model right after the binary so model
-  // choice is decoupled from agent identity. Only when the profile declares a
-  // `model_flag` and the template doesn't already pin a model (don't double it).
+  // pln#520 step 3: inject the resolved model at the profile's model argument
+  // position so model choice is decoupled from agent identity. Only when the
+  // profile declares a `model_flag` and the template doesn't already pin a model
+  // (don't double it).
   if (options.model && profile.model_flag && !rawTokens.includes(profile.model_flag)) {
-    rawTokens.splice(1, 0, profile.model_flag, options.model);
+    const insertIndex = Math.min(
+      Math.max(profile.model_flag_insert_index ?? 1, 1),
+      rawTokens.length,
+    );
+    rawTokens.splice(insertIndex, 0, profile.model_flag, options.model);
   }
 
   const executable = rawTokens[0];

@@ -2,10 +2,11 @@
  * pln#520 step 3 — model selection decoupled from agent identity.
  *
  * `resolveModel` chain: override → lane → identity → profile default.
- * `buildInvokeCommand({ model })` injects `<model_flag> <model>` right after
- * the binary for agents that declare a `model_flag` (e.g. claude-code), so you
- * can run `claude-code --model sonnet` instead of a `claude-sonnet`
- * pseudo-identity.
+ * `buildInvokeCommand({ model })` injects `<model_flag> <model>` at the
+ * profile's model argument position for agents that declare a `model_flag`, so
+ * you can run `claude-code --model sonnet` instead of a `claude-sonnet`
+ * pseudo-identity. Profiles with subcommands can place the flag after that
+ * subcommand, e.g. `codex exec --model <model>`.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,10 +43,10 @@ describe('buildInvokeCommand model injection (pln#520 step 3)', () => {
     });
     assert.ok(cmd, 'expected an invoke command');
     assert.equal(cmd!.executable, 'claude');
-    // `--model sonnet` lands immediately after the binary, before -p.
-    const idx = cmd!.args.indexOf('--model');
-    assert.ok(idx >= 0, `expected --model in args, got: ${cmd!.args.join(' ')}`);
-    assert.equal(cmd!.args[idx + 1], 'sonnet');
+    // `--model sonnet` lands immediately after the binary, before -p. The
+    // prompt is delivered by stdin, so it must not appear as an argv element.
+    assert.deepEqual(cmd!.args.slice(0, 4), ['--model', 'sonnet', '-p', '--allowedTools']);
+    assert.ok(!cmd!.args.includes('do the thing'), `stdin prompt leaked into args: ${cmd!.args.join(' ')}`);
     // bashCommand quotes each token (e.g. `claude "--model" "sonnet" ...`).
     assert.ok(
       cmd!.bashCommand.includes('--model') && cmd!.bashCommand.includes('sonnet'),
@@ -73,22 +74,24 @@ describe('buildInvokeCommand model injection (pln#520 step 3)', () => {
 
   // pln#606 — model_flag rolled out to codex and github-copilot (verified
   // empirically: `codex exec -m|--model`, `copilot --model`).
-  it('injects the model flag right after the binary for codex', () => {
+  it('injects the model flag after the codex exec subcommand', () => {
     const cmd = buildInvokeCommand('codex', 'do the thing', {
       model: 'gpt-5-codex',
       platform: 'linux',
     });
     assert.ok(cmd, 'expected an invoke command');
     assert.equal(cmd!.executable, 'codex');
-    const idx = cmd!.args.indexOf('--model');
-    assert.ok(idx >= 0, `expected --model in args, got: ${cmd!.args.join(' ')}`);
-    assert.equal(cmd!.args[idx + 1], 'gpt-5-codex');
-    // Injection lands before the existing -c / --sandbox flags; the sandbox
-    // switch must still be present so we don't accidentally strip it.
-    assert.ok(
-      cmd!.args.includes('--sandbox'),
-      `sandbox flag must survive model injection, got: ${cmd!.args.join(' ')}`,
-    );
+    assert.deepEqual(cmd!.args, [
+      'exec',
+      '--model',
+      'gpt-5-codex',
+      '-c',
+      'approval_policy=never',
+      '--sandbox',
+      'workspace-write',
+    ]);
+    assert.equal(cmd!.promptDelivery, 'stdin_pipe');
+    assert.ok(!cmd!.args.includes('do the thing'), `stdin prompt leaked into args: ${cmd!.args.join(' ')}`);
   });
 
   it('injects the model flag right after the binary for github-copilot', () => {
@@ -98,12 +101,14 @@ describe('buildInvokeCommand model injection (pln#520 step 3)', () => {
     });
     assert.ok(cmd);
     assert.equal(cmd!.executable, 'copilot');
-    const idx = cmd!.args.indexOf('--model');
-    assert.ok(idx >= 0, `expected --model in args, got: ${cmd!.args.join(' ')}`);
-    assert.equal(cmd!.args[idx + 1], 'gpt-5.4');
-    // The permission switches that make copilot spawn headless must survive.
-    assert.ok(cmd!.args.includes('--allow-all'));
-    assert.ok(cmd!.args.includes('--no-ask-user'));
+    assert.deepEqual(cmd!.args, [
+      '--model',
+      'gpt-5.4',
+      '-p',
+      'do the thing',
+      '--allow-all',
+      '--no-ask-user',
+    ]);
   });
 
   it('is a no-op for codex when no model is supplied', () => {
