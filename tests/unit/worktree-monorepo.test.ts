@@ -23,12 +23,15 @@ import {
  * 8.3 short names (RUNNER~1 vs runneradmin), drive-letter case, and macOS
  * /var → /private/var. A plain realpathSync mismatched on GitHub Windows.
  */
-function assertSamePath(actual: string, expected: string, message?: string): void {
+function assertSamePath(actual: string, expected: string, message: string): void {
   const norm = (p: string): string => {
     let r = path.resolve(p);
     try { r = fs.realpathSync.native(r); } catch { /* path may be gone */ }
     return process.platform === 'win32' ? r.toLowerCase() : r;
   };
+  // @types/node 26 tightened assert.equal's message overload to reject
+  // `string | undefined` (trp — PR#35). Keep the param required (all call sites
+  // pass one) so the third arg is always a plain string.
   assert.equal(norm(actual), norm(expected), message);
 }
 
