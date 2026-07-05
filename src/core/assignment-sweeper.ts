@@ -163,21 +163,35 @@ export function sweepAssignmentsFromList(
   const result: SweeperResult = { timed_out: [], expired: [], implicitly_advanced: [] };
 
   for (const assignment of assignments) {
+    // pln#602 / Codex PR#48 finding 2: when a hygiene `policy` is supplied
+    // (session-start full sweep, bclaw_work read-path), the age comparison,
+    // the implicit-evidence freshness window, AND the status_reason MUST use
+    // the family TTLs (offered 3d / accepted 1d / started 1d by default), NOT
+    // the assignment's embedded heartbeat_ttl_ms/acceptance_ttl_ms (~30/15min).
+    // Otherwise a 20-min offered assignment that `doctor --hygiene` does not
+    // list as a candidate could still be expired here — the exact incoherence
+    // Codex flagged. Without a policy (the dispatcher convergence sweep,
+    // dispatcher.ts), fall back to the embedded TTLs so short-window dispatch
+    // convergence is unchanged.
+    const startedTtl = policy?.assignment_started_ttl_ms ?? assignment.heartbeat_ttl_ms;
+    const acceptedTtl = policy?.assignment_accepted_ttl_ms ?? assignment.acceptance_ttl_ms;
+    const offeredTtl = policy?.assignment_offered_ttl_ms ?? assignment.acceptance_ttl_ms;
+
     // Check started assignments for heartbeat timeout
     if (assignment.status === 'started') {
       const lastBeat = assignment.last_heartbeat_at ?? assignment.started_at;
       if (!lastBeat) continue;
       const ageMs = now - new Date(lastBeat).getTime();
-      if (ageMs > assignment.heartbeat_ttl_ms) {
+      if (ageMs > startedTtl) {
         // can_948acfd6: a worker without MCP cannot bump last_heartbeat_at —
         // its file evidence is the heartbeat. Fresh file activity vetoes the
         // administrative timeout.
         const sinceMs = new Date(assignment.started_at ?? assignment.created_at).getTime();
-        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.heartbeat_ttl_ms);
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, startedTtl);
         if (evidence.fresh) continue;
         try {
           transitionAssignment(assignment.id, 'timed_out', {
-            status_reason: `No heartbeat for ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.heartbeat_ttl_ms / 60_000)}min); implicit evidence: ${evidence.description}`,
+            status_reason: `No heartbeat for ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(startedTtl / 60_000)}min); implicit evidence: ${evidence.description}`,
             actor,
           }, cwd);
           result.timed_out.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });
@@ -190,10 +204,12 @@ export function sweepAssignmentsFromList(
       const acceptedAt = assignment.accepted_at ?? assignment.last_heartbeat_at;
       if (!acceptedAt) continue;
       const ageMs = now - new Date(acceptedAt).getTime();
-      // Use acceptance_ttl for accepted→timed_out (same window: agent should start quickly after accepting)
-      if (ageMs > assignment.acceptance_ttl_ms) {
+      // Use the accepted-family TTL for accepted→timed_out (agent should start
+      // soon after accepting; family default 1d, or embedded acceptance_ttl_ms
+      // for the policy-less convergence sweep).
+      if (ageMs > acceptedTtl) {
         const sinceMs = new Date(acceptedAt).getTime();
-        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.acceptance_ttl_ms);
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, acceptedTtl);
         if (evidence.fresh) {
           // Working without MCP — record the implicit start so the FSM matches reality.
           try {
@@ -220,13 +236,13 @@ export function sweepAssignmentsFromList(
       const offeredAt = assignment.offered_at;
       if (!offeredAt) continue;
       const ageMs = now - new Date(offeredAt).getTime();
-      if (ageMs > assignment.acceptance_ttl_ms) {
+      if (ageMs > offeredTtl) {
         // can_948acfd6: ANY worker evidence (ack sentinel touched pre-exec,
         // heartbeat written, files edited, commit landed) is an implicit
         // acceptance — the worker just couldn't say so via MCP. Expiring it
         // is the false-administrative-death observed three times in sprint 1.
         const sinceMs = new Date(offeredAt).getTime();
-        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, assignment.acceptance_ttl_ms);
+        const evidence = collectImplicitEvidence(assignment, cwd, now, sinceMs, offeredTtl);
         if (evidence.any) {
           try {
             transitionAssignment(assignment.id, 'accepted', {
@@ -239,7 +255,7 @@ export function sweepAssignmentsFromList(
         }
         try {
           transitionAssignment(assignment.id, 'expired', {
-            status_reason: `Not accepted within ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(assignment.acceptance_ttl_ms / 60_000)}min); no implicit evidence`,
+            status_reason: `Not accepted within ${Math.round(ageMs / 60_000)} minutes (TTL: ${Math.round(offeredTtl / 60_000)}min); no implicit evidence`,
             actor,
           }, cwd);
           result.expired.push({ assignment_id: assignment.id, agent: assignment.agent, age_ms: ageMs });
@@ -263,6 +279,49 @@ export function sweepAssignmentsFromList(
  * trio). `started` items keep converging via the reconciler on the same
  * pass elsewhere.
  */
+/** Minimal projection the read-path candidate selector needs (matches the
+ * fields context.ts surfaces on open_work.active_assignments). */
+export interface ReadPathAssignmentProjection {
+  id: string;
+  status: string;
+  last_heartbeat_at?: string;
+}
+
+/**
+ * Pure candidate selection for the bclaw_work read-path sweep (Codex PR#48
+ * finding 3, pln#578 guardrail). Given ONLY the in-memory projections that
+ * buildContext already surfaced, return the ids worth a full loadAssignment:
+ *   - status must be sweepable (offered/accepted/started) — created/terminal
+ *     rows can never transition and are dropped BEFORE any file read, so a
+ *     healthy store full of `created` assignments costs zero extra I/O;
+ *   - among those, only rows whose surfaced heartbeat is older than the
+ *     smallest family TTL (or that carry no heartbeat) are suspicious;
+ *   - capped at read_path_sweep_budget.
+ * Extracted so the hot-path zero-read guarantee is unit-testable without the
+ * MCP handler.
+ */
+export function selectReadPathSweepCandidates(
+  projections: ReadPathAssignmentProjection[],
+  policy: HygienePolicy,
+  nowMs: number,
+): string[] {
+  if (policy.disabled) return [];
+  const minTtl = Math.min(
+    policy.assignment_offered_ttl_ms,
+    policy.assignment_accepted_ttl_ms,
+    policy.assignment_started_ttl_ms,
+  );
+  return projections
+    .filter((a) => {
+      if (a.status !== 'offered' && a.status !== 'accepted' && a.status !== 'started') return false;
+      const beat = a.last_heartbeat_at;
+      if (!beat) return true;
+      return nowMs - new Date(beat).getTime() > minTtl;
+    })
+    .slice(0, policy.read_path_sweep_budget)
+    .map((a) => a.id);
+}
+
 export function sweepAssignmentsAtReadPath(
   assignments: Assignment[],
   cwd?: string,

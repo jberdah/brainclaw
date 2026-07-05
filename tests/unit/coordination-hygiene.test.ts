@@ -32,7 +32,7 @@ import {
 } from '../../src/core/hint-aging.js';
 import type { StalenessWarning } from '../../src/core/staleness.js';
 import { saveAssignment, loadAssignment } from '../../src/core/assignments.js';
-import { sweepAssignmentsFromList, sweepAssignmentsAtReadPath } from '../../src/core/assignment-sweeper.js';
+import { sweepAssignmentsFromList, sweepAssignmentsAtReadPath, selectReadPathSweepCandidates } from '../../src/core/assignment-sweeper.js';
 import { parkClosedAutoHandoffs } from '../../src/core/gc-semantic.js';
 import { runHygieneReport } from '../../src/commands/doctor.js';
 import type { Assignment, Handoff } from '../../src/core/schema.js';
@@ -309,5 +309,102 @@ describe('computeServeStats', () => {
     assert.equal(stats.total, 3);
     assert.equal(stats.over_threshold, 2);
     assert.equal(stats.median_count, 4);
+  });
+});
+
+// ── Codex PR#48 review — regression coverage for the 4 findings ───
+
+/** Append a raw YAML block at the config root (valid for top-level keys). */
+function appendConfigYaml(dir: string, block: string): void {
+  const cfgPath = path.join(dir, '.brainclaw', 'config.yaml');
+  const raw = fs.readFileSync(cfgPath, 'utf-8');
+  fs.writeFileSync(cfgPath, `${raw.trimEnd()}\n${block}\n`, 'utf-8');
+}
+
+describe('loadHygienePolicy — config overrides (finding 1: HygieneConfigSchema)', () => {
+  it('applies a valid config.hygiene override instead of stripping it', () => {
+    appendConfigYaml(ws.dir, 'hygiene:\n  disabled: true\n  assignment_offered_ttl_ms: 60000');
+    const p = loadHygienePolicy(ws.dir);
+    assert.equal(p.disabled, true, 'disabled override now reaches the policy');
+    assert.equal(p.assignment_offered_ttl_ms, 60000, 'TTL override now reaches the policy');
+    // Untouched fields keep their defaults (partial override).
+    assert.equal(p.stale_warning_serve_k, DEFAULT_HYGIENE_POLICY.stale_warning_serve_k);
+  });
+
+  it('ignores an unknown/typo hygiene key and keeps the default', () => {
+    // _ttl_m instead of _ttl_ms — stripped by the schema, must fall back.
+    appendConfigYaml(ws.dir, 'hygiene:\n  assignment_offered_ttl_m: 999');
+    const p = loadHygienePolicy(ws.dir);
+    assert.equal(p.assignment_offered_ttl_ms, DEFAULT_HYGIENE_POLICY.assignment_offered_ttl_ms);
+  });
+});
+
+describe('sweepAssignmentsFromList — family TTL from policy (finding 2)', () => {
+  it('does NOT sweep a 20-min offered assignment when the policy family TTL is long (3d)', () => {
+    const offeredAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    const a = mkOfferedAssignment(ws, generateId('assignments'), offeredAt);
+    const r = sweepAssignmentsFromList([a], ws.dir, { actor: 'test', policy: DEFAULT_HYGIENE_POLICY });
+    assert.equal(r.expired.length, 0, 'not expired under the 3d offered family TTL');
+    assert.equal(r.implicitly_advanced.length, 0);
+    assert.equal(loadAssignment(a.id, ws.dir)!.status, 'offered', 'stays offered');
+  });
+
+  it('DOES expire a 20-min offered assignment without a policy (embedded 15-min acceptance TTL — convergence sweep unchanged)', () => {
+    const offeredAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    const a = mkOfferedAssignment(ws, generateId('assignments'), offeredAt);
+    const r = sweepAssignmentsFromList([a], ws.dir, { actor: 'test' });
+    assert.equal(r.expired.length, 1, 'expired under the embedded 15-min convergence TTL');
+    assert.equal(loadAssignment(a.id, ws.dir)!.status, 'expired');
+  });
+});
+
+describe('selectReadPathSweepCandidates — hot-path zero-read guard (finding 3)', () => {
+  it('never selects a healthy created assignment (no heartbeat) → zero full loads', () => {
+    const projections = [
+      { id: 'asgn_created_1', status: 'created' as const },
+      { id: 'asgn_created_2', status: 'created' as const },
+    ];
+    const ids = selectReadPathSweepCandidates(projections, DEFAULT_HYGIENE_POLICY, Date.now());
+    assert.deepEqual(ids, [], 'created rows are dropped before any loadAssignment');
+  });
+
+  it('selects only stale sweepable statuses and respects the budget', () => {
+    const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const projections = [
+      { id: 'asgn_off', status: 'offered', last_heartbeat_at: old },
+      { id: 'asgn_acc', status: 'accepted', last_heartbeat_at: old },
+      { id: 'asgn_done', status: 'completed', last_heartbeat_at: old }, // terminal → skip
+      { id: 'asgn_created', status: 'created' }, // no heartbeat but not sweepable → skip
+    ];
+    const policy: HygienePolicy = { ...DEFAULT_HYGIENE_POLICY, read_path_sweep_budget: 1 };
+    const ids = selectReadPathSweepCandidates(projections, policy, Date.now());
+    assert.equal(ids.length, 1, 'budget respected');
+    assert.ok(ids[0] === 'asgn_off' || ids[0] === 'asgn_acc', 'only a stale sweepable status selected');
+  });
+
+  it('disabled policy selects nothing', () => {
+    const projections = [{ id: 'asgn_x', status: 'offered' }];
+    const ids = selectReadPathSweepCandidates(projections, { ...DEFAULT_HYGIENE_POLICY, disabled: true }, Date.now());
+    assert.deepEqual(ids, []);
+  });
+});
+
+describe('parkClosedAutoHandoffs — idempotent under partial failure (finding 4)', () => {
+  it('does not append a duplicate compacted record if a source could not be unlinked', () => {
+    const old = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+    writeAutoHandoff(ws, 'hnd_dup', 'closed', old, true);
+    const archive = path.join(ws.dir, '.brainclaw', 'coordination', 'handoffs', 'compacted.jsonl');
+
+    // First pass parks cleanly.
+    const first = parkClosedAutoHandoffs(ws.dir, 30, false);
+    assert.equal(first.parked, 1);
+    const linesAfterFirst = fs.readFileSync(archive, 'utf-8').trim().split('\n').length;
+    assert.equal(linesAfterFirst, 1, 'one compacted record after the first pass');
+
+    // Second pass: source is gone → nothing re-parked, no duplicate record.
+    const second = parkClosedAutoHandoffs(ws.dir, 30, false);
+    assert.equal(second.parked, 0, 'no re-park once the source is gone');
+    const linesAfterSecond = fs.readFileSync(archive, 'utf-8').trim().split('\n').length;
+    assert.equal(linesAfterSecond, 1, 'compacted log did not gain a duplicate');
   });
 });

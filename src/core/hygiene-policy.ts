@@ -21,6 +21,7 @@
  * @module
  */
 import { loadConfig } from './config.js';
+import { logger } from './logger.js';
 
 export interface HygienePolicy {
   /** When true, hygiene passes are no-ops (config opt-out for archive stores). */
@@ -54,20 +55,45 @@ export const DEFAULT_HYGIENE_POLICY: HygienePolicy = {
   read_path_sweep_budget: 25,
 };
 
+/** The override keys HygieneConfigSchema declares — used to detect typos. */
+const HYGIENE_POLICY_KEYS: ReadonlyArray<keyof HygienePolicy> = [
+  'disabled',
+  'assignment_offered_ttl_ms',
+  'assignment_accepted_ttl_ms',
+  'assignment_started_ttl_ms',
+  'handoff_closed_ttl_ms',
+  'stale_warning_serve_k',
+  'workflow_hint_serve_k',
+  'read_path_sweep_budget',
+];
+
 /**
  * Best-effort load: any policy override is merged on top of the defaults.
  * Config parse errors fall back silently to defaults so a broken config.yaml
  * cannot break every bclaw_work call.
  *
- * The overrides currently live on the loaded config object under `hygiene`,
- * which the ConfigSchema does not yet declare — reads are typed as `unknown`
- * and coerced, so this file compiles without a schema migration.
+ * `config.hygiene` is now declared by ConfigSchema (HygieneConfigSchema), so
+ * valid overrides survive the zod parse instead of being stripped (Codex review
+ * of PR #48, HIGH — the previous `as unknown as { hygiene? }` cast read a key
+ * the schema had already discarded, so `disabled`/TTL overrides never applied).
+ * Undefined fields (partial override or an unknown/typo sub-key that the schema
+ * stripped) fall back to DEFAULT_HYGIENE_POLICY; a typo is logged so the drop is
+ * not fully silent, consistent with the store-wide strip convention.
  */
 export function loadHygienePolicy(cwd?: string): HygienePolicy {
   try {
-    const config = loadConfig(cwd) as unknown as { hygiene?: Partial<HygienePolicy> };
+    const config = loadConfig(cwd) as { hygiene?: Partial<HygienePolicy> & Record<string, unknown> };
     const overrides = config.hygiene ?? {};
-    return { ...DEFAULT_HYGIENE_POLICY, ...overrides };
+    for (const key of Object.keys(overrides)) {
+      if (!HYGIENE_POLICY_KEYS.includes(key as keyof HygienePolicy)) {
+        logger.warn(`config.hygiene: unknown key "${key}" ignored (valid keys: ${HYGIENE_POLICY_KEYS.join(', ')})`);
+      }
+    }
+    // Drop undefined values so a partial override never overwrites a default with undefined.
+    const defined = Object.fromEntries(
+      Object.entries(overrides).filter(([, v]) => v !== undefined),
+    ) as Partial<HygienePolicy>;
+    return { ...DEFAULT_HYGIENE_POLICY, ...defined };
   } catch {
     return { ...DEFAULT_HYGIENE_POLICY };
   }

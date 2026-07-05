@@ -11,7 +11,7 @@ import { resolveCrossProjectLinks, resolveCrossProjectWritableTarget, resolvePro
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
 import { ageStaleWarnings, ageWorkflowHints, loadServeRegistry } from '../core/hint-aging.js';
 import { loadHygienePolicy } from '../core/hygiene-policy.js';
-import { sweepAssignmentsAtReadPath } from '../core/assignment-sweeper.js';
+import { sweepAssignmentsAtReadPath, selectReadPathSweepCandidates } from '../core/assignment-sweeper.js';
 import { loadAssignment } from '../core/assignments.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
@@ -5626,20 +5626,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             // possibly cross a family TTL. Zero read overhead when the open
             // work is fresh (the common case).
             const openAssignments = contextResult.open_work?.active_assignments ?? [];
-            const nowMs = Date.now();
-            const minTtl = Math.min(
-              policy.assignment_offered_ttl_ms,
-              policy.assignment_accepted_ttl_ms,
-              policy.assignment_started_ttl_ms,
-            );
-            const suspicious = openAssignments.filter((a) => {
-              const beat = a.last_heartbeat_at;
-              if (!beat) return true;
-              return nowMs - new Date(beat).getTime() > minTtl;
-            }).slice(0, policy.read_path_sweep_budget);
-            if (suspicious.length > 0) {
-              const full = suspicious
-                .map((s) => loadAssignment(s.id, targetCwd))
+            // Codex PR#48 finding 3 (pln#578 guardrail): select candidate ids
+            // from the already-surfaced projection — created/terminal rows are
+            // dropped BEFORE any full loadAssignment, so a healthy store costs
+            // zero extra file reads. Selection logic is unit-tested in
+            // selectReadPathSweepCandidates.
+            const candidateIds = selectReadPathSweepCandidates(openAssignments, policy, Date.now());
+            if (candidateIds.length > 0) {
+              const full = candidateIds
+                .map((id) => loadAssignment(id, targetCwd))
                 .filter((a): a is NonNullable<typeof a> => a !== undefined);
               sweepAssignmentsAtReadPath(full, targetCwd, {
                 actor: 'bclaw_work-readpath',

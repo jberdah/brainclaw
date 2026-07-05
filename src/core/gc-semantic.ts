@@ -687,13 +687,24 @@ export function parkClosedAutoHandoffs(
   fs.mkdirSync(path.dirname(backupPath), { recursive: true });
   let parked = 0;
   for (const { filePath, content } of eligible) {
+    // Codex PR#48 finding 4: order the steps so a partial failure can never
+    // leave the source on disk AND its record already in the compaction log
+    // (which produced a duplicate compacted record on the next pass). The safe
+    // order is backup → unlink → archive:
+    //   1. backup first  — park-don't-delete safety net is written before any
+    //      removal, so the raw handoff is always recoverable.
+    //   2. unlink next    — if this throws, we do NOT archive, so no compacted
+    //      record exists for a source that is still present → no duplicate.
+    //   3. archive last   — if this throws after a successful unlink, the source
+    //      is gone (in the backup) and simply absent from compacted.jsonl; the
+    //      next pass cannot re-see it, so still no duplicate.
     try {
       const parsed = JSON.parse(content) as Record<string, unknown>;
       parsed._compacted_at = new Date().toISOString();
       parsed._compaction_type = 'closed-auto-handoff';
-      fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
       fs.appendFileSync(backupPath, content.trim() + '\n', 'utf-8');
       fs.unlinkSync(filePath);
+      fs.appendFileSync(archivePath, JSON.stringify(parsed) + '\n', 'utf-8');
       parked += 1;
     } catch (err) {
       logger.debug('parkClosedAutoHandoffs: failed to park', err);
