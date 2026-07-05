@@ -9,6 +9,7 @@ import {
   detectWorkspaceNodeModules,
   createWorktree,
   resolveWorktreePath,
+  resolveGitToplevel,
 } from '../../src/core/worktree.js';
 
 // pln#523 — monorepo per-package node_modules provisioning for dispatched
@@ -160,6 +161,63 @@ describe('createWorktree — monorepo per-package node_modules links (pln#523)',
       spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
       fs.rmSync(targetPath, { recursive: true, force: true });
       fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('in-tree project: creates the worktree under the repo-root hash, not the subdir (pln#614)', () => {
+    // Reproduces the leazzy monorepo case (trp_28025248): the project dir sits
+    // INSIDE a larger repo, so the git root is an ancestor. createWorktree must
+    // resolve the toplevel — run `git worktree add` from the repo root and hash
+    // the worktree dir off it — instead of the project subdir.
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-intree-'));
+    const projectDir = path.join(repo, 'applications', 'leazzy');
+    const expectedTop = resolveWorktreePath(repo, 'feat/intree');
+    const subdirHash = resolveWorktreePath(projectDir, 'feat/intree');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    try {
+      fs.rmSync(expectedTop, { recursive: true, force: true });
+      fs.rmSync(subdirHash, { recursive: true, force: true });
+      git(['init']);
+      git(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'init']);
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      // Called from the project subdir — previously ran `git worktree add` from
+      // here and (with an empty .git) failed; now resolves the toplevel.
+      const wt = createWorktree(projectDir, 'feat/intree');
+
+      assert.equal(path.resolve(wt), path.resolve(expectedTop), 'worktree lives under the repo-root hash');
+      assert.notEqual(path.resolve(wt), path.resolve(subdirHash), 'NOT under the project-subdir hash');
+      assert.ok(fs.existsSync(wt), 'worktree materialised (git worktree add ran from the toplevel)');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', expectedTop], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(expectedTop, { recursive: true, force: true });
+      fs.rmSync(subdirHash, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveGitToplevel returns the repo root from a subdir, falls back for a non-git dir (pln#614)', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-toplevel-'));
+    const sub = path.join(repo, 'a', 'b');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-nongit-'));
+    try {
+      git(['init']);
+      fs.mkdirSync(sub, { recursive: true });
+      // realpath both sides: macOS temp (/var → /private/var) differs from git's output.
+      assert.equal(fs.realpathSync(resolveGitToplevel(sub)), fs.realpathSync(repo), 'resolves the repo root from a nested subdir');
+      assert.equal(resolveGitToplevel(nonGit), nonGit, 'falls back to the input for a non-git dir');
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(nonGit, { recursive: true, force: true });
     }
   });
 
