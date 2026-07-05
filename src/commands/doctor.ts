@@ -4,6 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
 import { reconcileAllOpenRuns } from '../core/agentrun-reconciler.js';
+import { loadHygienePolicy, type HygienePolicy } from '../core/hygiene-policy.js';
+import { computeServeStats, loadServeRegistry } from '../core/hint-aging.js';
+import { listAssignments } from '../core/assignments.js';
+import { parkClosedAutoHandoffs } from '../core/gc-semantic.js';
 import { runSpawnCheck, renderSpawnCheckReport, type SpawnCheckOptions } from '../core/spawn-check.js';
 import { loadAgentRun } from '../core/agentruns.js';
 import { listAgentIdentities, listDebrisAgentIdentities, resolveCurrentAgentIdentity } from '../core/agent-registry.js';
@@ -150,6 +154,13 @@ export interface DoctorOptions {
    * suite; exits non-zero on any drift. No-op-safe when the journal is off.
    */
   verifyJournal?: boolean;
+  /**
+   * pln#602 — coordination hygiene report. Counts per family (assignments,
+   * handoffs, stale warnings, workflow hints), median ages, park candidates.
+   * Read-only: reports what a park pass WOULD do (dryRun) without mutating.
+   * Informational; exit code 0.
+   */
+  hygiene?: boolean;
 }
 
 interface DoctorCheck {
@@ -840,7 +851,146 @@ function runJournalVerification(options: DoctorOptions): void {
   if (drift.length > 0) process.exit(1);
 }
 
+// ── pln#602 — coordination hygiene report ────────────────────────────────
+
+export interface HygieneReport {
+  generated_at: string;
+  disabled: boolean;
+  policy: HygienePolicy;
+  families: {
+    assignments: {
+      total_open: number;
+      offered: number;
+      accepted: number;
+      started: number;
+      offered_park_candidates: number;
+      accepted_park_candidates: number;
+      median_open_age_days: number;
+    };
+    handoffs: {
+      closed_park_candidates: number;
+    };
+    stale_warnings: {
+      total_tracked: number;
+      over_threshold: number;
+      median_count: number;
+      oldest_first_at?: string;
+    };
+    workflow_hints: {
+      total_tracked: number;
+      over_threshold: number;
+      median_count: number;
+      oldest_first_at?: string;
+    };
+  };
+}
+
+function medianAgeDays(items: Array<{ created_at: string }>, nowMs: number): number {
+  if (items.length === 0) return 0;
+  const ages = items
+    .map((a) => Math.floor((nowMs - new Date(a.created_at).getTime()) / 86_400_000))
+    .sort((a, b) => a - b);
+  const mid = Math.floor(ages.length / 2);
+  return ages.length % 2 === 1 ? ages[mid] : (ages[mid - 1] + ages[mid]) / 2;
+}
+
+export function runHygieneReport(options: DoctorOptions = {}): HygieneReport {
+  const cwd = options.cwd;
+  const policy = loadHygienePolicy(cwd);
+  const nowMs = Date.now();
+
+  const allAssignments = listAssignments(cwd);
+  const open = allAssignments.filter((a) => a.status === 'offered' || a.status === 'accepted' || a.status === 'started');
+  const offered = open.filter((a) => a.status === 'offered');
+  const accepted = open.filter((a) => a.status === 'accepted');
+  const started = open.filter((a) => a.status === 'started');
+
+  const heartbeatAgeMs = (a: { last_heartbeat_at?: string; offered_at?: string; created_at: string }): number => {
+    const anchor = a.last_heartbeat_at ?? a.offered_at ?? a.created_at;
+    return nowMs - new Date(anchor).getTime();
+  };
+  const offered_park_candidates = offered.filter((a) => heartbeatAgeMs(a) > policy.assignment_offered_ttl_ms).length;
+  const accepted_park_candidates = accepted.filter((a) => heartbeatAgeMs(a) > policy.assignment_accepted_ttl_ms).length;
+
+  const handoffParkDry = parkClosedAutoHandoffs(
+    cwd ?? process.cwd(),
+    Math.floor(policy.handoff_closed_ttl_ms / 86_400_000),
+    true,
+  );
+
+  const registry = loadServeRegistry(cwd);
+  const staleStats = computeServeStats(registry.warnings, policy.stale_warning_serve_k);
+  const hintsStats = computeServeStats(registry.hints, policy.workflow_hint_serve_k);
+
+  return {
+    generated_at: new Date(nowMs).toISOString(),
+    disabled: policy.disabled,
+    policy,
+    families: {
+      assignments: {
+        total_open: open.length,
+        offered: offered.length,
+        accepted: accepted.length,
+        started: started.length,
+        offered_park_candidates,
+        accepted_park_candidates,
+        median_open_age_days: medianAgeDays(open, nowMs),
+      },
+      handoffs: {
+        closed_park_candidates: handoffParkDry.candidates,
+      },
+      stale_warnings: {
+        total_tracked: staleStats.total,
+        over_threshold: staleStats.over_threshold,
+        median_count: staleStats.median_count,
+        oldest_first_at: staleStats.oldest_first_at,
+      },
+      workflow_hints: {
+        total_tracked: hintsStats.total,
+        over_threshold: hintsStats.over_threshold,
+        median_count: hintsStats.median_count,
+        oldest_first_at: hintsStats.oldest_first_at,
+      },
+    },
+  };
+}
+
+function renderHygieneReport(report: HygieneReport): string {
+  const lines: string[] = [];
+  lines.push(`Coordination hygiene — snapshot ${report.generated_at}`);
+  if (report.disabled) {
+    lines.push('  ✗ policy.disabled=true — hygiene sweep + aging are opted out via config.hygiene.disabled.');
+  }
+  lines.push('');
+  const a = report.families.assignments;
+  lines.push(`Assignments (open ${a.total_open}: offered ${a.offered} / accepted ${a.accepted} / started ${a.started}, median age ${a.median_open_age_days}d)`);
+  lines.push(`  Park candidates: offered=${a.offered_park_candidates}, accepted=${a.accepted_park_candidates} — next sweep at session-start or bclaw_work will converge.`);
+  const h = report.families.handoffs;
+  lines.push(`Handoffs closed park candidates: ${h.closed_park_candidates} (auto-generated, older than ${Math.floor(report.policy.handoff_closed_ttl_ms / 86_400_000)}d)`);
+  const sw = report.families.stale_warnings;
+  lines.push(`Stale warnings tracked: ${sw.total_tracked} (over serve-K=${report.policy.stale_warning_serve_k}: ${sw.over_threshold}, median count ${sw.median_count}${sw.oldest_first_at ? `, oldest first-served ${sw.oldest_first_at.slice(0, 10)}` : ''})`);
+  const wh = report.families.workflow_hints;
+  lines.push(`Workflow hints tracked: ${wh.total_tracked} (over serve-K=${report.policy.workflow_hint_serve_k}: ${wh.over_threshold}, median count ${wh.median_count}${wh.oldest_first_at ? `, oldest first-served ${wh.oldest_first_at.slice(0, 10)}` : ''})`);
+  lines.push('');
+  lines.push('Read-only: no state was mutated. Session-start and bclaw_work drive the actual sweep/park; the counters age at bclaw_work read paths.');
+  return lines.join('\n');
+}
+
 export function runDoctor(options: DoctorOptions = {}): void {
+  if (options.hygiene) {
+    if (!memoryExists(options.cwd)) {
+      console.error('Error: .brainclaw/ not found. Run `brainclaw init` first.');
+      process.exit(1);
+    }
+    const report = runHygieneReport(options);
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(renderHygieneReport(report));
+    }
+    return;
+  }
+
   if (options.verifyJournal) {
     runJournalVerification(options);
     return;

@@ -819,12 +819,13 @@ program
   .option('--verify-journal', 'Phase-2 cutover gate (pln#565): rebuild state from the event journal and diff vs live projections; exits non-zero on any drift')
   .option('--spawn-check', 'Real spawn round-trip per installed agent before dispatch (pln#520 step 2): validates delivery + handshake on this host, exits non-zero on any installed-agent failure')
   .option('--spawn-check-timeout <ms>', 'Per-agent timeout for --spawn-check (default 15000)', parseInt)
+  .option('--hygiene', 'Coordination-hygiene snapshot (pln#602): counts per family, park candidates, serve-count aging stats. Read-only.')
   .action(async (options) => {
     if (options.spawnCheck) {
       await runDoctorSpawnCheck({ cwd: options.cwd, json: options.json, timeoutMs: options.spawnCheckTimeout });
       return;
     }
-    runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch, verifyJournal: options.verifyJournal });
+    runDoctor({ ...options, afterMigration: options.afterMigration, dispatch: options.dispatch, verifyJournal: options.verifyJournal, hygiene: options.hygiene });
   });
 
 // --- repair (Phase 4 Sprint 2 Lane C / pln#397) ---
