@@ -1,8 +1,8 @@
 # Dispatch supervisor — coordination-enforcement spec (round 3)
 
-**Status:** design spec, awaiting re-review.
+**Status:** design spec, revised after the Codex round-3 review (PR #47) — all 7 findings integrated (A0→B hard dependency, explicit `checkSpawnEligibility` contract, run-identity schema migration in A0 scope, cascade wired on the reconciler failure path, `createWorktree` removed from the F7 gate list, tightened never-adopted exemption, completed F10 host-mismatch/no-signal rows). Ready for implementation starting at A0.
 **Plan:** pln#545 (feat/coordination-enforcement).
-**Predecessors:** round-2 pivot review (folded into this assignment brief); round-2 baseline resolved F1, F3, F4, F5, F6.
+**Predecessors:** round-2 pivot review (folded into this assignment brief); round-2 baseline resolved F1, F3, F4, F5, F6; round-3 Codex review (loop lop_f212bbabb8f7310f) resolved the 7 spec↔code mismatches.
 **Companion docs:** [dispatch-lifecycle.md](dispatch-lifecycle.md) (entities + FSMs), [parallel-merge-protocol.md](parallel-merge-protocol.md) (merge safety), [coordinator-runbook.md](coordinator-runbook.md) (operator patterns).
 
 This doc is doc-only. It specifies WHAT changes and WHY. Implementation lands as separate A0-first increments (see §7), each with its own code-review loop.
@@ -21,7 +21,7 @@ The round-2 pivot: replace the shell ack-wrap with a **Node supervisor process**
 
 The supervisor is a small helper binary shipped in the coordinator install, started as the immediate child of the dispatch entrypoint. It is NOT another agent, NOT persistent, and NOT stateful across dispatches — it is a per-run process wrapper whose only job is honest liveness attribution.
 
-**A0** — the first incremental delivery — moves `createAgentRun` to happen ONLY after a spawn is confirmed to have started. B — the supervisor itself — lands after A0. B behaves as a no-op if A0 is not yet deployed, so any partial roll-out remains safe.
+**A0** — the first incremental delivery — creates the `agent_run` right after spawn-eligibility passes and BEFORE the spawn, and adds the run-identity fields (`host_id`/`host_os`/`boot_id`/`start_time_hint`) to the schema. **A0 is a HARD prerequisite for B**, not a soft one (Codex review of PR #47, HIGH): the supervisor keys its sentinels on `run_id` and needs the run to exist before it spawns, but today both entrypoints call `attemptExecution` → `adapter.start(assignmentId)` BEFORE `createAgentRun` and `runtime-signals.ts` is assignment-keyed — so a supervisor shipped without A0 has no `run_id` to write `<run_id>.*` sentinels with. There is no safe "B without A0" rollback; §5.2 documents what the reconciler does for the identity-none runs A0 has not yet reached, but B itself does not ship until A0 is deployed.
 
 ---
 
@@ -60,17 +60,22 @@ Code references below re-anchor against current master (post PRs #40 squash-awar
 
 ### 3.1 F2 / F9 — A0: `createAgentRun` after spawn-eligibility, before the spawn
 
-A0 is the observability sanity increment. It has no behavioural coupling to the supervisor and MUST ship first so that B (the supervisor) can be evaluated on a fleet whose run records are already honest about which dispatches actually reached the spawn.
+A0 is the observability + run-identity increment, and B's HARD prerequisite (§1, §7): it moves run creation before the spawn AND adds the identity fields the supervisor writes. B cannot ship without it, because the supervisor keys its sentinels on a `run_id` that must exist before `adapter.start`.
 
 **Both dispatch entrypoints are in scope.** They share structure but not code today and are both structurally identical for A0's purposes:
 
 - `src/core/dispatcher.ts:1146–1266` — the automatic dispatcher's E2E execution phase (post-refactor equivalent of `dispatcher.ts:1150–1238` in the plan). `attemptExecution` is called (line 1146), and both `createAgentRun` calls happen post-hoc: the `spawn_no_handshake` branch at line 1168 and the nominal branch at line 1213.
 - `src/commands/mcp.ts:5948–6072` — the `bclaw_coordinate` E2E path (post-refactor equivalent of `mcp.ts:5447–5557`). `attemptExecution` at line 5955, then `createAgentRun` at line 5978 (`spawn_no_handshake`) and line 6020 (nominal).
 
-Split the execution API into two phases:
+Split the execution API into three pieces. The eligibility contract is EXPLICIT about which ineligible states consume an `attempt_index` (Codex review of PR #47, HIGH — the earlier draft named worktree/capacity/canSpawn as both "no-run exits" AND "failed runs", which is contradictory; in the real code they are all branches inside `attemptExecution` at `src/core/execution.ts:215–281` / `344–366` returning `command_ready_manual` with a failure kind):
 
-- **`beginAgentRun(...)`** — creates the `agent_run` in status `created` immediately AFTER the pre-spawn eligibility checks pass (worktree exists, capacity OK, spawn-capable agent, not manual/inbox-only) and BEFORE `attemptExecution` calls `adapter.start(...)`. Eligibility checks that already return `command_ready_manual` / `inbox_only` in `src/core/execution.ts:215–281` still return without a run — those paths get no run at all (they never spawn). The eligibility branches that ARE spawn attempts (post the requireWorktree, capacity, and canSpawn gates) get a run in `created` before spawn.
-- **`transitionAgentRun(run.id, 'launching' | 'failed', ...)`** — called by the adapter or the caller with the spawn outcome and the pid the supervisor reports.
+- **`checkSpawnEligibility(...) → { eligible: true } | { eligible: false, record_run: boolean, failure_kind, reason }`** — the single classifier. `record_run` is the decisive field:
+  - `record_run: false` — intentional non-spawns that must NOT consume an attempt: `inbox_only` (delivery channel = inbox), and `command_ready_manual` caused by `autoExecute=false` (the operator will launch by hand). No run, no `attempt_index`.
+  - `record_run: true` — spawn ATTEMPTS that failed pre-spawn and must be honest in the run history: `spawn_no_worktree`, `spawn_capacity`, `!canSpawn` (agent not spawn-capable and not an opt-out manual path), and `!invoke` (no invoke command). These get a run in terminal `failed` with the `failure_kind`, consuming an `attempt_index`.
+- **`beginAgentRun(...)`** — when eligible, creates the `agent_run` in status `created` BEFORE `attemptExecution` calls `adapter.start(...)`, stamping the identity fields (see schema migration below).
+- **`transitionAgentRun(run.id, 'launching' | 'failed', ...)`** — called with the spawn outcome and the pid the supervisor reports; an adapter throw (spawn ENOENT) transitions `created → failed` with `failure_kind='spawn_failed'`.
+
+**Schema migration is A0 scope (Codex review of PR #47, HIGH).** `AgentRunSchema` (`src/core/schema.ts`, the run record — today only `pid` among identity fields) and `CreateAgentRunOptions` (`src/core/agentruns.ts`) currently declare NONE of `host_id` / `host_os` / `boot_id` / `start_time_hint`, so a naive `createAgentRun({ host_id, … })` would have zod strip them and the matrix's `identity_partial`/`identity_full` states would never materialise. A0 MUST add these optional fields to both the schema and the create/begin options, and ship a persistence test proving a written run round-trips them. B later writes `start_time_hint` (from the supervisor) into the same typed fields — never via tags or unknown properties.
 
 `beginAgentRun` MUST take the assignment id and set `attempt_index` via `nextAttemptIndex(assignment_id, cwd)` in `src/core/agentruns.ts:96–100` — this field already exists and increments correctly today, but only because we create the run once per attempt. A0 keeps that invariant across attempts by:
 
@@ -97,21 +102,28 @@ Introduce `assertWorktreeMutationSafe(worktreePath, intent, options)` in `src/co
 - `resetWorktreeToRef` (`src/core/worktree.ts:400`) — hard reset destroys uncommitted work. Never safe while a worker is active.
 - `removeWorktree` (`src/core/worktree.ts:1032`) — removing while a worker's fd is open on a file inside kills the worker in a way that leaves no signal.
 - `mergeWorktreeBranch` (`src/core/worktree.ts:1409`) — the parasitic-deletion restoration step (lines 1430–1444) only runs if the merge itself proceeds; a live worker mid-commit produces exactly the kind of partial branch content that turns into a parasitic deletion after merge.
-- `createWorktree` **force-reset path** (`src/core/worktree.ts:504`, specifically the branch-reuse / force-reset lines) — reusing a claim's existing worktree by resetting it is destructive.
+`createWorktree` is deliberately NOT in this list (Codex review of PR #47, MED — the earlier draft anchored it to the wrong behaviour). Current `createWorktree` (`src/core/worktree.ts`) rejects an existing target path (`:568–572`) and a branch already checked out in an attached worktree (`:582–588`); its force-reset branch (`:590–621`) is a `git branch --force` on an *unattached* branch, which destroys no live worktree. The actual reused-claim worktree reset happens elsewhere — `createCoordinatorClaim` calls `resetWorktreeToRef` at `src/core/claims.ts:910–912`, and `resetWorktreeToRef` is already gated above. So worktree-liveness safety for reuse rides on `resetWorktreeToRef`; `createWorktree` would need a *different* guard (branch-destruction, different evidence) and is out of scope for F7.
 
 The gate is placed inside these functions, not at the CLI/MCP callers (`src/commands/worktree.ts:79–159`, and the MCP handlers). This closes the class of "someone added a new caller and forgot to gate" bugs.
 
-**Explicit exemption (with reason and audit line):** `cleanMergedWorktrees` and the never-dispatched-cleanup path. A claim in state `never-adopted` (see `assessClaimLiveness` at `src/core/claims.ts:768–782`) that was NEVER dispatched has by definition no running worker to protect; removing its worktree is safe and required for `cleanMergedWorktrees` to make forward progress. The exemption is:
+**Explicit exemption (with reason and audit line):** `cleanMergedWorktrees` and the never-dispatched-cleanup path. **The exemption must NOT rely on `never-adopted` alone** (Codex review of PR #47, MED): `assessClaimLiveness` (`src/core/claims.ts:768–782`) classifies `never-adopted` purely as "no `session_id` ever assigned and older than the stale threshold" — but a sandboxed / zero-MCP worker legitimately runs WITHOUT adopting the claim's session, so it can have a live assignment/run, a fresh heartbeat, and a written LANE-RESULT while the claim still reads `never-adopted`. Bypassing the gate on that status alone could delete a live or already-delivered worker tree. The exemption therefore requires POSITIVE proof of no worker: no assignment/agent_run references the claim, AND no heartbeat / LANE-RESULT / fs activity in the worktree within the freshness window. Only then is removal safe. The exemption call:
 
 ```ts
 // Signature (illustrative — do not treat as final API):
 assertWorktreeMutationSafe(worktreePath, intent, {
   exempt_reason: 'never-adopted-claim-cleanup',
   audit_actor: 'coordinator',
+  // Guard must verify ALL before bypassing (Codex PR#47 MED):
+  proof: {
+    no_assignment_or_run: true,   // no assignment/agent_run references this claim
+    no_recent_heartbeat: true,    // no heartbeat within the freshness window
+    no_lane_result: true,         // no LANE-RESULT.json at the worktree root
+    no_fs_activity: true,         // no worktree fs activity within the window
+  },
 });
 ```
 
-The exemption is recorded in the audit log (actor + reason + claim id + worktree). If we ever see a "never-adopted" claim actually being adopted late (a race), the audit trail names who bypassed the gate.
+The exemption is recorded in the audit log (actor + reason + claim id + worktree + the four proof fields). If a "never-adopted" claim is actually being adopted late (a race), the proof check fails and the gate holds; the audit trail names who attempted the bypass.
 
 **Test bar for F7:** two callers exercising each chokepoint (one blocked by an active worker, one exempted or passing) plus a regression test that a caller added tomorrow — with no manual guard — still cannot mutate a live worktree.
 
@@ -160,7 +172,7 @@ These invariants have landed in master since the plan was written (PRs #40–#45
 |---|---|---|
 | `dispatch_status` counts commits ahead via **patch-id**, not just ancestry, so a squash-merged commit reads as 0-ahead | PR #40 (`src/core/dispatch-status.ts:82–98`, `commits_ahead` docstring) | The supervisor's `ingest_result_authoritative` verdict MUST not contradict a `commits_ahead=0` reading — a worker whose patch is on master is done, even if the branch head diverges. |
 | Worktree `.brainclaw-worktree.json` sidecars now record their **creation SHA**; `commits_ahead_base` and `commits_ahead_raw` are surfaced separately | PR #40 (`src/core/dispatch-status.ts:82–106`) | `merge_safe` uses the sidecar creation SHA as the base, not moving `master`. Legacy sidecars without the SHA report `commits_ahead=unknown`; the gate treats `unknown` as "insufficient evidence" — falls back to fs-activity + LANE-RESULT. |
-| `releaseClaimWithCascade` propagates plan status with a last-claim rule and audits every cascade decision | PR #44 (`src/core/claims.ts:313–431`) | The reconciler's GC cascade after `run_failed` (`src/core/agentrun-reconciler.ts:285–305`) already uses this. The supervisor's `orphan_recover_veto=no_veto` decision is what unlocks that cascade; nothing else changes. |
+| `releaseClaimWithCascade` propagates plan status with a last-claim rule and audits every cascade decision | PR #44 (`src/core/claims.ts:313–431`) | **The reconciler failure path does NOT use it yet** — `src/core/agentrun-reconciler.ts` imports `releaseClaim` (line 38) and calls `releaseClaim(run.claim_id, cwd)` (line 297), the non-cascading variant (Codex review of PR #47, HIGH — the earlier draft wrongly claimed the cascade was already wired). Increment B's scope therefore INCLUDES replacing that call with `releaseClaimWithCascade(run.claim_id, cwd, { planStatus: <explicit> })` plus a test that the last-claim plan cascade fires on `run_failed`. Until B lands, an orphan-recovered run releases its claim WITHOUT cascading plan status — the current, documented behaviour, not a regression. |
 | `coordinator_override:true` provides an audited ownership bypass for release calls | PR #44 (`src/core/claims.ts:200–208, 473–521`) | The supervisor never uses `coordinator_override` — it operates as a system caller (auth undefined) with the same bypass. Human operators keep the override for manual recovery. |
 | Model routing per agent (`ec49e6c`) is a spawn-time concern only | PR #41 | The supervisor does not need to know which model was selected; it only knows the invoke command. |
 | Auto-repair of identity + session on canonical writes | PR #42 | The supervisor's writes to the run record MUST tolerate identity auto-repair — do not assume the run's `agent_id` matches the coordinator's `BRAINCLAW_AGENT_ID` at time of read; look it up fresh. |
@@ -200,11 +212,12 @@ Every row here has `identity_full`.
 | S4 | none, pid alive on host | match | **`veto`** | none | `blocked` | wait; heartbeat check |
 | S5 | none, pid dead on host, no fs-activity in worktree for > N | match | `no_veto` | `silent_death` — declare `failed` with `silent_termination_no_evidence` | `safe` | GC cascade + audit |
 | S6 | none, pid dead on host, recent fs-activity in worktree | match | **`veto`** | none — worker likely respawned via IDE/detached | `blocked` | wait; investigate |
-| S7 | any signals, host_mismatch | mismatch | **`veto`** (this reconciler cannot judge a foreign host's pid) | `unknown_host` | `blocked` | escalate to that host's coordinator |
+| S7a | RK completed/failed + nonce, host_mismatch | mismatch | **`veto`** (cannot judge a foreign pid) | **authoritative from RK** — the run-keyed sentinel is a FACT written by the owning host's supervisor, not a local pid judgement (Codex review of PR #47, HIGH — the earlier S7 wrongly blocked an authoritative RK verdict on host mismatch) | `blocked` (merge/GC run on the owning host) | ingest the verdict; defer any worktree op to that host |
+| S7b | AK-only or no signals, host_mismatch | mismatch | **`veto`** | `unknown_host` (cannot infer a foreign pid's fate without a sentinel) | `blocked` | escalate to that host's coordinator |
 
-### 5.2 Rollback / mixed-fleet — B deployed, A0 not deployed (or A0 rolled back)
+### 5.2 Legacy runs — `identity_none` records created before A0
 
-The run was created by the old code path (post-hoc, only in the handshake-timeout branch). It carries `identity_none` regardless of whether the current coordinator is running B.
+A0 is a hard prerequisite for B (§1, §3.1), so "B running without A0" cannot happen by fresh deployment. What CAN happen: a fleet on A0+B still has OLD `agent_run` records in its store, created by the pre-A0 code path (post-hoc, only in the handshake-timeout branch) and carrying `identity_none`. B must degrade gracefully on those rows rather than mis-judge them. This table is that degradation contract.
 
 | Row | Signals present | pid alive? | orphan_recover_veto | ingest_result | merge_safe | Reconciler rec |
 |---|---|---|---|---|---|---|
@@ -215,7 +228,7 @@ The run was created by the old code path (post-hoc, only in the handshake-timeou
 | R5 | no signals, pid alive | alive | **`veto`** | none | `blocked` | wait |
 | R6 | no signals, pid dead, no fs-activity | dead | `no_veto` | `silent_death` | `safe` | GC + audit |
 
-**Rule:** B, when it encounters `identity_none`, behaves EXACTLY like today's code. It is a no-op wrapper on the legacy-path runs. This is the property that makes B safe to ship first. See §7 for the deployment order that would produce §5.2 rows.
+**Rule:** B, when it encounters an `identity_none` legacy record, behaves EXACTLY like today's code (legacy-conservative: assignment-keyed signals + `isProcessAlive(run.pid)`). It never invents a `run_id` sentinel for a run that predates A0. This bounded back-compat — not a rollback path — is what lets B ship without a store migration of historical runs. Row R1 (a legacy record that nonetheless has an RK sentinel) only arises if a supervisor was manually pointed at it; it is included for completeness, not as a supported deploy order.
 
 ### 5.3 A0-deployed, B-not-deployed (or B rolled back)
 
@@ -228,13 +241,15 @@ Runs carry `identity_partial` — `host_id` and `boot_id` from the coordinator, 
 | P3 | AK ack only, pid dead, no fs-activity for > N | match | dead | `no_veto` | `silent_death` | `safe` | GC + audit — note `identity_partial` in audit |
 | P4 | AK ack only, pid dead, recent fs-activity | match | dead | **`veto`** | none | `blocked` | wait — likely IDE-respawned child, look for heartbeat |
 | P5 | none, pid alive | match | alive | **`veto`** | none | `blocked` | wait |
-| P6 | any | mismatch | irrelevant | **`veto`** | `unknown_host` | `blocked` | escalate to that host |
+| P7 | none, pid dead, no fs-activity for > N | match | dead | `no_veto` | `silent_death` (audit notes `identity_partial`) | `safe` | GC + audit |
+| P8 | none, pid dead, recent fs-activity | match | dead | **`veto`** | none | `blocked` | wait — IDE-respawn suspected (Codex review of PR #47, HIGH — the no-signal dead-pid rows were missing) |
+| P6 | AK-only or none, host_mismatch | mismatch | irrelevant | **`veto`** | `unknown_host` (no RK possible in A0-only, since B is not deployed) | `blocked` | escalate to that host |
 
 **Rule for A0-only:** the run record gets richer (`host_id`, `boot_id`, per-attempt `retry_of_run_id`, honest `attempt_index`), but the reconciler still uses `isProcessAlive(run.pid)` where `run.pid` is the ack-wrap SHELL's pid. Nothing gets more trustworthy — the record just gets more diagnosable. This is intentional: A0 shifts observability, B shifts trust.
 
 ### 5.4 Cross-host coordinator
 
-Every row where `host_mismatch=true` returns `veto` / `unknown_host` / `blocked`. Federation runs (a coordinator observing runs on another host) MUST NOT declare a foreign pid dead, even when the run record lists `identity_full`. The reconciler emits an audit event `cross_host_reconcile_skipped` with the run id, the observed host, and this host. Nothing else changes today; cross-host reconciliation is a separate feature (see [project_federation_premium](../../.brainclaw/memory/project_federation_premium.md) for the eventual pull-and-materialize model).
+On `host_mismatch`, `orphan_recover_veto` is ALWAYS `veto` and `merge_safe` is ALWAYS `blocked` — a coordinator MUST NOT declare a foreign pid dead or mutate a worktree on another host, even when the run record lists `identity_full`. The one thing that DOES cross the host boundary is an authoritative **RK completed/failed sentinel** (row S7a): it is a fact the owning host's supervisor wrote, so `ingest_result` may adopt its verdict (a worker that reported done is done, regardless of which host observes the record). AK-only / no-signal foreign runs stay `unknown_host` (S7b). The reconciler emits `cross_host_reconcile_skipped` (run id, observed host, this host) whenever it withholds a liveness/merge decision on a foreign host. Full cross-host reconciliation remains a separate feature (see [project_federation_premium](../../.brainclaw/memory/project_federation_premium.md) for the eventual pull-and-materialize model).
 
 ---
 
@@ -279,22 +294,23 @@ Every step is a discrete audit line naming the actor (supervisor / reconciler / 
 
 ## 7. A0-first implementation plan
 
-Each increment lands as a separate PR with its own code-review loop. The order is deliberate: A0 improves observability without changing trust; B changes trust while remaining a no-op on A0-less runs; C shifts callers to the new predicates once B is proven; D deprecates the legacy signals.
+Each increment lands as a separate PR with its own code-review loop. The order is deliberate and A0→B is a HARD dependency (§Order dependencies): A0 improves observability + adds the run-identity schema without changing trust; B (which requires A0) changes trust to run-keyed signals while staying legacy-conservative on pre-A0 `identity_none` records already in the store; C shifts callers to the new predicates once B is proven; D deprecates the legacy signals.
 
 ### Increment A0 — creation-after-spawn-eligibility, run per attempt
 
 **Scope.**
 
+- **Schema migration FIRST** (finding 7): add optional `host_id`, `host_os`, `boot_id`, `start_time_hint` to `AgentRunSchema` (`src/core/schema.ts`) AND to `CreateAgentRunOptions` (`src/core/agentruns.ts`), so the fields are not zod-stripped. Ship a persistence test that a written run round-trips them.
 - Introduce `beginAgentRun(...)` in `src/core/agentruns.ts` (thin wrapper around `createAgentRun` with the round-2 semantics baked in).
-- Extract the pre-spawn eligibility checks in `src/core/execution.ts:215–281` into a `checkSpawnEligibility(...)` helper returning `{ eligible: true } | { eligible: false, failure_kind, reason }`.
+- Extract the pre-spawn eligibility checks in `src/core/execution.ts:215–281,344–366` into a `checkSpawnEligibility(...)` helper returning `{ eligible: true } | { eligible: false, record_run: boolean, failure_kind, reason }` (§3.1). `record_run` explicitly classifies each ineligible state: `false` for `inbox_only` and `autoExecute=false` manual paths; `true` for `spawn_no_worktree`, `spawn_capacity`, `!canSpawn`, `!invoke`, and adapter throw (`spawn_failed`).
 - Refactor `src/core/dispatcher.ts:1146–1266` and `src/commands/mcp.ts:5948–6072` to:
   1. Call `checkSpawnEligibility` first.
-  2. If ineligible AND the ineligibility is a spawn attempt failure (`spawn_no_worktree`, `spawn_capacity`, `spawn_failed`), call `beginAgentRun` in status `failed` with the right `failure_kind`. If ineligible because the intent is inbox-only / manual-only, no run is created.
+  2. If `!eligible && record_run`, call `beginAgentRun` in status `failed` with the `failure_kind` (consumes an `attempt_index`). If `!eligible && !record_run`, return with NO run.
   3. If eligible, call `beginAgentRun` in status `created`, then `attemptExecution` → transition to `launching` on success or `failed` on adapter throw.
 - Set `retry_of_run_id` on every non-first attempt via a lookup against the current latest run for the assignment (`findLatestAgentRunForAssignment` already exists at `src/core/agentruns.ts:102–109`).
 - Record `host_id`, `host_os`, `boot_id` on the run at creation time (populates `identity_partial`).
 
-**Non-scope.** No supervisor. No new sentinels. No reconciler changes. Trust in legacy signals is unchanged.
+**Non-scope.** No supervisor. No new sentinels. No reconciler trust changes. Trust in legacy signals is unchanged (A0 shifts observability + the record shape, not what the reconciler believes).
 
 **Tests.**
 
@@ -317,6 +333,7 @@ Each increment lands as a separate PR with its own code-review loop. The order i
 - New run-keyed signals `<run_id>.launched|.exited|.completed|.failed`. Legacy `<assignment_id>.*` signals continue to be written by legacy adapters (fallback path when the supervisor is not usable).
 - Reconciler learns to prefer RK signals when both present.
 - Register the `identity_full` fields (`host_id, host_os, boot_id, start_time_hint`) on the run at supervisor launch.
+- **Wire the cascade on the failure path** (finding 1): replace `releaseClaim(run.claim_id, cwd)` at `src/core/agentrun-reconciler.ts:297` with `releaseClaimWithCascade(run.claim_id, cwd, { planStatus: <explicit> })`, so an orphan-recovered run propagates plan status per the PR #44 last-claim rule. Add a test that the cascade fires on `run_failed`.
 
 **Non-scope.** Callers other than the two dispatch entrypoints. Removal of legacy signals.
 
@@ -350,8 +367,8 @@ Each increment lands as a separate PR with its own code-review loop. The order i
 
 ### Order dependencies
 
-- A0 → B: soft (B's `identity_full` is nicer with A0 in place; B works without it).
-- B → C: hard. C's gate depends on `merge_safe` returning trustworthy `merge_safe` verdicts, which requires B.
+- A0 → B: **hard** (Codex review of PR #47, HIGH — corrected from the earlier "soft"). B keys sentinels on a `run_id` that must exist before the spawn, and writes the identity fields A0 adds to the schema; without A0 there is no run to key on and no typed field to write. B does not ship until A0 is deployed.
+- B → C: hard. C's gate depends on `merge_safe` returning trustworthy verdicts, which requires B's run-keyed sentinels.
 - C → D: hard. D is only meaningful once C proves the RK-signal path is the norm.
 
 ---
