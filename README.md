@@ -431,6 +431,14 @@ npm run test:coverage      # with coverage report
 
 For older releases (v0.x and the early v1.0 launch series), `git log` on `master` is the source of truth — every release commit follows the `chore(release): bump version to <semver>` convention, and the matching feature/fix commits reference their plan id (e.g. `feat(mcp): self-heal ... (pln#478)`).
 
+### v1.14.0
+
+Coordination hygiene, a dispatch-supervisor spec, and a monorepo worktree fix — from continued cross-machine dogfooding, each Codex-reviewed before merge:
+
+- **Coordination hygiene v1** (pln#602) — family-level TTL sweep (park-don't-delete, `config.hygiene`-overridable), lazy at the `bclaw_work` read path (zero extra reads on a healthy store) + full at session-start, K-times aging of stale warnings/hints into one actionable aggregate, and `brainclaw doctor --hygiene`.
+- **Worktree creation for in-tree projects** (pln#614) — `bclaw_coordinate(assign|review)` on a project dir that isn't the git root (app inside a monorepo) now resolves the real toplevel (`resolveGitToplevel` with a parent-walk past an invalid nested `.git`), so it spawns instead of failing with "not a git repository". Standalone projects unchanged; validated E2E on the reporting monorepo.
+- **Dispatch-supervisor round-3 spec** (pln#545, docs) — `docs/concepts/dispatch-supervisor.md`: honest worker-liveness attribution (Node supervisor + `run_id`-keyed sentinels), A0→B hard dependency, Windows Job Object FAIL-CLOSED, complete behavior matrix. Implementation lands later as A0-first increments.
+
 ### v1.13.0
 
 Operator-maturity batch from two days of heavy multi-agent dogfooding — dispatch/worktree lifecycle, claim parity, write-path auto-repair, model routing, benchmark gate, 2× faster context reads:

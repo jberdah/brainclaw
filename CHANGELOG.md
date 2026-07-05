@@ -5,6 +5,22 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] — 2026-07-05
+
+Coordination-hygiene, dispatch-supervisor spec, and a monorepo worktree fix — from continued cross-machine dogfooding. Each landing was Codex-reviewed before merge. No breaking changes.
+
+### Added
+
+- **Coordination hygiene v1** (pln#602, #48). Stops serving stale coordination debris to agents: a family-level TTL policy (park-don't-delete, config-overridable via `config.hygiene`), a lazy assignment sweep at the `bclaw_work` read path (zero extra file reads on a healthy store — pln#578 guardrail) plus a full sweep at session-start, K-times aging of `stale_warnings`/`workflow_hints` into a single actionable aggregate, and a `brainclaw doctor --hygiene` operator report. Assignment transitions go through the canonical grammar (audit trail); every park writes a backup first.
+
+### Fixed
+
+- **Worktree creation for in-tree projects** (pln#614, #49). `bclaw_coordinate(assign|review)` on a project whose directory is **not** the git root (e.g. an app inside a monorepo) failed to spawn — `git worktree add` ran from the project dir and derived the worktree hash from it, while the ideation path resolved the toplevel (observed as two divergent worktree hashes), and an empty `.git` left by the embedded init made it worse. New `resolveGitToplevel(cwd)` — `git rev-parse --show-toplevel` with a **parent-walk** that skips past an invalid nested `.git` — is applied in `createWorktree`, `cleanMergedWorktrees`, `gcWorktreeIfHarvested`, and the harvest scan base, so git runs from the real repo root and the worktree hash agrees across dispatch paths. Standalone projects (dir == toplevel) are unchanged. Validated E2E on the reporting monorepo.
+
+### Docs
+
+- **Dispatch-supervisor round-3 spec** (pln#545, #47). `docs/concepts/dispatch-supervisor.md` — the round-3 design for honest worker-liveness attribution (Node supervisor owning the real worker pid + `run_id`-keyed sentinels): A0→B as a hard dependency, an explicit spawn-eligibility contract, the Windows Job Object FAIL-CLOSED mechanism, and a complete behavior matrix. Codex-reviewed (7 spec↔code mismatches integrated); implementation lands later as A0-first increments.
+
 ## [1.13.0] — 2026-07-04
 
 Operator-maturity batch from two days of heavy multi-agent dogfooding (pln#598–613): dispatch/worktree lifecycle fixes, claim-lifecycle parity, write-path auto-repair, model routing for spawns, a reproducible agent-experience benchmark with blocking CI budgets, and a 2× faster context read on large stores. No breaking changes (MCP surface fingerprint bumped, additive only).
