@@ -9,6 +9,10 @@ import { generatedSchemas } from './mcp-schemas.generated.js';
 import { getTriggeredItems, renderTriggeredItems } from '../core/lifecycle.js';
 import { resolveCrossProjectLinks, resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
 import { buildContext, renderContextMarkdown, renderContextPromptTemplate, renderContextBriefing } from '../core/context.js';
+import { ageStaleWarnings, ageWorkflowHints, loadServeRegistry } from '../core/hint-aging.js';
+import { loadHygienePolicy } from '../core/hygiene-policy.js';
+import { sweepAssignmentsAtReadPath } from '../core/assignment-sweeper.js';
+import { loadAssignment } from '../core/assignments.js';
 import { buildCoordinationSnapshot } from '../core/coordination.js';
 import { checkBrainclawInstallableUpdate, getInstalledBrainclawVersion, readDiskBrainclawVersion, renderBrainclawInstallableUpdateNotice } from '../core/brainclaw-version.js';
 import { loadConfig } from '../core/config.js';
@@ -5602,6 +5606,57 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         }
       }
 
+      // pln#602 — coordination hygiene at the read path. Cheap: works on
+      // what buildContext already loaded (open_work + stale_warnings +
+      // workflow_hints) so no additional store scan on the hot bclaw_work
+      // path (pln#578 perf guardrail). Sweep converts stuck offered/accepted
+      // assignments via the canonical grammar; aging folds warnings/hints
+      // that have already been served K times into a single aggregate line.
+      type StaleWarningList = NonNullable<NonNullable<typeof contextResult>['stale_warnings']>;
+      let stalePostAging: StaleWarningList | undefined;
+      let staleAggregate: string | undefined;
+      let hintsPostAging: string[] | undefined;
+      let hintsAggregate: string | undefined;
+      if (contextResult) {
+        try {
+          const policy = loadHygienePolicy(targetCwd);
+          if (!policy.disabled) {
+            // Filter candidates from the projection (no extra reads) — only
+            // assignments whose surfaced last_heartbeat_at is old enough to
+            // possibly cross a family TTL. Zero read overhead when the open
+            // work is fresh (the common case).
+            const openAssignments = contextResult.open_work?.active_assignments ?? [];
+            const nowMs = Date.now();
+            const minTtl = Math.min(
+              policy.assignment_offered_ttl_ms,
+              policy.assignment_accepted_ttl_ms,
+              policy.assignment_started_ttl_ms,
+            );
+            const suspicious = openAssignments.filter((a) => {
+              const beat = a.last_heartbeat_at;
+              if (!beat) return true;
+              return nowMs - new Date(beat).getTime() > minTtl;
+            }).slice(0, policy.read_path_sweep_budget);
+            if (suspicious.length > 0) {
+              const full = suspicious
+                .map((s) => loadAssignment(s.id, targetCwd))
+                .filter((a): a is NonNullable<typeof a> => a !== undefined);
+              sweepAssignmentsAtReadPath(full, targetCwd, {
+                actor: 'bclaw_work-readpath',
+                policy,
+              });
+            }
+            const registry = loadServeRegistry(targetCwd);
+            const aged = ageStaleWarnings(contextResult.stale_warnings ?? [], targetCwd, { policy, registry });
+            stalePostAging = aged.warnings;
+            staleAggregate = aged.aggregate;
+            const agedHints = ageWorkflowHints(contextResult.workflow_hints ?? [], targetCwd, { policy, registry });
+            hintsPostAging = agedHints.hints;
+            hintsAggregate = agedHints.aggregate;
+          }
+        } catch { /* non-fatal — hygiene must never break bclaw_work */ }
+      }
+
       // Build the full context result, then compact it if requested.
       // Compact mode (default) strips the heavy ContextResult down to a
       // minimal summary that fits within MCP token limits (~25k chars).
@@ -5618,7 +5673,8 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             plan_id: item.plan_id,
           }));
 
-        const staleTop3 = (contextResult.stale_warnings ?? []).slice(0, 3).map(
+        const stalePool = stalePostAging ?? contextResult.stale_warnings ?? [];
+        const staleTop3 = stalePool.slice(0, 3).map(
           (w: { id: string; entity: string; text: string; age_days: number }) => ({
             id: w.id,
             entity: w.entity,
@@ -5646,6 +5702,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
             }
           : undefined;
 
+        const hintsPool = hintsPostAging ?? contextResult.workflow_hints ?? [];
         resultPayload = {
           context_schema: contextResult.context_schema,
           profile: contextResult.profile,
@@ -5654,7 +5711,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           context_diff: trimmedDiff ?? null,
           plan_summary: planItems,
           stale_warnings: staleTop3,
-          workflow_hints: (contextResult.workflow_hints ?? []).slice(0, 3),
+          ...(staleAggregate ? { stale_warnings_aggregate: staleAggregate } : {}),
+          workflow_hints: hintsPool.slice(0, 3),
+          ...(hintsAggregate ? { workflow_hints_aggregate: hintsAggregate } : {}),
           claim_conflicts: contextResult.claim_conflicts ?? [],
           open_work: contextResult.open_work ?? null,
           _compact: true,

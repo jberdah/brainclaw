@@ -16,6 +16,7 @@
 import { spawnSync } from 'node:child_process';
 import { listAssignments, transitionAssignment } from './assignments.js';
 import { signalExists, readHeartbeat, latestActivityMs } from './runtime-signals.js';
+import { DEFAULT_HYGIENE_POLICY, type HygienePolicy } from './hygiene-policy.js';
 import type { Assignment } from './schema.js';
 
 // ── Types ────────────────────────────────────────────────────
@@ -130,15 +131,38 @@ function collectImplicitEvidence(
  */
 export function sweepAssignments(
   cwd?: string,
-  options?: { nowMs?: number; actor?: string },
+  options?: { nowMs?: number; actor?: string; policy?: HygienePolicy },
 ): SweeperResult {
+  return sweepAssignmentsFromList(listAssignments(cwd), cwd, options);
+}
+
+/**
+ * Read-path variant: sweep only the assignments the caller ALREADY loaded
+ * (typically open_work.active_assignments). No `listAssignments` call, so no
+ * additional store scan on the hot bclaw_work path (pln#602 perf guardrail
+ * per the pln#578 read-path optimisation). Use `sweepAssignmentsFromList`
+ * with a bounded slice when a full pass would violate the budget.
+ *
+ * @param assignments - pre-loaded assignments to consider (only non-terminal ones matter)
+ * @param cwd - project root
+ * @param options.nowMs - Override current time for testing
+ * @param options.actor - Actor for the audit trail (default: 'sweeper-readpath')
+ * @param options.policy - Family-level TTL/policy overrides
+ */
+export function sweepAssignmentsFromList(
+  assignments: Assignment[],
+  cwd?: string,
+  options?: { nowMs?: number; actor?: string; policy?: HygienePolicy },
+): SweeperResult {
+  const policy = options?.policy;
+  if (policy?.disabled) {
+    return { timed_out: [], expired: [], implicitly_advanced: [] };
+  }
   const now = options?.nowMs ?? Date.now();
   const actor = options?.actor ?? 'sweeper';
   const result: SweeperResult = { timed_out: [], expired: [], implicitly_advanced: [] };
 
-  const all = listAssignments(cwd);
-
-  for (const assignment of all) {
+  for (const assignment of assignments) {
     // Check started assignments for heartbeat timeout
     if (assignment.status === 'started') {
       const lastBeat = assignment.last_heartbeat_at ?? assignment.started_at;
@@ -225,4 +249,38 @@ export function sweepAssignments(
   }
 
   return result;
+}
+
+/**
+ * Bounded read-path sweep. Called from `bclaw_work` after buildContext has
+ * populated open_work; operates ONLY on the caller's list, capped by the
+ * hygiene policy's read_path_sweep_budget so a burst of stale assignments
+ * cannot inflate the hot path.
+ *
+ * Selection prioritises the offered/accepted branches: those are the ones
+ * that empirically go stale AFTER a worktree GC without a self-report
+ * (fable-audit-2026-07 witnesses asgn_f835612c and the 2026-07-04 morning
+ * trio). `started` items keep converging via the reconciler on the same
+ * pass elsewhere.
+ */
+export function sweepAssignmentsAtReadPath(
+  assignments: Assignment[],
+  cwd?: string,
+  options?: { nowMs?: number; actor?: string; policy?: HygienePolicy },
+): SweeperResult {
+  const policy = options?.policy ?? DEFAULT_HYGIENE_POLICY;
+  if (policy.disabled) {
+    return { timed_out: [], expired: [], implicitly_advanced: [] };
+  }
+  const budget = policy.read_path_sweep_budget;
+  // Prefer offered/accepted (the empirical debris class); the sweep is a no-op
+  // for terminal statuses so filtering is a perf hygiene, not correctness.
+  const eligible = assignments
+    .filter((a) => a.status === 'offered' || a.status === 'accepted' || a.status === 'started')
+    .slice(0, budget);
+  return sweepAssignmentsFromList(eligible, cwd, {
+    ...options,
+    actor: options?.actor ?? 'sweeper-readpath',
+    policy,
+  });
 }

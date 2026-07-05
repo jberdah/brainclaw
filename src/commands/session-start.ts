@@ -16,7 +16,9 @@ import { releaseStaleClaimsFromOtherAgents } from '../core/claims.js';
 import { SessionSnapshotSchema, type SessionSnapshot } from '../core/schema.js';
 import { auditLocalAgentWorkspaceFiles } from '../core/agent-files.js';
 import { buildAgentInventory, loadAgentInventory, saveAgentInventory, diffInventory } from '../core/agent-inventory.js';
-import { checkMemoryPressure, enforceRuntimeNoteRetention, type MemoryPressureResult } from '../core/gc-semantic.js';
+import { checkMemoryPressure, enforceRuntimeNoteRetention, parkClosedAutoHandoffs, type MemoryPressureResult } from '../core/gc-semantic.js';
+import { sweepAssignments } from '../core/assignment-sweeper.js';
+import { loadHygienePolicy } from '../core/hygiene-policy.js';
 import { maybeCreateCheckpoint } from '../core/events/checkpoint.js';
 import { pullSignalsFromLinkedProjects, markSignalProcessed } from '../core/federation-transport.js';
 import { pullSignalsFromCloud, isCloudSyncEnabled } from '../core/federation-cloud.js';
@@ -263,6 +265,22 @@ export async function startSession(options: SessionStartOptions = {}): Promise<S
     try {
       enforceRuntimeNoteRetention({ cwd: options.cwd });
     } catch { /* non-fatal — retention sweep must never block session start */ }
+
+    // pln#602 — coordination hygiene pass. Converge orphan offered/accepted
+    // assignments (workers that died without a self-report — fable-audit-2026-07
+    // witnesses) and park closed auto-generated handoffs so bclaw_work stops
+    // serving debris. Runs at session-start ONLY (not on the hot read path);
+    // opt-out via config.hygiene.disabled honoured through the policy load.
+    try {
+      const policy = loadHygienePolicy(options.cwd);
+      if (!policy.disabled) {
+        sweepAssignments(options.cwd, { actor: 'session-start', policy });
+        parkClosedAutoHandoffs(
+          options.cwd ?? process.cwd(),
+          Math.floor(policy.handoff_closed_ttl_ms / (24 * 60 * 60 * 1000)),
+        );
+      }
+    } catch { /* non-fatal — hygiene sweep must never block session start */ }
 
     // pln#566 Inc0 — keep a recent journal-derived checkpoint available off the
     // hot path so the (capability-gated, OFF by default) checkpointRead read
