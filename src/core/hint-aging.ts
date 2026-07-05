@@ -17,10 +17,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { nowISO } from './ids.js';
 import { resolveEntityDir } from './io.js';
 import { logger } from './logger.js';
-import { DEFAULT_HYGIENE_POLICY, loadHygienePolicy, type HygienePolicy } from './hygiene-policy.js';
+import { loadHygienePolicy, type HygienePolicy } from './hygiene-policy.js';
 import type { StalenessWarning } from './staleness.js';
 
 // ── Persistence types ───────────────────────────────────────────
