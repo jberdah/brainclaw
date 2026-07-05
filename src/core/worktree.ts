@@ -255,6 +255,44 @@ function runGit(
 }
 
 /**
+ * Resolve the real git worktree root for `cwd` (pln#614). On an IN-TREE project
+ * — a project dir that sits inside a larger repo (monorepo), where the git root
+ * is an ancestor, not the project dir itself — `git worktree add` MUST run from
+ * the true toplevel, and the per-project worktree hash MUST be derived from it.
+ *
+ * The bug (trp_28025248, cross-machine dogfooding 1.13.0): the assign/review
+ * claim path passed the project cwd straight to createWorktree, so `git worktree
+ * add` ran from the project dir and — with an empty `.git` left by the embedded
+ * init — failed with "not a git repository", while the ideation path (which
+ * resolved the toplevel) worked. resolveGitToplevel makes both paths agree.
+ *
+ * Falls back to the input cwd when `git rev-parse` cannot resolve a toplevel
+ * (not a repo, git absent) so non-git callers and tests keep their behaviour.
+ */
+export function resolveGitToplevel(cwd: string): string {
+  // Codex review of PR #49 (HIGH): a stale/empty `.git` INSIDE the project dir
+  // (left by the embedded init — the exact leazzy case) makes `git rev-parse
+  // --show-toplevel` FAIL at that level instead of discovering the parent repo:
+  // git stops at the invalid gitdir. A plain fallback-to-cwd would then still
+  // run from the project dir and hash the subdir — the bug unfixed. So on
+  // failure we walk UP and retry from each ancestor, skipping past the invalid
+  // nested gitdir until a real toplevel is found; only a truly non-git tree
+  // falls back to the input cwd.
+  let dir = path.resolve(cwd);
+  for (let depth = 0; depth < 64; depth += 1) {
+    const result = runGit(['rev-parse', '--show-toplevel'], dir);
+    if (result.ok) {
+      const top = result.stdout.trim();
+      if (top) return path.resolve(top);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // filesystem root — not inside any repo
+    dir = parent;
+  }
+  return cwd;
+}
+
+/**
  * Returns true if the given path is a bare git repository.
  * Bare repos have no working tree, so worktree add is not applicable.
  */
@@ -517,6 +555,13 @@ export function createWorktree(
     excludeShared?: string[];
   } = {},
 ): string {
+  // pln#614: resolve the true git toplevel first, so an in-tree project (project
+  // dir ≠ git root) creates its worktree from the real repo root — `git worktree
+  // add` runs there, and the per-project worktree hash (resolveWorktreePath) is
+  // derived from it, matching the ideation path. All git commands + the hash
+  // below use this resolved root rather than the raw project cwd.
+  mainWorktreePath = resolveGitToplevel(mainWorktreePath);
+
   const symlinkWarnings: string[] = [];
   const trySymlinkSharedPath = (entryName: string): void => {
     const sourcePath = path.join(mainWorktreePath, entryName);
@@ -1173,6 +1218,11 @@ export function cleanMergedWorktrees(
 ): CleanResult {
   const result: CleanResult = { removed: [], skipped: [], pruned: false };
 
+  // pln#614: resolve the toplevel so an in-tree project scans the same
+  // per-project worktree hash createWorktree wrote under (and runs git from the
+  // real repo root).
+  mainWorktreePath = resolveGitToplevel(mainWorktreePath);
+
   // First prune stale git worktree admin entries
   pruneWorktrees(mainWorktreePath);
   result.pruned = true;
@@ -1292,6 +1342,10 @@ export function gcWorktreeIfHarvested(
   });
 
   if (!worktreePath || !fs.existsSync(worktreePath)) return out(false, 'already gone');
+
+  // pln#614: the merge-base / patch-id probes below run from the main repo — an
+  // in-tree project dir (empty .git) would fail them; resolve the real toplevel.
+  mainWorktreePath = resolveGitToplevel(mainWorktreePath);
 
   if (workerLooksAlive(worktreePath, options.livenessWindowMs ?? WORKTREE_GC_LIVENESS_WINDOW_MS)) {
     return out(false, 'worker still active (recent heartbeat)');

@@ -22,7 +22,7 @@ import { memoryExists } from '../core/io.js';
 import { loadAssignment, transitionAssignment } from '../core/assignments.js';
 import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
-import { commitWorktreeOnBehalf, worktreesBaseDir } from '../core/worktree.js';
+import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
 
 export interface HarvestOptions {
   /**
@@ -52,7 +52,13 @@ export interface HarvestResult {
  * Returns subdirectories that exist on disk (may or may not have an inbox).
  */
 function autoDetectWorktreePaths(cwd: string): string[] {
-  const base = worktreesBaseDir(cwd);
+  // Codex review of PR #49 (MED): createWorktree now writes in-tree worktrees
+  // under the git-TOPLEVEL hash (pln#614), so the scan base must resolve the
+  // toplevel too — otherwise `harvest --all` / candidates from an in-tree
+  // project subdir scan the stale subdir hash and miss every lane result. Only
+  // the scan base is toplevel-resolved; .brainclaw store reads/writes elsewhere
+  // keep the original project cwd.
+  const base = worktreesBaseDir(resolveGitToplevel(cwd));
   if (!fs.existsSync(base)) return [];
 
   return fs.readdirSync(base, { withFileTypes: true })
