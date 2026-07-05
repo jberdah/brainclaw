@@ -270,10 +270,24 @@ function runGit(
  * (not a repo, git absent) so non-git callers and tests keep their behaviour.
  */
 export function resolveGitToplevel(cwd: string): string {
-  const result = runGit(['rev-parse', '--show-toplevel'], cwd);
-  if (result.ok) {
-    const top = result.stdout.trim();
-    if (top) return path.resolve(top);
+  // Codex review of PR #49 (HIGH): a stale/empty `.git` INSIDE the project dir
+  // (left by the embedded init — the exact leazzy case) makes `git rev-parse
+  // --show-toplevel` FAIL at that level instead of discovering the parent repo:
+  // git stops at the invalid gitdir. A plain fallback-to-cwd would then still
+  // run from the project dir and hash the subdir — the bug unfixed. So on
+  // failure we walk UP and retry from each ancestor, skipping past the invalid
+  // nested gitdir until a real toplevel is found; only a truly non-git tree
+  // falls back to the input cwd.
+  let dir = path.resolve(cwd);
+  for (let depth = 0; depth < 64; depth += 1) {
+    const result = runGit(['rev-parse', '--show-toplevel'], dir);
+    if (result.ok) {
+      const top = result.stdout.trim();
+      if (top) return path.resolve(top);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // filesystem root — not inside any repo
+    dir = parent;
   }
   return cwd;
 }

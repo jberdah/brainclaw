@@ -221,6 +221,57 @@ describe('createWorktree — monorepo per-package node_modules links (pln#523)',
     }
   });
 
+  it('resolveGitToplevel walks past an invalid nested .git to the real repo root (Codex PR#49 HIGH — the leazzy case)', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-badgit-'));
+    const projectDir = path.join(repo, 'applications', 'leazzy');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    try {
+      git(['init']);
+      fs.mkdirSync(projectDir, { recursive: true });
+      // Reproduce the embedded-init artifact: an empty/invalid `.git` INSIDE the
+      // project dir. `git rev-parse --show-toplevel` from here fails (git stops
+      // at the invalid gitdir); the parent-walk must skip it and find the repo
+      // root. Result must be the repo root regardless of whether the empty .git
+      // makes rev-parse fail on this platform — the test asserts the outcome.
+      fs.mkdirSync(path.join(projectDir, '.git'), { recursive: true });
+      assert.equal(
+        fs.realpathSync(resolveGitToplevel(projectDir)),
+        fs.realpathSync(repo),
+        'resolves to the monorepo root despite the invalid nested .git',
+      );
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('harvest scan base resolves the toplevel hash for an in-tree subdir (Codex PR#49 MED)', () => {
+    // autoDetectWorktreePaths hashes resolveGitToplevel(cwd); prove the scan base
+    // for an in-tree subdir equals the base createWorktree wrote under (repo root),
+    // not the stale subdir hash.
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-harvestbase-'));
+    const sub = path.join(repo, 'applications', 'leazzy');
+    const git = (args: string[], cwd = repo) => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return result;
+    };
+    try {
+      git(['init']);
+      fs.mkdirSync(sub, { recursive: true });
+      // resolveWorktreePath(repo, …) and resolveWorktreePath(resolveGitToplevel(sub), …)
+      // must share the same per-project base (the toplevel hash).
+      const createBase = path.dirname(resolveWorktreePath(repo, 'feat/x'));
+      const scanBase = path.dirname(resolveWorktreePath(resolveGitToplevel(sub), 'feat/x'));
+      assert.equal(scanBase, createBase, 'harvest scan base matches the create base (toplevel hash)');
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it('honors BRAINCLAW_NO_LINK_DEPS=1 by skipping auto dependency linking', () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-mono-nolink-'));
     const targetPath = resolveWorktreePath(repo, 'feat/nolink');
