@@ -1619,6 +1619,29 @@ export const BrainclawLocalReleaseManifestSchema = z.object({
 });
 export type BrainclawLocalReleaseManifest = z.infer<typeof BrainclawLocalReleaseManifestSchema>;
 
+/**
+ * Coordination-hygiene overrides (pln#602). Declared here so ConfigSchema does
+ * NOT strip the `hygiene` key at parse time — the earlier untyped read
+ * (`loadConfig() as { hygiene? }`) was silently unreachable because zod strips
+ * unknown keys by default (Codex review of PR #48, HIGH). Every field is an
+ * optional override on DEFAULT_HYGIENE_POLICY; the numeric TTLs/budgets are
+ * validated positive so a bad value fails loudly rather than disabling a sweep.
+ * Unknown sub-keys still follow the store-wide strip convention (a typo is
+ * ignored, consistent with reputation/governance/etc.) — the load path logs
+ * them via loadHygienePolicy so the drop is not fully silent.
+ */
+export const HygieneConfigSchema = z.object({
+  disabled: z.boolean().optional(),
+  assignment_offered_ttl_ms: z.number().int().positive().optional(),
+  assignment_accepted_ttl_ms: z.number().int().positive().optional(),
+  assignment_started_ttl_ms: z.number().int().positive().optional(),
+  handoff_closed_ttl_ms: z.number().int().positive().optional(),
+  stale_warning_serve_k: z.number().int().positive().optional(),
+  workflow_hint_serve_k: z.number().int().positive().optional(),
+  read_path_sweep_budget: z.number().int().positive().optional(),
+});
+export type HygieneConfig = z.infer<typeof HygieneConfigSchema>;
+
 export const ConfigSchema = z.object({
   schema_version: z.number().int().positive().optional(),
   version: z.literal(1),
@@ -1650,6 +1673,7 @@ export const ConfigSchema = z.object({
   reflective_memory: ReflectiveMemoryConfigSchema.optional(),
   governance: GovernanceConfigSchema.optional(),
   reputation: ReputationConfigSchema.optional(),
+  hygiene: HygieneConfigSchema.optional(),
   agent_integrations: AgentIntegrationsConfigSchema.default({ declarations: [] }),
   cross_project_links: z.array(CrossProjectLinkSchema).optional().default([]),
   implicit_session_ttl: z.string().default('4h'),
