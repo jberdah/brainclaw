@@ -16,6 +16,22 @@ import {
 // worktrees. The root-only junction (detectStackSharedPaths) left workers unable
 // to build/typecheck sub-packages that keep a local node_modules.
 
+/**
+ * Assert two paths are the same real location. Uses realpathSync.native +
+ * win32 lowercasing — the SAME normalisation worktreesBaseDir applies — so the
+ * comparison is stable where git and Node disagree on surface form: Windows CI
+ * 8.3 short names (RUNNER~1 vs runneradmin), drive-letter case, and macOS
+ * /var → /private/var. A plain realpathSync mismatched on GitHub Windows.
+ */
+function assertSamePath(actual: string, expected: string, message?: string): void {
+  const norm = (p: string): string => {
+    let r = path.resolve(p);
+    try { r = fs.realpathSync.native(r); } catch { /* path may be gone */ }
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  assert.equal(norm(actual), norm(expected), message);
+}
+
 describe('readWorkspacePatterns (pln#523)', () => {
   it('reads npm/yarn workspaces array', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-ws-arr-'));
@@ -212,9 +228,8 @@ describe('createWorktree — monorepo per-package node_modules links (pln#523)',
     try {
       git(['init']);
       fs.mkdirSync(sub, { recursive: true });
-      // realpath both sides: macOS temp (/var → /private/var) differs from git's output.
-      assert.equal(fs.realpathSync(resolveGitToplevel(sub)), fs.realpathSync(repo), 'resolves the repo root from a nested subdir');
-      assert.equal(resolveGitToplevel(nonGit), nonGit, 'falls back to the input for a non-git dir');
+      assertSamePath(resolveGitToplevel(sub), repo, 'resolves the repo root from a nested subdir');
+      assertSamePath(resolveGitToplevel(nonGit), nonGit, 'falls back to the input for a non-git dir');
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(nonGit, { recursive: true, force: true });
@@ -238,9 +253,9 @@ describe('createWorktree — monorepo per-package node_modules links (pln#523)',
       // root. Result must be the repo root regardless of whether the empty .git
       // makes rev-parse fail on this platform — the test asserts the outcome.
       fs.mkdirSync(path.join(projectDir, '.git'), { recursive: true });
-      assert.equal(
-        fs.realpathSync(resolveGitToplevel(projectDir)),
-        fs.realpathSync(repo),
+      assertSamePath(
+        resolveGitToplevel(projectDir),
+        repo,
         'resolves to the monorepo root despite the invalid nested .git',
       );
     } finally {
