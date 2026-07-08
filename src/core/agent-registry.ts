@@ -185,8 +185,17 @@ function ensureParentDir(filepath: string): void {
   }
 }
 
-function fingerprintPublicKey(publicKey: string): string {
-  return crypto.createHash('sha256').update(publicKey).digest('hex');
+/**
+ * Canonical Ed25519 public-key fingerprint (pln#101): sha256 over the PEM with
+ * carriage returns stripped and surrounding whitespace trimmed, so a trailing
+ * newline or CRLF (e.g. introduced by copy-paste through the cloud UI) does NOT
+ * change the fingerprint. The cloud computes the same canonical value — see
+ * brainclaw-cloud/src/handlers/agents.ts fingerprintPem — so a local↔remote
+ * match is a reliable proof of the same key regardless of PEM formatting.
+ */
+export function fingerprintPublicKeyPem(publicKeyPem: string): string {
+  const canonical = publicKeyPem.replace(/\r/g, '').trim();
+  return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
 function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env, forceRegenerate: boolean = false): AgentIdentityDocument['identity_key'] {
@@ -215,7 +224,7 @@ function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env,
   return {
     algorithm: 'ed25519',
     public_key: publicKeyPem,
-    fingerprint: fingerprintPublicKey(publicKeyPem),
+    fingerprint: fingerprintPublicKeyPem(publicKeyPem),
     created_at: createdAt,
   };
 }
@@ -246,7 +255,7 @@ export function loadAgentSigningKey(
     .createPublicKey(privateKey as unknown as crypto.PublicKeyInput)
     .export({ type: 'spki', format: 'pem' })
     .toString();
-  return { privateKeyPem, publicKeyPem, fingerprint: fingerprintPublicKey(publicKeyPem) };
+  return { privateKeyPem, publicKeyPem, fingerprint: fingerprintPublicKeyPem(publicKeyPem) };
 }
 
 /**

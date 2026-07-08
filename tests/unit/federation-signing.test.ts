@@ -12,7 +12,7 @@ import {
   AGENT_SIGNATURE_HEADER,
   AGENT_TIMESTAMP_HEADER,
 } from '../../src/core/federation-signing.js';
-import { registerAgentIdentity } from '../../src/core/agent-registry.js';
+import { registerAgentIdentity, fingerprintPublicKeyPem } from '../../src/core/agent-registry.js';
 import { loadConfig, saveConfig } from '../../src/core/config.js';
 import { createTestWorkspace } from '../helpers/workspace.js';
 
@@ -95,6 +95,19 @@ function pemToDer(pem: string): Uint8Array<ArrayBuffer> {
     .replace(/\s+/g, '');
   return base64ToBytes(b64);
 }
+
+describe('federation-signing / canonical fingerprint', () => {
+  it('is invariant to trailing newline and CRLF (pln#101 whitespace pitfall)', () => {
+    const { publicKeyPem } = makeKeyPair();
+    const base = publicKeyPem.replace(/\r/g, '').trim();
+    const fp = fingerprintPublicKeyPem(base);
+    assert.equal(fp.length, 64);
+    assert.equal(fingerprintPublicKeyPem(base + '\n'), fp);
+    assert.equal(fingerprintPublicKeyPem(base + '\n\n'), fp);
+    assert.equal(fingerprintPublicKeyPem(`${base.replace(/\n/g, '\r\n')}\r\n`), fp);
+    assert.equal(fingerprintPublicKeyPem(`  ${base}  `), fp);
+  });
+});
 
 describe('federation-signing / cross-stack WebCrypto interop', () => {
   // The backend verifies with WebCrypto (crypto.subtle) in the Workers runtime.
