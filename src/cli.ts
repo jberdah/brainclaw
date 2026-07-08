@@ -2151,23 +2151,51 @@ federationCmd
 
 federationCmd
   .command('status')
-  .description('Check cloud federation configuration')
+  .description('Diagnose cloud federation: config, health, signing identity, approved agent')
   .action(async () => {
-    const { isCloudConfigured } = await import('./core/federation-cloud.js');
-    const url = process.env.BRAINCLAW_CLOUD_URL ?? 'https://app.brainclaw.dev';
+    const { diagnoseCloudBridge } = await import('./core/federation-cloud.js');
+    const d = await diagnoseCloudBridge();
 
-    console.log(`Cloud URL: ${url}`);
-    console.log(`API Key: ${process.env.BRAINCLAW_CLOUD_API_KEY ? '***configured***' : 'NOT SET'}`);
-    console.log(`Configured: ${isCloudConfigured() ? 'yes' : 'no'}`);
+    const yn = (b: boolean) => (b ? 'yes' : 'no');
+    console.log(`Cloud URL:   ${d.apiUrl}`);
+    console.log(`API Key:     ${process.env.BRAINCLAW_CLOUD_API_KEY ? '***configured***' : (d.configured ? 'from config' : 'NOT SET')}`);
+    console.log(`Configured:  ${yn(d.configured)}`);
+    console.log(`Opted-in:    ${yn(d.enabled)}`);
+    console.log(`Project:     ${d.projectId ?? '(none)'}`);
+    console.log(`Require signed writes: ${yn(d.requireSigned)}`);
 
-    if (isCloudConfigured()) {
-      try {
-        const res = await fetch(`${url}/api/v1/health`);
-        const data = await res.json() as Record<string, unknown>;
-        console.log(`Cloud status: ${data.status} (v${data.version})`);
-      } catch (e) {
-        console.error(`Cloud unreachable: ${(e as Error).message}`);
+    if (d.health) {
+      console.log(
+        d.health.ok
+          ? `Cloud status: ${d.health.status} (v${d.health.version})`
+          : `Cloud unreachable: ${d.health.error ?? 'unknown error'}`,
+      );
+    }
+
+    if (d.signing.available) {
+      console.log('\nSigning identity:');
+      console.log(`  Agent:       ${d.signing.agentName} [${d.signing.cloudAgentId}]`);
+      console.log(`  Key present: yes`);
+      console.log(`  Fingerprint: ${d.signing.fingerprint.slice(0, 16)}…`);
+    } else {
+      console.log(`\nSigning identity: unavailable — ${d.signing.reason}`);
+    }
+
+    if (d.approvedAgent) {
+      console.log('\nApproved agent (cloud):');
+      if (d.approvedAgent.found) {
+        console.log(`  Status:      ${d.approvedAgent.status ?? '(unknown)'}`);
+        console.log(`  Trust:       ${d.approvedAgent.trustLevel ?? '(unknown)'}`);
+        console.log(
+          `  Key match:   ${d.approvedAgent.fingerprintMatch ? 'yes ✔' : 'NO ✗ (local key does not match the registered key)'}`,
+        );
+      } else {
+        console.log(`  Not found${d.approvedAgent.error ? ` — ${d.approvedAgent.error}` : ''}`);
       }
+    }
+
+    if (d.requireSigned && !d.signing.available) {
+      console.log('\n⚠ require_signed is set but no signing identity is available — the bridge will refuse to push (fail-closed).');
     }
   });
 
