@@ -1,13 +1,20 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 import {
   signCloudBody,
   buildCloudWriteHeaders,
+  resolveCloudSigningIdentity,
   AGENT_ID_HEADER,
   AGENT_SIGNATURE_HEADER,
   AGENT_TIMESTAMP_HEADER,
 } from '../../src/core/federation-signing.js';
+import { registerAgentIdentity } from '../../src/core/agent-registry.js';
+import { loadConfig, saveConfig } from '../../src/core/config.js';
+import { createTestWorkspace } from '../helpers/workspace.js';
 
 function makeKeyPair(): { privateKeyPem: string; publicKeyPem: string } {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -147,5 +154,64 @@ describe('federation-signing / buildCloudWriteHeaders', () => {
     });
     assert.ok(headers);
     assert.equal(headers![AGENT_ID_HEADER], 'agt_cloud');
+  });
+});
+
+describe('federation-signing / resolveCloudSigningIdentity', () => {
+  it('uses config cloud agent id for X-Agent-Id while BRAINCLAW_AGENT_ID selects the local key', () => {
+    // Save every env var this test mutates and restore in finally — leaking
+    // BRAINCLAW_AGENT_ID/NAME contaminates sibling tests (trap: agent-shell env).
+    const saved = {
+      cloudId: process.env.BRAINCLAW_CLOUD_AGENT_ID,
+      agentId: process.env.BRAINCLAW_AGENT_ID,
+      agentName: process.env.BRAINCLAW_AGENT_NAME,
+    };
+    delete process.env.BRAINCLAW_CLOUD_AGENT_ID;
+    const workspace = createTestWorkspace({ prefix: 'bclaw-signing-' });
+    let localKeyPath: string | undefined;
+    try {
+      const localIdentity = registerAgentIdentity({
+        agentName: 'signer',
+        kind: 'agent',
+        generateFingerprint: true,
+        cwd: workspace.dir,
+        env: process.env,
+      });
+      // The signing key lands in the neutral home store, NOT the workspace —
+      // track it so we can remove it and not accrue debris in ~/.brainclaw/keys.
+      localKeyPath = path.join(os.homedir(), '.brainclaw', 'keys', `${localIdentity.agent_id}.ed25519.pem`);
+
+      const config = loadConfig(workspace.dir);
+      config.cloud_sync = {
+        enabled: true,
+        endpoint: 'https://example.invalid',
+        api_key: 'test-key',
+        agent_id: 'agt_cloud_remote',
+        agent_name: 'signer',
+        require_signed: true,
+      };
+      saveConfig(config, workspace.dir);
+      process.env.BRAINCLAW_AGENT_ID = localIdentity.agent_id;
+      process.env.BRAINCLAW_AGENT_NAME = localIdentity.agent_name;
+
+      const resolved = resolveCloudSigningIdentity(workspace.dir);
+
+      assert.ok(resolved);
+      // X-Agent-Id comes from cloud_sync.agent_id, NOT the local BRAINCLAW_AGENT_ID.
+      assert.equal(resolved.cloudAgentId, 'agt_cloud_remote');
+      // The private key is resolved via the local identity id.
+      assert.equal(resolved.localAgentId, localIdentity.agent_id);
+    } finally {
+      workspace.cleanup();
+      if (localKeyPath) { try { fs.rmSync(localKeyPath, { force: true }); } catch { /* best-effort */ } }
+      for (const [k, v] of Object.entries({
+        BRAINCLAW_CLOUD_AGENT_ID: saved.cloudId,
+        BRAINCLAW_AGENT_ID: saved.agentId,
+        BRAINCLAW_AGENT_NAME: saved.agentName,
+      })) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 });

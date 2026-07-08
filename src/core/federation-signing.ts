@@ -116,7 +116,12 @@ export function resolveCloudSigningIdentity(
     // No project config — fall back to env only.
   }
 
-  const cloudAgentId = (env.BRAINCLAW_AGENT_ID?.trim() || cfgAgentId || '').trim() || undefined;
+  // X-Agent-Id must be the CLOUD agent id, which is distinct from the local
+  // identity id. BRAINCLAW_AGENT_ID is already the LOCAL id everywhere in
+  // brainclaw (current-agent resolution, etc.), so a dedicated
+  // BRAINCLAW_CLOUD_AGENT_ID override avoids sending the local id as the cloud
+  // header when a session exports BRAINCLAW_AGENT_ID (review finding, pln#100).
+  const cloudAgentId = (env.BRAINCLAW_CLOUD_AGENT_ID?.trim() || cfgAgentId || '').trim() || undefined;
   const agentName =
     (env.BRAINCLAW_AGENT_NAME?.trim() || env.BRAINCLAW_AGENT?.trim() || cfgAgentName || '').trim() || undefined;
 
