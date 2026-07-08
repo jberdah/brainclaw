@@ -249,6 +249,22 @@ export function loadAgentSigningKey(
   return { privateKeyPem, publicKeyPem, fingerprint: fingerprintPublicKey(publicKeyPem) };
 }
 
+/**
+ * Ensure an agent has an Ed25519 signing key, WITHOUT rotating an existing one
+ * (pln#101). Generates the keypair on first call, returns the existing key on
+ * subsequent calls — so it is safe to run after the public key has been
+ * approved in the cloud (rotating would break the fingerprint match). Returns
+ * the SPKI public-key PEM + its sha256(pem) fingerprint.
+ */
+export function ensureAgentSigningKey(
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { publicKeyPem: string; fingerprint: string } {
+  const key = buildIdentityKey(agentId, env, false);
+  if (!key) throw new Error(`Failed to derive signing key for agent ${agentId}`);
+  return { publicKeyPem: key.public_key, fingerprint: key.fingerprint };
+}
+
 function withIdentityKey(
   agent: AgentIdentityDocument,
   env: NodeJS.ProcessEnv = process.env,

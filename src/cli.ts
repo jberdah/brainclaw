@@ -2199,6 +2199,40 @@ federationCmd
     }
   });
 
+federationCmd
+  .command('identity')
+  .description('Show this agent\'s federation signing identity (public key to approve in the cloud UI)')
+  .option('--agent <name>', 'Agent name (defaults to the current agent)')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const { resolveOrAutoRegisterAgentIdentity, ensureAgentSigningKey, resolveCurrentAgentName } =
+      await import('./core/agent-registry.js');
+
+    const agentName = (options.agent as string | undefined) ?? resolveCurrentAgentName();
+    const { identity } = resolveOrAutoRegisterAgentIdentity({ agentName, cwd: process.cwd() });
+    const key = ensureAgentSigningKey(identity.agent_id);
+
+    if (options.json) {
+      console.log(JSON.stringify({
+        agent_name: identity.agent_name,
+        local_agent_id: identity.agent_id,
+        fingerprint: key.fingerprint,
+        public_key_pem: key.publicKeyPem,
+      }, null, 2));
+      return;
+    }
+
+    console.log(`Agent name:     ${identity.agent_name}`);
+    console.log(`Local agent id: ${identity.agent_id}`);
+    console.log(`Fingerprint:    ${key.fingerprint}`);
+    console.log('\nPublic key — paste into the cloud UI (project → Agents → Register / approve an agent):\n');
+    console.log(key.publicKeyPem.trim());
+    console.log('\nThen, on this machine, configure the bridge with the cloud agent id shown after approval:');
+    console.log(`  export BRAINCLAW_AGENT_NAME=${identity.agent_name}`);
+    console.log('  export BRAINCLAW_CLOUD_AGENT_ID=<agt_... returned by the UI>');
+    console.log('  (plus BRAINCLAW_CLOUD_API_KEY, BRAINCLAW_PROJECT_ID) — then run `brainclaw federation status`.');
+  });
+
 // --- codev (legacy experimental) ---
 if (isCodevEnabled()) {
   program
