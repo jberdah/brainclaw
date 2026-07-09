@@ -45,6 +45,12 @@ const ENTITY_DIR_MAP: Record<string, string> = {
   'runtime': 'coordination/runtime',
   'runtime-hosts': 'coordination/runtime-hosts',
   'runtime-private': 'coordination/runtime-private',
+  // federation/ — outbound cloud sync queue (pln#101 Phase 2): durable outbox,
+  // archived 'sent' markers, and 'parked' dead-letters.
+  'federation': 'coordination/federation',
+  'federation/outbox': 'coordination/federation/outbox',
+  'federation/sent': 'coordination/federation/sent',
+  'federation/parked': 'coordination/federation/parked',
   'surface-tasks': 'coordination/surface-tasks',
   'assignments': 'coordination/assignments',
   'runs': 'coordination/runs',

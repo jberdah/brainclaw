@@ -187,6 +187,50 @@ export async function pushBoardToCloud(
   }
 }
 
+/**
+ * Push a signed claim upsert to PUT /api/v1/claims/:id (pln#101 increment 1).
+ * Reuses the same signing + fail-closed policy as the other writes. Surfaces
+ * the HTTP status and the response body's classification code so the caller
+ * (`federation sync`) can distinguish 409 STALE (superseded) from 409
+ * REV_CONFLICT (divergence → park) and 403 CROSS_TENANT (park).
+ */
+export type ClaimPushResult =
+  | { kind: 'response'; httpStatus: number; code: string | null }
+  | { kind: 'fail_closed' }
+  | { kind: 'not_configured' }
+  | { kind: 'network_error'; error: string };
+
+export async function pushClaimToCloud(
+  payload: { id: string },
+  cwd?: string,
+): Promise<ClaimPushResult> {
+  const cloud = resolveCloudConfig(cwd);
+  if (!cloud) return { kind: 'not_configured' };
+
+  const body = JSON.stringify(payload);
+  const headers = writeHeaders(body, cloud, cwd);
+  if (!headers) return { kind: 'fail_closed' };
+
+  try {
+    const response = await fetch(`${cloud.apiUrl}/api/v1/claims/${encodeURIComponent(payload.id)}`, {
+      method: 'PUT',
+      headers,
+      body,
+    });
+    let code: string | null = null;
+    try {
+      const data = (await response.json()) as Record<string, unknown>;
+      const raw = data.code ?? data.status;
+      code = typeof raw === 'string' ? raw : null;
+    } catch {
+      // Non-JSON body — leave code null; the HTTP status still classifies it.
+    }
+    return { kind: 'response', httpStatus: response.status, code };
+  } catch (err) {
+    return { kind: 'network_error', error: (err as Error).message };
+  }
+}
+
 export function isCloudConfigured(cwd?: string): boolean {
   return resolveCloudConfig(cwd) !== undefined;
 }
