@@ -27,7 +27,10 @@ import type { Claim, ClaimStatus } from './schema.js';
 export interface ClaimCloudPayload {
   id: string;
   rev: number;
-  agent_id: string | null;
+  // NOTE: agent_id is intentionally omitted — the cloud binds it to the signed
+  // agent's identity (signature.agentId = the CLOUD agent id), which differs
+  // from the local identity id. Sending the local id would trip the cloud's
+  // AGENT_ID_MISMATCH guard. agent_name is a free label and is kept.
   agent_name: string;
   scope: string;
   description: string;
@@ -91,13 +94,14 @@ function stableStringify(value: unknown): string {
  * bodies (a conflict the cloud must not silently absorb).
  */
 export function claimContentHash(claim: Claim): string {
+  // Identity fields (agent_id/agent_name) are excluded: they are constant over a
+  // claim's life and the local↔cloud agent-id mapping is a transport concern,
+  // not claim content. What matters for divergence detection is the lifecycle body.
   const body = {
     id: claim.id,
     status: claim.status,
     scope: claim.scope,
     description: claim.description,
-    agent_id: claim.agent_id ?? null,
-    agent_name: claim.agent,
     plan_id: claim.plan_id ?? null,
     host_id: claim.host_id ?? null,
     session_id: claim.session_id ?? null,
@@ -113,7 +117,6 @@ function buildClaimPayload(claim: Claim, rev: number, contentHash: string): Clai
   return {
     id: claim.id,
     rev,
-    agent_id: claim.agent_id ?? null,
     agent_name: claim.agent,
     scope: claim.scope,
     description: claim.description,
