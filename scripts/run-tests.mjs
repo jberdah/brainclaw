@@ -323,7 +323,14 @@ export async function runGroup(groupName, options = {}) {
 
   const tests = selected.map(createTestDescriptor);
   const sequentialTests = tests.filter((test) => test.kind !== 'e2e');
-  const parallelTests = tests.filter((test) => test.kind === 'e2e');
+  // Crash/stress files that spawn child processes in tight fsync loops must
+  // not share the machine with other disk/process-heavy e2e files — a parallel
+  // pool re-creates the child starvation that moving them out of the coverage
+  // lane fixed (pln#622 PR0a). They run alone, serially, after the pool.
+  const serialE2eBasenames = new Set(['journal-crash-storm.test.js']);
+  const e2eTests = tests.filter((test) => test.kind === 'e2e');
+  const parallelTests = e2eTests.filter((test) => !serialE2eBasenames.has(path.basename(test.filepath)));
+  const serialE2eTests = e2eTests.filter((test) => serialE2eBasenames.has(path.basename(test.filepath)));
   const startedAt = Date.now();
   const results = [];
 
@@ -335,6 +342,10 @@ export async function runGroup(groupName, options = {}) {
   if (parallelTests.length > 0) {
     console.log(`  Parallel e2e: ${parallelTests.length} file(s) with worker pool of ${options.concurrency ?? 3} (${perFileTimeoutMs.e2e / 1000}s per file)`);
     results.push(...await runParallelTests(parallelTests, options));
+  }
+  if (serialE2eTests.length > 0) {
+    console.log(`  Serial e2e (crash/stress lane): ${serialE2eTests.length} file(s), one at a time`);
+    results.push(...await runSequentialTests(serialE2eTests, options));
   }
 
   const totalMs = Date.now() - startedAt;

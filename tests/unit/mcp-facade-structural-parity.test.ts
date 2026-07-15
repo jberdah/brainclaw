@@ -31,12 +31,10 @@ import { PUBLISHED_TOOLS } from '../../src/commands/mcp.js';
  * What is deliberately NOT asserted:
  *   - descriptions: prose diverges freely between the JSDoc and the client-
  *     facing catalog (the governance fingerprint strips them too);
- *   - `required` arrays: requiredness legitimately diverges. The zod side
- *     encodes it via .optional()/.default() wrappers plus handler-level
- *     conditional rules (e.g. bclaw_work scope is only needed for
- *     intent='execute', threadId only for summarize), while the published
- *     `required` is the hand-maintained unconditional floor shown to MCP
- *     clients. Comparing them would force one side to lie.
+ *   - CONDITIONAL requiredness: handler-level rules (e.g. threadId only for
+ *     summarize) are not representable in a flat `required` array. What IS
+ *     asserted (checkpoint-1 review) is the UNCONDITIONAL floor: the published
+ *     `required` must equal the set of zod keys that reject `undefined`.
  */
 
 /**
@@ -135,6 +133,23 @@ describe('MCP facade schemas — structural parity with facade-schema.ts zod sou
           stale,
           [],
           `${tool}: ENVELOPE_ALLOWLIST lists [${stale.join(', ')}] but they are no longer published — prune the allowlist.`,
+        );
+      });
+
+      it('published required equals the unconditional zod floor (checkpoint-1 review)', () => {
+        // The zod floor = keys that reject `undefined` (neither .optional()
+        // nor .default(), regardless of preprocess/effects wrapping). Handler-
+        // level CONDITIONAL requiredness (e.g. threadId for summarize) stays
+        // out of scope by construction: those keys parse undefined fine.
+        const zodFloor = Object.entries(zodShape)
+          .filter(([, field]) => !field.safeParse(undefined).success)
+          .map(([key]) => key)
+          .sort();
+        const publishedRequired = [...(inputSchema.required ?? [])].sort();
+        assert.deepEqual(
+          publishedRequired,
+          zodFloor,
+          `${tool}: published \`required\` must equal the unconditional zod floor.`,
         );
       });
 
