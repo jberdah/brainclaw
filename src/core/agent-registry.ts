@@ -185,8 +185,17 @@ function ensureParentDir(filepath: string): void {
   }
 }
 
-function fingerprintPublicKey(publicKey: string): string {
-  return crypto.createHash('sha256').update(publicKey).digest('hex');
+/**
+ * Canonical Ed25519 public-key fingerprint (pln#101): sha256 over the PEM with
+ * carriage returns stripped and surrounding whitespace trimmed, so a trailing
+ * newline or CRLF (e.g. introduced by copy-paste through the cloud UI) does NOT
+ * change the fingerprint. The cloud computes the same canonical value — see
+ * brainclaw-cloud/src/handlers/agents.ts fingerprintPem — so a local↔remote
+ * match is a reliable proof of the same key regardless of PEM formatting.
+ */
+export function fingerprintPublicKeyPem(publicKeyPem: string): string {
+  const canonical = publicKeyPem.replace(/\r/g, '').trim();
+  return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
 function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env, forceRegenerate: boolean = false): AgentIdentityDocument['identity_key'] {
@@ -215,9 +224,54 @@ function buildIdentityKey(agentId: string, env: NodeJS.ProcessEnv = process.env,
   return {
     algorithm: 'ed25519',
     public_key: publicKeyPem,
-    fingerprint: fingerprintPublicKey(publicKeyPem),
+    fingerprint: fingerprintPublicKeyPem(publicKeyPem),
     created_at: createdAt,
   };
+}
+
+/**
+ * Load an agent's Ed25519 signing material for cloud request signing (pln#100).
+ *
+ * Reads the private key from the neutral key store (~/.brainclaw/keys/),
+ * migrating from the legacy CODEX_HOME location if needed, and derives the SPKI
+ * public-key PEM plus its fingerprint — the same sha256(pem) the cloud stores as
+ * agents.key_fingerprint, so a local↔remote fingerprint match is a byte-for-byte
+ * proof of the same key. Returns undefined when no key has been generated yet:
+ * signing NEVER silently mints a key (the public key must be registered with the
+ * cloud first). Use registerAgentIdentity({ generateFingerprint: true }) to mint one.
+ */
+export function loadAgentSigningKey(
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { privateKeyPem: string; publicKeyPem: string; fingerprint: string } | undefined {
+  migrateLegacyAgentKey(agentId, env);
+  const filepath = agentKeyPath(agentId);
+  if (!fs.existsSync(filepath)) return undefined;
+  const privateKeyPem = fs.readFileSync(filepath, 'utf-8');
+  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  // @types/node 26 dropped the KeyObject overload from createPublicKey's signature
+  // (see buildIdentityKey) — cast to a parameter type the .d.ts still accepts.
+  const publicKeyPem = crypto
+    .createPublicKey(privateKey as unknown as crypto.PublicKeyInput)
+    .export({ type: 'spki', format: 'pem' })
+    .toString();
+  return { privateKeyPem, publicKeyPem, fingerprint: fingerprintPublicKeyPem(publicKeyPem) };
+}
+
+/**
+ * Ensure an agent has an Ed25519 signing key, WITHOUT rotating an existing one
+ * (pln#101). Generates the keypair on first call, returns the existing key on
+ * subsequent calls — so it is safe to run after the public key has been
+ * approved in the cloud (rotating would break the fingerprint match). Returns
+ * the SPKI public-key PEM + its sha256(pem) fingerprint.
+ */
+export function ensureAgentSigningKey(
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { publicKeyPem: string; fingerprint: string } {
+  const key = buildIdentityKey(agentId, env, false);
+  if (!key) throw new Error(`Failed to derive signing key for agent ${agentId}`);
+  return { publicKeyPem: key.public_key, fingerprint: key.fingerprint };
 }
 
 function withIdentityKey(
