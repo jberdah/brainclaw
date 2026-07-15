@@ -2100,7 +2100,14 @@ federationCmd
     const msg = createFederationMessage({
       version: 1,
       from: { project_name: config.project_name, project_path: process.cwd(), agent_name: agent },
-      to: { project_name: options.toProject ?? 'broadcast', project_path: '' },
+      to: {
+        project_name: options.toProject ?? 'broadcast',
+        project_path: '',
+        // Wire --to-agent into the message (was declared but dropped, so every
+        // push went out as a broadcast with to_agent NULL — found during the
+        // cross-machine E2E, pln#365). Omitted → undefined → broadcast, as before.
+        ...(options.toAgent ? { agent_name: options.toAgent as string } : {}),
+      },
       type: options.type as 'signal' | 'handoff' | 'candidate' | 'runtime_note' | 'board_snapshot',
       payload: { text: message },
     });
