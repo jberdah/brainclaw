@@ -22,6 +22,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { sanitizedProcessEnv } from '../helpers/workspace.js';
@@ -61,18 +62,26 @@ function dumpRegistry(): RegistryCommand[] {
   // sanitizedProcessEnv strips every BRAINCLAW_* / agent-detection key, which
   // keeps the dump deterministic (e.g. BRAINCLAW_ENABLE_CODEV gates command
   // registration in src/cli.ts and must not leak in from an agent shell).
-  const result = spawnSync(process.execPath, [CLI_PATH], {
-    cwd: REPO_ROOT,
-    env: { ...sanitizedProcessEnv(), BRAINCLAW_DUMP_REGISTRY: '1' },
-    encoding: 'utf-8',
-    timeout: 30_000,
-  });
-  assert.equal(
-    result.status,
-    0,
-    `BRAINCLAW_DUMP_REGISTRY=1 run failed (status ${result.status}).\nstderr:\n${result.stderr}`,
-  );
-  return JSON.parse(result.stdout) as RegistryCommand[];
+  // The dump goes to a FILE, not stdout: module side effects can interleave
+  // stdout writes (observed on Linux CI — JSON corrupted mid-stream).
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-registry-'));
+  const dumpPath = path.join(tmpDir, 'registry.json');
+  try {
+    const result = spawnSync(process.execPath, [CLI_PATH], {
+      cwd: REPO_ROOT,
+      env: { ...sanitizedProcessEnv(), BRAINCLAW_DUMP_REGISTRY: dumpPath },
+      encoding: 'utf-8',
+      timeout: 30_000,
+    });
+    assert.equal(
+      result.status,
+      0,
+      `BRAINCLAW_DUMP_REGISTRY run failed (status ${result.status}).\nstderr:\n${result.stderr}`,
+    );
+    return JSON.parse(fs.readFileSync(dumpPath, 'utf-8')) as RegistryCommand[];
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /** Human-readable drift report: added/removed command paths + changed entries. */

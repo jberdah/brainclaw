@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
@@ -2499,14 +2500,18 @@ program
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CAMPAIGN SCAFFOLDING (pln#622 PR0c) — TEMPORARY, removed at end of campaign.
-// When BRAINCLAW_DUMP_REGISTRY=1 is set, print a normalized JSON snapshot of
-// the fully-built Commander registry on stdout and exit BEFORE parsing. This
+// When BRAINCLAW_DUMP_REGISTRY is set, emit a normalized JSON snapshot of
+// the fully-built Commander registry and exit BEFORE parsing: value '1'
+// prints to stdout (manual debugging); any other value is a FILE PATH the
+// JSON is written to — module side effects can interleave writes on stdout
+// (observed on Linux CI: corrupted JSON mid-stream), a file write is not
+// subject to that race. This
 // adds zero visible CLI surface: no new command, option, or help text — it is
 // reachable only through an env var that regular users never set. It exists
 // solely so tests/unit/cli-registry-snapshot.test.ts can freeze the command
 // surface while cli.ts is decomposed (PR1→PR5); the branch goes away in PR6.
 // ─────────────────────────────────────────────────────────────────────────────
-if (process.env.BRAINCLAW_DUMP_REGISTRY === '1') {
+if (process.env.BRAINCLAW_DUMP_REGISTRY) {
   interface RegistryCommand {
     aliases: string[];
     arguments: { name: string; required: boolean; variadic: boolean }[];
@@ -2555,7 +2560,12 @@ if (process.env.BRAINCLAW_DUMP_REGISTRY === '1') {
   };
   walk(program, []);
   commands.sort((a, b) => byCodepoint(a.path, b.path));
-  console.log(JSON.stringify(commands, null, 2));
+  const dumpTarget = process.env.BRAINCLAW_DUMP_REGISTRY!;
+  if (dumpTarget === '1') {
+    console.log(JSON.stringify(commands, null, 2));
+  } else {
+    fs.writeFileSync(dumpTarget, JSON.stringify(commands, null, 2), 'utf-8');
+  }
   process.exit(0);
 }
 
