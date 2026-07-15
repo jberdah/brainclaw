@@ -6,13 +6,31 @@ import assert from 'node:assert/strict';
 import { CoordinateRequestSchema } from '../../src/core/facade-schema.js';
 import { loadConfig as loadProjectConfig, saveConfig as saveProjectConfig } from '../../src/core/config.js';
 import { getSpawnableAgents } from '../../src/core/agent-capability.js';
-import { executeMcpToolCall } from '../../src/commands/mcp.js';
+import { ALL_TOOLS, executeMcpToolCall } from '../../src/commands/mcp.js';
 import { findLatestAgentRunForAssignment } from '../../src/core/agentruns.js';
 import { loadAssignment } from '../../src/core/assignments.js';
 import { listClaims } from '../../src/core/claims.js';
 import { readInbox } from '../../src/core/messaging.js';
 import type { FacadeResponse } from '../../src/core/facade-schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
+
+describe('model selection — CLI/MCP parity (pln#520/#606)', () => {
+  interface ToolDescriptor { name: string; inputSchema: { properties?: Record<string, { type?: string }> } }
+  const findTool = (name: string) =>
+    (ALL_TOOLS as readonly ToolDescriptor[]).find((t) => t.name === name);
+
+  it('bclaw_dispatch inputSchema exposes a string `model` (mirrors CLI `dispatch run --model`)', () => {
+    const tool = findTool('bclaw_dispatch');
+    assert.ok(tool, 'bclaw_dispatch must be registered');
+    assert.equal(tool.inputSchema.properties?.model?.type, 'string');
+  });
+
+  it('bclaw_coordinate inputSchema exposes a string `model` (agent-facing spawn facade)', () => {
+    const tool = findTool('bclaw_coordinate');
+    assert.ok(tool, 'bclaw_coordinate must be registered');
+    assert.equal(tool.inputSchema.properties?.model?.type, 'string');
+  });
+});
 
 describe('bclaw_coordinate — schema', () => {
   it('parses valid assign params', () => {
@@ -100,6 +118,32 @@ describe('bclaw_coordinate — schema', () => {
     });
     assert.ok(result.success);
     assert.deepEqual(result.data.constraints, { deadline: '2026-04-10', reviewRequired: true });
+  });
+
+  it('parses a model override for CLI/MCP parity (pln#520/#606)', () => {
+    const result = CoordinateRequestSchema.safeParse({
+      intent: 'assign',
+      task: 'Implement feature X',
+      targetAgents: ['codex'],
+      model: 'gpt-5-codex',
+    });
+    assert.ok(result.success);
+    assert.equal(result.data.model, 'gpt-5-codex');
+  });
+
+  it('rejects an empty model string', () => {
+    const result = CoordinateRequestSchema.safeParse({
+      intent: 'assign',
+      task: 'do something',
+      model: '',
+    });
+    assert.ok(!result.success);
+  });
+
+  it('leaves model undefined when omitted (falls back to the agent profile default)', () => {
+    const result = CoordinateRequestSchema.safeParse({ intent: 'assign', task: 'no model' });
+    assert.ok(result.success);
+    assert.equal(result.data.model, undefined);
   });
 
   it('coerces allow_dirty string "true"/"false" to boolean and preserves real booleans (trp#371)', () => {
@@ -361,6 +405,42 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(typeof plan.message_id === 'string', 'Expected message_id');
 
       assert.ok(Array.isArray(result.commands), 'Expected commands array');
+    });
+
+    it('injects the requested model into the spawn command (CLI/MCP parity, pln#520/#606)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'assign',
+        task: 'Refactor with an explicit model',
+        scope: 'src/core/model-target.ts',
+        targetAgents: ['codex'],
+        model: 'gpt-5-codex',
+        agent: 'claude-code',
+        autoExecute: false,
+      });
+
+      assert.equal(response.status, 'ok');
+      const commands = response.result.commands as Array<{ agent: string; command: string }>;
+      const codexCmd = commands.find((c) => c.agent === 'codex');
+      assert.ok(codexCmd, 'expected a command hint for codex');
+      // codex declares model_flag → `codex exec --model gpt-5-codex …`
+      assert.match(codexCmd.command, /--model/);
+      assert.match(codexCmd.command, /gpt-5-codex/);
+    });
+
+    it('omits --model from the spawn command when no model is requested (no profile default)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'assign',
+        task: 'Refactor with the template default model',
+        scope: 'src/core/model-default.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: false,
+      });
+
+      const commands = response.result.commands as Array<{ agent: string; command: string }>;
+      const codexCmd = commands.find((c) => c.agent === 'codex');
+      assert.ok(codexCmd, 'expected a command hint for codex');
+      assert.doesNotMatch(codexCmd.command, /--model/);
     });
 
     it('warns on duplicate assignment for same scope', async () => {
