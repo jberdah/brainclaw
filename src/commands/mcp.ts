@@ -1183,11 +1183,13 @@ const MCP_WRITE_TOOLS = [
         open_loop: { type: 'boolean', description: 'For intent=review only: also open a review Loop on top of the candidate (author + reviewer slots, advance to `findings`, dispatch turns). Default false — existing review callers are unaffected. See docs/concepts/loop-engine.md §Automation.' },
         review_mode: { type: 'string', enum: ['asymmetric', 'symmetric'], description: 'Optional review Loop mode when open_loop=true. `asymmetric` (default) keeps the classical author→reviewer handoff; `symmetric` lets each reviewer turn also apply fixes directly, halving round-trips for spec/doc reviews. Ignored when open_loop is false.' },
         preflight: { type: 'boolean', description: 'pln#533: when open_loop=true, run a trivial validation spawn per reviewer agent BEFORE opening the loop so an environment death (config rejected, auth fail, model mismatch) surfaces instantly with a clear reason instead of a generic loop timeout. Reviewers that fail pre-flight are dropped (with a targeted warning); if all fail, loop creation is skipped. Default true; set false to skip (e.g. you already ran `brainclaw doctor --spawn-check`). Ignored when open_loop is false or BRAINCLAW_NO_SPAWN is set.' },
+        client_request_id: { type: 'string', description: 'Caller-minted ULID/UUIDv7 for idempotent retries. Currently observed on intent="review" + open_loop=true: a retry with the same client_request_id returns the cached {candidate_id, loop_id} response instead of creating a duplicate candidate + loop. Safe to pass on other intents — silently ignored.' },
         agent: { type: 'string', description: 'Caller agent name.' },
         agentId: { type: 'string', description: 'Caller registered agent id.' },
         project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
         allow_dirty: { type: 'boolean', description: 'Override the scope-aware dirty-working-tree guard (trp#371 Tier 2). The guard runs only for worktree-spawning intents (assign/review/reroute) and blocks only when uncommitted files overlap — or cannot be proven disjoint from — the dispatch scope (the worker spawns from HEAD and will not see them). `.brainclaw/` and `.git/` are always excluded. Set true to proceed anyway (the block is downgraded to a warning that lists the overlapping files). Boolean; the string "true"/"false" are also coerced.' },
         ref: { type: 'string', description: 'Optional git ref (commit/branch/tag) for assign/review/reroute: the dispatched worker builds its worktree from this ref instead of HEAD. When set, uncommitted working-tree changes are intentionally out of scope and the dirty guard allows the dispatch. Ignored by consult/ideate/summarize (no worktree).' },
+        preset: { type: 'string', description: 'pln#511: loop preset selector — only valid with intent="ideate". When set, the handler bypasses the kind-default ideation phases and opens the loop with the named preset\'s phases / stop_condition / protocol. v1 ships a single preset: "bootstrap" (see src/core/loops/presets/). The name is validated against the preset registry: unknown names are rejected with `unknown_preset`; passing preset with any intent other than "ideate" is rejected with `preset_kind_mismatch` (presets are kind-specific).' },
         model: { type: 'string', description: 'Model to run on the spawned worker, decoupled from agent identity (e.g. "sonnet", "gpt-5-codex", "gpt-5.4"). Injected as `<model_flag> <model>` into the invoke command for agents that declare one (claude-code/codex/github-copilot); no-op for template-pinned pseudo-identities (e.g. claude-sonnet) or agents without a model_flag. Highest-priority link in the model resolution chain (override > lane > identity > default). Applies to intents that spawn a worker (assign/consult/review/reroute/ideate); ignored by summarize.' },
       },
       required: ['intent', 'task'],
@@ -1201,7 +1203,11 @@ const MCP_WRITE_TOOLS = [
     // tests/unit/mcp-zod-parity.test.ts hard-codes its (tool, zod-schema)
     // pairs explicitly; it does NOT enumerate by this annotation. If that
     // test ever moves to annotation-driven enrollment, validate the
-    // annotation against a closed enum then.
+    // annotation against a closed enum then. Sister guard: the hand-written
+    // facade schemas (bclaw_work, bclaw_coordinate) are NOT zod-derived —
+    // tests/unit/mcp-facade-structural-parity.test.ts asserts bidirectional
+    // structural parity (keys + enums) between them and their zod request
+    // schemas in src/core/facade-schema.ts (pln#622 PR0b).
     annotations: { tier: 'facade', category: 'loops', headlessApproval: 'auto', experimental: true, schemaSource: 'zod-derived' },
     inputSchema: {
       type: 'object',
