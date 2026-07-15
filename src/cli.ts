@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
@@ -2496,6 +2497,77 @@ program
     const globalOpts = program.opts();
     runRunProfile(profileName, { ...options, cwd: globalOpts.cwd });
   });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAMPAIGN SCAFFOLDING (pln#622 PR0c) — TEMPORARY, removed at end of campaign.
+// When BRAINCLAW_DUMP_REGISTRY is set, emit a normalized JSON snapshot of
+// the fully-built Commander registry and exit BEFORE parsing: value '1'
+// prints to stdout (manual debugging); any other value is a FILE PATH the
+// JSON is written to — module side effects can interleave writes on stdout
+// (observed on Linux CI: corrupted JSON mid-stream), a file write is not
+// subject to that race. This
+// adds zero visible CLI surface: no new command, option, or help text — it is
+// reachable only through an env var that regular users never set. It exists
+// solely so tests/unit/cli-registry-snapshot.test.ts can freeze the command
+// surface while cli.ts is decomposed (PR1→PR5); the branch goes away in PR6.
+// ─────────────────────────────────────────────────────────────────────────────
+if (process.env.BRAINCLAW_DUMP_REGISTRY) {
+  interface RegistryCommand {
+    aliases: string[];
+    arguments: { name: string; required: boolean; variadic: boolean }[];
+    options: {
+      defaultValue?: unknown;
+      flags: string;
+      long: string | null;
+      mandatory: boolean;
+      negate: boolean;
+      short: string | null;
+      valueOptional: boolean;
+      valueRequired: boolean;
+      variadic: boolean;
+    }[];
+    path: string;
+  }
+  // Codepoint comparison (NOT localeCompare) so the committed snapshot is
+  // byte-identical across machines/locales.
+  const byCodepoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const commands: RegistryCommand[] = [];
+  const walk = (cmd: Command, prefix: string[]): void => {
+    const pathTokens = [...prefix, cmd.name()];
+    commands.push({
+      aliases: [...cmd.aliases()].sort(byCodepoint),
+      arguments: cmd.registeredArguments.map((arg) => ({
+        name: arg.name(),
+        required: arg.required,
+        variadic: arg.variadic,
+      })),
+      options: cmd.options
+        .map((opt) => ({
+          ...(opt.defaultValue !== undefined ? { defaultValue: opt.defaultValue as unknown } : {}),
+          flags: opt.flags,
+          long: opt.long ?? null,
+          mandatory: opt.mandatory,
+          negate: opt.negate,
+          short: opt.short ?? null,
+          valueOptional: opt.optional,
+          valueRequired: opt.required,
+          variadic: opt.variadic,
+        }))
+        .sort((a, b) => byCodepoint(a.flags, b.flags)),
+      path: pathTokens.join(' '),
+    });
+    for (const sub of cmd.commands) walk(sub, pathTokens);
+  };
+  walk(program, []);
+  commands.sort((a, b) => byCodepoint(a.path, b.path));
+  const dumpTarget = process.env.BRAINCLAW_DUMP_REGISTRY!;
+  if (dumpTarget === '1') {
+    console.log(JSON.stringify(commands, null, 2));
+  } else {
+    fs.writeFileSync(dumpTarget, JSON.stringify(commands, null, 2), 'utf-8');
+  }
+  process.exit(0);
+}
 
 {
   // Friendly trailing-global-option error must run before Commander parses:

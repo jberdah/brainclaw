@@ -10,6 +10,26 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Fixed — `bclaw_coordinate` published-schema parity (pln#622 PR0b)**
+- The published inputSchema of `bclaw_coordinate` now declares `preset`
+  (loop preset selector, valid only with `intent='ideate'`; v1 ships the
+  single preset `bootstrap`; unknown names are rejected with
+  `unknown_preset`, other intents with `preset_kind_mismatch`) and
+  `client_request_id` (caller-minted ULID/UUIDv7 for idempotent retries,
+  observed on `intent='review'` + `open_loop=true`, safe elsewhere). Both
+  were already accepted by `CoordinateRequestSchema` and used by the
+  handler — and `next_actions` literally recommended
+  `bclaw_coordinate(intent='ideate', preset='bootstrap')` — but the catalog
+  never declared them, so strict MCP clients could not follow the product's
+  own recommendation.
+- New guard: `tests/unit/mcp-facade-structural-parity.test.ts` asserts
+  bidirectional structural parity (keys + shared enum values) between the
+  hand-written facade schemas (`bclaw_work`, `bclaw_coordinate`) and their
+  zod sources, with an explicit allowlist for adapter-envelope fields
+  (`agent`, `agentId`).
+- No tool was added, removed, or renamed; no required argument changed.
+- Surface fingerprint bumped in the `(current)` section below.
+
 **Changed — MCP model selection parity (pln#520/#606)**
 - `bclaw_dispatch` and `bclaw_coordinate` gain an optional `model` string that
   selects the spawned worker's model (e.g. `sonnet`, `gpt-5-codex`), decoupled
@@ -132,8 +152,15 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:b53eb56d4391b5a6`
-  (updated 2026-07-15 for pln#520/#606: optional `model` string added to
+- MCP public surface fingerprint: `sha256:45c02576aff36244`
+  (updated 2026-07-15 for pln#622 PR0b: `preset` and `client_request_id` added
+  to the published `bclaw_coordinate` input schema. Both were already accepted
+  by `CoordinateRequestSchema` and used by the handler — and `next_actions`
+  recommended `bclaw_coordinate(intent='ideate', preset='bootstrap')` — but
+  the catalog never declared them. Additive: no tool added, removed, or
+  renamed; no required argument changed.
+  Previous: `sha256:b53eb56d4391b5a6`
+  updated 2026-07-15 for pln#520/#606: optional `model` string added to
   `bclaw_dispatch` and `bclaw_coordinate` input schemas — selects the spawned
   worker's model, decoupled from agent identity (CLI/MCP parity with
   `dispatch run --model`). Additive: no tool added, removed, or renamed; no
