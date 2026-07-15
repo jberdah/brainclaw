@@ -731,6 +731,31 @@ describe('sanitizeBranchComponent — cap never produces an invalid ref', () => 
   it('falls back to "scope" when the input sanitizes to empty', () => {
     assert.equal(sanitizeBranchComponent('...///...'), 'scope');
   });
+
+  // trp#950 (dogfood 2026-07-15, β/γ): two distinct scopes sharing a >48-char
+  // prefix used to collapse to the SAME branch → same worktree → the 2nd
+  // claim/assign was refused. Repro prefix: applications/marketing_descriptions/
+  // backend/app/… (exactly 48 chars before the distinguishing filename).
+  it('does NOT collide when two long scopes share a >48-char prefix', () => {
+    const scopeA = 'applications/marketing_descriptions/backend/app/serviceA.ts';
+    const scopeB = 'applications/marketing_descriptions/backend/app/serviceB.ts';
+    const slugA = sanitizeBranchComponent(scopeA);
+    const slugB = sanitizeBranchComponent(scopeB);
+    assert.notEqual(slugA, slugB, `distinct scopes must map to distinct branches; both gave "${slugA}"`);
+    assert.ok(slugA.length <= 48 && slugB.length <= 48, 'both slugs must respect the cap');
+    assert.ok(gitAcceptsBranch(slugA) && gitAcceptsBranch(slugB), 'git must accept both branches');
+  });
+
+  it('is deterministic — the same scope always yields the same slug (resume/re-assign)', () => {
+    const scope = 'applications/marketing_descriptions/backend/app/serviceA.ts';
+    assert.equal(sanitizeBranchComponent(scope), sanitizeBranchComponent(scope));
+  });
+
+  it('leaves short scopes (≤ cap) untouched — no hash suffix, backward compatible', () => {
+    // No truncation → no digest suffix; output is the plain sanitized slug.
+    assert.equal(sanitizeBranchComponent('src/core/foo.ts'), 'src-core-foo.ts');
+    assert.doesNotMatch(sanitizeBranchComponent('src/core/foo.ts'), /-[0-9a-f]{8}$/);
+  });
 });
 
 // Dogfood 1.10.1 — `git worktree add` checks out the whole tree; a flat 15s cap

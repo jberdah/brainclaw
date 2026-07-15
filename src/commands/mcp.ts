@@ -37,7 +37,7 @@ import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim, createCoordinatorClaim, adoptClaimSession, attachAssignmentMessageToClaim, linkClaimToAssignment, releaseClaimWithCascade } from '../core/claims.js';
 import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
-import { createWorktree as coreCreateWorktree } from '../core/worktree.js';
+import { createWorktree as coreCreateWorktree, sanitizeBranchComponent } from '../core/worktree.js';
 import { createRuntimeNote } from './runtime-note.js';
 import { createCandidateFromInput } from './reflect.js';
 import { acceptCandidate } from './accept.js';
@@ -4020,7 +4020,9 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       // worktree:false) for an advisory-only lock with no worktree.
       const advisoryClaim = args.advisory === true || args.worktree === false;
       if (!advisoryClaim) {
-        const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+        // Shared slug logic (trp#950): collision-resistant when the scope
+        // exceeds the branch-component cap, and identical to createCoordinatorClaim.
+        const branchSlug = sanitizeBranchComponent(claimScope);
         const worktreeBranch = (args.worktreeBranch as string | undefined)?.trim() || `feat/${branchSlug}`;
         try {
           worktreePath = coreCreateWorktree(claimCwd, worktreeBranch, {
@@ -4087,7 +4089,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           const { execSync } = await import('node:child_process');
           const branch = execSync('git branch --show-current', { cwd: claimCwd, encoding: 'utf-8' }).trim();
           if (branch === 'master' || branch === 'main') {
-            const branchSlug = claimScope.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+            const branchSlug = sanitizeBranchComponent(claimScope);
             branchWarn = `\n⚠️ You are on ${branch}. Create a feature branch before editing: git checkout -b feat/${branchSlug}`;
           }
         } catch { /* git not available, skip warning */ }
