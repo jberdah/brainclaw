@@ -56,7 +56,7 @@ export const BUILTIN_DETECTORS: TokenDetector[] = [
 export interface DetectorMatch {
   detectorId: string;
   label: string;
-  /** The substring that matched, truncated for safe display. */
+  /** The substring that matched, irreversibly masked for safe display. */
   excerpt: string;
 }
 
@@ -73,7 +73,7 @@ export function runStructuralDetectors(text: string, disabled?: Record<string, b
       out.push({
         detectorId: d.id,
         label: d.label,
-        excerpt: truncate(m[0]),
+        excerpt: maskSecret(m[0]),
       });
     }
   }
@@ -142,12 +142,39 @@ export function runEntropyDetector(
     const context = text.slice(start, end);
     if (!SECRET_KEYWORD_CONTEXT.test(context)) continue;
 
-    out.push({ excerpt: truncate(token), entropy: Math.round(entropy * 100) / 100 });
+    out.push({ excerpt: maskSecret(token), entropy: Math.round(entropy * 100) / 100 });
   }
   return out;
 }
 
-function truncate(s: string, maxLen = 48): string {
-  if (s.length <= maxLen) return s;
-  return s.slice(0, Math.max(8, maxLen / 2)) + '…' + s.slice(-Math.max(4, maxLen / 4));
+/**
+ * Irreversibly mask a matched secret for display.
+ *
+ * The previous behavior truncated the match to ~48 chars, which returned
+ * short secrets (GitHub PATs are 40 chars, AWS key IDs are 20) verbatim in
+ * warning messages and logs. Masking keeps just enough to identify the
+ * token family without ever exposing recoverable material. Splitting is
+ * done per Unicode code point, so surrogate pairs are never cut in half.
+ *
+ *   - matches of 2 code points or fewer: `***` alone (exposing even the
+ *     first code point would reveal most or all of the value);
+ *   - matches of 3–8 code points: first code point + `***`;
+ *   - longer matches: at most ⌊length/3⌋ code points are exposed, capped
+ *     at 6, split prefix-heavy (up to 4 leading — enough to identify
+ *     `ghp_`, `AKIA`, `sk_l` — the remainder trailing) around a fixed
+ *     `…***…` marker.
+ *
+ * The exposure budget grows smoothly with the match length (no cliff at
+ * the short/long boundary) and never reveals more than a third of a
+ * match longer than 8 code points.
+ */
+export function maskSecret(s: string): string {
+  const cp = Array.from(s);
+  if (cp.length === 0) return '';
+  if (cp.length <= 2) return '***';
+  if (cp.length <= 8) return cp[0] + '***';
+  const exposed = Math.min(6, Math.floor(cp.length / 3));
+  const lead = Math.min(4, exposed - 1);
+  const trail = exposed - lead;
+  return cp.slice(0, lead).join('') + '…***…' + cp.slice(cp.length - trail).join('');
 }

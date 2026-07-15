@@ -1,5 +1,5 @@
 import type { Config, State } from './schema.js';
-import { runEntropyDetector, runStructuralDetectors } from './security-detectors.js';
+import { maskSecret, runEntropyDetector, runStructuralDetectors } from './security-detectors.js';
 
 export interface SecurityWarning {
   level: 'warn' | 'block';
@@ -24,7 +24,7 @@ export function scanText(text: string, config: Config): SecurityWarning[] {
   const isStrict = config.security?.strict_redaction ?? false;
   const level: 'warn' | 'block' = isStrict ? 'block' : 'warn';
 
-  for (const pattern of config.redaction.patterns) {
+  for (const [i, pattern] of config.redaction.patterns.entries()) {
     try {
       // Strip Python-style inline flags (?i) etc. since we always use 'i' flag
       const cleanPattern = pattern.replace(/^\(\?[gimsuy]+\)/g, '');
@@ -32,7 +32,9 @@ export function scanText(text: string, config: Config): SecurityWarning[] {
       if (re.test(text)) {
         warnings.push({
           level,
-          message: `Possible sensitive content matching pattern '${pattern}' found in text`,
+          // The configured pattern may itself be a literal secret value, so
+          // it is referenced by index and masked, never echoed verbatim.
+          message: `Possible sensitive content matching redaction pattern #${i} ('${maskSecret(pattern)}') found in text`,
         });
       }
     } catch {

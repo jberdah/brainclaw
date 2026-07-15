@@ -35,6 +35,32 @@ describe('core/security', () => {
     assert.equal(warnings[0].level, 'block');
   });
 
+  it('masks user-configured redaction patterns in warning messages', () => {
+    // Operators sometimes put the literal secret value itself in
+    // redaction.patterns — the warning must never echo it back verbatim.
+    const config = defaultConfig('brainclaw');
+    const literal = 'hunter2secretvalue42';
+    config.redaction.patterns = [literal];
+
+    const warnings = scanText(`the value is ${literal}`, config);
+    const patternWarnings = warnings.filter((w) => w.message.includes('redaction pattern #0'));
+    assert.equal(patternWarnings.length, 1, 'the configured pattern should fire and be referenced by index');
+    for (const w of warnings) {
+      assert.ok(!w.message.includes(literal), `warning leaks the configured pattern: ${w.message}`);
+    }
+  });
+
+  it('never includes the raw secret in warning messages', () => {
+    const config = defaultConfig('brainclaw');
+    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const warnings = scanText(`deploy with ${secret}`, config);
+
+    assert.ok(warnings.length >= 1, 'the token detector should fire');
+    for (const w of warnings) {
+      assert.ok(!w.message.includes(secret), `warning leaks the secret: ${w.message}`);
+    }
+  });
+
   it('warns when a sensitive path is mentioned', () => {
     const config = defaultConfig('brainclaw');
     const warnings = scanText('See .env before starting the server', config);
