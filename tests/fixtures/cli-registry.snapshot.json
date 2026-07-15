@@ -1,0 +1,7518 @@
+[
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--cwd <path>",
+        "long": "--cwd",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--debug",
+        "long": "--debug",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--project <name>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--verbose",
+        "long": "--verbose",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "-V, --version",
+        "long": "--version",
+        "mandatory": false,
+        "negate": false,
+        "short": "-V",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--by <reviewer>",
+        "long": "--by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw accept"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "file",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--session <id>",
+        "long": "--session",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "openclaw",
+        "flags": "--source <source>",
+        "long": "--source",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw adapter-openclaw-import"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "planId",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--actual-effort <effort>",
+        "long": "--actual-effort",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--assign <assignee>",
+        "long": "--assign",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--estimate <minutes>",
+        "long": "--estimate",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw add-step"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all-agents",
+        "long": "--all-agents",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--all-hosts",
+        "long": "--all-hosts",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--capabilities",
+        "long": "--capabilities",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--for <target>",
+        "long": "--for",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--include-session-meta",
+        "long": "--include-session-meta",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--suggest <query>",
+        "long": "--suggest",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--with-reputation",
+        "long": "--with-reputation",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw agent-board"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--refresh",
+        "long": "--refresh",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw agent-inventory"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--claim <id>",
+        "long": "--claim",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--reason <text>",
+        "long": "--reason",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--sequence <id>",
+        "long": "--sequence",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw assignment"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--action <action>",
+        "long": "--action",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--actor <agent>",
+        "long": "--actor",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--governance",
+        "long": "--governance",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--limit <n>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--scope <path>",
+        "long": "--scope",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--since <date>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw audit"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--answers-file <path>",
+        "long": "--answers-file",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--apply",
+        "long": "--apply",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--audience <audience>",
+        "long": "--audience",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--for <target>",
+        "long": "--for",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--interview",
+        "long": "--interview",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--refresh",
+        "long": "--refresh",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--uninstall",
+        "long": "--uninstall",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw bootstrap"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--cancel",
+        "long": "--cancel",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--status",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw bootstrap-loop"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <name>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tag>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw capability"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--files <files...>",
+        "long": "--files",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--staged",
+        "long": "--staged",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw check-constraints"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw check-events"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--action <action>",
+        "long": "--action",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--agent-id <id>",
+        "long": "--agent-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--scope <path>",
+        "long": "--scope",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw check-policy"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "defaultValue": "npm",
+        "flags": "--ecosystem <type>",
+        "long": "--ecosystem",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--lockfile <file>",
+        "long": "--lockfile",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--mode <mode>",
+        "long": "--mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--packages <names>",
+        "long": "--packages",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--requirements <file>",
+        "long": "--requirements",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw check-security"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--coordinator-override",
+        "long": "--coordinator-override",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--plan-status <status>",
+        "long": "--plan-status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--scope <scope>",
+        "long": "--scope",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--ttl <duration>",
+        "long": "--ttl",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw claim"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--max-age <days>",
+        "long": "--max-age",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw cleanup-candidates"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--cascade",
+        "long": "--cascade",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--changed",
+        "long": "--changed",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--limit <n>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw code-map"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--assess",
+        "long": "--assess",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--max-items <n>",
+        "long": "--max-items",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--min-age <days>",
+        "long": "--min-age",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--no-dedup-handoffs",
+        "long": "--no-dedup-handoffs",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-purge-claims",
+        "long": "--no-purge-claims",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-purge-session-notes",
+        "long": "--no-purge-session-notes",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw compact"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "planId",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "stepId",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [],
+    "path": "brainclaw complete-step"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--category <category>",
+        "long": "--category",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw constraint"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all-hosts",
+        "long": "--all-hosts",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--compact-template",
+        "long": "--compact-template",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--digest",
+        "long": "--digest",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--explain",
+        "long": "--explain",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--for <target>",
+        "long": "--for",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--include-pending",
+        "long": "--include-pending",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--max-chars <count>",
+        "long": "--max-chars",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--max-items <count>",
+        "long": "--max-items",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--no-bootstrap",
+        "long": "--no-bootstrap",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--profile <profile>",
+        "long": "--profile",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--refresh-bootstrap",
+        "long": "--refresh-bootstrap",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--since-session <id>",
+        "long": "--since-session",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--template",
+        "long": "--template",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw context"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--hook",
+        "long": "--hook",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--session <id>",
+        "long": "--session",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--since <date>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw context-diff"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--outcome <outcome>",
+        "long": "--outcome",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw decision"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [],
+    "path": "brainclaw delete-plan"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "planId",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "stepId",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [],
+    "path": "brainclaw delete-step"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--since <timestamp>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw diff"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-save",
+        "long": "--no-save",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw discover"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw dispatch"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw dispatch analysis"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry",
+        "long": "--dry",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--handoff <id>",
+        "long": "--handoff",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--reviewer <name>",
+        "long": "--reviewer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--spawn",
+        "long": "--spawn",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw dispatch review"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--agents <names>",
+        "long": "--agents",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry",
+        "long": "--dry",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--lanes <names>",
+        "long": "--lanes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--max <n>",
+        "long": "--max",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--max-concurrency <n>",
+        "long": "--max-concurrency",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--model <name>",
+        "long": "--model",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--spawn",
+        "long": "--spawn",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw dispatch run"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "target",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--base <ref>",
+        "long": "--base",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--interval <seconds>",
+        "long": "--interval",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--timeout <minutes>",
+        "long": "--timeout",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw dispatch watch"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--after-migration",
+        "long": "--after-migration",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dispatch",
+        "long": "--dispatch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--fix",
+        "long": "--fix",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--fix-agent-ignore",
+        "long": "--fix-agent-ignore",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--fix-hooks",
+        "long": "--fix-hooks",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--hygiene",
+        "long": "--hygiene",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--migration-check",
+        "long": "--migration-check",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--repair",
+        "long": "--repair",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--spawn-check",
+        "long": "--spawn-check",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--spawn-check-timeout <ms>",
+        "long": "--spawn-check-timeout",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--verify-journal",
+        "long": "--verify-journal",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw doctor"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "name",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "defaultValue": [],
+        "flags": "--capability <value>",
+        "long": "--capability",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--context-profile <profile>",
+        "long": "--context-profile",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--generate-fingerprint",
+        "long": "--generate-fingerprint",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": "agent",
+        "flags": "--kind <kind>",
+        "long": "--kind",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--replace-capabilities",
+        "long": "--replace-capabilities",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--set-current",
+        "long": "--set-current",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw enable-agent"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent-tooling",
+        "long": "--agent-tooling",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw env"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--outlier-threshold <minutes>",
+        "long": "--outlier-threshold",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw estimation-report"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--query <q>",
+        "long": "--query",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw explore"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--detect",
+        "long": "--detect",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--format <format>",
+        "long": "--format",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--include-live",
+        "long": "--include-live",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--output <file>",
+        "long": "--output",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--shared",
+        "long": "--shared",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--write",
+        "long": "--write",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw export"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw federation"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw federation identity"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "20",
+        "flags": "--limit <n>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--since <date>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw federation pull"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "message",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--to-agent <agent>",
+        "long": "--to-agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--to-project <project>",
+        "long": "--to-project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "runtime_note",
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw federation push"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw federation status"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": "claim",
+        "flags": "--entity <type>",
+        "long": "--entity",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--limit <n>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw federation sync"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--capture-diff",
+        "long": "--capture-diff",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--files <files...>",
+        "long": "--files",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--from <from>",
+        "long": "--from",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--linked-plan <plans...>",
+        "long": "--linked-plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--post-condition <conditions...>",
+        "long": "--post-condition",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--pre-condition <conditions...>",
+        "long": "--pre-condition",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--test <tests...>",
+        "long": "--test",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--to <to>",
+        "long": "--to",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw handoff"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "assignment_id",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--base <ref>",
+        "long": "--base",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--integrate",
+        "long": "--integrate",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--orphaned",
+        "long": "--orphaned",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": [],
+        "flags": "--worktree <path>",
+        "long": "--worktree",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw harvest"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": [],
+        "flags": "--worktree <path>",
+        "long": "--worktree",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw harvest-candidates"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [],
+    "path": "brainclaw history"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--target <target>",
+        "long": "--target",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw hooks"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw inbox"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw inbox ack"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw inbox archive"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--thread <id>",
+        "long": "--thread",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw inbox list"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "to",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--ack",
+        "long": "--ack",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--ref <id>",
+        "long": "--ref",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--scope <path>",
+        "long": "--scope",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--thread <id>",
+        "long": "--thread",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw inbox send"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw inbox thread"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--compact",
+        "long": "--compact",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--cwd <path>",
+        "long": "--cwd",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-ai-scan",
+        "long": "--no-ai-scan",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-analyze-repo",
+        "long": "--no-analyze-repo",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--project-mode <mode>",
+        "long": "--project-mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project-strategy <strategy>",
+        "long": "--project-strategy",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--scan",
+        "long": "--scan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--topology <mode>",
+        "long": "--topology",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw init"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw install-hooks"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "global",
+        "flags": "--layer <layer>",
+        "long": "--layer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--supersedes <id>",
+        "long": "--supersedes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw instruction"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--channels <list>",
+        "long": "--channels",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--name <slug>",
+        "long": "--name",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--role <role>",
+        "long": "--role",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw link"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--with-reputation",
+        "long": "--with-reputation",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw list-agents"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw list-claims"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--active",
+        "long": "--active",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--for <target>",
+        "long": "--for",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--layer <layer>",
+        "long": "--layer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--resolved",
+        "long": "--resolved",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw list-instructions"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--assignee <assignee>",
+        "long": "--assignee",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--recursive",
+        "long": "--recursive",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw list-plans"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw loop"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--body <json-or-text>",
+        "long": "--body",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--phase <phase>",
+        "long": "--phase",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--produced-by <agent>",
+        "long": "--produced-by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--ref <ref>",
+        "long": "--ref",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop add-artifact"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--reason <text>",
+        "long": "--reason",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--to-phase <name>",
+        "long": "--to-phase",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop advance"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--artifact <json>",
+        "long": "--artifact",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--failure-reason <text>",
+        "long": "--failure-reason",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--outcome <outcome>",
+        "long": "--outcome",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--slot <slot_id>",
+        "long": "--slot",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop complete-turn"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "loop_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--assignment-id <id>",
+        "long": "--assignment-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--input <text>",
+        "long": "--input",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--role <role>",
+        "long": "--role",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--slot <slot_id>",
+        "long": "--slot",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw loop turn"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--refresh",
+        "long": "--refresh",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw machine-profile"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw mcp"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--category <category>",
+        "long": "--category",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--from <from>",
+        "long": "--from",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--outcome <outcome>",
+        "long": "--outcome",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--severity <severity>",
+        "long": "--severity",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--text <text>",
+        "long": "--text",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--to <to>",
+        "long": "--to",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--ttl <duration>",
+        "long": "--ttl",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "shared",
+        "flags": "--visibility <visibility>",
+        "long": "--visibility",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw memory"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "defaultValue": "20",
+        "flags": "-n, --limit <count>",
+        "long": "--limit",
+        "mandatory": false,
+        "negate": false,
+        "short": "-n",
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw memory-log"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "ref",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--actor <name>",
+        "long": "--actor",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw memory-rollback"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--since <timestamp>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw metrics"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--enable-journal",
+        "long": "--enable-journal",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--promote-machine-items",
+        "long": "--promote-machine-items",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw migrate"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "entity",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--from <project>",
+        "long": "--from",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--to <project>",
+        "long": "--to",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw move"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw note"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-reflect",
+        "long": "--auto-reflect",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--ttl <duration>",
+        "long": "--ttl",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "shared",
+        "flags": "--visibility <visibility>",
+        "long": "--visibility",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw note create"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw patch-configs"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--actual-effort <effort>",
+        "long": "--actual-effort",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--assignee <assignee>",
+        "long": "--assignee",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--depends-on <ids...>",
+        "long": "--depends-on",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--estimate <minutes>",
+        "long": "--estimate",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "defaultValue": "medium",
+        "flags": "--priority <priority>",
+        "long": "--priority",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--recursive",
+        "long": "--recursive",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw plan"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--register",
+        "long": "--register",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--scan <roots>",
+        "long": "--scan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw projects"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--archive",
+        "long": "--archive",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--expired",
+        "long": "--expired",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--semantic",
+        "long": "--semantic",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw prune"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--days <days>",
+        "long": "--days",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw prune-candidates"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--remote <remote>",
+        "long": "--remote",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw pull"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--message <message>",
+        "long": "--message",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--remote <remote>",
+        "long": "--remote",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw push"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--loop <loop_id>",
+        "long": "--loop",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--mine",
+        "long": "--mine",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": "awaiting",
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw questions"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw rebuild"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--apply-bootstrap",
+        "long": "--apply-bootstrap",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--skip-agent-inventory",
+        "long": "--skip-agent-inventory",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--skip-machine-profile",
+        "long": "--skip-machine-profile",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw reconcile"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--batch <file>",
+        "long": "--batch",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--from <from>",
+        "long": "--from",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--session <id>",
+        "long": "--session",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--severity <severity>",
+        "long": "--severity",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--source <source>",
+        "long": "--source",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--to <to>",
+        "long": "--to",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw reflect"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "text",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--all-hosts",
+        "long": "--all-hosts",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--from <from>",
+        "long": "--from",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--severity <severity>",
+        "long": "--severity",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--source <source>",
+        "long": "--source",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--suggest",
+        "long": "--suggest",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--to <to>",
+        "long": "--to",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw reflect-runtime-note"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw refresh"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "name",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "defaultValue": [],
+        "flags": "--capability <value>",
+        "long": "--capability",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--curator",
+        "long": "--curator",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--generate-fingerprint",
+        "long": "--generate-fingerprint",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "defaultValue": "unknown",
+        "flags": "--kind <kind>",
+        "long": "--kind",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--remove",
+        "long": "--remove",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--replace-capabilities",
+        "long": "--replace-capabilities",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--set-current",
+        "long": "--set-current",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw register-agent"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--by <reviewer>",
+        "long": "--by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--reason <reason>",
+        "long": "--reason",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw reject"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--coordinator-override",
+        "long": "--coordinator-override",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--plan-status <status>",
+        "long": "--plan-status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw release-claim"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--from-git-diff",
+        "long": "--from-git-diff",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--ref1 <ref>",
+        "long": "--ref1",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--ref2 <ref>",
+        "long": "--ref2",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw release-claims"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--generate",
+        "long": "--generate",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--since <ref>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw release-notes"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--include-unsafe",
+        "long": "--include-unsafe",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw repair"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "qst_id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--answer <text>",
+        "long": "--answer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--choose <option_id>",
+        "long": "--choose",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--skip",
+        "long": "--skip",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw reply"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--assignee <assignee>",
+        "long": "--assignee",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto",
+        "long": "--auto",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-by <actor>",
+        "long": "--auto-by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--claim <curator>",
+        "long": "--claim",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--for-curator <curator>",
+        "long": "--for-curator",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--only-overdue",
+        "long": "--only-overdue",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--prioritized",
+        "long": "--prioritized",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--take <count>",
+        "long": "--take",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw review"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--audit-id <timestamp>",
+        "long": "--audit-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--item-id <id>",
+        "long": "--item-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw rollback"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "profile-name",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--dry",
+        "long": "--dry",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw run"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-reflect",
+        "long": "--auto-reflect",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--ttl <duration>",
+        "long": "--ttl",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "shared",
+        "flags": "--visibility <visibility>",
+        "long": "--visibility",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw runtime-note"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all-hosts",
+        "long": "--all-hosts",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--plan <id>",
+        "long": "--plan",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--visibility <visibility>",
+        "long": "--visibility",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw runtime-status"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "query",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--max-results <count>",
+        "long": "--max-results",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--pending",
+        "long": "--pending",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--section <section>",
+        "long": "--section",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--since <timestamp>",
+        "long": "--since",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw search"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--description <text>",
+        "long": "--description",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--items <json>",
+        "long": "--items",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--name <name>",
+        "long": "--name",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--owner <owner>",
+        "long": "--owner",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      }
+    ],
+    "path": "brainclaw sequence"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-reflect",
+        "long": "--auto-reflect",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-release",
+        "long": "--auto-release",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dispatch-review",
+        "long": "--dispatch-review",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--hook",
+        "long": "--hook",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-reflect",
+        "long": "--no-reflect",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--reflect-handoff",
+        "long": "--reflect-handoff",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--reviewer <name>",
+        "long": "--reviewer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--session <id>",
+        "long": "--session",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--summary <text>",
+        "long": "--summary",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw session-end"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--context <path>",
+        "long": "--context",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--hook",
+        "long": "--hook",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--include-context",
+        "long": "--include-context",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--maintenance-mode <mode>",
+        "long": "--maintenance-mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--model <id>",
+        "long": "--model",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw session-start"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "agent",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--level <level>",
+        "long": "--level",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--reset-breaker",
+        "long": "--reset-breaker",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw set-trust"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agents <agents>",
+        "long": "--agents",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--repos <mode>",
+        "long": "--repos",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--roots <paths>",
+        "long": "--roots",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw setup"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agents <agents>",
+        "long": "--agents",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw setup-machine"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "defaultValue": "advisory",
+        "flags": "--mode <mode>",
+        "long": "--mode",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw setup-security"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--related",
+        "long": "--related",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw show-candidate"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": false,
+        "variadic": false
+      },
+      {
+        "name": "id",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw stale"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--by <actor>",
+        "long": "--by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw star-candidate"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--markdown",
+        "long": "--markdown",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw status"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <agent>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--agent-id <agentId>",
+        "long": "--agent-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--instructions <text>",
+        "long": "--instructions",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--kind <kind>",
+        "long": "--kind",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--output <paths...>",
+        "long": "--output",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--result <text>",
+        "long": "--result",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--target <surface>",
+        "long": "--target",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw surface-task"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "project",
+        "required": false,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--clear",
+        "long": "--clear",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--global",
+        "long": "--global",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--list",
+        "long": "--list",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw switch"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--commit",
+        "long": "--commit",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--include-machine-runtime",
+        "long": "--include-machine-runtime",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--message <message>",
+        "long": "--message",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--remote",
+        "long": "--remote",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--scope <scope>",
+        "long": "--scope",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--summary-only",
+        "long": "--summary-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw sync"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "subcommand",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "args",
+        "required": false,
+        "variadic": true
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <name>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tag>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--type <type>",
+        "long": "--type",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw tool"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "text",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--author <author>",
+        "long": "--author",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--host <host>",
+        "long": "--host",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--path <paths...>",
+        "long": "--path",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "defaultValue": "medium",
+        "flags": "--severity <severity>",
+        "long": "--severity",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "active",
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--store <target>",
+        "long": "--store",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--tag <tags...>",
+        "long": "--tag",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": true
+      },
+      {
+        "flags": "--ttl <duration>",
+        "long": "--ttl",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": "shared",
+        "flags": "--visibility <visibility>",
+        "long": "--visibility",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw trap"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--machine",
+        "long": "--machine",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--project",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "-y, --yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": "-y",
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw uninstall"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "defaultValue": [],
+        "flags": "--blocking-issue <text>",
+        "long": "--blocking-issue",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--narrative <text>",
+        "long": "--narrative",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--review-summary <text>",
+        "long": "--review-summary",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--review-verdict <verdict>",
+        "long": "--review-verdict",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--reviewed-by <agent>",
+        "long": "--reviewed-by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--reviewer <agent>",
+        "long": "--reviewer",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "defaultValue": [],
+        "flags": "--suggestion <text>",
+        "long": "--suggestion",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--to <agent>",
+        "long": "--to",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw update-handoff"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--actual-effort <effort>",
+        "long": "--actual-effort",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--assignee <assignee>",
+        "long": "--assignee",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--priority <priority>",
+        "long": "--priority",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--project <project>",
+        "long": "--project",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw update-plan"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "planId",
+        "required": true,
+        "variadic": false
+      },
+      {
+        "name": "stepId",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--actual-effort <effort>",
+        "long": "--actual-effort",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--assign <assignee>",
+        "long": "--assign",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--estimate <minutes>",
+        "long": "--estimate",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--status <status>",
+        "long": "--status",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--text <text>",
+        "long": "--text",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw update-step"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--backup",
+        "long": "--backup",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--no-backup",
+        "long": "--no-backup",
+        "mandatory": false,
+        "negate": true,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--rollback",
+        "long": "--rollback",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--self-update",
+        "long": "--self-update",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--to <version>",
+        "long": "--to",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--yes",
+        "long": "--yes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw upgrade"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--days <n>",
+        "long": "--days",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--tool <name>",
+        "long": "--tool",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw usage"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "id",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--by <actor>",
+        "long": "--by",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--context <context>",
+        "long": "--context",
+        "mandatory": true,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw use-candidate"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent-release-notes <json>",
+        "long": "--agent-release-notes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-release-notes",
+        "long": "--auto-release-notes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--check",
+        "long": "--check",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--publish-local",
+        "long": "--publish-local",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--release-notes <text>",
+        "long": "--release-notes",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw version"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--auto-claim",
+        "long": "--auto-claim",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--interval <seconds>",
+        "long": "--interval",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw watch"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--all",
+        "long": "--all",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--gc",
+        "long": "--gc",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--local-only",
+        "long": "--local-only",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw who"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw whoami"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw worktree"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--base <ref>",
+        "long": "--base",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--json",
+        "long": "--json",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw worktree check"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw worktree clean"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "branch",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--agent <name>",
+        "long": "--agent",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      },
+      {
+        "flags": "--session-id <id>",
+        "long": "--session-id",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw worktree create"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw worktree list"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "branch",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--dry-run",
+        "long": "--dry-run",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      },
+      {
+        "flags": "-m, --message <message>",
+        "long": "--message",
+        "mandatory": false,
+        "negate": false,
+        "short": "-m",
+        "valueOptional": false,
+        "valueRequired": true,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw worktree merge"
+  },
+  {
+    "aliases": [],
+    "arguments": [],
+    "options": [],
+    "path": "brainclaw worktree prune"
+  },
+  {
+    "aliases": [],
+    "arguments": [
+      {
+        "name": "path",
+        "required": true,
+        "variadic": false
+      }
+    ],
+    "options": [
+      {
+        "flags": "--force",
+        "long": "--force",
+        "mandatory": false,
+        "negate": false,
+        "short": null,
+        "valueOptional": false,
+        "valueRequired": false,
+        "variadic": false
+      }
+    ],
+    "path": "brainclaw worktree remove"
+  }
+]
