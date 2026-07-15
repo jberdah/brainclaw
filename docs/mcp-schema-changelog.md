@@ -10,6 +10,16 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — MCP model selection parity (pln#520/#606)**
+- `bclaw_dispatch` and `bclaw_coordinate` gain an optional `model` string that
+  selects the spawned worker's model (e.g. `sonnet`, `gpt-5-codex`), decoupled
+  from agent identity — closing the CLI/MCP gap (the CLI `dispatch run --model`
+  already existed). Injected only for agents that declare a `model_flag`
+  (claude-code / codex / github-copilot); no-op otherwise, and consistent with
+  the dispatcher's resolveModel chain.
+- No tool was removed or renamed; no required argument changed.
+- Surface fingerprint bumped in the `(current)` section below.
+
 **Added — `bclaw_move` cross-project relocation (pln#595)**
 - New canonical-grammar verb `bclaw_move(entity, id, to_project, from_project?, force?)`:
   relocates a brainclaw item to another project in a multi-project workspace,
@@ -122,8 +132,14 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:2b0dfbd62acd71b7`
-  (updated 2026-07-04 for trp#928: explicit `coordinator_override` boolean added
+- MCP public surface fingerprint: `sha256:b53eb56d4391b5a6`
+  (updated 2026-07-15 for pln#520/#606: optional `model` string added to
+  `bclaw_dispatch` and `bclaw_coordinate` input schemas — selects the spawned
+  worker's model, decoupled from agent identity (CLI/MCP parity with
+  `dispatch run --model`). Additive: no tool added, removed, or renamed; no
+  required argument changed.
+  Previous: `sha256:2b0dfbd62acd71b7`
+  updated 2026-07-04 for trp#928: explicit `coordinator_override` boolean added
   to `bclaw_release_claim` and `bclaw_transition` input schemas — the coordinator
   path to release/stale a non-owned claim is now opt-in and audited rather than
   auto-derived from trust level. Additive: no tool added, removed, or renamed; no

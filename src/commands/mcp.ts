@@ -93,7 +93,7 @@ import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core
 import { assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
 import { WorkRequestSchema, CoordinateRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
-import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, validateAgentForDispatch } from '../core/agent-capability.js';
+import { getSpawnableAgents, getCapabilityProfile, buildInvokeCommand, validateAgentForDispatch, resolveModel } from '../core/agent-capability.js';
 import { attemptExecution } from '../core/execution.js';
 import { createAgentRun, transitionAgentRun } from '../core/agentruns.js';
 import { sweepDeadPidRunningAgentRunsAtRead } from '../core/agentrun-reconciler.js';
@@ -656,6 +656,7 @@ const MCP_WRITE_TOOLS = [
         agents: { type: 'array', items: { type: 'string' }, description: 'Only dispatch to these agents. Default: all available.' },
         lanes: { type: 'array', items: { type: 'string' }, description: 'Only dispatch items in these lanes. Also used by intent=analysis.' },
         maxAssignments: { type: 'number', description: 'Max assignments to make (default: all ready). intent=execute only.' },
+        model: { type: 'string', description: 'Model to run on spawned workers, decoupled from agent identity (e.g. "sonnet", "gpt-5-codex"). Injected as `<model_flag> <model>` for agents that declare one (claude-code/codex/copilot); no-op for template-pinned identities. Mirrors the CLI `brainclaw dispatch run --model`. intent=execute only.' },
         dryRun: { type: 'boolean', description: 'Preview without sending. Accepted by all intents.' },
         autoExecute: { type: 'boolean', description: 'Attempt to spawn agents after delivery (default: true). intent=execute only.' },
         // intent=review args (forwarded to bclaw_dispatch_review)
@@ -1187,6 +1188,7 @@ const MCP_WRITE_TOOLS = [
         project: { type: 'string', description: 'Optional (pln#359 phase 1b): name of a linked project to dispatch into. When set, claim/assignment/message all land in the target project — the target agent picks the brief up async via its own bclaw_work. Auto-spawn is disabled in cross-project mode. Accepts cross_project_links and workspace store-chain children (see `brainclaw link list`).' },
         allow_dirty: { type: 'boolean', description: 'Override the scope-aware dirty-working-tree guard (trp#371 Tier 2). The guard runs only for worktree-spawning intents (assign/review/reroute) and blocks only when uncommitted files overlap — or cannot be proven disjoint from — the dispatch scope (the worker spawns from HEAD and will not see them). `.brainclaw/` and `.git/` are always excluded. Set true to proceed anyway (the block is downgraded to a warning that lists the overlapping files). Boolean; the string "true"/"false" are also coerced.' },
         ref: { type: 'string', description: 'Optional git ref (commit/branch/tag) for assign/review/reroute: the dispatched worker builds its worktree from this ref instead of HEAD. When set, uncommitted working-tree changes are intentionally out of scope and the dirty guard allows the dispatch. Ignored by consult/ideate/summarize (no worktree).' },
+        model: { type: 'string', description: 'Model to run on the spawned worker, decoupled from agent identity (e.g. "sonnet", "gpt-5-codex", "gpt-5.4"). Injected as `<model_flag> <model>` into the invoke command for agents that declare one (claude-code/codex/github-copilot); no-op for template-pinned pseudo-identities (e.g. claude-sonnet) or agents without a model_flag. Highest-priority link in the model resolution chain (override > lane > identity > default). Applies to intents that spawn a worker (assign/consult/review/reroute/ideate); ignored by summarize.' },
       },
       required: ['intent', 'task'],
     },
@@ -4536,6 +4538,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           dispatcherAgentId: resolved.identity!.agent_id,
           sessionId: connectionSessionId,
           autoExecute: args.autoExecute as boolean | undefined,
+          model: args.model as string | undefined,
         }, cwd);
 
         if (!result) {
@@ -6196,6 +6199,15 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
 
         const invoke = buildInvokeCommand(input.agent, input.text, {
           mode: input.commandMode ?? 'worker',
+          // pln#520/#606 — decouple model from agent identity. req.model is the
+          // override link; when unset, resolveModel intentionally falls back to
+          // the profile's default_model (the documented last link in the chain),
+          // mirroring the dispatcher's resolveModel usage (dispatcher.ts) so
+          // coordinate and dispatch spawn with the same model. No profile ships
+          // a default_model today, so omitting model stays a no-op in practice
+          // (gpt-5.6-luna review). Flows to both the manual commandHint and the
+          // auto-spawn path (runCoordinateExecution reuses this invoke).
+          model: resolveModel(input.agent, { override: req.model }),
         });
         // Build env prefix for claim routing — centralised in
         // execution-profile.ts:buildClaimEnvPrefix as of pln#496 step

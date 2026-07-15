@@ -116,6 +116,18 @@ export const CoordinateRequestSchema = z.object({
    * rejected as `preset_kind_mismatch`.
    */
   preset: z.string().min(1).optional(),
+  /**
+   * pln#520 step 3 / pln#606 — model to run on the spawned worker, decoupled
+   * from agent identity. Passed through to `resolveModel({ override })` and
+   * injected as `<model_flag> <model>` into the invoke command for agents that
+   * declare a `model_flag` (e.g. `claude-code --model sonnet`, `codex exec
+   * --model …`, `copilot --model …`). No-op for agents whose template already
+   * pins a model (e.g. the `claude-sonnet` pseudo-identity) or that declare no
+   * `model_flag`. Highest-priority link in the model resolution chain. Ignored
+   * by intents that don't spawn a worker (summarize). Mirrors the CLI
+   * `brainclaw dispatch run --model <name>` flag for CLI/MCP parity.
+   */
+  model: z.string().min(1).optional(),
 });
 
 export const FacadeArtifactSchema = z.object({
