@@ -5,6 +5,24 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-07-15
+
+MCP model-selection parity, federation increment 1 (signed claim sync), and two dogfooding fixes. Each change was reviewed before merge (gpt-5.6-luna review on the model + worktree work). No breaking changes.
+
+### Added
+
+- **MCP model selection** (pln#520/#606) — `bclaw_dispatch` and `bclaw_coordinate` gain an optional `model` string that selects the spawned worker's model (e.g. `sonnet`, `gpt-5-codex`), decoupled from agent identity. Closes the CLI/MCP gap: the CLI `dispatch run --model` already existed, but agents driving brainclaw over MCP had no way to set it. Injected only for agents that declare a `model_flag` (claude-code / codex / github-copilot); no-op otherwise, and consistent with the dispatcher's resolveModel chain.
+- **Federation increment 1** (pln#100/#101) — Ed25519 request signing for the cloud bridge, `brainclaw federation identity` + `ensureAgentSigningKey`, a canonical (whitespace-invariant) public-key fingerprint, and a signed claim-sync engine with an outbox. Additive and opt-in (new `federation` CLI commands + core modules); no change to default behavior.
+
+### Fixed
+
+- **Worktree branch-slug collision** (trp#950) — two distinct claim/assign scopes sharing a >48-char prefix collapsed to the same `feat/<slug>` branch → same worktree path → the second claim was refused. `sanitizeBranchComponent` now appends a deterministic 8-char digest of the full cleaned slug when (and only when) the scope exceeds the 48-char cap, so distinct scopes diverge while the same scope stays stable (resume/re-assign). Short scopes are unchanged.
+- **Federation `push --to-agent`** (pln#365) — the flag was declared but never wired into the message `to` block, so every push landed with `to_agent` NULL and was broadcast to every inbox. It now targets the named agent; omitting it keeps the broadcast default.
+
+### Docs
+
+- Trimmed the ~260-line inline Changelog section from `README.md` — the full version history lives in this `CHANGELOG.md`, and MCP protocol/schema changes in `docs/mcp-schema-changelog.md`.
+
 ## [1.14.0] — 2026-07-05
 
 Coordination-hygiene, dispatch-supervisor spec, and a monorepo worktree fix — from continued cross-machine dogfooding. Each landing was Codex-reviewed before merge. No breaking changes.

@@ -1263,6 +1263,17 @@ export const CloudSyncConfigSchema = z.object({
   enabled: z.boolean().default(false),
   endpoint: z.string().default('https://app.brainclaw.dev'),
   api_key: z.string().optional(),
+  /** Remote project this bridge federates into (scopes signed runtime writes). */
+  project_id: z.string().optional(),
+  /** Approved remote agent identity used to sign runtime writes (pln#100). */
+  agent_id: z.string().optional(),
+  agent_name: z.string().optional(),
+  /**
+   * Fail-closed toggle: when true, the bridge refuses to push a runtime write
+   * unless it can sign it with an approved agent's Ed25519 key. Absent/false
+   * keeps existing API-key-only setups working (signing is additive).
+   */
+  require_signed: z.boolean().optional(),
 });
 export type CloudSyncConfig = z.infer<typeof CloudSyncConfigSchema>;
 

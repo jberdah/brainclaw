@@ -27,17 +27,38 @@ function gitPath(p: string): string {
  * landed on the dot before `astro`, yielding `…IntegrationHubPage.` — a trailing
  * dot git rejects (`fatal: not a valid branch name`). Truncating first, then
  * stripping, guarantees the cap can never re-introduce an invalid ref.
+ *
+ * trp#950 (dogfood 2026-07-15): a plain truncation makes two DISTINCT scopes
+ * that share a >48-char prefix collapse to the SAME branch → same worktree path
+ * → the second claim/assign is refused. When (and only when) the cleaned slug
+ * exceeds the cap, a deterministic 8-char digest of the FULL cleaned slug is
+ * appended so distinct scopes diverge, while the same scope stays stable
+ * (resume/re-assign still resolves its worktree). Short scopes are unchanged.
+ * 8 hex chars = 32 bits: comfortably collision-safe for the realistic case
+ * (a handful of scopes sharing a deep directory prefix) while keeping a
+ * 39-char readable head.
  */
+const BRANCH_COMPONENT_CAP = 48;
 export function sanitizeBranchComponent(raw: string, fallback = 'scope'): string {
-  let slug = raw
+  const cleaned = raw
     .replace(/[\s~^:?*[\]\\]/g, '-')   // chars forbidden by check-ref-format
     .replace(/@\{/g, '-')               // reflog syntax
     .replace(/\.\.+/g, '.')             // no double dots
     .replace(/[^a-zA-Z0-9._-]/g, '-')   // conservative whitelist for the rest
     .replace(/-+/g, '-')                // collapse dashes
-    .replace(/^[.-]+/, '')              // no leading dot/dash
-    .slice(0, 48)                       // length cap BEFORE the trailing strips
-    .replace(/[.-]+$/, '');             // no trailing dot/dash (cut may have made one)
+    .replace(/^[.-]+/, '');             // no leading dot/dash
+
+  let slug: string;
+  if (cleaned.length <= BRANCH_COMPONENT_CAP) {
+    slug = cleaned.replace(/[.-]+$/, ''); // no trailing dot/dash
+  } else {
+    // Truncation drops characters → reserve room for a collision-resistant
+    // suffix derived from the full cleaned slug (trp#950). The digest is hex, so
+    // it can never re-introduce a trailing dot/dash or a `.lock` suffix.
+    const suffix = crypto.createHash('sha1').update(cleaned).digest('hex').slice(0, 8);
+    const head = cleaned.slice(0, BRANCH_COMPONENT_CAP - suffix.length - 1).replace(/[.-]+$/, '');
+    slug = `${head}-${suffix}`;
+  }
   if (/\.lock$/i.test(slug)) slug = slug.slice(0, -'.lock'.length).replace(/[.-]+$/, '');
   if (!slug) slug = fallback;
   return slug;
