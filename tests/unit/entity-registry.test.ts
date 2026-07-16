@@ -183,6 +183,102 @@ describe('core/entity-registry — grammar consistency', () => {
   });
 });
 
+/**
+ * pln#625 Phase 0 — the internal-consistency checks above validate that a
+ * spec's transition graph is self-referential, but they never compare the
+ * declared statuses to the PERSISTED status enum. That gap let `action` ship
+ * an FSM of open/in_progress/completed/dismissed while the on-disk schema only
+ * accepts pending/resolved/rejected/cancelled/expired — a transition tool built
+ * on it would InvalidTransitionError or write a schema-invalid record. This
+ * block pins every stateful EntitySpec's statuses to its Zod status enum so the
+ * two can never drift again. Aucune transition canonique n'est fiable tant que
+ * ce bloc n'est pas vert.
+ */
+describe('core/entity-registry — FSM ↔ Zod status enum (pln#625 Phase 0)', () => {
+  /** Unwrap ZodDefault / ZodOptional / ZodNullable / ZodEffects to the enum values. */
+  function enumValues(zodType: unknown): string[] | null {
+    let t = zodType as { options?: unknown; _def?: Record<string, unknown> } | undefined;
+    for (let i = 0; i < 12 && t; i++) {
+      if (Array.isArray(t.options)) return t.options as string[];
+      const def = t._def;
+      if (!def) break;
+      if (Array.isArray(def.values)) return def.values as string[]; // ZodEnum
+      if (def.innerType) { t = def.innerType as typeof t; continue; } // Default/Optional/Nullable
+      if (def.schema) { t = def.schema as typeof t; continue; }       // ZodEffects
+      if (typeof def.type === 'object' && def.type) { t = def.type as typeof t; continue; }
+      break;
+    }
+    return null;
+  }
+
+  /** Unwrap ZodEffects (preprocess/refine) / ZodDefault / ZodOptional to the inner ZodObject shape. */
+  function objectShape(zodType: unknown): Record<string, unknown> | null {
+    let t = zodType as { shape?: unknown; _def?: Record<string, unknown> } | undefined;
+    for (let i = 0; i < 12 && t; i++) {
+      if (t.shape && typeof t.shape === 'object') return t.shape as Record<string, unknown>;
+      const def = t._def;
+      if (!def) break;
+      if (def.out) { t = def.out as typeof t; continue; }             // Zod 4 ZodPipe (z.preprocess) → output schema
+      if (def.schema) { t = def.schema as typeof t; continue; }       // ZodEffects (preprocess/refine)
+      if (def.innerType) { t = def.innerType as typeof t; continue; } // Default/Optional/Nullable
+      break;
+    }
+    return null;
+  }
+
+  function statusEnumFor(spec: EntitySpec): string[] | null {
+    const shape = objectShape(spec.schema);
+    if (!shape || !spec.statusField) return null;
+    return enumValues(shape[spec.statusField]);
+  }
+
+  it('every stateful entity resolves its status field to a concrete Zod enum', () => {
+    for (const name of ENTITY_NAMES) {
+      const spec = ENTITY_REGISTRY[name];
+      if (!spec.statusField) continue;
+      const values = statusEnumFor(spec);
+      assert.ok(
+        values && values.length > 0,
+        `${name}: could not resolve a Zod enum for status field '${spec.statusField}' — the pin below cannot run`,
+      );
+    }
+  });
+
+  it('every status named in transitions + terminal is a member of the persisted Zod enum', () => {
+    for (const name of ENTITY_NAMES) {
+      const spec = ENTITY_REGISTRY[name];
+      if (!spec.statusField) continue;
+      const values = statusEnumFor(spec);
+      if (!values) continue; // covered by the guard test above
+      const enumSet = new Set(values);
+      const declared = new Set<string>(spec.terminal);
+      for (const [from, targets] of Object.entries(spec.transitions)) {
+        declared.add(from);
+        for (const to of targets) declared.add(to);
+      }
+      for (const status of declared) {
+        assert.ok(
+          enumSet.has(status),
+          `${name}: FSM references status '${status}' which is NOT in ${spec.statusField} enum [${values.join(', ')}]`,
+        );
+      }
+    }
+  });
+
+  it('every terminal status is a member of the persisted Zod enum (no phantom dead-ends)', () => {
+    for (const name of ENTITY_NAMES) {
+      const spec = ENTITY_REGISTRY[name];
+      if (!spec.statusField) continue;
+      const values = statusEnumFor(spec);
+      if (!values) continue;
+      const enumSet = new Set(values);
+      for (const t of spec.terminal) {
+        assert.ok(enumSet.has(t), `${name}: terminal status '${t}' is not a valid ${spec.statusField} value`);
+      }
+    }
+  });
+});
+
 describe('core/entity-registry — known-good transitions', () => {
   const cases: Array<{ entity: EntityName; from: string; to: string; valid: boolean }> = [
     { entity: 'plan', from: 'todo', to: 'in_progress', valid: true },
@@ -203,6 +299,10 @@ describe('core/entity-registry — known-good transitions', () => {
     { entity: 'assignment', from: 'started', to: 'cancelled', valid: true },
     { entity: 'assignment', from: 'cancelled', to: 'started', valid: false },
     { entity: 'agent_run', from: 'running', to: 'completed', valid: true },
+    { entity: 'action', from: 'pending', to: 'resolved', valid: true },
+    { entity: 'action', from: 'pending', to: 'expired', valid: true },
+    { entity: 'action', from: 'resolved', to: 'pending', valid: false }, // terminal
+    { entity: 'action', from: 'pending', to: 'completed', valid: false }, // 'completed' is not an action status
   ];
   for (const { entity, from, to, valid } of cases) {
     it(`${entity}: ${from} -> ${to} = ${valid ? 'ok' : 'rejected'}`, () => {

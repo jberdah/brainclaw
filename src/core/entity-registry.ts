@@ -381,21 +381,37 @@ const agent_run: EntitySpec = {
   },
 };
 
-/** Action — required follow-up item. */
+/**
+ * Action — runtime pause/resume record (approval / user_input / clarification /
+ * plan_approval). Created `pending` by the runtime; resolved via
+ * src/core/actions.ts:resolveAction (outcome resolved|rejected|cancelled) or
+ * swept to `expired` on read past its TTL. resolveAction refuses any non-pending
+ * action, so `pending` is the ONLY non-terminal state.
+ *
+ * pln#625 Phase 0 — this spec previously declared open/in_progress/completed/
+ * dismissed, NONE of which are valid ActionRequired statuses
+ * (ActionRequiredStatusSchema = pending/resolved/rejected/cancelled/expired),
+ * and `updatable` named description/priority which are not fields on
+ * ActionRequiredSchema. Any canonical transition built on the old matrix would
+ * have been dead-on-arrival (InvalidTransitionError / schema reject). The
+ * EntitySpec↔Zod consistency test now pins the FSM to the persisted enum so it
+ * can never silently drift again.
+ */
 const action: EntitySpec = {
   name: 'action',
   shortLabelPrefix: 'act',
   schema: ActionRequiredSchema,
-  updatable: ['description', 'priority'],
+  updatable: ['title', 'prompt', 'tags'],
   statusField: 'status',
   transitions: {
-    open: ['in_progress', 'completed', 'dismissed'],
-    in_progress: ['completed', 'dismissed'],
+    pending: ['resolved', 'rejected', 'cancelled', 'expired'],
   },
-  terminal: ['completed', 'dismissed'],
+  terminal: ['resolved', 'rejected', 'cancelled', 'expired'],
   sideEffects: {
-    'open->completed': ['audit:action_completed'],
-    'in_progress->completed': ['audit:action_completed'],
+    'pending->resolved': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_resume', 'sync:assignment_resume'],
+    'pending->rejected': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_cancel', 'sync:assignment_fail'],
+    'pending->cancelled': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_cancel', 'sync:assignment_fail'],
+    'pending->expired': ['timestamp:resolved_at', 'audit:action_expired', 'sync:agent_run_timeout', 'sync:assignment_fail'],
   },
 };
 
