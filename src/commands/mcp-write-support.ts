@@ -19,9 +19,13 @@ import {
   requireMinimumTrustLevel,
   requireRegisteredAgentIdentity,
   resolveCurrentAgentIdentity,
+  resolveOrAutoRegisterAgentIdentity,
 } from '../core/agent-registry.js';
 import { loadClaim } from '../core/claims.js';
-import { loadSessionById } from '../core/identity.js';
+import { loadConfig } from '../core/config.js';
+import { isObserverMode } from '../core/observer-mode.js';
+import { buildOperationalIdentity, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
+import type { ResolvedEffectiveCwd } from '../core/store-resolution.js';
 import type { McpToolErrorShape } from './mcp-contract.js';
 
 /**
@@ -228,4 +232,195 @@ export function ensureTrust(
       },
     };
   }
+}
+
+// ── Canonical-grammar author resolution + scope metadata (pln#622 PR4) ───────
+// Moved from mcp.ts: mutation-author resolution and scope-metadata helpers used
+// by the canonical CRUD write handlers (mcp-write-entities.ts). Co-located here
+// with resolveMutationIdentity/resolveConnectionPrincipal, which they call.
+
+export interface CanonicalAuthorAutoRepair {
+  /** True if the agent identity itself was auto-registered (first use). */
+  agent_auto_registered?: boolean;
+  /** Session id that was materialized by the auto-repair path, if any. */
+  session_auto_created?: string;
+}
+
+export interface CanonicalAuthorResolution {
+  agent_name: string;
+  agent_id?: string;
+  /** Undefined when the strict path resolved cleanly (no announcement needed). */
+  auto_repair?: CanonicalAuthorAutoRepair;
+}
+
+export function explicitSessionIdFromEnv(): string | undefined {
+  return process.env.BRAINCLAW_SESSION_ID?.trim()
+    || process.env.OPENCLAW_SESSION_ID?.trim()
+    || process.env.CLAUDE_SESSION_ID?.trim()
+    || process.env.COPILOT_SESSION_ID?.trim();
+}
+
+export function projectInfoForCwd(cwd: string): { path: string; name?: string } {
+  try {
+    const config = loadConfig(cwd);
+    return { path: cwd, name: config.project_name };
+  } catch {
+    return { path: cwd };
+  }
+}
+
+/**
+ * Resolve the agent identity for canonical-grammar mutation verbs
+ * (bclaw_create/update/remove/transition), so handlers can auto-fill required
+ * fields (e.g. plan.author) instead of letting the create land on disk with a
+ * missing field — which would then be silently GC'd by the state sync loop
+ * (see fix plan pln_5f44426c).
+ *
+ * pln#562 step 3 — a write that would create a record with a missing/'unknown'
+ * author must never be silent (that produced records that passed creation but
+ * were schema-invalid on read and silently GC'd from disk).
+ *
+ * pln#608 — extended with auto-repair: when the caller has no session but a
+ * derivable agent name (arg / $BRAINCLAW_AGENT_NAME / detected AI agent),
+ * fall through to `resolveOrAutoRegisterAgentIdentity` and materialize the
+ * session via `buildOperationalIdentity({ persistImplicitSession: true })`
+ * (same mechanic as switchProject:86-106 and session-start). The freshly-
+ * created session is tagged `auto_created` so aggressive harvesting can
+ * distinguish it from operator sessions (pln#602). The caller receives
+ * `auto_repair` and surfaces it as a warning — never silent.
+ *
+ * KEEP (still a hard error, doctrine boundary): the identity is ambiguous
+ * (no name in args, no env signal, no detectable agent). We do not invent
+ * an identity — invoke intent is unclear and the write would misattribute.
+ */
+export function resolveCanonicalAuthor(
+  args: Record<string, unknown>,
+  cwd?: string,
+  connectionSessionId?: string,
+): CanonicalAuthorResolution {
+  const resolved = resolveMutationIdentity(
+    args,
+    { nameField: 'agent', idField: 'agentId' },
+    cwd,
+    connectionSessionId,
+  );
+  if ('identity' in resolved && resolved.identity) {
+    return {
+      agent_name: resolved.identity.agent_name,
+      agent_id: resolved.identity.agent_id,
+    };
+  }
+
+  const strictError = 'error' in resolved && resolved.error ? resolved.error : undefined;
+
+  // KEEP (doctrine boundary): a pinned principal that rejected the caller args
+  // is a SPOOF/MISMATCH, not an ambiguous first-write. Never auto-repair over
+  // it — silently re-attributing would defeat pln#562 step 3. The strict error
+  // already carries the pointer to a curator override.
+  if (resolveConnectionPrincipal(cwd, connectionSessionId)) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'principal mismatch'}`,
+    );
+  }
+
+  // Observer processes are read-only dashboards/inspectors. Even when an env
+  // variable leaks an agent name into the observer process, canonical writes
+  // must not use the auto-repair path because it can mint identity/session
+  // state as a side effect.
+  if (isObserverMode()) {
+    throw new Error(
+      `cannot resolve mutation author: ${strictError?.message ?? 'observer mode cannot auto-repair identity/session state'}`,
+    );
+  }
+
+  const explicitName = typeof args.agent === 'string' ? args.agent : undefined;
+  const explicitId = typeof args.agentId === 'string' ? args.agentId : undefined;
+  // resolveOrAutoRegisterAgentIdentity's fall-through helper only reads
+  // BRAINCLAW_AGENT / OPENCLAW_AGENT. resolveCurrentAgentIdentity also honors
+  // BRAINCLAW_AGENT_NAME, and dispatched workers set both. Normalize here so
+  // an env-declared name is a first-class signal to the auto-repair path.
+  const envAgentName = explicitName
+    ?? (process.env.BRAINCLAW_AGENT_NAME?.trim() || undefined)
+    ?? (process.env.BRAINCLAW_AGENT?.trim() || undefined);
+
+  let identity;
+  let autoRegistered: boolean;
+  try {
+    const outcome = resolveOrAutoRegisterAgentIdentity({
+      agentName: envAgentName,
+      agentId: explicitId,
+      cwd,
+      allowCurrent: true,
+      allowEnv: true,
+    });
+    identity = outcome.identity;
+    autoRegistered = outcome.auto_registered;
+  } catch (err) {
+    // Genuine ambiguity — no derivable name. Stays a hard error (KEEP: doctrine
+    // boundary is "ambiguous intent → refuse with next_action", not silence).
+    const detail = err instanceof Error ? err.message : (strictError?.message ?? String(err));
+    throw new Error(
+      `cannot resolve mutation author: ${detail} `
+      + 'Pass a registered agent, set $BRAINCLAW_AGENT_NAME, '
+      + 'or register with `brainclaw register-agent <name>` before writing.',
+      { cause: err },
+    );
+  }
+
+  const explicitSessionId = connectionSessionId?.trim() || explicitSessionIdFromEnv();
+  const hadSessionBefore = explicitSessionId
+    ? Boolean(loadSessionById(explicitSessionId, cwd))
+    : Boolean(loadCurrentSession(cwd));
+
+  let sessionAutoCreated: string | undefined;
+  try {
+    const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
+      agentId: identity.agent_id,
+      sessionId: explicitSessionId,
+      persistImplicitSession: true,
+    });
+    if (!hadSessionBefore && opIdentity.session_id) {
+      sessionAutoCreated = opIdentity.session_id;
+      const session = loadSessionById(opIdentity.session_id, cwd);
+      if (session && !session.auto_created) {
+        saveCurrentSession({ ...session, auto_created: true }, cwd);
+      }
+    }
+  } catch { /* best-effort — write can still proceed without a persisted session */ }
+
+  const autoRepair: CanonicalAuthorAutoRepair | undefined = (autoRegistered || sessionAutoCreated)
+    ? {
+        ...(autoRegistered ? { agent_auto_registered: true } : {}),
+        ...(sessionAutoCreated ? { session_auto_created: sessionAutoCreated } : {}),
+      }
+    : undefined;
+
+  return {
+    agent_name: identity.agent_name,
+    agent_id: identity.agent_id,
+    ...(autoRepair ? { auto_repair: autoRepair } : {}),
+  };
+}
+
+export function renderAutoRepairWarning(auto_repair: CanonicalAuthorAutoRepair, agent_name: string): string {
+  const parts: string[] = [];
+  if (auto_repair.agent_auto_registered) {
+    parts.push(`agent '${agent_name}' auto-registered (first use). Run \`brainclaw register-agent ${agent_name}\` to set capabilities and trust level.`);
+  }
+  if (auto_repair.session_auto_created) {
+    parts.push(`session ${auto_repair.session_auto_created} auto-created for this write.`);
+  }
+  return `⚠️ auto-repair: ${parts.join(' ')}`;
+}
+
+export function scopeMetadataForTarget(
+  args: Record<string, unknown>,
+  targetCwd: string,
+  effectiveScope: ResolvedEffectiveCwd,
+): { resolved_project: { path: string; name?: string }; active_source: ResolvedEffectiveCwd['active_source'] | 'explicit' } {
+  const hasExplicitProject = typeof args.project === 'string' && args.project.trim().length > 0;
+  return {
+    resolved_project: projectInfoForCwd(targetCwd),
+    active_source: hasExplicitProject ? 'explicit' : effectiveScope.active_source,
+  };
 }

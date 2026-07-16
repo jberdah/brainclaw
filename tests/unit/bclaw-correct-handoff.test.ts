@@ -9,9 +9,12 @@ import path from 'node:path';
  * the full MCP runtime (executeMcpToolCall + trust + auto-session).
  * Until that seam is extracted into a testable helper, pin the guard
  * logic at the source level.
+ *
+ * pln#622 PR4 — the handler moved from mcp.ts into mcp-write-entities.ts
+ * (handleBclawCorrectHandoff); the scraper now reads its new home.
  */
-describe('commands/mcp — bclaw_correct_handoff guards', () => {
-  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8');
+describe('commands/mcp-write-entities — bclaw_correct_handoff guards', () => {
+  const source = readFileSync(path.join('src', 'commands', 'mcp-write-entities.ts'), 'utf-8');
 
   it('refuses to supersede an already-superseded handoff', () => {
     // Guard literal: `if (original.superseded_by)` with an error response
