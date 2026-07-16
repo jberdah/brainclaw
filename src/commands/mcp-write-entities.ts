@@ -34,6 +34,8 @@ import {
   resolveCanonicalAuthor,
   renderAutoRepairWarning,
   scopeMetadataForTarget,
+  scanMcpWriteText,
+  appendSecurityWarnings,
   type CanonicalAuthorAutoRepair,
 } from './mcp-write-support.js';
 import {
@@ -96,6 +98,10 @@ export function handleBclawCreatePlan(payload: McpToolExecutionPayload, ctx: Mcp
     return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
   }
 
+  // S2 (pln#623): scan write text on the MCP path (same control point as the CLI).
+  const scan = scanMcpWriteText(planText, cwd);
+  if (scan.blockResponse) return { response: scan.blockResponse };
+
   try {
     const created = createPlan({
       text: planText,
@@ -121,12 +127,12 @@ export function handleBclawCreatePlan(payload: McpToolExecutionPayload, ctx: Mcp
       item_type: 'plan',
     }, cwd);
     return {
-      response: toolResponse({
+      response: appendSecurityWarnings(toolResponse({
         content: [{ type: 'text', text: `✔ Plan added: [${created.shortLabel}] ${created.text}` }],
         plan_id: created.id,
         short_label: created.shortLabel,
         text: created.text,
-      }),
+      }), scan.warnings),
     };
   } catch (error: unknown) {
     return { response: ctx.createLegacyToolExecutionErrorResponse(error) };
@@ -149,6 +155,10 @@ export function handleBclawCreateCandidate(payload: McpToolExecutionPayload, ctx
   if (!['constraint', 'decision', 'trap', 'handoff'].includes(candidateType)) {
     return { response: createToolErrorResponse('validation_error', 'type must be one of: constraint, decision, trap, handoff') };
   }
+
+  // S2 (pln#623): scan write text on the MCP path (same control point as the CLI).
+  const scan = scanMcpWriteText(candidateText, cwd);
+  if (scan.blockResponse) return { response: scan.blockResponse };
 
   try {
     const created = createEntity('candidate', {
@@ -182,7 +192,7 @@ export function handleBclawCreateCandidate(payload: McpToolExecutionPayload, ctx
         cwd,
       );
       return {
-        response: toolResponse({
+        response: appendSecurityWarnings(toolResponse({
           content: [{ type: 'text', text: `✔ Candidate created [${created.id}] and signaled to '${signal.target_project.name}' [${signal.id}]` }],
           candidate_id: created.id,
           short_label: created.short_label,
@@ -190,16 +200,16 @@ export function handleBclawCreateCandidate(payload: McpToolExecutionPayload, ctx
           entity_type: signal.entity_type,
           target_project: signal.target_project.name,
           target_path: signal.target_project.path,
-        }),
+        }), scan.warnings),
       };
     }
 
     return {
-      response: toolResponse({
+      response: appendSecurityWarnings(toolResponse({
         content: [{ type: 'text', text: `✔ Candidate created [${created.id}]` }],
         candidate_id: created.id,
         short_label: created.short_label,
-      }),
+      }), scan.warnings),
     };
   } catch (error: unknown) {
     return { response: ctx.createLegacyToolExecutionErrorResponse(error) };
@@ -480,6 +490,11 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
       data.agent = data.author;
     }
 
+    // S2 (pln#623): scan the primary text field on the MCP path, mirroring the
+    // CLI write adapters (which scan the entity text before persisting).
+    const createScan = scanMcpWriteText(typeof data.text === 'string' ? data.text : '', targetCwd);
+    if (createScan.blockResponse) return { response: createScan.blockResponse };
+
     const result = createEntity(entity, data, targetCwd);
     appendAuditEntry(
       { actor: actor ?? 'unknown', ...(actorId ? { actor_id: actorId } : {}), action: 'create', item_id: result.id, item_type: entity },
@@ -490,7 +505,7 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
       ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
       : [{ type: 'text' as const, text: createText }];
     return {
-      response: toolResponse({
+      response: appendSecurityWarnings(toolResponse({
         content: createContent,
         structuredContent: {
           ...result,
@@ -499,7 +514,7 @@ export function handleBclawCreate(payload: McpToolExecutionPayload, ctx: McpWrit
           ...(autoSwitched ? { auto_switched: true } : {}),
           ...(autoRepair ? { auto_repair: autoRepair } : {}),
         },
-      }),
+      }), createScan.warnings),
     };
   } catch (error: unknown) {
     return { response: createToolErrorResponse('validation_error', (error as Error).message) };
@@ -515,6 +530,9 @@ export function handleBclawUpdate(payload: McpToolExecutionPayload, ctx: McpWrit
     const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
     const targetScope = scopeMetadataForTarget(args, targetCwd, ctx.scopeInfo);
     const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
+    // S2 (pln#623): scan the patched text field on the MCP path (CLI parity).
+    const updateScan = scanMcpWriteText(typeof patch.text === 'string' ? patch.text : '', targetCwd);
+    if (updateScan.blockResponse) return { response: updateScan.blockResponse };
     const result = updateEntity(entity, id, patch, targetCwd);
     appendAuditEntry(
       { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
@@ -525,7 +543,7 @@ export function handleBclawUpdate(payload: McpToolExecutionPayload, ctx: McpWrit
       ? [{ type: 'text' as const, text: updateText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
       : [{ type: 'text' as const, text: updateText }];
     return {
-      response: toolResponse({
+      response: appendSecurityWarnings(toolResponse({
         content: updateContent,
         structuredContent: {
           ...result,
@@ -533,7 +551,7 @@ export function handleBclawUpdate(payload: McpToolExecutionPayload, ctx: McpWrit
           active_source: targetScope.active_source,
           ...(auto_repair ? { auto_repair } : {}),
         },
-      }),
+      }), updateScan.warnings),
     };
   } catch (error: unknown) {
     return { response: createToolErrorResponse('validation_error', (error as Error).message) };

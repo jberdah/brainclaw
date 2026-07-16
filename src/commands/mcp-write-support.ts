@@ -26,7 +26,8 @@ import { loadConfig } from '../core/config.js';
 import { isObserverMode } from '../core/observer-mode.js';
 import { buildOperationalIdentity, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
 import type { ResolvedEffectiveCwd } from '../core/store-resolution.js';
-import type { McpToolErrorShape } from './mcp-contract.js';
+import { scanText } from '../core/security.js';
+import { toolResponse, type McpToolResponse, type McpToolErrorShape } from './mcp-contract.js';
 
 /**
  * Per-call context carried from the tool executor (mcp.ts) into the write
@@ -422,5 +423,65 @@ export function scopeMetadataForTarget(
   return {
     resolved_project: projectInfoForCwd(targetCwd),
     active_source: hasExplicitProject ? 'explicit' : effectiveScope.active_source,
+  };
+}
+
+// ── Security scan on the MCP write path (S2, pln#623) ────────────────────────
+// The CLI write adapters scan their text through scanText and refuse the write
+// on a `block` verdict (strict_redaction); the MCP write adapters historically
+// did NOT, so an agent could write secret-bearing content via MCP that the CLI
+// would have blocked. These helpers give the MCP handlers the same control
+// point: scanMcpWriteText runs the scan; a strict-mode block yields a ready
+// error response the handler returns INSTEAD of writing, and warn-mode matches
+// are surfaced (never silently dropped) via appendSecurityWarnings.
+
+export interface McpWriteScanResult {
+  /** Present when strict_redaction escalated a match to block — return this instead of writing. */
+  blockResponse?: McpToolResponse;
+  /** Masked warning messages (block or warn) to surface on the write response. */
+  warnings: string[];
+}
+
+export function scanMcpWriteText(text: string, cwd: string): McpWriteScanResult {
+  if (!text) return { warnings: [] };
+  let config;
+  try {
+    config = loadConfig(cwd);
+  } catch {
+    return { warnings: [] }; // no store/config to scan against — nothing to enforce
+  }
+  const found = scanText(text, config);
+  if (found.length === 0) return { warnings: [] };
+  const warnings = found.map((w) => w.message);
+  if (found.some((w) => w.level === 'block')) {
+    return {
+      warnings,
+      blockResponse: toolResponse(
+        {
+          content: [{
+            type: 'text',
+            text: 'Blocked: strict redaction is enabled and the text contains sensitive content. Nothing was written.\n'
+              + warnings.map((m) => `⚠ ${m}`).join('\n'),
+          }],
+          structuredContent: { error: 'security_block', blocked_by: 'strict_redaction', security_warnings: warnings },
+        },
+        true,
+      ),
+    };
+  }
+  return { warnings };
+}
+
+/**
+ * Append warn-level security warnings to a successful write response so the MCP
+ * caller sees them (parity with the CLI's printed warnings). No-op when there
+ * are no warnings, so responses for clean text stay byte-identical.
+ */
+export function appendSecurityWarnings(response: McpToolResponse, warnings: string[]): McpToolResponse {
+  if (warnings.length === 0) return response;
+  return {
+    ...response,
+    content: [...response.content, { type: 'text', text: warnings.map((m) => `⚠ security: ${m}`).join('\n') }],
+    structuredContent: { ...(response.structuredContent ?? {}), security_warnings: warnings },
   };
 }

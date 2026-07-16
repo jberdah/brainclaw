@@ -23,7 +23,7 @@ import { assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '
 import { createRuntimeNote } from './runtime-note.js';
 import { createCandidateFromInput } from './reflect.js';
 import { harvestCandidates } from './harvest.js';
-import { ensureTrust } from './mcp-write-support.js';
+import { ensureTrust, scanMcpWriteText, appendSecurityWarnings } from './mcp-write-support.js';
 import {
   toolResponse,
   createToolErrorResponse,
@@ -131,6 +131,12 @@ export function handleBclawWriteNote(payload: McpToolExecutionPayload, ctx: McpW
   }
   const identity = resolved.identity!;
 
+  // S2 (pln#623): scan write text on the MCP path, same control point as the
+  // CLI adapters. A strict-mode block refuses the write; warn-mode matches are
+  // surfaced on the response.
+  const scan = scanMcpWriteText(text, cwd);
+  if (scan.blockResponse) return { response: scan.blockResponse };
+
   // Cross-project push
   const crossProjectTarget = ctx.getCrossProjectArg(args, 'crossProject', 'cross_project');
   if (crossProjectTarget) {
@@ -159,14 +165,14 @@ export function handleBclawWriteNote(payload: McpToolExecutionPayload, ctx: McpW
         cwd,
       );
       return {
-        response: toolResponse({
+        response: appendSecurityWarnings(toolResponse({
           content: [{ type: 'text', text: `✔ Cross-project runtime note signaled to '${signal.target_project.name}' [${signal.id}]` }],
           signal_id: signal.id,
           entity_type: signal.entity_type,
           note_id: (signal.payload as { id: string }).id,
           target_project: signal.target_project.name,
           target_path: signal.target_project.path,
-        }),
+        }), scan.warnings),
       };
     } catch (e: unknown) {
       return { response: createToolErrorResponse('validation_error', e instanceof Error ? e.message : String(e)) };
@@ -185,7 +191,7 @@ export function handleBclawWriteNote(payload: McpToolExecutionPayload, ctx: McpW
     model: ctx.currentModel,
   }, false);
   return {
-    response: toolResponse({
+    response: appendSecurityWarnings(toolResponse({
       content: [{ type: 'text', text: `✔ Note created [${result.noteId}]` }],
       note_id: result.noteId,
       session_id: result.sessionId,
@@ -194,7 +200,7 @@ export function handleBclawWriteNote(payload: McpToolExecutionPayload, ctx: McpW
       candidate_id: result.candidateId,
       promoted_item_id: result.promotedItemId,
       skip_reason: result.skipReason,
-    }),
+    }), scan.warnings),
     nextConnectionSessionId: ctx.explicitSessionIdFromEnv() ? undefined : result.sessionId,
   };
 }
@@ -211,6 +217,10 @@ export function handleBclawQuickCapture(payload: McpToolExecutionPayload, ctx: M
   if (!inputValidation.ok) {
     return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
   }
+
+  // S2 (pln#623): scan the captured text (same control point as the CLI).
+  const scan = scanMcpWriteText(text, cwd);
+  if (scan.blockResponse) return { response: scan.blockResponse };
 
   const context = typeof args.context === 'string' ? args.context.trim() : undefined;
   if (context) {
@@ -244,7 +254,7 @@ export function handleBclawQuickCapture(payload: McpToolExecutionPayload, ctx: M
       model: ctx.currentModel,
     }, false);
     return {
-      response: toolResponse({
+      response: appendSecurityWarnings(toolResponse({
         content: [{ type: 'text', text: `✔ Quick capture saved as runtime note [${result.noteId}]` }],
         structuredContent: {
           classification: classification.target,
@@ -258,7 +268,7 @@ export function handleBclawQuickCapture(payload: McpToolExecutionPayload, ctx: M
             { tool: 'bclaw_quick_capture', args: { text: '<same text>', type: 'decision' }, when: 'this was actually a durable decision/trap/constraint — re-capture with an asserted type' },
           ],
         },
-      }),
+      }), scan.warnings),
       nextConnectionSessionId: ctx.explicitSessionIdFromEnv() ? undefined : result.sessionId,
     };
   }
@@ -284,7 +294,7 @@ export function handleBclawQuickCapture(payload: McpToolExecutionPayload, ctx: M
         { tool: 'bclaw_get', args: { entity: 'candidate', id: capture.candidateId }, when: 'to review the pending candidate (contradiction metadata is advisory)' },
       ];
   return {
-    response: toolResponse({
+    response: appendSecurityWarnings(toolResponse({
       content: [{ type: 'text', text: statusText }],
       structuredContent: {
         classification: classification.target,
@@ -305,7 +315,7 @@ export function handleBclawQuickCapture(payload: McpToolExecutionPayload, ctx: M
         context,
         next_actions: captureNextActions,
       },
-    }),
+    }), scan.warnings),
   };
 }
 
