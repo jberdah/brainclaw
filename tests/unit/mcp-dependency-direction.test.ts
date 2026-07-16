@@ -68,7 +68,7 @@ describe('MCP dependency direction (pln#622 PR1)', () => {
   });
 
   it('(b) extracted boundary modules do not import commands/mcp.js', () => {
-    for (const name of ['mcp-read-handlers.ts', 'mcp-contract.ts', 'mcp-presentation.ts', 'mcp-catalog.ts']) {
+    for (const name of ['mcp-read-handlers.ts', 'mcp-contract.ts', 'mcp-presentation.ts', 'mcp-catalog.ts', 'mcp-write-support.ts', 'mcp-write-coordination.ts']) {
       const file = path.join(SRC, 'commands', name);
       assert.ok(graph.has(file), `graph is missing ${file}`);
       assert.ok(!graph.get(file)!.has(MCP), `${name} imports commands/mcp.js — the assembly point must stay import-free from boundary modules`);
