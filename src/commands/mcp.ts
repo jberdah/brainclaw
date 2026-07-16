@@ -1,85 +1,45 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { resolveCrossProjectLinks, resolveCrossProjectWritableTarget, resolveProjectCwd, writeCrossProjectSignal } from '../core/cross-project.js';
+import { resolveCrossProjectLinks, resolveProjectCwd } from '../core/cross-project.js';
 import { buildContext } from '../core/context.js';
 import { ageStaleWarnings, ageWorkflowHints, loadServeRegistry } from '../core/hint-aging.js';
 import { loadHygienePolicy } from '../core/hygiene-policy.js';
 import { sweepAssignmentsAtReadPath, selectReadPathSweepCandidates } from '../core/assignment-sweeper.js';
 import { loadAssignment } from '../core/assignments.js';
 import { getInstalledBrainclawVersion, readDiskBrainclawVersion } from '../core/brainclaw-version.js';
-import { loadConfig } from '../core/config.js';
-import { collectLoadValidationWarnings, findLoadValidationWarning, loadState, persistState, saveState } from '../core/state.js';
-import { generateIdWithLabel } from '../core/ids.js';
+import { collectLoadValidationWarnings, findLoadValidationWarning, loadState } from '../core/state.js';
 import { memoryExists, MEMORY_DIR } from '../core/io.js';
-import { loadCandidate } from '../core/candidates.js';
 import {
-  createEntity,
   getEntity,
   listEntities,
   boundListResult,
   DEFAULT_FIND_CHAR_BUDGET,
-  removeEntity,
-  transitionEntity,
-  updateEntity,
   type EntityFilter,
 } from '../core/entity-operations.js';
-import { relocateEntity } from '../core/operations/relocate.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
-import { ENTITY_REGISTRY, type EntityName } from '../core/entity-registry.js';
+import { type EntityName } from '../core/entity-registry.js';
 import { generateClaimId, listClaims, loadClaim, saveClaim, adoptClaimSession } from '../core/claims.js';
-import { createSequence, updateSequence, deleteSequence } from '../core/sequence.js';
 import { assertCrossProjectBoundary, checkPolicy } from '../core/policy.js';
-import { createRuntimeNote } from './runtime-note.js';
-import { createCandidateFromInput } from './reflect.js';
-import { acceptCandidate } from './accept.js';
-import { rejectCandidate } from './reject.js';
 import { startSession } from './session-start.js';
-import { applyHandoffUpdates } from './update-handoff.js';
 import {
   AgentIdentityResolutionError,
   AgentTrustError,
-  hasMinimumTrustLevel,
   resolveCurrentModel,
-  resolveOrAutoRegisterAgentIdentity,
 } from '../core/agent-registry.js';
 import { appendAuditEntry } from '../core/audit.js';
-import { nowISO, generateId } from '../core/ids.js';
-import { buildOperationalIdentity, loadAllSessions, loadCurrentSession, loadSessionById, saveCurrentSession } from '../core/identity.js';
-import { validateMcpInput, validateMcpField } from '../core/input-validation.js';
-import { createCapability, createTool as createRegistryTool } from '../core/registries.js';
-import { detectAiAgent } from '../core/ai-agent-detection.js';
-import { isObserverMode } from '../core/observer-mode.js';
-import {
-  checkGitPresence,
-  scanGitRepos,
-  parseRoots,
-  parseRepoSelection,
-  parseAgentSelection,
-  getDetectedSetupAgentNames,
-  getInstalledAgentNames,
-  runGlobalInstall,
-  initReposAndConfigureAgents,
-  readSetupState,
-  ALL_KNOWN_AGENTS,
-} from './setup.js';
-import { buildAgentInventory } from '../core/agent-inventory.js';
-import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef, type ResolvedEffectiveCwd, type StoreTarget } from '../core/store-resolution.js';
+import { nowISO } from '../core/ids.js';
+import { loadAllSessions } from '../core/identity.js';
+// Setup wizard / project-init / registry helpers now live in mcp-write-admin.ts (PR4).
+// Canonical entity write handlers now live in mcp-write-entities.ts (PR4).
+import { findOutermostBrainclawRoot, resolveEffectiveCwd, resolveEffectiveCwdInfo, resolveProjectRef } from '../core/store-resolution.js';
 import { switchProject } from './switch.js';
-import { assessBootstrapNeed, probeForQuickSetup, buildQuickSetupProbeResponse, buildOnboardingPreview, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation, type ProjectTypeChoice, type TopologyChoice } from '../core/setup-flow.js';
-import { ensureUserStore, resolveHomeDir } from '../core/setup-state.js';
-import type { CandidateType, MemoryVisibility, PlanType, Priority, SequenceItemInput, SequenceStatus } from '../core/schema.js';
-import { createPlan, deletePlan as deletePlanOp } from '../core/operations/plan.js';
-import { countActionable } from '../core/messaging.js';
-import { deleteMemoryItem, updateMemoryItem, type MemoryItemType } from '../core/operations/memory-mutation.js';
-import { assessMemoryPressure, buildCompactionTemplate, applyCompaction } from '../core/gc-semantic.js';
+import { assessBootstrapNeed, resolveEmptyMemoryRecommendation, type EmptyMemoryRecommendation } from '../core/setup-flow.js';
 import { WorkRequestSchema, type FacadeResponse } from '../core/facade-schema.js';
 import { codeMapWorkSection, codeMapRefreshNextActions } from '../core/code-map/work-section.js';
 import { sweepDeadPidRunningAgentRunsAtRead } from '../core/agentrun-reconciler.js';
 import { bumpActiveAssignmentHeartbeat } from '../core/assignments.js';
-import { harvestCandidates } from './harvest.js';
 import {
   handleBclawAckMessage,
   handleBclawCoordinate,
@@ -87,7 +47,13 @@ import {
   handleBclawLoop,
   handleBclawSendMessage,
 } from './mcp-write-coordination.js';
-import { ensureTrust, resolveConnectionPrincipal, resolveMutationIdentity } from './mcp-write-support.js';
+import {
+  ensureTrust,
+  resolveMutationIdentity,
+  explicitSessionIdFromEnv,
+  projectInfoForCwd,
+  scopeMetadataForTarget,
+} from './mcp-write-support.js';
 
 // ---------------------------------------------------------------------------
 // Neutral boundaries extracted in pln#622 PR1. mcp.ts stays the assembly
@@ -138,6 +104,47 @@ import {
   handleBclawDeleteStep,
   type McpWriteClaimsContext,
 } from './mcp-write-claims.js';
+// Sequence write handlers extracted in pln#622 PR4.
+import {
+  handleBclawCreateSequence,
+  handleBclawUpdateSequence,
+  handleBclawDeleteSequence,
+  type McpWriteSequencesContext,
+} from './mcp-write-sequences.js';
+// Memory write handlers extracted in pln#622 PR4.
+import {
+  handleBclawWriteNote,
+  handleBclawQuickCapture,
+  handleBclawCompact,
+  handleBclawDeleteMemory,
+  handleBclawUpdateMemory,
+  handleBclawHarvestCandidates,
+  type McpWriteMemoryContext,
+} from './mcp-write-memory.js';
+// Admin / provisioning write handlers extracted in pln#622 PR4.
+import {
+  handleBclawSetup,
+  handleBclawInitProject,
+  handleBclawAddCapability,
+  handleBclawAddTool,
+  type McpWriteAdminContext,
+} from './mcp-write-admin.js';
+// Entity write handlers extracted in pln#622 PR4.
+import {
+  handleBclawCreatePlan,
+  handleBclawCreateCandidate,
+  handleBclawAccept,
+  handleBclawReject,
+  handleBclawDeletePlan,
+  handleBclawCorrectHandoff,
+  handleBclawUpdateHandoff,
+  handleBclawCreate,
+  handleBclawUpdate,
+  handleBclawRemove,
+  handleBclawMove,
+  handleBclawTransition,
+  type McpWriteEntitiesContext,
+} from './mcp-write-entities.js';
 
 // Re-exports: the exact pre-PR1 public surface of this module.
 export {
@@ -184,18 +191,9 @@ export {
 export {
   __resetConnectionPrincipalForTests,
 } from './mcp-write-support.js';
-export type { PinnedConnectionPrincipal } from './mcp-write-support.js';
+export type { PinnedConnectionPrincipal, CanonicalAuthorAutoRepair, CanonicalAuthorResolution } from './mcp-write-support.js';
 
 const MCP_RUNTIME_REPAIR_COMMAND = 'brainclaw doctor --repair';
-
-type QuickCaptureTarget = 'decision' | 'trap' | 'constraint' | 'note';
-
-interface QuickCaptureClassification {
-  target: QuickCaptureTarget;
-  reason: string;
-  decisionScore: number;
-  trapScore: number;
-}
 
 class McpProtocolError extends Error {
   code: number;
@@ -325,68 +323,7 @@ function appendLegacyMcpToolWarning(response: McpToolResponse, name: string): Mc
 
 
 // Bootstrap helpers moved to mcp-read-handlers.ts
-
-function scoreKeywordMatches(text: string, patterns: RegExp[]): number {
-  return patterns.reduce((score, pattern) => score + (pattern.test(text) ? 1 : 0), 0);
-}
-
-function classifyQuickCapture(text: string): QuickCaptureClassification {
-  const normalized = text.trim().toLowerCase();
-  const decisionPatterns = [
-    /\b(decide|decision|decided|prefer|preferred|policy|convention|standard|standardize|adopt|chosen|choose|settled on)\b/,
-    /\b(use|default to|go with|route through|switch to|migrate to|move to)\b/,
-    /^(use|prefer|adopt|standardize|route|switch|migrate)\b/,
-  ];
-  const trapPatterns = [
-    /\b(trap|warning|beware|avoid|never|don't|do not|risk|risky|gotcha|workaround)\b/,
-    /\b(bug|broken|breaks|failure|fails|failing|flaky|blocked|missing|crash|regression|timeout|deadlock|race condition|leak)\b/,
-    /\b(error|incident|problem|issue|hang|stuck|retry)\b/,
-  ];
-
-  const decisionScore = scoreKeywordMatches(normalized, decisionPatterns);
-  const trapScore = scoreKeywordMatches(normalized, trapPatterns);
-
-  if (decisionScore > 0 && trapScore > 0 && Math.abs(decisionScore - trapScore) <= 1) {
-    return {
-      target: 'note',
-      reason: 'ambiguous_keywords',
-      decisionScore,
-      trapScore,
-    };
-  }
-
-  if (trapScore >= 2 && trapScore >= decisionScore + 1) {
-    return {
-      target: 'trap',
-      reason: 'trap_keywords',
-      decisionScore,
-      trapScore,
-    };
-  }
-
-  if (decisionScore >= 2 && decisionScore >= trapScore + 1) {
-    return {
-      target: 'decision',
-      reason: 'decision_keywords',
-      decisionScore,
-      trapScore,
-    };
-  }
-
-  return {
-    target: 'note',
-    reason: decisionScore === trapScore && decisionScore > 0 ? 'ambiguous_keywords' : 'low_confidence',
-    decisionScore,
-    trapScore,
-  };
-}
-
-function formatQuickCaptureNoteText(text: string, context?: string): string {
-  if (!context) {
-    return text;
-  }
-  return `${text}\n\nContext: ${context}`;
-}
+// Quick-capture keyword classification moved to mcp-write-memory.ts (PR4).
 
 function requireObjectParams(params: unknown, id: JsonRpcId): Record<string, unknown> {
   if (params === undefined) {
@@ -417,202 +354,6 @@ function getCancelledRequestId(params: Record<string, unknown>): JsonRpcId | und
     return candidate;
   }
   return undefined;
-}
-
-/**
- * Auto-repair outcome for a canonical-grammar mutation.
- *
- * Populated when `resolveCanonicalAuthor` had to fall through from the strict
- * `resolveMutationIdentity` path onto `resolveOrAutoRegisterAgentIdentity` +
- * auto-session. The doctrine (pln#608): mechanical + non-ambiguous + cheap +
- * scoped precondition → the engine satisfies it AND announces it — never
- * silence. Callers surface these fields as a warning in the response text
- * and in structuredContent.auto_repair.
- */
-export interface CanonicalAuthorAutoRepair {
-  /** True if the agent identity itself was auto-registered (first use). */
-  agent_auto_registered?: boolean;
-  /** Session id that was materialized by the auto-repair path, if any. */
-  session_auto_created?: string;
-}
-
-export interface CanonicalAuthorResolution {
-  agent_name: string;
-  agent_id?: string;
-  /** Undefined when the strict path resolved cleanly (no announcement needed). */
-  auto_repair?: CanonicalAuthorAutoRepair;
-}
-
-/**
- * Resolve the agent identity for canonical-grammar mutation verbs
- * (bclaw_create/update/remove/transition), so handlers can auto-fill required
- * fields (e.g. plan.author) instead of letting the create land on disk with a
- * missing field — which would then be silently GC'd by the state sync loop
- * (see fix plan pln_5f44426c).
- *
- * pln#562 step 3 — a write that would create a record with a missing/'unknown'
- * author must never be silent (that produced records that passed creation but
- * were schema-invalid on read and silently GC'd from disk).
- *
- * pln#608 — extended with auto-repair: when the caller has no session but a
- * derivable agent name (arg / $BRAINCLAW_AGENT_NAME / detected AI agent),
- * fall through to `resolveOrAutoRegisterAgentIdentity` and materialize the
- * session via `buildOperationalIdentity({ persistImplicitSession: true })`
- * (same mechanic as switchProject:86-106 and session-start). The freshly-
- * created session is tagged `auto_created` so aggressive harvesting can
- * distinguish it from operator sessions (pln#602). The caller receives
- * `auto_repair` and surfaces it as a warning — never silent.
- *
- * KEEP (still a hard error, doctrine boundary): the identity is ambiguous
- * (no name in args, no env signal, no detectable agent). We do not invent
- * an identity — invoke intent is unclear and the write would misattribute.
- */
-function resolveCanonicalAuthor(
-  args: Record<string, unknown>,
-  cwd?: string,
-  connectionSessionId?: string,
-): CanonicalAuthorResolution {
-  const resolved = resolveMutationIdentity(
-    args,
-    { nameField: 'agent', idField: 'agentId' },
-    cwd,
-    connectionSessionId,
-  );
-  if ('identity' in resolved && resolved.identity) {
-    return {
-      agent_name: resolved.identity.agent_name,
-      agent_id: resolved.identity.agent_id,
-    };
-  }
-
-  const strictError = 'error' in resolved && resolved.error ? resolved.error : undefined;
-
-  // KEEP (doctrine boundary): a pinned principal that rejected the caller args
-  // is a SPOOF/MISMATCH, not an ambiguous first-write. Never auto-repair over
-  // it — silently re-attributing would defeat pln#562 step 3. The strict error
-  // already carries the pointer to a curator override.
-  if (resolveConnectionPrincipal(cwd, connectionSessionId)) {
-    throw new Error(
-      `cannot resolve mutation author: ${strictError?.message ?? 'principal mismatch'}`,
-    );
-  }
-
-  // Observer processes are read-only dashboards/inspectors. Even when an env
-  // variable leaks an agent name into the observer process, canonical writes
-  // must not use the auto-repair path because it can mint identity/session
-  // state as a side effect.
-  if (isObserverMode()) {
-    throw new Error(
-      `cannot resolve mutation author: ${strictError?.message ?? 'observer mode cannot auto-repair identity/session state'}`,
-    );
-  }
-
-  const explicitName = typeof args.agent === 'string' ? args.agent : undefined;
-  const explicitId = typeof args.agentId === 'string' ? args.agentId : undefined;
-  // resolveOrAutoRegisterAgentIdentity's fall-through helper only reads
-  // BRAINCLAW_AGENT / OPENCLAW_AGENT. resolveCurrentAgentIdentity also honors
-  // BRAINCLAW_AGENT_NAME, and dispatched workers set both. Normalize here so
-  // an env-declared name is a first-class signal to the auto-repair path.
-  const envAgentName = explicitName
-    ?? (process.env.BRAINCLAW_AGENT_NAME?.trim() || undefined)
-    ?? (process.env.BRAINCLAW_AGENT?.trim() || undefined);
-
-  let identity;
-  let autoRegistered: boolean;
-  try {
-    const outcome = resolveOrAutoRegisterAgentIdentity({
-      agentName: envAgentName,
-      agentId: explicitId,
-      cwd,
-      allowCurrent: true,
-      allowEnv: true,
-    });
-    identity = outcome.identity;
-    autoRegistered = outcome.auto_registered;
-  } catch (err) {
-    // Genuine ambiguity — no derivable name. Stays a hard error (KEEP: doctrine
-    // boundary is "ambiguous intent → refuse with next_action", not silence).
-    const detail = err instanceof Error ? err.message : (strictError?.message ?? String(err));
-    throw new Error(
-      `cannot resolve mutation author: ${detail} `
-      + 'Pass a registered agent, set $BRAINCLAW_AGENT_NAME, '
-      + 'or register with `brainclaw register-agent <name>` before writing.',
-      { cause: err },
-    );
-  }
-
-  const explicitSessionId = connectionSessionId?.trim() || explicitSessionIdFromEnv();
-  const hadSessionBefore = explicitSessionId
-    ? Boolean(loadSessionById(explicitSessionId, cwd))
-    : Boolean(loadCurrentSession(cwd));
-
-  let sessionAutoCreated: string | undefined;
-  try {
-    const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
-      agentId: identity.agent_id,
-      sessionId: explicitSessionId,
-      persistImplicitSession: true,
-    });
-    if (!hadSessionBefore && opIdentity.session_id) {
-      sessionAutoCreated = opIdentity.session_id;
-      const session = loadSessionById(opIdentity.session_id, cwd);
-      if (session && !session.auto_created) {
-        saveCurrentSession({ ...session, auto_created: true }, cwd);
-      }
-    }
-  } catch { /* best-effort — write can still proceed without a persisted session */ }
-
-  const autoRepair: CanonicalAuthorAutoRepair | undefined = (autoRegistered || sessionAutoCreated)
-    ? {
-        ...(autoRegistered ? { agent_auto_registered: true } : {}),
-        ...(sessionAutoCreated ? { session_auto_created: sessionAutoCreated } : {}),
-      }
-    : undefined;
-
-  return {
-    agent_name: identity.agent_name,
-    agent_id: identity.agent_id,
-    ...(autoRepair ? { auto_repair: autoRepair } : {}),
-  };
-}
-
-function renderAutoRepairWarning(auto_repair: CanonicalAuthorAutoRepair, agent_name: string): string {
-  const parts: string[] = [];
-  if (auto_repair.agent_auto_registered) {
-    parts.push(`agent '${agent_name}' auto-registered (first use). Run \`brainclaw register-agent ${agent_name}\` to set capabilities and trust level.`);
-  }
-  if (auto_repair.session_auto_created) {
-    parts.push(`session ${auto_repair.session_auto_created} auto-created for this write.`);
-  }
-  return `⚠️ auto-repair: ${parts.join(' ')}`;
-}
-
-function explicitSessionIdFromEnv(): string | undefined {
-  return process.env.BRAINCLAW_SESSION_ID?.trim()
-    || process.env.OPENCLAW_SESSION_ID?.trim()
-    || process.env.CLAUDE_SESSION_ID?.trim()
-    || process.env.COPILOT_SESSION_ID?.trim();
-}
-
-function projectInfoForCwd(cwd: string): { path: string; name?: string } {
-  try {
-    const config = loadConfig(cwd);
-    return { path: cwd, name: config.project_name };
-  } catch {
-    return { path: cwd };
-  }
-}
-
-function scopeMetadataForTarget(
-  args: Record<string, unknown>,
-  targetCwd: string,
-  effectiveScope: ResolvedEffectiveCwd,
-): { resolved_project: { path: string; name?: string }; active_source: ResolvedEffectiveCwd['active_source'] | 'explicit' } {
-  const hasExplicitProject = typeof args.project === 'string' && args.project.trim().length > 0;
-  return {
-    resolved_project: projectInfoForCwd(targetCwd),
-    active_source: hasExplicitProject ? 'explicit' : effectiveScope.active_source,
-  };
 }
 
 function renderProvenanceFilterNote(result: {
@@ -1682,621 +1423,54 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       createLegacyMcpToolDisabledResponse,
     };
 
+    // pln#622 PR4 — per-call context for the extracted sequence write handlers.
+    const writeSequencesCtx: McpWriteSequencesContext = { currentModel };
+
+    // pln#622 PR4 — per-call context for the extracted memory write handlers.
+    const writeMemoryCtx: McpWriteMemoryContext = { currentModel, explicitSessionIdFromEnv, getCrossProjectArg };
+
+    // pln#622 PR4 — per-call context for the extracted admin write handlers.
+    const writeAdminCtx: McpWriteAdminContext = { currentModel };
+
+    // pln#622 PR4 — per-call context for the extracted entity write handlers.
+    const writeEntitiesCtx: McpWriteEntitiesContext = {
+      blockCrossProjectExecution,
+      resolveExecutionWriteTarget,
+      getCrossProjectArg,
+      createLegacyToolExecutionErrorResponse,
+      scopeInfo,
+    };
+
     if (name === 'bclaw_setup') {
-      const step = args.step as string | undefined;
-      const choice = (args.choice as string | undefined) ?? '';
-      const rootsArg = args.roots as string | undefined;
-      const repoSelectionArg = args.repo_selection as string | undefined;
-      const modeArg = args.mode as string | undefined;
-      const env = process.env;
-
-      if (!checkGitPresence()) {
-        return { response: toolResponse({ content: [{ type: 'text', text: 'Git is not installed or not found in PATH. Install git from https://git-scm.com before running brainclaw setup.' }], structuredContent: { error: 'git_not_found' } }, true) };
-      }
-
-      // ─── Quick mode: probe current repo ──────────────────────────────
-      if (!step) {
-        // Auto-detect mode: if we're in a git repo, use quick mode unless batch is forced
-        const forceBatch = modeArg === 'batch';
-        if (!forceBatch) {
-          const probe = probeForQuickSetup(cwd);
-          if (probe.isGitRepo || probe.alreadyInitialized) {
-            const response = buildQuickSetupProbeResponse(probe);
-            return { response: toolResponse({ content: [{ type: 'text', text: response.text }], structuredContent: response.structured }) };
-          }
-        }
-
-        // Fall through to batch mode
-        const existingState = readSetupState(env);
-        const alreadyRun = existingState ? `Setup was previously run on ${new Date(existingState.completed_at).toLocaleDateString()}. You can re-run it.` : undefined;
-        return { response: toolResponse({ content: [{ type: 'text', text: [alreadyRun, "Where are the user's project directories? Please ask the user to provide one or more root paths where their git repositories are located (e.g. ~/Projects, C:\\Users\\user\\code)."].filter(Boolean).join('\n\n') }], structuredContent: { pending_question: 'project_roots', prompt: 'Please ask the user: "Where are your projects? Enter one or more root directories (comma-separated):"', ...(alreadyRun ? { already_run: alreadyRun } : {}) } }) };
-      }
-
-      // ─── Quick mode step: init with choices ──────────────────────────
-      if (step === 'quick_init') {
-        const projectType = (args.project_type as ProjectTypeChoice | undefined) ?? 'standalone';
-        const topology = (args.topology as TopologyChoice | undefined) ?? 'embedded';
-
-        // Ensure user store exists
-        ensureUserStore(env);
-
-        // Map choices to init options
-        const projectMode = projectType === 'workspace' ? 'multi-project' as const : 'auto' as const;
-        const topologyMode = topology === 'sidecar' ? 'sidecar' as const : 'embedded' as const;
-
-        // Run init
-        try {
-          const { runInit } = await import('./init.js');
-          await runInit({
-            yes: true,
-            cwd,
-            skipAgentBootstrap: false,
-            projectMode,
-            topology: topologyMode,
-          });
-        } catch (err) {
-          return { response: toolResponse({ content: [{ type: 'text', text: `Init failed: ${err instanceof Error ? err.message : String(err)}` }], structuredContent: { error: 'init_failed', details: err instanceof Error ? err.message : String(err) } }, true) };
-        }
-
-        // Detect agent and report
-        const detected = detectAiAgent(env);
-        const summary: string[] = [
-          `✔ Initialized ${cwd.split(/[\\/]/).pop() ?? cwd} (${projectType}, ${topology})`,
-        ];
-        if (detected) {
-          summary.push(`✔ Agent detected: ${detected.name}`);
-        }
-        summary.push('✔ Full brainclaw MCP catalog activates automatically; reload your agent session only if new tools do not appear.');
-
-        // Bootstrap route follows the shared empty-memory rule; the preview
-        // already embeds the same recommendation text when memory is empty.
-        const probe = probeForQuickSetup(cwd);
-        const bootstrapAvailable = probe.hasContent;
-        const emptyMemoryRec = resolveEmptyMemoryRecommendation(cwd);
-        const preview = buildOnboardingPreview(cwd);
-
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: summary.join('\n') + '\n\n' + preview }],
-            structuredContent: {
-              setup_complete: true,
-              project_type: projectType,
-              topology,
-              detected_agent: detected?.name ?? null,
-              bootstrap_available: bootstrapAvailable,
-              bootstrap_route: emptyMemoryRec.route,
-              next_action: emptyMemoryRec.mcp_next_action,
-              preview,
-              summary,
-            },
-          }),
-        };
-      }
-
-      if (step === 'project_roots') {
-        const roots = parseRoots(choice, env);
-        if (roots.length === 0) {
-          return { response: toolResponse({ content: [{ type: 'text', text: 'No valid directories found from the provided paths. Please ask the user for valid root directories.' }], structuredContent: { error: 'no_valid_roots', provided: choice } }, true) };
-        }
-        const repos = scanGitRepos(roots);
-        const repoList = repos.map((r, i) => `  ${i + 1}) ${r.alreadyInitialised ? '[✔ init]' : '[      ]'} ${r.name}  (${r.path})`).join('\n');
-        return { response: toolResponse({ content: [{ type: 'text', text: `Found ${repos.length} repository candidate(s):\n${repoList}\n\nAsk the user which repositories to initialise.` }], structuredContent: { pending_question: 'repo_selection', roots: roots.join(','), repos: repos.map((r) => ({ path: r.path, name: r.name, alreadyInitialised: r.alreadyInitialised })), prompt: 'Please ask the user: "Which repositories to initialise? Reply: (a)ll, (c)urrent, or numbers like 1,3"' } }) };
-      }
-
-      if (step === 'repo_selection') {
-        if (!rootsArg) {
-          return { response: toolResponse({ content: [{ type: 'text', text: 'Missing roots parameter. Pass the roots value from the previous step.' }], structuredContent: { error: 'missing_roots' } }, true) };
-        }
-        const roots = parseRoots(rootsArg, env);
-        const repos = scanGitRepos(roots);
-        const selectedRepos = parseRepoSelection(choice, repos, cwd);
-        const detected = detectAiAgent(env);
-        const installedAgents = getInstalledAgentNames(buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env));
-        const detectedSetupAgents = getDetectedSetupAgentNames(detected?.name, installedAgents);
-        const agentList = ALL_KNOWN_AGENTS.map((a, i) => {
-          const tag = a === detected?.name ? ' ← detected' : installedAgents.includes(a) ? ' ← installed' : '';
-          return `  ${i + 1}) ${a}${tag}`;
-        }).join('\n');
-        const detectedLine = detectedSetupAgents.length > 0 ? `\nDetected install set: ${detectedSetupAgents.join(', ')}\n` : '\n';
-        return { response: toolResponse({ content: [{ type: 'text', text: `Selected ${selectedRepos.length} repo(s). Detected AI agent: ${detected?.name ?? 'none'}.${detectedLine}\nAvailable agents:\n${agentList}\n\nAsk the user which agents to configure.` }], structuredContent: { pending_question: 'agent_selection', roots: rootsArg, repo_selection: choice, selected_repos: selectedRepos.map((r) => ({ path: r.path, name: r.name })), detected_agent: detected?.name ?? null, installed_agents: installedAgents, detected_setup_agents: detectedSetupAgents, all_agents: ALL_KNOWN_AGENTS, prompt: 'Please ask the user: "Which agents to configure? Reply: (d)etected installed, (a)ll, or agent names like claude-code,cursor"' } }) };
-      }
-
-      if (step === 'agent_selection') {
-        if (!rootsArg || !repoSelectionArg) {
-          return { response: toolResponse({ content: [{ type: 'text', text: 'Missing roots or repo_selection parameter from previous steps.' }], structuredContent: { error: 'missing_params' } }, true) };
-        }
-        const roots = parseRoots(rootsArg, env);
-        const repos = scanGitRepos(roots);
-        const selectedRepos = parseRepoSelection(repoSelectionArg, repos, cwd);
-        const detected = detectAiAgent(env);
-        const installedAgents = getInstalledAgentNames(buildAgentInventory(resolveHomeDir(env) ?? os.homedir(), env));
-        const selectedAgents = parseAgentSelection(choice, detected?.name, installedAgents);
-        const summary: string[] = [];
-        const written = runGlobalInstall(selectedAgents, env);
-        for (const f of written) summary.push(`✔ Global config: ${f}`);
-        const { initialisedRepos, configActions } = await initReposAndConfigureAgents(selectedRepos, selectedAgents, env);
-        for (const p of initialisedRepos) summary.push(`✔ Initialised repo: ${p}`);
-        for (const a of configActions) summary.push(a);
-        let reloadMsg = '✔ Setup complete! Reload your AI agent session to activate brainclaw MCP tools.';
-        if (detected?.name === 'claude-code') reloadMsg += '\n  → In VS Code: Cmd/Ctrl+Shift+P → "Claude: Reload MCP Servers"';
-        else if (detected?.name === 'cursor') reloadMsg += '\n  → In Cursor: restart the editor';
-        else if (detected?.name === 'windsurf') reloadMsg += '\n  → In Windsurf: restart the editor';
-        return { response: toolResponse({ content: [{ type: 'text', text: [reloadMsg, '', ...summary].join('\n') }], structuredContent: { setup_complete: true, initialised_repos: initialisedRepos, global_configs_written: written, agent_configs_written: configActions, detected_agent: detected?.name ?? null, summary } }) };
-      }
-
-      return { response: toolResponse({ content: [{ type: 'text', text: `Unknown step: "${step}". Valid steps: project_roots, repo_selection, agent_selection.` }], structuredContent: { error: 'unknown_step', step } }, true) };
+      return await handleBclawSetup(payload, writeAdminCtx);
     }
 
     if (name === 'bclaw_init_project') {
-      const rawPath = typeof args.path === 'string' ? args.path.trim() : '';
-      if (!rawPath) {
-        return { response: createToolErrorResponse('validation_error', 'path is required') };
-      }
-      const force = args.force === true;
-      const projectModeArg = typeof args.project_mode === 'string' ? args.project_mode : undefined;
-      const linkAs = typeof args.link_as === 'string' && args.link_as.trim().length > 0
-        ? args.link_as.trim()
-        : undefined;
-
-      const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
-
-      let wasAlreadyInitialized = false;
-      if (memoryExists(resolvedPath) && !force) {
-        wasAlreadyInitialized = true;
-      } else {
-        if (!fs.existsSync(resolvedPath)) {
-          try {
-            fs.mkdirSync(resolvedPath, { recursive: true });
-          } catch (err) {
-            return {
-              response: createToolErrorResponse(
-                'init_project_failed',
-                `Failed to create target directory '${resolvedPath}': ${err instanceof Error ? err.message : String(err)}`,
-              ),
-            };
-          }
-        }
-        try {
-          const { runInit } = await import('./init.js');
-          await runInit({
-            yes: true,
-            cwd: resolvedPath,
-            force,
-            ...(projectModeArg ? { projectMode: projectModeArg as 'single-project' | 'multi-project' | 'auto' } : {}),
-          });
-        } catch (err) {
-          return {
-            response: createToolErrorResponse(
-              'init_project_failed',
-              `runInit failed for '${resolvedPath}': ${err instanceof Error ? err.message : String(err)}`,
-            ),
-          };
-        }
-      }
-
-      let projectName: string;
-      try {
-        projectName = loadConfig(resolvedPath).project_name;
-      } catch {
-        projectName = path.basename(resolvedPath);
-      }
-
-      let linkName: string;
-      try {
-        const { addCrossProjectLink } = await import('../core/cross-project.js');
-        const link = addCrossProjectLink({
-          path: resolvedPath,
-          name: linkAs ?? projectName,
-          cwd,
-          force,
-        });
-        linkName = link.name ?? path.basename(resolvedPath);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        // Treat a duplicate link as idempotent success when the caller did
-        // not request --force; the project itself is initialised correctly
-        // and the existing link already points at it.
-        if (/already exists/i.test(message) && !force) {
-          try {
-            const { resolveCrossProjectLinks } = await import('../core/cross-project.js');
-            const existing = resolveCrossProjectLinks(cwd).find(
-              (l) => l.absolutePath === resolvedPath || l.path === rawPath,
-            );
-            linkName = existing?.name ?? linkAs ?? projectName;
-          } catch {
-            linkName = linkAs ?? projectName;
-          }
-        } else {
-          return {
-            response: createToolErrorResponse('init_project_failed', `Failed to register cross_project_link: ${message}`),
-          };
-        }
-      }
-
-      const summary = wasAlreadyInitialized
-        ? `✔ ${resolvedPath} already initialised; linked as '${linkName}'.`
-        : `✔ Initialised brainclaw at ${resolvedPath} and linked as '${linkName}'.`;
-
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: summary }],
-          structuredContent: {
-            status: 'ok',
-            project_name: projectName,
-            path: resolvedPath,
-            link_id: linkName,
-            was_already_initialized: wasAlreadyInitialized,
-          },
-        }),
-      };
+      return await handleBclawInitProject(payload, writeAdminCtx);
     }
 
     if (name === 'bclaw_write_note') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const text = String(args.text ?? '');
-      const tags = (args.tags as string[] | undefined) ?? [];
-      const inputValidation = validateMcpInput(text, tags);
-      if (!inputValidation.ok) {
-        return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
-      }
-      const identity = resolved.identity!;
-
-      // Cross-project push
-      const crossProjectTarget = getCrossProjectArg(args, 'crossProject', 'cross_project');
-      if (crossProjectTarget) {
-        try {
-          const opIdentity = buildOperationalIdentity(identity.agent_name, cwd, {
-            agentId: identity.agent_id,
-            sessionId: connectionSessionId,
-          });
-          const signal = writeCrossProjectSignal(
-            resolveCrossProjectWritableTarget(crossProjectTarget, 'runtime_note', cwd),
-            'runtime_note',
-            {
-              schema_version: 2,
-              id: generateId('runtime_note'),
-              agent: opIdentity.agent,
-              agent_id: opIdentity.agent_id,
-              project_id: opIdentity.project_id ?? '',
-              session_id: opIdentity.session_id,
-              text,
-              created_at: nowISO(),
-              tags,
-              visibility: 'shared',
-              host_id: opIdentity.host_id ?? '',
-              note_type: 'observation',
-            },
-            cwd,
-          );
-          return {
-            response: toolResponse({
-              content: [{ type: 'text', text: `✔ Cross-project runtime note signaled to '${signal.target_project.name}' [${signal.id}]` }],
-              signal_id: signal.id,
-              entity_type: signal.entity_type,
-              note_id: (signal.payload as { id: string }).id,
-              target_project: signal.target_project.name,
-              target_path: signal.target_project.path,
-            }),
-          };
-        } catch (e: unknown) {
-          return { response: createToolErrorResponse('validation_error', e instanceof Error ? e.message : String(e)) };
-        }
-      }
-
-      const result = createRuntimeNote(text, {
-        agent: identity.agent_name,
-        agentId: identity.agent_id,
-        tag: tags,
-        visibility: (args.visibility as MemoryVisibility | undefined) ?? 'shared',
-        ttl: args.ttl as string | undefined,
-        autoReflect: args.autoReflect as boolean | undefined,
-        cwd,
-        sessionId: connectionSessionId,
-        model: currentModel,
-      }, false);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Note created [${result.noteId}]` }],
-          note_id: result.noteId,
-          session_id: result.sessionId,
-          auto_reflect_attempted: result.autoReflectAttempted,
-          detected_type: result.detectedType,
-          candidate_id: result.candidateId,
-          promoted_item_id: result.promotedItemId,
-          skip_reason: result.skipReason,
-        }),
-        nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.sessionId,
-      };
+      return handleBclawWriteNote(payload, writeMemoryCtx);
     }
 
     if (name === 'bclaw_quick_capture') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-
-      const text = String(args.text ?? '');
-      const inputValidation = validateMcpInput(text);
-      if (!inputValidation.ok) {
-        return { response: createToolErrorResponse('validation_error', inputValidation.errors[0]?.message ?? 'Invalid input', inputValidation.errors) };
-      }
-
-      const context = typeof args.context === 'string' ? args.context.trim() : undefined;
-      if (context) {
-        const contextCheck = validateMcpField(context, 'context');
-        if (!contextCheck.ok) {
-          return { response: createToolErrorResponse('validation_error', contextCheck.message) };
-        }
-      }
-
-      const identity = resolved.identity!;
-      // Caller-asserted classification wins (pln#542): the calling agent
-      // declares decision/trap/constraint/note; keyword heuristics are the
-      // fallback when no type is given.
-      const assertedType = typeof args.type === 'string' ? args.type.trim().toLowerCase() : undefined;
-      let classification: QuickCaptureClassification;
-      if (assertedType === 'decision' || assertedType === 'trap' || assertedType === 'constraint' || assertedType === 'note') {
-        classification = { target: assertedType, reason: 'caller_asserted', decisionScore: 0, trapScore: 0 };
-      } else if (assertedType !== undefined) {
-        return { response: createToolErrorResponse('validation_error', `type must be one of: decision, trap, constraint, note (got '${assertedType}')`) };
-      } else {
-        classification = classifyQuickCapture(text);
-      }
-      if (classification.target === 'note') {
-        const result = createRuntimeNote(formatQuickCaptureNoteText(text, context), {
-          agent: identity.agent_name,
-          agentId: identity.agent_id,
-          tag: ['quick-capture'],
-          visibility: 'shared',
-          cwd,
-          sessionId: connectionSessionId,
-          model: currentModel,
-        }, false);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Quick capture saved as runtime note [${result.noteId}]` }],
-            structuredContent: {
-              classification: classification.target,
-              classification_reason: classification.reason,
-              decision_score: classification.decisionScore,
-              trap_score: classification.trapScore,
-              note_id: result.noteId,
-              session_id: result.sessionId,
-              context,
-              next_actions: [
-                { tool: 'bclaw_quick_capture', args: { text: '<same text>', type: 'decision' }, when: 'this was actually a durable decision/trap/constraint — re-capture with an asserted type' },
-              ],
-            },
-          }),
-          nextConnectionSessionId: explicitSessionIdFromEnv() ? undefined : result.sessionId,
-        };
-      }
-
-      const capture = createCandidateFromInput(text, classification.target, {
-        tag: ['quick-capture'],
-        author: identity.agent_name,
-        authorId: identity.agent_id,
-        sessionId: connectionSessionId,
-        source: 'mcp:quick-capture',
-        path: context,
-        cwd,
-      }, false, false, true);
-
-      const statusText = capture.writeThrough
-        ? `✔ Quick capture promoted as ${classification.target} [${capture.promotedItemId}]`
-        : `✔ Quick capture saved as ${classification.target} candidate [${capture.candidateId}]`;
-      const captureNextActions = capture.writeThrough
-        ? [
-            { tool: 'bclaw_get', args: { entity: classification.target, id: capture.promotedItemId }, when: 'to verify the promoted item' },
-          ]
-        : [
-            { tool: 'bclaw_get', args: { entity: 'candidate', id: capture.candidateId }, when: 'to review the pending candidate (contradiction metadata is advisory)' },
-          ];
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: statusText }],
-          structuredContent: {
-            classification: classification.target,
-            classification_reason: classification.reason,
-            decision_score: classification.decisionScore,
-            trap_score: classification.trapScore,
-            candidate_id: capture.candidateId,
-            promoted_item_id: capture.promotedItemId,
-            write_through: capture.writeThrough,
-            // Advisory only (cnd_abe61d68): contradictions are metadata on
-            // the candidate, never a promotion blocker.
-            contradiction_summary: capture.contradictionSummary,
-            contradictions_detected: capture.contradictionsDetected?.map((item) => ({
-              severity: item.severity,
-              reason: item.reason,
-              conflicts_with: item.conflicts_with,
-            })),
-            context,
-            next_actions: captureNextActions,
-          },
-        }),
-      };
+      return handleBclawQuickCapture(payload, writeMemoryCtx);
     }
 
     if (name === 'bclaw_create_plan') {
-      const crossProjectError = blockCrossProjectExecution('plan', args);
-      if (crossProjectError) {
-        return { response: crossProjectError };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-
-      const planText = String(args.text ?? '').trim();
-      if (!planText) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
-      }
-
-      try {
-        const created = createPlan({
-          text: planText,
-          author: resolved.identity!.agent_name,
-          type: args.type as PlanType | undefined,
-          priority: args.priority as Priority | undefined,
-          assignee: args.assignee as string | undefined,
-          project: args.project as string | undefined,
-          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
-          relatedPaths: Array.isArray(args.related_paths) ? args.related_paths as string[] : undefined,
-          dependsOn: Array.isArray(args.depends_on) ? args.depends_on as string[] : undefined,
-          estimatedEffort: typeof args.estimate === 'number'
-            ? args.estimate
-            : typeof args.estimated_effort === 'number'
-              ? args.estimated_effort
-              : undefined,
-        }, cwd);
-        appendAuditEntry({
-          actor: resolved.identity!.agent_name,
-          actor_id: resolved.identity!.agent_id,
-          action: 'create',
-          item_id: created.id,
-          item_type: 'plan',
-        }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Plan added: [${created.shortLabel}] ${created.text}` }],
-            plan_id: created.id,
-            short_label: created.shortLabel,
-            text: created.text,
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createLegacyToolExecutionErrorResponse(error) };
-      }
+      return handleBclawCreatePlan(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_create_candidate') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-
-      const candidateText = String(args.text ?? '').trim();
-      if (!candidateText) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: text') };
-      }
-
-      const candidateType = String(args.type ?? '').trim();
-      if (!['constraint', 'decision', 'trap', 'handoff'].includes(candidateType)) {
-        return { response: createToolErrorResponse('validation_error', 'type must be one of: constraint, decision, trap, handoff') };
-      }
-
-      try {
-        const created = createEntity('candidate', {
-          text: candidateText,
-          type: candidateType,
-          author: resolved.identity!.agent_name,
-          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
-          source: 'agent',
-          ...(typeof args.origin === 'string' ? { origin: String(args.origin) } : {}),
-          ...(typeof args.severity === 'string' ? { severity: String(args.severity) } : {}),
-          ...(typeof args.from === 'string' ? { from: String(args.from) } : {}),
-          ...(typeof args.to === 'string' ? { to: String(args.to) } : {}),
-          ...(typeof args.narrative === 'string' ? { narrative: String(args.narrative) } : {}),
-          ...(Array.isArray(args.related_paths) ? { related_paths: args.related_paths as string[] } : {}),
-          ...(typeof args.plan_id === 'string' ? { plan_id: String(args.plan_id) } : {}),
-        }, cwd);
-        appendAuditEntry({
-          actor: resolved.identity!.agent_name,
-          actor_id: resolved.identity!.agent_id,
-          action: 'create',
-          item_id: created.id,
-          item_type: 'candidate',
-        }, cwd);
-
-        const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
-        if (targetProjectArg) {
-          const signal = writeCrossProjectSignal(
-            resolveCrossProjectWritableTarget(targetProjectArg, 'candidate', cwd),
-            'candidate',
-            loadCandidate(created.id, cwd),
-            cwd,
-          );
-          return {
-            response: toolResponse({
-              content: [{ type: 'text', text: `✔ Candidate created [${created.id}] and signaled to '${signal.target_project.name}' [${signal.id}]` }],
-              candidate_id: created.id,
-              short_label: created.short_label,
-              signal_id: signal.id,
-              entity_type: signal.entity_type,
-              target_project: signal.target_project.name,
-              target_path: signal.target_project.path,
-            }),
-          };
-        }
-
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Candidate created [${created.id}]` }],
-            candidate_id: created.id,
-            short_label: created.short_label,
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createLegacyToolExecutionErrorResponse(error) };
-      }
+      return handleBclawCreateCandidate(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_accept') {
-      const resolved = ensureTrust(args, { nameField: 'by', idField: 'byId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      try {
-        const id = String(args.id ?? '').trim();
-        if (!id) {
-          return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-        }
-        const result = acceptCandidate(id, resolved.identity!.agent_name, cwd, resolved.identity!.agent_id);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Promoted to ${result.candidate_type} [${result.promoted_item_id}]` }],
-            candidate_id: result.candidate_id,
-            candidate_type: result.candidate_type,
-            promoted_item_id: result.promoted_item_id,
-            actor: result.actor,
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createLegacyToolExecutionErrorResponse(error) };
-      }
+      return handleBclawAccept(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_reject') {
-      const resolved = ensureTrust(args, { nameField: 'by', idField: 'byId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      try {
-        const id = String(args.id ?? '').trim();
-        if (!id) {
-          return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-        }
-        const result = rejectCandidate(
-          id,
-          typeof args.reason === 'string' ? args.reason : undefined,
-          resolved.identity!.agent_name,
-          cwd,
-          resolved.identity!.agent_id,
-        );
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Candidate rejected [${result.candidate_id}]` }],
-            candidate_id: result.candidate_id,
-            actor: result.actor,
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createLegacyToolExecutionErrorResponse(error) };
-      }
+      return handleBclawReject(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_claim') {
@@ -2316,67 +1490,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_compact') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-
-      const archiveIds = args.archiveIds as string[] | undefined;
-      const isPhase2 = archiveIds && archiveIds.length > 0;
-
-      if (isPhase2) {
-        // Phase 2: apply compaction — archive specified items and create new memories
-        const result = applyCompaction({
-          archiveIds,
-          newItems: args.newItems as Array<{ type: 'constraint' | 'decision' | 'trap'; text: string; tags?: string[]; severity?: string }> | undefined,
-          author: resolved.identity?.agent_name,
-          authorId: resolved.identity?.agent_id,
-          cwd,
-        });
-
-        const lines: string[] = [];
-        lines.push(`✔ Compacted ${result.archived_count} item(s).`);
-        if (result.created_count > 0) {
-          lines.push(`Created ${result.created_count} new memory item(s): ${result.created_ids.join(', ')}`);
-        }
-        lines.push(`Backup: ${result.backup_path}`);
-
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: lines.join('\n') }],
-            ...result,
-          }),
-        };
-      }
-
-      // Phase 1: assess pressure and return compaction template
-      const assessment = assessMemoryPressure(cwd);
-      const maxItems = (args.maxItems as number | undefined) ?? 20;
-      const selected = assessment.eligible_items.slice(0, maxItems);
-      const template = selected.length > 0 ? buildCompactionTemplate(selected) : undefined;
-
-      const lines: string[] = [];
-      lines.push(`Memory pressure: ${assessment.pressure ? 'YES' : 'no'} (${assessment.done_plans} done plans, ${assessment.closed_handoffs} closed handoffs)`);
-      lines.push(`Thresholds: plans >= ${assessment.thresholds.plans}, handoffs >= ${assessment.thresholds.handoffs}`);
-      lines.push(`Eligible items: ${assessment.eligible_items.length}`);
-
-      if (template) {
-        lines.push('');
-        lines.push(template);
-      } else {
-        lines.push('No items eligible for compaction.');
-      }
-
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: lines.join('\n') }],
-          pressure: assessment.pressure,
-          done_plans: assessment.done_plans,
-          closed_handoffs: assessment.closed_handoffs,
-          eligible_count: assessment.eligible_items.length,
-          eligible_ids: selected.map(i => i.id),
-        }),
-      };
+      return handleBclawCompact(payload, writeMemoryCtx);
     }
 
     if (name === 'bclaw_dispatch') {
@@ -2400,72 +1514,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_create_sequence') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const sequenceName = String(args.name ?? '').trim();
-      if (!sequenceName) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: name') };
-      }
-      try {
-        const result = createSequence({
-          name: sequenceName,
-          description: args.description as string | undefined,
-          status: args.status as SequenceStatus | undefined,
-          owner: args.owner as string | undefined,
-          items: Array.isArray(args.items) ? args.items as SequenceItemInput[] : [],
-          tags: Array.isArray(args.tags) ? args.tags as string[] : [],
-          author: resolved.identity!.agent_name,
-          authorId: resolved.identity!.agent_id,
-          model: currentModel,
-        }, cwd);
-        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'create', item_id: result.id, item_type: 'sequence' }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Sequence added: [${result.id}] ${sequenceName}` }],
-            sequence_id: result.id,
-          }),
-        };
-      } catch (err: unknown) {
-        return { response: createToolErrorResponse('operation_error', err instanceof Error ? err.message : String(err)) };
-      }
+      return handleBclawCreateSequence(payload, writeSequencesCtx);
     }
 
     if (name === 'bclaw_update_sequence') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const sequenceId = String(args.id ?? '').trim();
-      if (!sequenceId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      }
-      try {
-        const result = updateSequence({
-          id: sequenceId,
-          name: args.name as string | undefined,
-          description: args.description as string | undefined,
-          status: args.status as SequenceStatus | undefined,
-          owner: args.owner as string | undefined,
-          items: Array.isArray(args.items) ? args.items as SequenceItemInput[] : undefined,
-          tags: Array.isArray(args.tags) ? args.tags as string[] : undefined,
-        }, cwd);
-        appendAuditEntry({ actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: result.id, item_type: 'sequence' }, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Sequence updated: [${result.id}] ${result.name}` }],
-            sequence_id: result.id,
-            status: result.status,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
+      return handleBclawUpdateSequence(payload, writeSequencesCtx);
     }
 
     if (name === 'bclaw_add_step') {
@@ -2485,356 +1538,35 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_delete_plan') {
-      const dpLoc = resolveExecutionWriteTarget('plan', args, cwd, connectionSessionId);
-      if (dpLoc.block) {
-        return { response: dpLoc.block };
-      }
-      const dpTargetCwd = dpLoc.targetCwd;
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const dpId = String(args.id ?? '').trim();
-      if (!dpId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      try {
-        const result = deletePlanOp(dpId, dpTargetCwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Plan deleted: [${result.id}] ${result.text.slice(0, 80)}` }],
-            plan_id: result.id,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
+      return handleBclawDeletePlan(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_delete_sequence') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const dsqId = String(args.id ?? '').trim();
-      if (!dsqId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      try {
-        const result = deleteSequence(dsqId, cwd);
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Sequence deleted: [${result.id}] ${result.name}` }],
-            sequence_id: result.id,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
+      return handleBclawDeleteSequence(payload, writeSequencesCtx);
     }
 
     if (name === 'bclaw_delete_memory') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const itemId = String(args.id ?? '').trim();
-      const itemType = String(args.type ?? '').trim();
-      if (!itemId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      if (!itemType) return { response: createToolErrorResponse('validation_error', 'Missing required argument: type') };
-      if (!['constraint', 'decision', 'trap'].includes(itemType)) {
-        return { response: createToolErrorResponse('validation_error', `Invalid type: ${itemType}`) };
-      }
-      try {
-        const result = deleteMemoryItem(itemId, itemType as MemoryItemType, cwd);
-        appendAuditEntry(
-          { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'delete', item_id: itemId, item_type: itemType as CandidateType },
-          cwd,
-        );
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Deleted [${itemId}] (${itemType})` }],
-            deleted_id: result.deletedId,
-            item_type: result.itemType,
-            store_level: result.storeRole,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
+      return handleBclawDeleteMemory(payload, writeMemoryCtx);
     }
 
     if (name === 'bclaw_update_memory') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const itemId = String(args.id ?? '').trim();
-      const itemType = String(args.type ?? '').trim();
-      const newText = args.text ? String(args.text).trim() : undefined;
-      const newTags = Array.isArray(args.tags) ? args.tags.map((t) => String(t).trim()) : undefined;
-      const newStatus = args.status ? String(args.status).trim() : undefined;
-      const moveToStore = args.moveToStore ? String(args.moveToStore).trim() : undefined;
-
-      if (!itemId) return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      if (!itemType) return { response: createToolErrorResponse('validation_error', 'Missing required argument: type') };
-      if (!['constraint', 'decision', 'trap'].includes(itemType)) {
-        return { response: createToolErrorResponse('validation_error', `Invalid type for update: ${itemType}`) };
-      }
-      if (!newText && !newTags && !newStatus && !moveToStore) {
-        return { response: createToolErrorResponse('validation_error', 'At least one of text, tags, status, or moveToStore must be provided') };
-      }
-      if (moveToStore && !['local', 'repo', 'workspace', 'user'].includes(moveToStore)) {
-        return { response: createToolErrorResponse('validation_error', `Invalid moveToStore target: ${moveToStore}`) };
-      }
-      if (newStatus && itemType !== 'trap') {
-        return { response: createToolErrorResponse('validation_error', 'status updates are only supported for traps') };
-      }
-      if (newStatus && !['active', 'resolved', 'expired'].includes(newStatus)) {
-        return { response: createToolErrorResponse('validation_error', `Invalid trap status: ${newStatus}`) };
-      }
-      try {
-        const result = updateMemoryItem({
-          id: itemId,
-          type: itemType as MemoryItemType,
-          text: newText,
-          tags: newTags,
-          status: newStatus,
-          moveToStore: moveToStore as StoreTarget | undefined,
-        }, cwd);
-        appendAuditEntry(
-          { actor: resolved.identity!.agent_name, actor_id: resolved.identity!.agent_id, action: 'update', item_id: itemId, item_type: itemType as CandidateType },
-          cwd,
-        );
-        return {
-          response: toolResponse({
-            content: [{ type: 'text', text: `✔ Updated [${itemId}] (${itemType})` }],
-            updated_id: result.updatedId,
-            item_type: result.itemType,
-            previous_store: result.previousStore,
-            new_store: result.newStore,
-          }),
-        };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not found')) {
-          return { response: createToolErrorResponse('not_found', msg) };
-        }
-        return { response: createToolErrorResponse('operation_error', msg) };
-      }
+      return handleBclawUpdateMemory(payload, writeMemoryCtx);
     }
 
     if (name === 'bclaw_add_capability') {
-      const capName = String(args.name ?? '').trim();
-      const capDesc = String(args.description ?? '').trim();
-      if (!capName || !capDesc) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
-      const cap = createCapability({
-        name: capName,
-        description: capDesc,
-        tags: extraTags,
-        author: resolvedIdentity.agent_name,
-        authorId: resolvedIdentity.agent_id,
-        model: currentModel,
-      }, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: cap.id, item_type: 'capability', reason: `capability: ${capName}` }, cwd);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Capability registered: [${cap.id}] ${capName}` }],
-          id: cap.id,
-          name: capName,
-          schema_version: SCHEMA_VERSION,
-        }),
-      };
+      return handleBclawAddCapability(payload, writeAdminCtx);
     }
 
     if (name === 'bclaw_add_tool') {
-      const toolName = String(args.name ?? '').trim();
-      const toolDesc = String(args.description ?? '').trim();
-      if (!toolName || !toolDesc) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required arguments: name and description') };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const toolType = String(args.type ?? 'utility');
-      const extraTags = Array.isArray(args.tags) ? args.tags as string[] : [];
-      const tool = createRegistryTool({
-        name: toolName,
-        description: toolDesc,
-        type: toolType,
-        tags: extraTags,
-        author: resolvedIdentity.agent_name,
-        authorId: resolvedIdentity.agent_id,
-        model: currentModel,
-      }, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'create', item_id: tool.id, item_type: 'tool', reason: `tool: ${toolName}` }, cwd);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Tool registered: [${tool.id}] ${toolName} (${toolType})` }],
-          id: tool.id,
-          name: toolName,
-          type: toolType,
-          schema_version: SCHEMA_VERSION,
-        }),
-      };
+      return handleBclawAddTool(payload, writeAdminCtx);
     }
 
     if (name === 'bclaw_correct_handoff') {
-      // Phase 3 slice 3e — P6.1 tombstone correction. Writes a new
-      // handoff that supersedes the original. Both records stay on
-      // disk (federation-safe); the original becomes pinned via
-      // `superseded_by`.
-      const originalId = String(args.originalId ?? '').trim();
-      if (!originalId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: originalId') };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const state = loadState(cwd);
-      const original = state.open_handoffs.find((h) => h.id === originalId);
-      if (!original) {
-        return { response: createToolErrorResponse('not_found', `Handoff not found: ${originalId}`) };
-      }
-      if (original.superseded_by) {
-        return { response: createToolErrorResponse('validation_error', `Handoff ${originalId} was already superseded by ${original.superseded_by}. Correct the current tip instead.`) };
-      }
-      // Phase 3 slice 3e fixup (Sonnet review #3): refuse to supersede a
-      // handoff in a terminal status per EntityRegistry. A closed handoff
-      // is immutable history — corrections would logically dangle.
-      if (original.status && ENTITY_REGISTRY.handoff.terminal.includes(original.status)) {
-        return { response: createToolErrorResponse('validation_error', `Handoff ${originalId} is in terminal status '${original.status}'. Cannot supersede a closed handoff.`) };
-      }
-      const { id: newId, short_label } = generateIdWithLabel('open_handoffs', cwd);
-      const reason = typeof args.reason === 'string' && args.reason ? args.reason : undefined;
-      const overrideText = typeof args.text === 'string' && args.text ? args.text : undefined;
-      const correctionText = overrideText
-        ?? `${original.text}\n\n---\n[correction] ${reason ?? 'superseded by later record'}`;
-      const overrideNarrative = typeof args.narrative === 'string' && args.narrative ? args.narrative : original.narrative;
-      const tags = Array.isArray(args.tags) ? (args.tags as string[]) : original.tags;
-      const correction = {
-        ...original,
-        id: newId,
-        short_label,
-        text: correctionText,
-        narrative: overrideNarrative,
-        tags,
-        created_at: nowISO(),
-        author: resolvedIdentity.agent_name,
-        author_id: resolvedIdentity.agent_id,
-        session_id: connectionSessionId,
-        review: undefined,
-        supersedes: originalId,
-      };
-      delete (correction as Record<string, unknown>).superseded_by;
-      original.superseded_by = newId;
-      state.open_handoffs.push(correction as typeof original);
-      persistState(state, cwd);
-      appendAuditEntry({
-        actor: resolvedIdentity.agent_name,
-        actor_id: resolvedIdentity.agent_id,
-        action: 'create',
-        item_id: newId,
-        item_type: 'handoff',
-        scope: `supersedes:${originalId}`,
-      }, cwd);
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ correction handoff [${short_label ?? newId}] supersedes ${originalId}` }],
-          id: newId,
-          short_label,
-          supersedes: originalId,
-          schema_version: SCHEMA_VERSION,
-        }),
-      };
+      return handleBclawCorrectHandoff(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_update_handoff') {
-      const handoffId = String(args.id ?? '').trim();
-      if (!handoffId) {
-        return { response: createToolErrorResponse('validation_error', 'Missing required argument: id') };
-      }
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'contributor', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const state = loadState(cwd);
-      const handoff = state.open_handoffs.find((h) => h.id === handoffId);
-      if (!handoff) {
-        return { response: createToolErrorResponse('not_found', `Handoff not found: ${handoffId}`) };
-      }
-      applyHandoffUpdates(handoff, {
-        status: args.status as 'open' | 'accepted' | 'closed' | undefined,
-        to: typeof args.to === 'string' ? String(args.to) : undefined,
-        narrative: typeof args.narrative === 'string' ? String(args.narrative) : undefined,
-        files_touched: Array.isArray(args.files_touched) ? args.files_touched as string[] : undefined,
-        pre_conditions: Array.isArray(args.pre_conditions) ? args.pre_conditions as string[] : undefined,
-        post_conditions: Array.isArray(args.post_conditions) ? args.post_conditions as string[] : undefined,
-        tests_to_verify: Array.isArray(args.tests_to_verify) ? args.tests_to_verify as string[] : undefined,
-        linked_plans: Array.isArray(args.linked_plans) ? args.linked_plans as string[] : undefined,
-        reviewer: typeof args.reviewer === 'string' ? String(args.reviewer) : undefined,
-        review_verdict: args.review_verdict as 'approve' | 'request_changes' | undefined,
-        reviewed_by: typeof args.reviewed_by === 'string' ? String(args.reviewed_by) : undefined,
-        review_summary: typeof args.review_summary === 'string' ? String(args.review_summary) : undefined,
-        blocking_issues: Array.isArray(args.blocking_issues) ? args.blocking_issues as string[] : undefined,
-        suggestions: Array.isArray(args.suggestions) ? args.suggestions as string[] : undefined,
-      });
-      saveState(state, cwd);
-      appendAuditEntry({ actor: resolvedIdentity.agent_name, actor_id: resolvedIdentity.agent_id, action: 'update', item_id: handoffId, item_type: 'handoff' }, cwd);
-      const targetProjectArg = getCrossProjectArg(args, 'targetProject', 'target_project');
-      if (targetProjectArg) {
-        try {
-          const targetLink = resolveCrossProjectWritableTarget(targetProjectArg, 'handoff', cwd);
-          const signal = writeCrossProjectSignal(targetLink, 'handoff', handoff, cwd);
-          return {
-            response: toolResponse({
-              content: [{ type: 'text', text: `✔ Handoff updated locally and signaled to ${targetLink.projectName} [${signal.id}]` }],
-              signal_id: signal.id,
-              entity_type: signal.entity_type,
-              handoff_id: handoffId,
-              status: handoff.status,
-              to: handoff.to,
-              review: handoff.review,
-              target_project: targetLink.projectName,
-              target_path: targetLink.absolutePath,
-              schema_version: SCHEMA_VERSION,
-            }),
-          };
-        } catch (error: unknown) {
-          return { response: createToolErrorResponse('validation_error', error instanceof Error ? error.message : String(error)) };
-        }
-      }
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: `✔ Handoff updated: [${handoffId}] ${handoff.from} → ${handoff.to} (${handoff.status})` }],
-          handoff_id: handoffId,
-          status: handoff.status,
-          to: handoff.to,
-          review: handoff.review,
-          schema_version: SCHEMA_VERSION,
-        }),
-      };
+      return handleBclawUpdateHandoff(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_work') {
@@ -3183,31 +1915,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_harvest_candidates') {
-      const resolved = ensureTrust(args, { nameField: 'agent', idField: 'agentId' }, 'trusted', cwd, connectionSessionId);
-      if (resolved.error) {
-        return { response: createToolErrorResponse(resolved.error.kind, resolved.error.message, resolved.error.details) };
-      }
-      const resolvedIdentity = resolved.identity!;
-      const worktreePaths = Array.isArray(args.worktreePaths) ? (args.worktreePaths as string[]) : undefined;
-      const dryRun = args.dryRun === true;
-      const harvestResult = harvestCandidates({
-        worktreePaths,
-        dryRun,
-        cwd,
-        agent: resolvedIdentity.agent_name,
-      });
-      const dryTag = dryRun ? ' (dry-run)' : '';
-      const summary = `✔ Harvest complete${dryTag}: ${harvestResult.harvested.length} imported, ${harvestResult.skipped.length} skipped, ${harvestResult.errors.length} error(s).`;
-      return {
-        response: toolResponse({
-          content: [{ type: 'text', text: summary }],
-          harvested: harvestResult.harvested.length,
-          skipped: harvestResult.skipped.length,
-          errors: harvestResult.errors,
-          candidates: harvestResult.harvested.map((c) => ({ id: c.id, type: c.type })),
-          dry_run: dryRun,
-        }),
-      };
+      return handleBclawHarvestCandidates(payload, writeMemoryCtx);
     }
 
     // ── Canonical CRUD verbs (Phase 3 slice 3b) ──────────────────────
@@ -3396,244 +2104,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
     }
 
     if (name === 'bclaw_create') {
-      try {
-        const entity = String(args.entity ?? '') as EntityName;
-        // Execution entities (plan/claim) auto-localize into a workspace sibling
-        // when project=X names one: session+switch then write locally. Only
-        // federated links / unknown names are blocked (signaling-only boundary).
-        let targetCwd: string;
-        let autoSwitched = false;
-        if (entity === 'claim' || entity === 'plan') {
-          const loc = resolveExecutionWriteTarget(entity, args, cwd, connectionSessionId);
-          if (loc.block) return { response: loc.block };
-          targetCwd = loc.targetCwd;
-          autoSwitched = loc.autoSwitched;
-        } else {
-          targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
-        }
-        const rawData = (args.data ?? {}) as Record<string, unknown>;
-        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-
-        // Auto-fill identity fields. Without this, a caller who omits author/agent
-        // creates a schema-invalid record that is silently dropped on read and
-        // GC'd from disk on the next mutation.
-        // Identity is resolved against the SOURCE cwd (the agent's own
-        // project/registry), not the target — an agent doesn't need to be
-        // registered in the target project to write into it. An explicitly
-        // supplied data.author is honored as content-level attribution
-        // (cross-project signaling writers may not be registered locally);
-        // when author is MISSING, resolution is mandatory and failure is a
-        // hard validation_error (pln#562 step 3) — never author:'unknown'.
-        const data: Record<string, unknown> = { ...rawData };
-        let actor = typeof data.author === 'string' ? data.author : undefined;
-        let actorId = typeof data.agent_id === 'string' ? data.agent_id : undefined;
-        let autoRepair: CanonicalAuthorAutoRepair | undefined;
-        if (data.author === undefined) {
-          const author = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-          data.author = author.agent_name;
-          if (data.agent === undefined) data.agent = author.agent_name;
-          if (data.agent_id === undefined && author.agent_id) data.agent_id = author.agent_id;
-          actor = author.agent_name;
-          actorId = author.agent_id;
-          autoRepair = author.auto_repair;
-        } else if (data.agent === undefined) {
-          data.agent = data.author;
-        }
-
-        const result = createEntity(entity, data, targetCwd);
-        appendAuditEntry(
-          { actor: actor ?? 'unknown', ...(actorId ? { actor_id: actorId } : {}), action: 'create', item_id: result.id, item_type: entity },
-          targetCwd,
-        );
-        const createText = `✔ created ${entity} ${result.id}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
-        const createContent = autoRepair
-          ? [{ type: 'text' as const, text: createText }, { type: 'text' as const, text: renderAutoRepairWarning(autoRepair, actor ?? 'unknown') }]
-          : [{ type: 'text' as const, text: createText }];
-        return {
-          response: toolResponse({
-            content: createContent,
-            structuredContent: {
-              ...result,
-              resolved_project: targetScope.resolved_project,
-              active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
-              ...(autoSwitched ? { auto_switched: true } : {}),
-              ...(autoRepair ? { auto_repair: autoRepair } : {}),
-            },
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
-      }
+      return handleBclawCreate(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_update') {
-      try {
-        const entity = String(args.entity ?? '') as EntityName;
-        const id = String(args.id ?? '');
-        const patch = (args.patch ?? {}) as Record<string, unknown>;
-        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
-        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = updateEntity(entity, id, patch, targetCwd);
-        appendAuditEntry(
-          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity },
-          targetCwd,
-        );
-        const updateText = `✔ updated ${entity} ${id}`;
-        const updateContent = auto_repair
-          ? [{ type: 'text' as const, text: updateText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
-          : [{ type: 'text' as const, text: updateText }];
-        return {
-          response: toolResponse({
-            content: updateContent,
-            structuredContent: {
-              ...result,
-              resolved_project: targetScope.resolved_project,
-              active_source: targetScope.active_source,
-              ...(auto_repair ? { auto_repair } : {}),
-            },
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
-      }
+      return handleBclawUpdate(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_remove') {
-      try {
-        const entity = String(args.entity ?? '') as EntityName;
-        const id = String(args.id ?? '');
-        const purge = args.purge === true;
-        const targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
-        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = removeEntity(entity, id, targetCwd, purge);
-        appendAuditEntry(
-          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'delete', item_id: id, item_type: entity, reason: purge ? 'purged' : 'archived' },
-          targetCwd,
-        );
-        const removeText = `✔ removed ${entity} ${id}`;
-        const removeContent = auto_repair
-          ? [{ type: 'text' as const, text: removeText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
-          : [{ type: 'text' as const, text: removeText }];
-        return {
-          response: toolResponse({
-            content: removeContent,
-            structuredContent: {
-              ...result,
-              resolved_project: targetScope.resolved_project,
-              active_source: targetScope.active_source,
-              ...(auto_repair ? { auto_repair } : {}),
-            },
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
-      }
+      return handleBclawRemove(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_move') {
-      try {
-        const entity = String(args.entity ?? '') as EntityName;
-        const id = String(args.id ?? '');
-        const toProject = String(args.to_project ?? '');
-        const fromProject = typeof args.from_project === 'string' ? args.from_project : undefined;
-        const force = args.force === true;
-        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        const result = relocateEntity({ entity, id, toProject, fromProject, force, cwd, actor: agent_name, actorId: agent_id });
-        const warn = result.warnings.length ? ` (${result.warnings.length} warning(s))` : '';
-        const moveText = `✔ moved ${entity} ${id} → ${result.to}${warn}`;
-        const moveContent = auto_repair
-          ? [{ type: 'text' as const, text: moveText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
-          : [{ type: 'text' as const, text: moveText }];
-        return {
-          response: toolResponse({
-            content: moveContent,
-            structuredContent: {
-              ...result,
-              ...(auto_repair ? { auto_repair } : {}),
-            },
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
-      }
+      return handleBclawMove(payload, writeEntitiesCtx);
     }
 
     if (name === 'bclaw_transition') {
-      try {
-        const entity = String(args.entity ?? '') as EntityName;
-        // Same auto-localize as bclaw_create: a workspace sibling named by
-        // project=X is switched into and transitioned locally; only federated
-        // links / unknown names are blocked (signaling-only boundary).
-        let targetCwd: string;
-        let autoSwitched = false;
-        if (entity === 'claim' || entity === 'plan') {
-          const loc = resolveExecutionWriteTarget(entity, args, cwd, connectionSessionId);
-          if (loc.block) return { response: loc.block };
-          targetCwd = loc.targetCwd;
-          autoSwitched = loc.autoSwitched;
-        } else {
-          targetCwd = resolveProjectCwd(args.project as string | undefined, cwd);
-        }
-        const id = String(args.id ?? '');
-        const to = String(args.to ?? '');
-        const reason = args.reason as string | undefined;
-        const targetScope = scopeMetadataForTarget(args, targetCwd, scopeInfo);
-        const { agent_name, agent_id, auto_repair } = resolveCanonicalAuthor(args, cwd, connectionSessionId);
-        // trp#928 — claim transitions consume the ReleaseClaimAuth ownership
-        // check (released/stale both mutate a claim owned by SOME agent). Reuse
-        // the same coordinator_override opt-in as bclaw_release_claim so both
-        // paths have identical trust semantics and the same executable error.
-        let transitionAuth: import('../core/entity-operations.js').TransitionAuth | undefined;
-        if (entity === 'claim') {
-          const transitionIdentity = resolveMutationIdentity(args, { nameField: 'agent', idField: 'agentId' }, targetCwd, connectionSessionId);
-          const coordinatorOverrideRequested = args.coordinator_override === true;
-          if (coordinatorOverrideRequested) {
-            const identity = 'identity' in transitionIdentity ? transitionIdentity.identity : undefined;
-            const trustLevel = identity?.trust_level ?? 'contributor';
-            if (!hasMinimumTrustLevel(trustLevel, 'trusted')) {
-              return {
-                response: createToolErrorResponse(
-                  'trust_error',
-                  `coordinator_override:true requires trust_level 'trusted' or higher — caller is '${trustLevel}'.`,
-                ),
-              };
-            }
-          }
-          transitionAuth = 'identity' in transitionIdentity && transitionIdentity.identity
-            ? {
-                agent: transitionIdentity.identity.agent_name,
-                agent_id: transitionIdentity.identity.agent_id,
-                session_id: connectionSessionId,
-                override: coordinatorOverrideRequested,
-              }
-            : undefined;
-        }
-        const result = transitionEntity(entity, id, to, targetCwd, reason, transitionAuth);
-        appendAuditEntry(
-          { actor: agent_name, ...(agent_id ? { actor_id: agent_id } : {}), action: 'update', item_id: id, item_type: entity, reason: `transition ${result.from} → ${to}${reason ? ` (${reason})` : ''}` },
-          targetCwd,
-        );
-        const transitionText = `✔ ${entity} ${id}: ${result.from} → ${to}${autoSwitched ? ` (auto-switched → ${targetScope.resolved_project.name ?? targetScope.resolved_project.path})` : ''}`;
-        const transitionContent = auto_repair
-          ? [{ type: 'text' as const, text: transitionText }, { type: 'text' as const, text: renderAutoRepairWarning(auto_repair, agent_name) }]
-          : [{ type: 'text' as const, text: transitionText }];
-        return {
-          response: toolResponse({
-            content: transitionContent,
-            structuredContent: {
-              ...result,
-              resolved_project: targetScope.resolved_project,
-              active_source: autoSwitched ? 'auto_switch' : targetScope.active_source,
-              ...(autoSwitched ? { auto_switched: true } : {}),
-              ...(auto_repair ? { auto_repair } : {}),
-            },
-          }),
-        };
-      } catch (error: unknown) {
-        return { response: createToolErrorResponse('validation_error', (error as Error).message) };
-      }
+      return handleBclawTransition(payload, writeEntitiesCtx);
     }
 
     const removedRedirect = REMOVED_TOOL_REDIRECTS[name];
