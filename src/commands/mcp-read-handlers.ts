@@ -4,6 +4,10 @@
  * Extracted from mcp.ts to reduce file size. These handlers do not mutate
  * state — they build context, list items, search, and inspect.
  *
+ * pln#622 PR2: the per-call context (effective cwd, project routing, lazy
+ * config/state/agent-name loads) is resolved once at the entry point and
+ * shared by every handler via {@link ResolvedReadContext}.
+ *
  * @module
  */
 import { applyBootstrapImport, renderBootstrapInterview, renderBootstrapSummary, runBootstrapProfile, uninstallBootstrapImport } from '../core/bootstrap.js';
@@ -47,13 +51,13 @@ import { runDoctor } from './doctor.js';
 import { buildProjectDiscovery, saveDiscoveryProfile, loadDiscoveryProfile, renderDiscoverySummary } from '../core/project-discovery.js';
 import { listCapabilities, listTools as listRegistryTools } from '../core/registries.js';
 import { listAvailableProjectsForSession, switchProject } from './switch.js';
-import { resolveEffectiveCwdInfo } from '../core/store-resolution.js';
+import { resolveEffectiveCwdInfo, type ResolvedEffectiveCwd } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
 import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
-import type { ActionRequiredKind, ActionRequiredStatus, AssignmentStatus, BootstrapInterviewAnswer, PlanStatus, PlanType, RuntimeEventType, SequenceStatus } from '../core/schema.js';
+import type { ActionRequiredKind, ActionRequiredStatus, AgentRunStatus, AgentRunTransport, AssignmentStatus, BootstrapInterviewAnswer, Config, MessageStatus, MessageType, PlanStatus, PlanType, RuntimeEventType, SequenceStatus, State } from '../core/schema.js';
 import {
   type McpToolResponse,
   type McpReadToolContext,
@@ -124,6 +128,37 @@ function getReviewAssignee(tags: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Per-call context shared by every read handler (pln#622 PR2).
+ *
+ * Built exactly once in {@link handleMcpReadToolCall}: effective cwd (after
+ * session/store resolution AND explicit `project` routing), scope provenance,
+ * plus lazy memoized accessors for the loads several handlers repeat per call
+ * (config, state, current agent name). The `bclaw_context` dispatcher
+ * re-enters {@link dispatchReadTool} with the same context, so store
+ * resolution and project routing are not recomputed on delegation.
+ */
+interface ResolvedReadContext {
+  /** Effective cwd — post store resolution and project-arg routing. */
+  cwd: string;
+  activeSource: ResolvedEffectiveCwd['active_source'];
+  resolvedProject: ResolvedEffectiveCwd['resolved_project'];
+  /**
+   * True when an explicit `project` arg was routed to its store. Handlers
+   * must then skip their own "project as metadata filter" logic — routing
+   * already scopes the read to the right store (pln#359).
+   */
+  projectRoutingApplied: boolean;
+  /** MCP connection session id (session-scoped tools: bclaw_switch, …). */
+  connectionSessionId?: string;
+  /** Lazy memoized loadConfig(cwd). */
+  getConfig: () => Config;
+  /** Lazy memoized loadState(cwd). */
+  getState: () => State;
+  /** Lazy memoized resolveCurrentAgentName(cwd). */
+  getAgentName: () => string;
+}
+
 export function handleMcpReadToolCall(
   name: string,
   args: Record<string, unknown> = {},
@@ -147,17 +182,43 @@ export function handleMcpReadToolCall(
   const projectArg = args.project as string | undefined;
   const targetProjectArg = name === 'bclaw_switch' ? undefined : projectArg;
   let projectRoutingApplied = false;
+  let routedConfig: Config | undefined;
   if (targetProjectArg) {
     cwd = resolveProjectCwd(targetProjectArg, cwd);
     activeSource = 'explicit';
     try {
-      const config = loadConfig(cwd);
-      resolvedProject = { path: cwd, name: config.project_name };
+      routedConfig = loadConfig(cwd);
+      resolvedProject = { path: cwd, name: routedConfig.project_name };
     } catch {
       resolvedProject = { path: cwd };
     }
     projectRoutingApplied = true;
   }
+
+  // Memoized lazy loads — seeded by the routing probe above and shared across
+  // the bclaw_context delegation, so one tool call never re-reads them.
+  let configCache = routedConfig;
+  let stateCache: State | undefined;
+  let agentNameCache: string | undefined;
+
+  return dispatchReadTool(name, args, {
+    cwd,
+    activeSource,
+    resolvedProject,
+    projectRoutingApplied,
+    connectionSessionId: context.connectionSessionId,
+    getConfig: () => (configCache ??= loadConfig(cwd)),
+    getState: () => (stateCache ??= loadState(cwd)),
+    getAgentName: () => (agentNameCache ??= resolveCurrentAgentName(cwd)),
+  });
+}
+
+function dispatchReadTool(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ResolvedReadContext,
+): McpToolResponse {
+  const { cwd, activeSource, resolvedProject, projectRoutingApplied } = ctx;
 
   if (name === 'bclaw_get_context') {
     // pln#542: budget_tokens caps the relevance-ranked fill (~4 chars/token).
@@ -165,7 +226,9 @@ export function handleMcpReadToolCall(
     const budgetTokens = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : undefined;
     const result = buildContext({
       target: args.path as string | undefined,
-      project: targetProjectArg,
+      // Inside dispatch the name is never 'bclaw_switch', so the raw project
+      // arg is exactly the entry point's targetProjectArg.
+      project: args.project as string | undefined,
       agent: args.agent as string | undefined,
       host: args.host as string | undefined,
       allHosts: args.allHosts as boolean | undefined,
@@ -226,7 +289,7 @@ export function handleMcpReadToolCall(
       notifications = result.context_diff.event_summary;
       unseenEventCount = result.context_diff.unseen_event_count;
     } else {
-      const agentName = (args.agent as string) ?? resolveCurrentAgentName(cwd);
+      const agentName = (args.agent as string) ?? ctx.getAgentName();
       const unseenEvents = readUnseenEvents(agentName, cwd);
       notifications = buildNotificationSummary(unseenEvents);
       unseenEventCount = unseenEvents.length;
@@ -257,7 +320,7 @@ export function handleMcpReadToolCall(
       throw new Error('Missing required argument: id');
     }
 
-    const state = loadState(cwd);
+    const state = ctx.getState();
     const handoff = state.open_handoffs.find((item) => item.id === handoffId || item.short_label === handoffId);
     if (!handoff) {
       return {
@@ -436,7 +499,7 @@ export function handleMcpReadToolCall(
 
   if (name === 'bclaw_get_execution_context') {
     const executionContext = buildExecutionContext({ cwd });
-    const config = loadConfig(cwd);
+    const config = ctx.getConfig();
     const installableUpdate = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
     const installableUpdateNotice = renderBrainclawInstallableUpdateNotice(installableUpdate);
     const agentTooling = args.includeAgentTooling ? buildAgentToolingContext({ cwd }) : undefined;
@@ -461,7 +524,7 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_release_notes') {
-    const config = loadConfig(cwd);
+    const config = ctx.getConfig();
     const updateCheck = checkBrainclawInstallableUpdate(config, cwd, { useDefaultNpmSource: true });
     const arn = updateCheck.agent_release_notes;
     const lines: string[] = [];
@@ -499,9 +562,9 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_get_agent_board_summary') {
-    const config = loadConfig(cwd);
-    const state = loadState(cwd);
-    const agent = (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd);
+    const config = ctx.getConfig();
+    const state = ctx.getState();
+    const agent = (args.agent as string | undefined) ?? ctx.getAgentName();
     const currentHost = resolveCurrentHostId();
     const activeClaims = listClaims(cwd).filter((c) => c.status === 'active');
     const pendingActions = listActionRequired(cwd).filter((a) => a.status === 'pending');
@@ -767,7 +830,7 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_list_plans') {
-    let plans = loadState(cwd).plan_items;
+    let plans = ctx.getState().plan_items;
 
     // Direct lookup by ID
     if (args.id) {
@@ -1023,8 +1086,8 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_list_runs') {
-    const status = validateEnumFilter<import('../core/schema.js').AgentRunStatus>(args.status, AgentRunStatusSchema, 'run status');
-    const transport = validateEnumFilter<import('../core/schema.js').AgentRunTransport>(args.transport, AgentRunTransportSchema, 'run transport');
+    const status = validateEnumFilter<AgentRunStatus>(args.status, AgentRunStatusSchema, 'run status');
+    const transport = validateEnumFilter<AgentRunTransport>(args.transport, AgentRunTransportSchema, 'run transport');
     const id = args.id as string | undefined;
     const assignmentId = args.assignmentId as string | undefined;
     const claimId = args.claimId as string | undefined;
@@ -1290,7 +1353,7 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_list_instructions') {
-    const config = loadConfig(cwd);
+    const config = ctx.getConfig();
     const project = args.project as string | undefined;
     const inferredProject = project ?? inferProjectFromTarget(args.path as string | undefined, config);
     const resolvedAgent = args.resolved ? resolveAgentScope(args.agent as string | undefined) : args.agent as string | undefined;
@@ -1521,7 +1584,7 @@ export function handleMcpReadToolCall(
   if (name === 'bclaw_conflict_check') {
     const agentNameArg = args.agent as string | undefined;
     const agentIdArg = args.agentId as string | undefined;
-    const currentAgentName = agentNameArg ?? resolveCurrentAgentName(cwd);
+    const currentAgentName = agentNameArg ?? ctx.getAgentName();
     const allClaimsForCheck = listClaims(cwd).filter((c) => c.status === 'active');
     const myClaimsForCheck = allClaimsForCheck.filter((c) =>
       agentIdArg ? c.agent_id === agentIdArg : c.agent === currentAgentName
@@ -1562,7 +1625,7 @@ export function handleMcpReadToolCall(
   if (name === 'bclaw_switch') {
     if (args.list === true) {
       try {
-        const result = listAvailableProjectsForSession(cwd, context.connectionSessionId);
+        const result = listAvailableProjectsForSession(cwd, ctx.connectionSessionId);
         const lines = result.projects.map(p => {
           const marker = p.active ? '→' : ' ';
           const label = p.name ? `${p.name} (${p.relative_path})` : p.relative_path;
@@ -1579,8 +1642,8 @@ export function handleMcpReadToolCall(
 
     if (args.clear === true) {
       try {
-        const session = context.connectionSessionId
-          ? loadSessionById(context.connectionSessionId, cwd)
+        const session = ctx.connectionSessionId
+          ? loadSessionById(ctx.connectionSessionId, cwd)
           : loadCurrentSession(cwd);
         if (session?.active_project) {
           const { active_project: _removed, ...rest } = session;
@@ -1601,7 +1664,7 @@ export function handleMcpReadToolCall(
     }
 
     try {
-      const result = switchProject(projectRef, { cwd, sessionOnly: true, sessionId: context.connectionSessionId });
+      const result = switchProject(projectRef, { cwd, sessionOnly: true, sessionId: ctx.connectionSessionId });
       const text = `✔ Switched to ${result.name ? `"${result.name}"` : result.path} (${result.scope}-scoped)`;
       return {
         content: [{ type: 'text', text }],
@@ -1661,7 +1724,7 @@ export function handleMcpReadToolCall(
     }
     const result = checkPolicy({
       scope,
-      agent: (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd),
+      agent: (args.agent as string | undefined) ?? ctx.getAgentName(),
       agentId: args.agentId as string | undefined,
       action: args.action as string | undefined,
       cwd,
@@ -1873,12 +1936,12 @@ export function handleMcpReadToolCall(
   }
 
   if (name === 'bclaw_read_inbox') {
-    const agentName = (args.agent as string | undefined) ?? resolveCurrentAgentName(cwd);
+    const agentName = (args.agent as string | undefined) ?? ctx.getAgentName();
     const markAsRead = args.markAsRead === true; // default: false — reading doesn't imply processing
     const result = readInbox({
       agent: agentName,
-      status: args.status as import('../core/schema.js').MessageStatus | undefined,
-      type: args.type as import('../core/schema.js').MessageType | undefined,
+      status: args.status as MessageStatus | undefined,
+      type: args.type as MessageType | undefined,
       thread_id: args.thread_id as string | undefined,
       limit: args.limit as number | undefined,
       offset: args.offset as number | undefined,
@@ -1905,15 +1968,18 @@ export function handleMcpReadToolCall(
     // Phase 3 slice 3c — unified dispatcher. See docs/concepts/mcp-governance.md
     // for the stability contract of the advanced tier.
     const kind = String(args.kind ?? '');
+    // Delegation re-enters dispatchReadTool with the SAME resolved context —
+    // store resolution and project routing already happened at the entry
+    // point and must not be recomputed (pln#622 PR2).
     switch (kind) {
       case 'memory':
-        return handleMcpReadToolCall('bclaw_get_context', args, context);
+        return dispatchReadTool('bclaw_get_context', args, ctx);
       case 'execution':
-        return handleMcpReadToolCall('bclaw_get_execution_context', args, context);
+        return dispatchReadTool('bclaw_get_execution_context', args, ctx);
       case 'board':
-        return handleMcpReadToolCall('bclaw_get_agent_board', args, context);
+        return dispatchReadTool('bclaw_get_agent_board', args, ctx);
       case 'board_summary':
-        return handleMcpReadToolCall('bclaw_get_agent_board_summary', args, context);
+        return dispatchReadTool('bclaw_get_agent_board_summary', args, ctx);
       case 'cross_project': {
         // pln#558 step 3 — lightweight endpoint for the VS Code extension's
         // SYSTEM section: returns linked_projects + incoming_signals only,
@@ -1930,10 +1996,10 @@ export function handleMcpReadToolCall(
         if (typeof since !== 'string' || !since) {
           throw new Error('bclaw_context(kind="delta") requires `since` (session_id).');
         }
-        return handleMcpReadToolCall(
+        return dispatchReadTool(
           'bclaw_get_context',
           { ...args, since_session: since },
-          context,
+          ctx,
         );
       }
       default:
