@@ -7,15 +7,28 @@ export interface SecurityWarning {
 }
 
 /**
- * Scan a text string for sensitive content. Three signal layers run:
- *   1. User-configured regex patterns from `config.redaction.patterns`
- *      (the legacy MVP behavior).
- *   2. Structural detectors — exact token shapes for GitHub PATs, AWS
- *      access keys, JWTs, etc. High precision; on by default.
- *   3. Entropy detector — flags high-entropy token-like substrings near
- *      a sensitive keyword. Tunable, on by default.
+ * Scan a text string for sensitive content. Four independent signal layers
+ * run, each with its own enable-gate (S4 semantics, pln#623):
  *
- * In strict mode all signals escalate to `block`; otherwise `warn`.
+ *   1. Redaction patterns — user-configured regexes from
+ *      `config.redaction.patterns`. Gate: `config.redaction.enabled` (whole
+ *      scan short-circuits off when false). The legacy MVP behavior.
+ *   2. Structural detectors — exact token shapes for GitHub PATs, AWS access
+ *      keys, JWTs, etc. High precision. Gate: `security.token_detection.enabled`
+ *      (default on); individual detectors via `token_detection.detectors[id]`.
+ *   3. Entropy detector — high-Shannon-entropy token-like substrings near a
+ *      secret keyword. Gate: `security.token_detection.entropy.enabled` (nested
+ *      under the token_detection gate; default on).
+ *   4. Sensitive paths — literal mentions of `config.sensitive_paths` entries
+ *      (`.env`, `secrets/`, …). Gate: `security.block_sensitive_paths` (default
+ *      on).
+ *
+ * LEVEL (uniform across ALL four layers): a match surfaces as `warn`, and
+ * escalates to `block` when `security.strict_redaction` is true (mode: strict).
+ * Strict mode blocks every signal uniformly — there is no per-layer level
+ * override. Detected/redacted excerpts in messages are always irreversibly
+ * masked (see maskSecret); the redaction pattern itself is referenced by index
+ * and masked, never echoed.
  */
 export function scanText(text: string, config: Config): SecurityWarning[] {
   const warnings: SecurityWarning[] = [];
@@ -73,7 +86,12 @@ export function scanText(text: string, config: Config): SecurityWarning[] {
     for (const sp of config.sensitive_paths) {
       if (text.includes(sp)) {
         warnings.push({
-          level: 'warn',
+          // S3 (pln#623): the level is config-derived, not hardcoded. Like the
+          // three detector layers above, a sensitive-path match surfaces as a
+          // `warn` normally and escalates to `block` under strict_redaction —
+          // strict mode blocks EVERY signal, uniformly. `block_sensitive_paths`
+          // remains the enable-gate for this layer (default on).
+          level,
           message: `Sensitive path '${sp}' mentioned in text`,
         });
       }

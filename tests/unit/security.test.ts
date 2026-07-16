@@ -68,6 +68,33 @@ describe('core/security', () => {
     assert.ok(warnings.some((warning) => warning.message.includes('.env')));
   });
 
+  it('S3: a sensitive-path match is warn in warn mode', () => {
+    const config = defaultConfig('brainclaw');
+    const pathWarnings = scanText('See .env before starting the server', config)
+      .filter((w) => w.message.includes('Sensitive path'));
+    assert.ok(pathWarnings.length >= 1, 'sensitive-path layer should fire on .env');
+    for (const w of pathWarnings) assert.equal(w.level, 'warn');
+  });
+
+  it('S3: a sensitive-path match escalates to block under strict_redaction (config-derived, not hardcoded)', () => {
+    const config = defaultConfig('brainclaw');
+    assert.ok(config.security);
+    config.security.strict_redaction = true;
+    const pathWarnings = scanText('See .env before starting the server', config)
+      .filter((w) => w.message.includes('Sensitive path'));
+    assert.ok(pathWarnings.length >= 1, 'sensitive-path layer should fire on .env');
+    for (const w of pathWarnings) assert.equal(w.level, 'block');
+  });
+
+  it('S3: block_sensitive_paths=false disables the sensitive-path layer entirely', () => {
+    const config = defaultConfig('brainclaw');
+    assert.ok(config.security);
+    config.security.block_sensitive_paths = false;
+    const pathWarnings = scanText('See .env before starting the server', config)
+      .filter((w) => w.message.includes('Sensitive path'));
+    assert.equal(pathWarnings.length, 0);
+  });
+
   it('doctorCheck scans state entries and annotates the source item', () => {
     const config = defaultConfig('brainclaw');
     const state = emptyState();
