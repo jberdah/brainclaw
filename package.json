@@ -62,6 +62,8 @@
     "test:coverage:check": "npm run build:test && c8 --all --check-coverage --lines 55 --functions 60 --branches 65 --statements 55 --src dist-test/src --reporter=text-summary --exclude=dist-test/tests/** --exclude=dist-test/scripts/** node scripts/run-tests.mjs default",
     "bench": "npm run build:test && node scripts/bench.mjs",
     "bench:check": "node scripts/bench-check.mjs",
+    "bench:cold-start": "node scripts/bench-cold-start.mjs",
+    "bench:cold-start:check": "node scripts/bench-cold-start.mjs --check",
     "prepublishOnly": "npm run build:release && npm run pack:check"
   },
   "keywords": [

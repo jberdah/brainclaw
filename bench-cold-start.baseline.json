@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "_note": "REFERENCE cold-start baseline (pln#622 PR6). Subprocess wall-clock medians for the coldest CLI entry points — the Node import cost the in-process bench (scripts/bench.mjs) deliberately excludes. These numbers were measured on a dev laptop under concurrent load against dist-test/src/cli.js (sourcemaps loaded, unbundled), so they run SLOWER and noisier than the published dist/cli.js. Wall-clock cold-start is machine- and load-dependent (see memory: re-profile on a calm machine), so this file is a reference floor, NOT a portable gate: `npm run bench:cold-start:check` uses a generous 100% tolerance to catch only a gross import-graph regression (the same code was observed to vary ~60% run-to-run under load). Regenerate on a calm machine or CI runner with:  node scripts/bench-cold-start.mjs --cli dist/cli.js --out bench-cold-start.baseline.json",
+  "measured_against": "dist-test/src/cli.js",
+  "repeats": 7,
+  "scenarios": [
+    { "name": "version", "argv": "--version", "duration_ms": { "median": 1044 } },
+    { "name": "help", "argv": "--help", "duration_ms": { "median": 1768 } },
+    { "name": "status_json", "argv": "status --json", "duration_ms": { "median": 1407 } }
+  ]
+}
