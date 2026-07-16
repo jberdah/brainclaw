@@ -518,6 +518,40 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(Array.isArray(result.contacted), 'Expected contacted array');
       assert.deepEqual(result.contacted, ['codex', 'github-copilot']);
     });
+
+    // pln#626 Phase 1 — contract honesty. consult is inbox-only; it must SAY so
+    // (never omit execution_status) and must not silently swallow autoExecute.
+    it('carries execution_status=inbox_only + execution_reason and warns when autoExecute=true is passed (pln#626 Phase 1)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'consult',
+        task: 'Is inbox-only honest now?',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: true,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'inbox_only', 'consult must report inbox_only, never omit the status');
+      assert.equal(result.execution_reason, 'intent_inbox_only');
+      assert.ok(
+        response.warnings.some((w) => w.includes("autoExecute has no effect on intent='consult'")),
+        `expected an autoExecute no-op warning, got: ${response.warnings.join(' | ')}`,
+      );
+    });
+
+    it('does NOT emit the autoExecute warning on a plain consult (no noise when the flag is absent)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'consult',
+        task: 'Plain consult, no autoExecute',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+      });
+      assert.equal((response.result as Record<string, unknown>).execution_status, 'inbox_only');
+      assert.ok(
+        !response.warnings.some((w) => w.includes('autoExecute has no effect')),
+        'a plain consult (no autoExecute) must not emit the no-op warning',
+      );
+    });
   });
 
   // ── reroute ─────────────────────────────────────────────
@@ -1019,6 +1053,33 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(
         (proposal.body ?? '').length <= 4000,
         `proposal body must be sliced to ≤4000 chars; got ${proposal.body?.length}`,
+      );
+    });
+
+    // pln#626 Phase 1 — contract honesty. ideate delivers critic briefs to the
+    // inbox but does NOT yet spawn (Phase 2). It must report inbox_only, warn
+    // that autoExecute is a no-op, and make clear that `dispatched_critics`
+    // counts inbox messages, not running processes.
+    it('carries execution_status=inbox_only + execution_reason and clarifies dispatched_critics are inbox-only, not spawned (pln#626 Phase 1)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'ideate',
+        task: 'Approach A or B — inbox honesty check?',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: true,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'inbox_only', 'ideate must report inbox_only until Phase 2 wires spawning');
+      assert.equal(result.execution_reason, 'intent_inbox_only');
+      assert.equal(result.dispatched_critics, 1);
+      assert.ok(
+        response.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")),
+        `expected an autoExecute no-op warning, got: ${response.warnings.join(' | ')}`,
+      );
+      assert.ok(
+        response.warnings.some((w) => w.includes('NOT spawned as processes')),
+        `expected a dispatched_critics honesty warning, got: ${response.warnings.join(' | ')}`,
       );
     });
   });

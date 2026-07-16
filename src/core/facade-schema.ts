@@ -4,10 +4,15 @@ export const ExecutionStatusSchema = z.enum(['delivered_and_started', 'command_r
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 
 export const WorkIntentSchema = z.enum(['execute', 'consult', 'resume', 'review']);
-// pln#492 phase 2.c — 'ideate' opens an ideation loop with a proposal seed
-// artifact. The handler does NOT yet dispatch turns (driver wire-up is
-// phase 2.d). Callers receive loop_id and may drive the loop manually via
-// bclaw_loop intent='turn' / 'advance' until the dispatch path lands.
+// pln#626 Phase 1 — coordinate intents split into two honest contracts:
+//  • SPAWNING (assign / review / reroute): create a claim + worktree and,
+//    when autoExecute is on, spawn a worker process on the brief.
+//  • INBOX-ONLY (consult / summarize / ideate): deliver to the target inbox;
+//    autoExecute is a no-op here (warned, never silently ignored). 'ideate'
+//    opens an ideation loop with a proposal seed and queues critic briefs to
+//    the inbox but does NOT yet spawn critic agents — real critic spawning is
+//    pln#626 Phase 2. Until then, drive the loop via bclaw_loop
+//    intent='turn' / 'advance'.
 export const CoordinateIntentSchema = z.enum(['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate']);
 
 export const WorkRequestSchema = z.object({

@@ -846,6 +846,14 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     };
 
   } else if (req.intent === 'consult') {
+    // pln#626 Phase 1 — consult is inbox-only by design: it delivers an RFC to
+    // the target inbox(es) and never spawns. autoExecute is a no-op here, so
+    // say so explicitly rather than silently ignoring a caller who set it.
+    if (req.autoExecute === true) {
+      warnings.push(
+        "autoExecute has no effect on intent='consult': consult delivers the RFC to the target inbox(es) only and never spawns an agent — targets pick it up via their own bclaw_work. For real spawning use bclaw_dispatch(intent='execute') on a sequence, or intent='assign'/'review' (pln#626).",
+      );
+    }
     const consultThreadId = req.threadId ?? `thread_${crypto.randomBytes(4).toString('hex')}`;
     const contacted: string[] = [];
     const delivery_plan: CoordinateDeliveryEntry[] = [];
@@ -878,6 +886,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       delivery_plan,
       messages_sent: toMessageSummary(delivery_plan),
       commands: commandHints,
+      // pln#626 Phase 1 — every coordinate intent now carries an execution
+      // status; consult is inbox-only, so it is honestly reported as such
+      // rather than omitting the field (which read as "maybe it spawned").
+      execution_status: 'inbox_only',
+      execution_reason: 'intent_inbox_only',
     };
 
   } else if (req.intent === 'review') {
@@ -1698,6 +1711,23 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       );
     }
 
+    // pln#626 Phase 1 — honesty of the contract. ideate opens the loop and
+    // delivers critic briefs to the inbox, but does NOT yet spawn critic
+    // agents (that is Phase 2). Two silent lies are fixed here:
+    //  (a) autoExecute reads as intent-agnostic in the catalog but is a no-op
+    //      for ideate → warn when a caller explicitly set it;
+    //  (b) `dispatched_critics` counts inbox messages, not running processes →
+    //      say so, so "dispatched_critics: 2" is never misread as 2 launches.
+    if (req.autoExecute === true) {
+      warnings.push(
+        "autoExecute has no effect on intent='ideate': ideate opens the loop and delivers critic briefs to the inbox but does not yet spawn critic agents (pln#626 Phase 2). Drive turns via bclaw_loop, or dispatch a sequence via bclaw_dispatch(intent='execute').",
+      );
+    }
+    if (dispatchedCritics > 0) {
+      warnings.push(
+        `ideate: ${dispatchedCritics} critic brief(s) were delivered to the inbox, NOT spawned as processes — 'dispatched_critics' counts inbox messages, not running agents (pln#626 Phase 2 will wire real spawning). Drive the critics via bclaw_loop or launch them manually.`,
+      );
+    }
     result = {
       loop_id: loopId,
       proposal_artifact_id: proposalArtifactId,
@@ -1705,6 +1735,9 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       mode: explicitTargets ? 'multi_agent' : 'single_agent',
       dispatched_critics: dispatchedCritics,
       current_phase: dispatchedPhase,
+      // pln#626 Phase 1 — inbox-only until Phase 2 wires critic spawning.
+      execution_status: 'inbox_only',
+      execution_reason: 'intent_inbox_only',
       ...(presetSelected ? { preset: req.preset } : {}),
     };
 
