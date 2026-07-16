@@ -4,15 +4,16 @@ export const ExecutionStatusSchema = z.enum(['delivered_and_started', 'command_r
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 
 export const WorkIntentSchema = z.enum(['execute', 'consult', 'resume', 'review']);
-// pln#626 Phase 1 — coordinate intents split into two honest contracts:
+// pln#626 Phase 1 — coordinate intents split into three honest contracts:
 //  • SPAWNING (assign / review / reroute): create a claim + worktree and,
 //    when autoExecute is on, spawn a worker process on the brief.
-//  • INBOX-ONLY (consult / summarize / ideate): deliver to the target inbox;
-//    autoExecute is a no-op here (warned, never silently ignored). 'ideate'
-//    opens an ideation loop with a proposal seed and queues critic briefs to
-//    the inbox but does NOT yet spawn critic agents — real critic spawning is
-//    pln#626 Phase 2. Until then, drive the loop via bclaw_loop
-//    intent='turn' / 'advance'.
+//  • INBOX-ONLY (consult / ideate): deliver to the target inbox; autoExecute
+//    is a no-op here (warned, never silently ignored). 'ideate' opens an
+//    ideation loop with a proposal seed and queues critic briefs to the inbox
+//    but does NOT yet spawn critic agents — real critic spawning is pln#626
+//    Phase 2. Until then, drive the loop via bclaw_loop intent='turn'/'advance'.
+//  • READ-ONLY (summarize): reads a thread and returns a summary — no claim,
+//    no dispatch, no execution_status; autoExecute is irrelevant.
 export const CoordinateIntentSchema = z.enum(['assign', 'consult', 'review', 'reroute', 'summarize', 'ideate']);
 
 export const WorkRequestSchema = z.object({
@@ -191,6 +192,13 @@ export const FacadeResponseSchema = z.object({
   session_id: z.string().optional(),
   warnings: z.array(z.string()),
   execution_status: ExecutionStatusSchema.optional(),
+  /**
+   * pln#626 Phase 1 — machine-readable reason accompanying execution_status
+   * when it is not `delivered_and_started`: auto_execute_disabled (manual
+   * handoff), not_spawnable, spawn_no_worktree/capacity/no_handshake/failed,
+   * or intent_inbox_only (consult/ideate). Absent when everything spawned.
+   */
+  execution_reason: z.string().optional(),
   /** pln#503 phase 3.3: present when execution_status === 'delivered_and_started'. */
   verify_with: VerifyWithSchema.optional(),
   /**

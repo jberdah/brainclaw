@@ -131,6 +131,10 @@ export interface DispatchedItem {
   assignment_id?: string;
   /** E2E execution status */
   execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
+  /** pln#626 Phase 1 — machine-readable reason a delivery didn't spawn. */
+  execution_reason?: string;
+  /** pln#626 Phase 1 — failure classification when a spawn was attempted and refused. */
+  failure_kind?: string;
   /** PID of spawned agent process (when execution_status is delivered_and_started) */
   pid?: number;
   /** AgentRun id created for this delivery (when run tracking succeeded). */
@@ -1156,11 +1160,15 @@ export async function dispatch(options: DispatchOptions, cwd: string): Promise<{
         requireWorktree: true, // pln#531: never spawn a worker in the integration repo
       });
       entry.execution_status = execResult.execution_status;
+      // pln#626 Phase 1 — mirror the coordinate path: carry the reason so a
+      // command_ready_manual sequence item says WHY it didn't spawn.
+      if (execResult.execution_reason) entry.execution_reason = execResult.execution_reason;
+      if (execResult.failure_kind) entry.failure_kind = execResult.failure_kind;
       if (execResult.pid) entry.pid = execResult.pid;
       if (execResult.execution_status === 'delivered_and_started') {
         entry.channel = 'spawned_cli';
       }
-      if (execResult.error) result.warnings.push(execResult.error);
+      if (execResult.error) result.warnings.push(`${entry.agent}: ${execResult.error}`);
 
       if (entry.assignment_id && entry.claim_id) {
         if (execResult.failure_kind === 'spawn_no_handshake') {

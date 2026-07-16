@@ -474,6 +474,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         requireWorktree: true, // pln#531: never spawn a worker in the integration repo
       });
       entry.execution_status = execResult.execution_status;
+      // pln#626 Phase 1 — carry the machine-readable reason (+ failure_kind) to
+      // the delivery entry so the primary spawn path (assign/review/reroute) is
+      // as honest as consult/ideate: a command_ready_manual entry now says WHY.
+      if (execResult.execution_reason) entry.execution_reason = execResult.execution_reason;
+      if (execResult.failure_kind) entry.failure_kind = execResult.failure_kind;
       if (execResult.pid) entry.pid = execResult.pid;
       if (execResult.execution_status === 'delivered_and_started') {
         entry.channel = 'spawned_cli';
@@ -481,7 +486,9 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       } else if (execResult.execution_status === 'command_ready_manual' && overall !== 'delivered_and_started') {
         overall = 'command_ready_manual';
       }
-      if (execResult.error) opts.warnings.push(execResult.error);
+      // Attribute the reason to its agent — a 3-target NO_SPAWN dispatch used to
+      // emit three identical context-free warnings (pln#626 Phase 1 R5).
+      if (execResult.error) opts.warnings.push(`${entry.agent}: ${execResult.error}`);
       if (entry.assignment_id && entry.claim_id) {
         if (execResult.failure_kind === 'spawn_no_handshake') {
           try {
@@ -607,6 +614,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     command?: string;
     shell?: string;
     execution_status?: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only';
+    // pln#626 Phase 1 — per-entry reason so a command_ready_manual entry is
+    // never silent about WHY it didn't spawn (auto_execute_disabled vs
+    // not_spawnable vs spawn_*). Copied from attemptExecution's ExecutionResult.
+    execution_reason?: string;
+    failure_kind?: string;
     pid?: number;
   };
   const toMessageSummary = (deliveryPlan: CoordinateDeliveryEntry[]) => deliveryPlan.map((entry) => ({
@@ -886,9 +898,8 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       delivery_plan,
       messages_sent: toMessageSummary(delivery_plan),
       commands: commandHints,
-      // pln#626 Phase 1 — every coordinate intent now carries an execution
-      // status; consult is inbox-only, so it is honestly reported as such
-      // rather than omitting the field (which read as "maybe it spawned").
+      // pln#626 Phase 1 — consult is inbox-only, so it reports that honestly
+      // instead of omitting execution_status (which read as "maybe it spawned").
       execution_status: 'inbox_only',
       execution_reason: 'intent_inbox_only',
     };
@@ -1401,6 +1412,15 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     result = { thread_id: threadId, message_count: messages.length, summary };
 
   } else if (req.intent === 'ideate') ideate: {
+    // pln#626 Phase 1 — ideate is inbox-only (Phase 2 will spawn critics), so
+    // autoExecute is a no-op. Warn HERE, at the top, so the notice fires on
+    // every ideate sub-path — including the bootstrap "join existing loop"
+    // early-return below, which `break ideate`s before the result assembly.
+    if (req.autoExecute === true) {
+      warnings.push(
+        "autoExecute has no effect on intent='ideate': ideate opens the loop and delivers critic briefs to the inbox but does not yet spawn critic agents (pln#626 Phase 2). Drive turns via bclaw_loop, or dispatch a sequence via bclaw_dispatch(intent='execute').",
+      );
+    }
     // pln#492 phase 2.c (open + proposal) + 2.d.2 (multi-agent dispatch).
     // Single-agent mode (no targetAgents): open the loop with the task
     // as a proposal seed and stop there — the champion drives manually
@@ -1485,6 +1505,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
           status: jLoop.status,
           mode: 'single_agent',
           preset: req.preset,
+          // pln#626 Phase 1 — report inbox_only even on the join early-return,
+          // so this path is not the one silent hole in the contract (R1).
+          execution_status: 'inbox_only',
+          execution_reason: 'intent_inbox_only',
         };
         // Skip the rest of the ideate flow — we joined an existing loop.
         break ideate;
@@ -1711,18 +1735,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       );
     }
 
-    // pln#626 Phase 1 — honesty of the contract. ideate opens the loop and
-    // delivers critic briefs to the inbox, but does NOT yet spawn critic
-    // agents (that is Phase 2). Two silent lies are fixed here:
-    //  (a) autoExecute reads as intent-agnostic in the catalog but is a no-op
-    //      for ideate → warn when a caller explicitly set it;
-    //  (b) `dispatched_critics` counts inbox messages, not running processes →
-    //      say so, so "dispatched_critics: 2" is never misread as 2 launches.
-    if (req.autoExecute === true) {
-      warnings.push(
-        "autoExecute has no effect on intent='ideate': ideate opens the loop and delivers critic briefs to the inbox but does not yet spawn critic agents (pln#626 Phase 2). Drive turns via bclaw_loop, or dispatch a sequence via bclaw_dispatch(intent='execute').",
-      );
-    }
+    // pln#626 Phase 1 — honesty of the contract. `dispatched_critics` counts
+    // inbox messages, not running processes → say so, so "dispatched_critics: 2"
+    // is never misread as 2 launched agents. (The autoExecute no-op warning is
+    // emitted at the top of the ideate block so it also covers the bootstrap
+    // join early-return.)
     if (dispatchedCritics > 0) {
       warnings.push(
         `ideate: ${dispatchedCritics} critic brief(s) were delivered to the inbox, NOT spawned as processes — 'dispatched_critics' counts inbox messages, not running agents (pln#626 Phase 2 will wire real spawning). Drive the critics via bclaw_loop or launch them manually.`,
@@ -1749,6 +1766,27 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   const resultExecStatus = (result && typeof result === 'object' && 'execution_status' in result)
     ? (result as Record<string, unknown>).execution_status as FacadeResponse['execution_status']
     : undefined;
+
+  // pln#626 Phase 1 — surface the REASON WHY at the top level, not just per
+  // delivery entry. Prefer an explicit result.execution_reason (consult /
+  // ideate / bootstrap-join set it); otherwise derive it from the delivery
+  // plan — the first non-started entry's reason explains why the overall
+  // status isn't delivered_and_started (e.g. auto_execute_disabled on a manual
+  // assign, not_spawnable on an IDE-only target). No reason when all started.
+  const resultExecReason: string | undefined = (() => {
+    if (!result || typeof result !== 'object') return undefined;
+    const r = result as Record<string, unknown>;
+    if (typeof r.execution_reason === 'string') return r.execution_reason;
+    const plan = r.delivery_plan;
+    if (Array.isArray(plan)) {
+      for (const e of plan as Array<Record<string, unknown>>) {
+        if (e && e.execution_status !== 'delivered_and_started' && typeof e.execution_reason === 'string') {
+          return e.execution_reason;
+        }
+      }
+    }
+    return undefined;
+  })();
 
   // pln#503 phase 3.3: when execution_status === 'delivered_and_started',
   // attach a self-documenting `verify_with` hint pointing at the assignment
@@ -1779,11 +1817,12 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     warnings,
     duration_ms: Date.now() - startMs,
     ...(resultExecStatus ? { execution_status: resultExecStatus } : {}),
+    ...(resultExecReason ? { execution_reason: resultExecReason } : {}),
     ...(verifyWith ? { verify_with: verifyWith } : {}),
   };
 
   const summaryParts: string[] = [`✔ bclaw_coordinate [${req.intent}] targets=${resolvedAgents.length}`];
-  if (resultExecStatus) summaryParts.push(`execution: ${resultExecStatus}`);
+  if (resultExecStatus) summaryParts.push(`execution: ${resultExecStatus}${resultExecReason ? ` (${resultExecReason})` : ''}`);
   if (warnings.length > 0) summaryParts.push(warnings.map((w) => `⚠ ${w}`).join('\n'));
 
   return {

@@ -479,6 +479,30 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(claimEffects.length, 1, 'Expected one claim side effect entry');
       assert.equal(claimEffects[0]?.action, 'reuse', 'Duplicate assign should report claim reuse');
     });
+
+    // pln#626 Phase 1 (rework) — the primary spawn path must be as honest as
+    // consult/ideate: an autoExecute:false assign is a manual handoff, and the
+    // reason must reach BOTH the delivery entry AND the top-level FacadeResponse
+    // (not die inside runCoordinateExecution as it did before the rework).
+    it('autoExecute:false surfaces execution_reason=auto_execute_disabled on the entry AND top-level (R3)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'assign',
+        task: 'Manual handoff, no spawn',
+        scope: 'src/core/manual-handoff.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: false,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'command_ready_manual');
+      const plan = result.delivery_plan as Array<Record<string, unknown>>;
+      assert.equal(plan[0]?.execution_status, 'command_ready_manual');
+      assert.equal(plan[0]?.execution_reason, 'auto_execute_disabled', 'delivery entry must carry the reason');
+      assert.equal(plan[0]?.failure_kind, undefined, 'a manual handoff is not a failure');
+      // Top-level aggregate must expose it — the crux of the review rework.
+      assert.equal(response.execution_reason, 'auto_execute_disabled');
+    });
   });
 
   // ── consult ─────────────────────────────────────────────

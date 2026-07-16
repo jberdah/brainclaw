@@ -218,15 +218,31 @@ describe('bclaw_coordinate — bootstrap join-or-lock (pln#513 step 2, seq #60)'
       preset: 'bootstrap',
       task: 'second call',
       agent: 'claude-code',
+      autoExecute: true,
     });
     assert.equal(second.status, 'ok');
-    const secondResult = second.result as { loop_id: string; joined_existing: boolean; current_phase?: string };
+    const secondResult = second.result as {
+      loop_id: string; joined_existing: boolean; current_phase?: string;
+      execution_status?: string; execution_reason?: string;
+    };
     assert.equal(secondResult.loop_id, firstResult.loop_id, 'second call must return the SAME loop_id');
     assert.equal(secondResult.joined_existing, true);
     assert.ok(secondResult.current_phase, 'joined response must include current_phase');
 
     const joinedWarning = second.warnings.find((w) => w.includes('joined existing'));
     assert.ok(joinedWarning, `expected a "joined existing" warning, got: ${second.warnings.join(' | ')}`);
+
+    // pln#626 Phase 1 (R1) — the bootstrap join early-return must NOT be the one
+    // silent hole: it reports inbox_only + reason even though it `break ideate`s
+    // before the result assembly, and the top-of-block autoExecute warning still
+    // fires on this path.
+    assert.equal(secondResult.execution_status, 'inbox_only', 'join result must report inbox_only');
+    assert.equal(secondResult.execution_reason, 'intent_inbox_only');
+    assert.equal(second.execution_reason, 'intent_inbox_only', 'top-level must surface the reason on the join path');
+    assert.ok(
+      second.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")),
+      `expected the autoExecute no-op warning on the join path, got: ${second.warnings.join(' | ')}`,
+    );
   });
 
   it('returns bootstrap_coordination_in_progress when an active lock exists with no backing loop (pln#513 phase 4 codex review)', async () => {
