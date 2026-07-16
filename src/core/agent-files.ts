@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
-import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from '../commands/mcp.js';
+import { MCP_HEADLESS_AUTO_TOOL_NAMES, MCP_CANONICAL_GRAMMAR_TOOL_NAMES, REMOVED_IN_V1_TOOLS } from './protocol-tool-policy.js';
 import { renderToml, tomlArrayTableHasEntry } from './toml-writer.js';
 import { PROTOCOL_SKILLS, renderProtocolSkill } from './protocol-skills.js';
 import { getInstalledBrainclawVersion } from './brainclaw-version.js';

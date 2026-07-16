@@ -70,4 +70,44 @@ export default tseslint.config(
       'no-empty': 'off',
     },
   },
+  {
+    // pln#622 PR1 dependency-direction guard, block 1: no commands module may
+    // import the mcp.ts assembly point. Explicit exceptions:
+    //   - mcp.ts itself: it IS the assembly point (imports the extracted
+    //     boundary modules and re-exports the historical surface).
+    //   - mcp-worker.ts: legitimately imports executeMcpToolCall to run tool
+    //     calls on the worker thread.
+    files: ['src/commands/**'],
+    ignores: ['src/commands/mcp.ts', 'src/commands/mcp-worker.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            group: ['./mcp.js', '**/commands/mcp.js'],
+            message: 'Do not import the mcp.ts assembly point from commands modules — import mcp-contract.js / mcp-presentation.js / mcp-catalog.js instead (pln#622 PR1).',
+          },
+        ],
+      }],
+    },
+  },
+  {
+    // pln#622 PR1 dependency-direction guard, block 2: core/ must not import
+    // the MCP command layer (core → commands inversion). Scoped to
+    // '../commands/mcp*.js' ONLY — candidates.ts / claims.ts / sequence.ts /
+    // state.ts / context.ts / dispatcher.ts carry legacy imports to OTHER
+    // commands files that are out of scope for this campaign.
+    files: ['src/core/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            // Depth-independent (checkpoint-2 review): a nested core module's
+            // '../../commands/mcp.js' must be caught too.
+            group: ['**/commands/mcp*.js'],
+            message: 'core/ must not import the MCP command layer — use src/core/protocol-tool-policy.ts for tool-name policy lists (pln#622 PR1).',
+          },
+        ],
+      }],
+    },
+  },
 );

@@ -11,7 +11,7 @@ import { REMOVED_IN_V1_TOOLS, PUBLISHED_TOOLS } from '../../src/commands/mcp.js'
  * the full MCP runtime into the unit suite.
  */
 describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
-  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8');
+  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8') + readFileSync(path.join('src', 'commands', 'mcp-catalog.ts'), 'utf-8');
 
   const EXPECTED_DEPRECATED = [
     // Facade-era
@@ -87,7 +87,7 @@ describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
  * catalog. Guards against accidental re-introduction of removed tools.
  */
 describe('commands/mcp — v1.0 catalog integrity', () => {
-  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8');
+  const source = readFileSync(path.join('src', 'commands', 'mcp.ts'), 'utf-8') + readFileSync(path.join('src', 'commands', 'mcp-catalog.ts'), 'utf-8');
 
   // Canonical grammar verbs — tier:standard in the default catalog.
   // NOTE: bclaw_context is also a canonical read verb but is tagged

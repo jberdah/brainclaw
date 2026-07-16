@@ -483,8 +483,14 @@ describe('instruction-templates', () => {
     // calling `bclaw_dispatch(intent=review)` and getting 0 targets when they
     // really wanted `bclaw_coordinate(intent=review, open_loop=true)`.
     const thisDir = path.dirname(fileURLToPath(import.meta.url));
+    // Tool definitions moved to mcp-catalog.ts in the PR1 boundary extraction
+    // (pln#622); concatenating assembly + catalog keeps this source-level
+    // check valid wherever the definition lives during the campaign.
     const mcpSrc = fs.readFileSync(
       path.resolve(thisDir, '../../../src/commands/mcp.ts'),
+      'utf-8',
+    ) + fs.readFileSync(
+      path.resolve(thisDir, '../../../src/commands/mcp-catalog.ts'),
       'utf-8',
     );
 

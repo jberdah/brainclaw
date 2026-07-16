@@ -60,8 +60,8 @@ import {
   SCHEMA_VERSION,
   createToolErrorResponse,
   normaliseFormat,
-  renderContextForMcp,
-} from './mcp.js';
+} from './mcp-contract.js';
+import { renderContextForMcp } from './mcp-presentation.js';
 
 function normalizeBootstrapInterviewAnswersArg(value: unknown): BootstrapInterviewAnswer[] {
   if (!Array.isArray(value)) {
