@@ -42,6 +42,13 @@ interface RegistryCommand {
   path: string;
 }
 
+interface RegistryDump {
+  /** Full command surface, sorted by path (compared against the fixture). */
+  commands: RegistryCommand[];
+  /** Top-level registration order — what `--help` renders (pln#622 PR5 order shim). */
+  topLevelOrder: string[];
+}
+
 /** Serialize with recursively sorted object keys so the committed file is canonical. */
 function canonicalJson(value: unknown): string {
   const sortKeys = (v: unknown): unknown => {
@@ -58,7 +65,7 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeys(value), null, 2) + '\n';
 }
 
-function dumpRegistry(): RegistryCommand[] {
+function dumpRegistry(): RegistryDump {
   // sanitizedProcessEnv strips every BRAINCLAW_* / agent-detection key, which
   // keeps the dump deterministic (e.g. BRAINCLAW_ENABLE_CODEV gates command
   // registration in src/cli.ts and must not leak in from an agent shell).
@@ -78,7 +85,7 @@ function dumpRegistry(): RegistryCommand[] {
       0,
       `BRAINCLAW_DUMP_REGISTRY run failed (status ${result.status}).\nstderr:\n${result.stderr}`,
     );
-    return JSON.parse(fs.readFileSync(dumpPath, 'utf-8')) as RegistryCommand[];
+    return JSON.parse(fs.readFileSync(dumpPath, 'utf-8')) as RegistryDump;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -109,7 +116,7 @@ function describeDrift(actual: RegistryCommand[], expected: RegistryCommand[]): 
 
 describe('CLI registry baseline (pln#622 campaign freeze)', () => {
   it('matches the committed registry snapshot', () => {
-    const actual = dumpRegistry();
+    const actual = dumpRegistry().commands;
 
     // Sanity: a broken dump mechanism must never be accepted as a baseline.
     assert.ok(
@@ -146,5 +153,136 @@ describe('CLI registry baseline (pln#622 campaign freeze)', () => {
     const first = canonicalJson(dumpRegistry());
     const second = canonicalJson(dumpRegistry());
     assert.equal(first, second, 'registry dump is non-deterministic across runs');
+  });
+
+  it('preserves the pre-split monolith top-level command order (--help surface)', () => {
+    // Commander renders `--help` in registration order. The pln#622 PR5 split
+    // registers commands per family, so src/cli.ts carries an explicit
+    // ORIGINAL_COMMAND_ORDER manifest + stable sort to keep the help output
+    // identical to the pre-split monolith (git show 0bc2005:src/cli.ts).
+    // This is that manifest's frozen expectation, MINUS the two
+    // BRAINCLAW_ENABLE_CODEV-gated commands (codev, codev-metrics):
+    // sanitizedProcessEnv strips the gate, so they are not registered here.
+    const expectedOrder = [
+      'init',
+      'setup',
+      'setup-machine',
+      'memory-log',
+      'memory-rollback',
+      'upgrade',
+      'patch-configs',
+      'machine-profile',
+      'agent-inventory',
+      'projects',
+      'decision',
+      'constraint',
+      'trap',
+      'handoff',
+      'status',
+      'plan',
+      'code-map',
+      'move',
+      'list-plans',
+      'sequence',
+      'add-step',
+      'complete-step',
+      'update-step',
+      'delete-step',
+      'estimation-report',
+      'update-plan',
+      'surface-task',
+      'delete-plan',
+      'update-handoff',
+      'doctor',
+      'repair',
+      'stale',
+      'version',
+      'release-notes',
+      'uninstall',
+      'rebuild',
+      'reflect',
+      'reflect-runtime-note',
+      'context',
+      'bootstrap',
+      'env',
+      'memory',
+      'instruction',
+      'list-instructions',
+      'register-agent',
+      'enable-agent',
+      'list-agents',
+      'review',
+      'show-candidate',
+      'star-candidate',
+      'use-candidate',
+      'accept',
+      'adapter-openclaw-import',
+      'reject',
+      'harvest-candidates',
+      'harvest',
+      'prune-candidates',
+      'cleanup-candidates',
+      'claim',
+      'assignment',
+      'list-claims',
+      'release-claim',
+      'release-claims',
+      'agent-board',
+      'runtime-note',
+      'note',
+      'runtime-status',
+      'sync',
+      'check-constraints',
+      'check-policy',
+      'check-security',
+      'setup-security',
+      'install-hooks',
+      'diff',
+      'prune',
+      'compact',
+      'mcp',
+      'set-trust',
+      'session-start',
+      'session-end',
+      'whoami',
+      'usage',
+      'search',
+      'export',
+      'refresh',
+      'reconcile',
+      'hooks',
+      'watch',
+      'dispatch',
+      'inbox',
+      'check-events',
+      'metrics',
+      'rollback',
+      'pull',
+      'push',
+      'audit',
+      'history',
+      'context-diff',
+      'capability',
+      'link',
+      'tool',
+      'explore',
+      'discover',
+      'migrate',
+      'switch',
+      'who',
+      'worktree',
+      'federation',
+      'questions',
+      'bootstrap-loop',
+      'loop',
+      'reply',
+      'run',
+    ];
+    const { topLevelOrder } = dumpRegistry();
+    assert.deepEqual(
+      topLevelOrder,
+      expectedOrder,
+      'top-level --help command order drifted from the pre-split monolith (pln#622 PR5 order shim)',
+    );
   });
 });
