@@ -45,7 +45,28 @@ matches block the write.
 
 When `security.block_sensitive_paths: true` (default), content that
 references paths like `.env`, `secrets/`, `.git/`, or `node_modules/`
-emits a warning.
+is flagged. `block_sensitive_paths` is the **enable-gate** for this layer;
+the flagged level follows the same rule as every other signal — a `warn`
+normally, escalating to `block` under `strict_redaction: true` (mode:
+strict). It is not a standalone block toggle: in warn mode a sensitive-path
+mention warns; in strict mode it blocks, uniformly with redaction, structural,
+and entropy matches.
+
+### Signal layers and levels
+
+`scanText` runs four independent layers, each with its own enable-gate, and
+they all share one level rule:
+
+| Layer | Enable-gate | Level (warn mode / strict) |
+|-------|-------------|----------------------------|
+| Redaction patterns | `redaction.enabled` | warn / block |
+| Structural detectors | `security.token_detection.enabled` | warn / block |
+| Entropy detector | `security.token_detection.entropy.enabled` | warn / block |
+| Sensitive paths | `security.block_sensitive_paths` | warn / block |
+
+`strict_redaction: true` escalates **every** matched signal to `block`
+uniformly; there is no per-layer level override. Excerpts in messages are
+always irreversibly masked.
 
 ### Configuration
 
