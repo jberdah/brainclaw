@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PUBLISHED_TOOLS, SCHEMA_VERSION } from '../../src/commands/mcp.js';
+import { ENTITY_NAMES } from '../../src/core/entity-registry.js';
 
 function stripDescriptions(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -23,7 +24,7 @@ function stripDescriptions(value: unknown): unknown {
 }
 
 function publicSurfaceFingerprint(): string {
-  const publicSurface = PUBLISHED_TOOLS
+  const tools = PUBLISHED_TOOLS
     .map((tool) => ({
       name: tool.name,
       tier: tool.annotations?.tier,
@@ -31,6 +32,19 @@ function publicSurfaceFingerprint(): string {
       inputSchema: stripDescriptions(tool.inputSchema),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+
+  // pln#625 — the SET of grammar-addressable entities is part of the public
+  // surface, but it is invisible to the tool inputSchema: `entity` is a free
+  // `type: 'string'` (so the front door can return a curated UnknownEntityError
+  // instead of an opaque ajv rejection) and the description that lists the
+  // entities is stripped above. Fold ENTITY_NAMES into the fingerprint so that
+  // wiring a new addressable entity (e.g. bclaw_find(entity='agent')) moves the
+  // fingerprint and forces a changelog entry — closing the blind spot surfaced
+  // by the Phase 2c ideation loop (lop_f8e8d18cb8c27ada).
+  const publicSurface = {
+    tools,
+    grammar_entities: [...ENTITY_NAMES].sort(),
+  };
 
   return createHash('sha256')
     .update(JSON.stringify(publicSurface))

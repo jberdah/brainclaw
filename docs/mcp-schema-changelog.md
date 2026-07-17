@@ -10,6 +10,14 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Changed — governance guard now covers grammar-addressable entities (pln#625)**
+- `tests/unit/mcp-governance.test.ts` folds the set of addressable grammar
+  entities (`ENTITY_NAMES`) into the public-surface fingerprint. Wiring a new
+  `bclaw_find/get(entity='…')` target previously moved nothing (the `entity`
+  arg is a free string and its enumerating description is stripped), so a new
+  addressable entity could ship without a changelog entry. Closes the blind
+  spot surfaced by the Phase 2c ideation loop.
+
 **Added — read-only `agent` entity in the canonical grammar (pln#625 Phase 2c)**
 - `bclaw_find/get(entity='agent')` are now wired. They return a REDACTED,
   read-only projection: `id`, `name`, `kind`, `trust_level`, `capabilities`,
@@ -182,7 +190,14 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:45c02576aff36244`
+- MCP public surface fingerprint: `sha256:cc21360e69fc2285`
+  (updated 2026-07-17 for pln#625 Phase 2c: the fingerprint now folds in the set
+  of grammar-addressable entities (`ENTITY_NAMES`), and `agent` was wired as a
+  read-only grammar entity. Previously the entity set was invisible to the
+  fingerprint — `entity` is a free `type: 'string'` and its enumerating
+  description is stripped — so wiring a new addressable entity moved nothing and
+  slipped past this guard. Additive: no tool added, removed, or renamed.)
+  Previous: `sha256:45c02576aff36244`
   (updated 2026-07-15 for pln#622 PR0b: `preset` and `client_request_id` added
   to the published `bclaw_coordinate` input schema. Both were already accepted
   by `CoordinateRequestSchema` and used by the handler — and `next_actions`
