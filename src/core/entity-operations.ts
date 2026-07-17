@@ -304,6 +304,12 @@ export const GRAMMAR_FILTER_CONTRACT = {
   constrainedValues: {
     scope: ['project', 'global'],
   },
+  /**
+   * Filter keys whose value MUST be a boolean. Validated at the MCP front door
+   * so a stringy `"true"` is rejected loudly instead of silently coercing to a
+   * no-op (loadAgentsForRead requires a strict `=== true`). Codex review of #83.
+   */
+  booleanKeys: ['includeReputation'],
 } as const;
 
 export interface ListResult<T = unknown> {

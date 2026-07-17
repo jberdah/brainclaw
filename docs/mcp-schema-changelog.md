@@ -211,7 +211,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:be0df1e4cc33936f`
+- MCP public surface fingerprint: `sha256:468f0103414e97e8`
+  (updated 2026-07-18 for pln#625 PR #83 + Codex review: `bclaw_list_agents`
+  retired and `bclaw_find(entity='agent')` gains `includeReputation` — now typed
+  as a boolean in `GRAMMAR_FILTER_CONTRACT.booleanKeys` and validated at the MCP
+  front door, so a non-boolean value is rejected instead of silently coercing to
+  a no-op. The added boolean-type declaration moves the fingerprint.)
+  Previous: `sha256:be0df1e4cc33936f`
   (updated 2026-07-17 for pln#625 PR #83: `bclaw_list_agents` retired from the
   published surface — migrated to `bclaw_find(entity='agent')` which gains an
   agent-only `includeReputation` filter. Both the removed tool and the new

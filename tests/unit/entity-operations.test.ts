@@ -743,18 +743,28 @@ describe('core/entity-operations — agent read-only projection (pln#625 Phase 2
     assert.equal(projectScoped.find((a) => a.name === 'codex-tester')!.registered, undefined);
   });
 
-  it('find(agent, includeReputation) attaches a reputation field (opt-in), absent otherwise', () => {
+  it('find(agent, includeReputation) attaches a reputation field (opt-in), absent otherwise; catalog-only agents never join', () => {
     const plain = listEntities('agent', workspace.dir, {}).items as Array<Record<string, unknown>>;
     const withRep = listEntities('agent', workspace.dir, { includeReputation: true }).items as Array<Record<string, unknown>>;
     const plainHit = plain.find((a) => a.name === 'codex-tester')!;
     const repHit = withRep.find((a) => a.name === 'codex-tester')!;
-    // Opt-in: the key is present only when requested (value may be undefined when
-    // the agent has no reputation events yet — the join path is what we assert).
+    // Opt-in: a REGISTERED agent gets the key only when requested. The join maps
+    // by agent_id (projected as `id`) using the same code path as the CLI
+    // list-agents --with-reputation; here reputation is disabled-by-default so
+    // the value is undefined — the presence/absence of the key is what proves the
+    // join ran on the registered agent.
     assert.equal('reputation' in plainHit, false);
     assert.equal('reputation' in repHit, true);
     // Redaction still holds with the join on.
     assert.equal(repHit.identity_key, undefined);
     assert.equal(repHit.invoke, undefined);
+
+    // Codex #83 P2 — with scope=global, catalog-only agents (no agent_id) must
+    // NOT join a reputation entry (no accidental match via String(null)="null").
+    const global = listEntities('agent', workspace.dir, { scope: 'global', includeReputation: true }).items as Array<Record<string, unknown>>;
+    const catalogOnly = global.find((a) => a.registered === false);
+    assert.ok(catalogOnly, 'expected at least one catalog-only agent under scope=global');
+    assert.equal('reputation' in catalogOnly!, false, 'catalog-only agents must never carry a reputation join');
   });
 });
 
