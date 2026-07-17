@@ -166,6 +166,39 @@ export class EntityNotFoundError extends Error {
 }
 
 /**
+ * Thrown when a write verb targets a `writePolicy:'system'` entity via a verb
+ * that is not agent-wired: the runtime owns these records, so this is a
+ * deliberate "not agent-writable" boundary, NOT a "coming soon" gap. Names the
+ * authorized path (writePolicyNote) so the caller knows where the write really
+ * happens. pln#625 Phase 2 — replaces the misleading "not yet wired. Use the
+ * legacy tool" for system entities.
+ */
+export class SystemManagedError extends Error {
+  constructor(entity: EntityName, verb: string, note?: string) {
+    super(
+      `bclaw_${verb}(entity='${entity}'): ${entity} is system-managed — not writable via the canonical grammar.`
+      + (note ? ` ${note}.` : ''),
+    );
+    this.name = 'SystemManagedError';
+  }
+}
+
+/**
+ * Pick the right "this write verb isn't available" error for an unwired entity,
+ * from the registry data (no per-switch string drift): a system-managed entity
+ * gets the SystemManagedError boundary; an agent-ownable one gets the
+ * "not yet wired" signal. Call this from a write verb's switch DEFAULT only —
+ * explicitly-wired verbs return before reaching it.
+ */
+function writeUnsupported(name: EntityName, verb: string): Error {
+  const spec = ENTITY_REGISTRY[name];
+  if (spec?.writePolicy === 'system') {
+    return new SystemManagedError(name, verb, spec.writePolicyNote);
+  }
+  return new EntityOperationUnsupportedError(name, verb);
+}
+
+/**
  * Thrown when a canonical verb is called with an entity name that is not in the
  * registry at all (e.g. bclaw_update(entity='agent')). Previously such a name
  * reached `ENTITY_REGISTRY[name].updatable` and died on a raw TypeError
@@ -627,7 +660,7 @@ export function createEntity(
       return { entity: name, id: link.name ?? link.path };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'create');
+      throw writeUnsupported(name, 'create');
   }
 }
 
@@ -756,7 +789,7 @@ export function updateEntity(
       return { entity: name, id: merged.name ?? merged.path };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'update');
+      throw writeUnsupported(name, 'update');
   }
 }
 
@@ -831,7 +864,7 @@ export function removeEntity(
       return { entity: name, id, archived: true, purged: false };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'remove');
+      throw writeUnsupported(name, 'remove');
   }
 }
 
@@ -965,11 +998,10 @@ export function transitionEntity(
       throw new InvalidTransitionError(name, from, to);
     }
     default:
-      throw new EntityOperationUnsupportedError(
-        name,
-        'transition',
-        `Lifecycle transitions for ${name} not yet wired.`,
-      );
+      // pln#625 Phase 2 — system-managed entities (action/agent_run) report the
+      // curated "system-managed" boundary; agent-ownable-but-unwired ones (e.g.
+      // handoff) keep the "not yet wired" signal.
+      throw writeUnsupported(name, 'transition');
   }
 }
 
