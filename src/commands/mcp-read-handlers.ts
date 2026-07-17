@@ -54,7 +54,7 @@ import { listAvailableProjectsForSession, switchProject } from './switch.js';
 import { resolveEffectiveCwdInfo, type ResolvedEffectiveCwd } from '../core/store-resolution.js';
 import { resolveProjectCwd } from '../core/cross-project.js';
 import { readUnseenEvents, buildNotificationSummary } from '../core/event-log.js';
-import { boundListResult, DEFAULT_FIND_CHAR_BUDGET } from '../core/entity-operations.js';
+import { boundListResult, DEFAULT_FIND_CHAR_BUDGET, projectAgentForRead } from '../core/entity-operations.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
 import { BootstrapInterviewAnswerSchema, AssignmentStatusSchema, AgentRunStatusSchema, AgentRunTransportSchema, ActionRequiredStatusSchema, ActionRequiredKindSchema } from '../core/schema.js';
 import type { ActionRequiredKind, ActionRequiredStatus, AgentRunStatus, AgentRunTransport, AssignmentStatus, BootstrapInterviewAnswer, Config, MessageStatus, MessageType, PlanStatus, PlanType, RuntimeEventType, SequenceStatus, State } from '../core/schema.js';
@@ -1312,12 +1312,17 @@ function dispatchReadTool(
     const current = resolveCurrentAgentIdentity(cwd);
     const reputation = args.includeReputation ? buildReputationSnapshot(cwd) : undefined;
     const reputationById = new Map((reputation?.agents ?? []).map((agent) => [agent.agent_id ?? agent.key, toPublicReputationSummary(agent)]));
-    const structuredAgents = args.includeReputation
-      ? agents.map((agent) => ({
-          ...agent,
-          reputation: reputationById.get(agent.agent_id),
-        }))
-      : agents;
+    // pln#625 Phase 2c (ideation loop lop_f8e8d18cb8c27ada) — redact through the
+    // SAME projection as bclaw_find(entity=agent) so there is ONE source of truth
+    // and no key material / invoke.env leaks here. This tool previously spread the
+    // raw identity doc (identity_key.public_key + invoke.env in the clear).
+    // Reputation stays an opt-in add-on.
+    const structuredAgents = agents.map((agent) => {
+      const projected = projectAgentForRead(agent);
+      return args.includeReputation
+        ? { ...projected, reputation: reputationById.get(agent.agent_id) }
+        : projected;
+    });
 
     const lines = structuredAgents.length === 0
       ? ['No registered agents.']
@@ -1332,13 +1337,15 @@ function dispatchReadTool(
                 continuity_hygiene: number;
               };
             }).reputation;
-            const currentLabel = current?.agent_id === agent.agent_id ? ' [current]' : '';
-            const capabilitiesLabel = agent.capabilities.length > 0 ? ` caps=${agent.capabilities.join(',')}` : '';
-            const fingerprintLabel = agent.identity_key ? ` fp=${agent.identity_key.fingerprint.slice(0, 12)}` : '';
+            const capabilities = (agent.capabilities as string[] | undefined) ?? [];
+            const fingerprint = agent.fingerprint as string | undefined;
+            const currentLabel = current?.agent_id === agent.id ? ' [current]' : '';
+            const capabilitiesLabel = capabilities.length > 0 ? ` caps=${capabilities.join(',')}` : '';
+            const fingerprintLabel = fingerprint ? ` fp=${fingerprint.slice(0, 12)}` : '';
             const reputationLabel = reputation
               ? ` trust=${reputation.internal_trust} cq=${reputation.contribution_quality} rv=${reputation.review_reliability} ct=${reputation.continuity_hygiene}`
               : '';
-            return `- ${agent.agent_name} (${agent.agent_id}, kind=${agent.kind})${currentLabel}${reputationLabel}${capabilitiesLabel}${fingerprintLabel}`;
+            return `- ${String(agent.name)} (${String(agent.id)}, kind=${String(agent.kind)})${currentLabel}${reputationLabel}${capabilitiesLabel}${fingerprintLabel}`;
           }),
         ];
 

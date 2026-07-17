@@ -41,6 +41,7 @@ import {
 } from './claims.js';
 import { listActionRequired } from './actions.js';
 import { listAgentIdentities } from './agent-registry.js';
+import { getCapabilityProfile, getSpawnableAgents } from './agent-capability.js';
 import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
@@ -362,7 +363,7 @@ export function listEntities(
   filter: EntityFilter = {},
 ): ListResult {
   assertKnownEntity(name, 'find');
-  const all = loadAll(name, cwd);
+  const all = loadAll(name, cwd, filter);
   const fieldFiltered = applyFieldFilter(all, filter);
   const excludedLegacy = filter.includeLegacy === true
     ? 0
@@ -442,40 +443,88 @@ export function boundListResult<T = unknown>(
 }
 
 /**
- * Redacted read-only projection of an agent identity (pln#625 Phase 2c).
- * The grammar must never surface secrets or key material, so this is a strict
- * ALLOW-LIST — any field added to AgentIdentityDocument later stays hidden until
- * someone deliberately projects it here:
- *  - identity_key is dropped entirely; only a TRUNCATED fingerprint is exposed
- *    (enough to correlate a key without disclosing it whole).
- *  - invoke keeps command/channel/timeout (coordinators need them to spawn) but
- *    its `env` — which can carry API keys — is replaced with a redaction marker.
- * `id`/`name` mirror agent_id/agent_name so bclaw_get matches on either.
+ * Redacted read-only projection of an agent identity (pln#625 Phase 2c;
+ * refined by ideation loop lop_f8e8d18cb8c27ada). Shared by the grammar
+ * (find/get) AND bclaw_list_agents so redaction has ONE source of truth.
+ *
+ * Strict ALLOW-LIST — any field added to AgentIdentityDocument later stays
+ * hidden until someone deliberately projects it here:
+ *  - identity_key (private-ish key material: the PEM public_key) is dropped.
+ *  - `fingerprint` is the sha256(PEM) — the PUBLIC canonical key id, equal to
+ *    the cloud's agents.key_fingerprint — so it is exposed IN FULL: truncating
+ *    it added no confidentiality (a hash never reveals its preimage; the id is
+ *    public) and broke the whole point (matching a local key against the
+ *    256-bit remote fingerprint).
+ *  - `invoke` is intentionally NOT projected: it is populated by no writer and
+ *    read by no spawn path (buildInvokeCommand uses the capability profile, not
+ *    identity.invoke), so exposing it was dead surface — and it would leak
+ *    invoke.command (spawn flags, possibly tokens) verbatim.
+ * `short_label` mirrors agent_name so the generic getEntity matcher resolves an
+ * agent by id OR name (same trick as session's session_id→id alias).
  */
-function projectAgentForRead(doc: AgentIdentityDocument): Record<string, unknown> {
-  const fingerprint = doc.identity_key?.fingerprint;
+export function projectAgentForRead(doc: AgentIdentityDocument): Record<string, unknown> {
   return {
     id: doc.agent_id,
+    short_label: doc.agent_name,
     name: doc.agent_name,
     kind: doc.kind,
     trust_level: doc.trust_level,
     capabilities: doc.capabilities,
-    fingerprint: fingerprint ? `${fingerprint.slice(0, 16)}…` : undefined,
+    fingerprint: doc.identity_key?.fingerprint,
     model: doc.model,
     context_profile: doc.context_profile,
-    invoke: doc.invoke
-      ? {
-          command: doc.invoke.command,
-          channel: doc.invoke.channel,
-          timeout: doc.invoke.timeout,
-          ...(doc.invoke.env ? { env: '[redacted]' } : {}),
-        }
-      : undefined,
     created_at: doc.created_at,
   };
 }
 
-function loadAll(name: EntityName, cwd: string): unknown[] {
+/**
+ * Catalog-only stub for a spawnable agent that is NOT in this project's
+ * registry (scope='global' only). It has no identity document, so only the
+ * name + dispatchability are known.
+ */
+function projectCatalogAgentForRead(name: string): Record<string, unknown> {
+  return {
+    id: null,
+    short_label: name,
+    name,
+    kind: null,
+    trust_level: null,
+    capabilities: [],
+    dispatchable: true,
+    registered: false,
+  };
+}
+
+/**
+ * Load agents for a read (pln#625 Phase 2c, hybrid scope from lop_f8e8d18cb8c27ada).
+ * Default scope = the CURRENT PROJECT's registry (`.brainclaw/agents`, exactly
+ * what `list-agents` reads — there is NO global registry on disk). scope='global'
+ * additionally unions the static dispatchable catalog (getSpawnableAgents) and
+ * annotates each entry with `dispatchable` (canBeSpawnedCli) + `registered`
+ * (present in this project's registry) — the honest inventory a coordinator
+ * needs, since bclaw_dispatch resolves candidates from that catalog, NOT from
+ * the project registry.
+ */
+function loadAgentsForRead(cwd: string, filter?: EntityFilter): Record<string, unknown>[] {
+  const registered = listAgentIdentities(cwd).map(projectAgentForRead);
+  const scope = typeof filter?.scope === 'string' ? filter.scope : 'project';
+  if (scope !== 'global') return registered;
+
+  const byName = new Map<string, Record<string, unknown>>();
+  for (const a of registered) {
+    a.registered = true;
+    a.dispatchable = getCapabilityProfile(String(a.name))?.runtime.canBeSpawnedCli ?? false;
+    byName.set(String(a.name), a);
+  }
+  for (const { name } of getSpawnableAgents()) {
+    const existing = byName.get(name);
+    if (existing) { existing.dispatchable = true; continue; }
+    byName.set(name, projectCatalogAgentForRead(name));
+  }
+  return [...byName.values()];
+}
+
+function loadAll(name: EntityName, cwd: string, filter?: EntityFilter): unknown[] {
   switch (name) {
     case 'plan':                return loadState(cwd).plan_items;
     case 'decision':            return loadState(cwd).recent_decisions;
@@ -489,11 +538,10 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'action':              return listActionRequired(cwd);
     case 'assignment':          return listAssignments(cwd);
     case 'agent_run':           return loadAgentRunsWithReconciliation(cwd);
-    // pln#625 Phase 2c — agent is READ-ONLY via the grammar, with a redacted
-    // projection. Scope is the current project's agent registry (cwd); a
-    // global/cross-project agent listing is deliberately out of scope here and
-    // stays with the dedicated agent CLI.
-    case 'agent':               return listAgentIdentities(cwd).map(projectAgentForRead);
+    // pln#625 Phase 2c — agent is READ-ONLY via the grammar, redacted projection.
+    // Default scope = current project's registry; filter.scope='global' unions
+    // the dispatchable catalog. See loadAgentsForRead.
+    case 'agent':               return loadAgentsForRead(cwd, filter);
     case 'cross_project_link':  return resolveCrossProjectLinks(cwd);
     // pln#625 Phase 2 — wire the previously-unwired reads.
     case 'step':                return loadState(cwd).plan_items.flatMap((p) => p.steps ?? []);
@@ -580,15 +628,6 @@ export function getEntity(
              l.path === idOrShortLabel ||
              l.absolutePath === idOrShortLabel ||
              path.basename(l.absolutePath) === idOrShortLabel,
-    );
-    if (!hit) throw new EntityNotFoundError(name, idOrShortLabel);
-    return hit;
-  }
-  if (name === 'agent') {
-    // Redacted projection has no short_label; match on id (agt_…) or name.
-    const agents = loadAll(name, cwd) as Array<Record<string, unknown>>;
-    const hit = agents.find(
-      (a) => a.id === idOrShortLabel || a.name === idOrShortLabel,
     );
     if (!hit) throw new EntityNotFoundError(name, idOrShortLabel);
     return hit;

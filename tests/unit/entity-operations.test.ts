@@ -9,6 +9,7 @@ import {
   createEntity,
   getEntity,
   listEntities,
+  projectAgentForRead,
   removeEntity,
   transitionEntity,
   updateEntity,
@@ -674,7 +675,7 @@ describe('core/entity-operations — agent read-only projection (pln#625 Phase 2
     workspace.cleanup();
   });
 
-  it('find(agent) returns a redacted projection — no key material, no invoke.env, truncated fingerprint', () => {
+  it('find(agent) returns a redacted projection — key material dropped, invoke gone, FULL fingerprint', () => {
     const listed = listEntities('agent', workspace.dir, {});
     const hit = (listed.items as Array<Record<string, unknown>>).find((a) => a.name === 'codex-tester');
     assert.ok(hit, 'saved agent should be findable');
@@ -682,31 +683,64 @@ describe('core/entity-operations — agent read-only projection (pln#625 Phase 2
     assert.equal(hit!.kind, 'agent');
     assert.equal(hit!.trust_level, 'contributor');
     assert.deepEqual(hit!.capabilities, ['review', 'schema']);
-    // fingerprint truncated to a 16-char prefix + ellipsis, never the whole hash.
-    assert.equal(hit!.fingerprint, `${FULL_FINGERPRINT.slice(0, 16)}…`);
-    // identity_key object never surfaced; invoke.env redacted, command kept.
+    // Full public fingerprint (public key id, matches the cloud) — NOT truncated;
+    // the private key material (identity_key / public_key PEM) is what's dropped.
+    assert.equal(hit!.fingerprint, FULL_FINGERPRINT);
     assert.equal(hit!.identity_key, undefined);
-    const invoke = hit!.invoke as Record<string, unknown>;
-    assert.equal(invoke.command, 'codex exec {prompt}');
-    assert.equal(invoke.env, '[redacted]');
-    // Belt-and-braces: no secret leaks anywhere in the serialized projection.
+    // invoke is not projected at all (dead field + would leak invoke.command).
+    assert.equal(hit!.invoke, undefined);
+    // Belt-and-braces: no secret (env value / key PEM) leaks in the projection.
     const serialized = JSON.stringify(hit);
     assert.doesNotMatch(serialized, /sk-SECRET-do-not-leak/);
     assert.doesNotMatch(serialized, /SECRETKEYMATERIAL/);
-    assert.doesNotMatch(serialized, new RegExp(FULL_FINGERPRINT));
   });
 
-  it('get(agent) resolves by id OR name and is equally redacted', () => {
+  it('projection is a strict allow-list — an unknown future field stays hidden', () => {
+    const docWithSecret = {
+      version: 1,
+      agent_id: 'agt_alx',
+      agent_name: 'allowlist-probe',
+      created_at: nowISO(),
+      kind: 'agent',
+      trust_level: 'observer',
+      capabilities: [],
+      secret_field: 'LEAK-ME',
+    } as unknown as AgentIdentityDocument;
+    const projected = projectAgentForRead(docWithSecret) as Record<string, unknown>;
+    assert.equal(projected.secret_field, undefined);
+    assert.doesNotMatch(JSON.stringify(projected), /LEAK-ME/);
+  });
+
+  it('get(agent) resolves by id OR name (short_label alias) and is equally redacted', () => {
     const byName = getEntity('agent', 'codex-tester', workspace.dir) as Record<string, unknown>;
     const byId = getEntity('agent', 'agt_read0001', workspace.dir) as Record<string, unknown>;
     assert.equal(byName.id, 'agt_read0001');
     assert.equal(byId.name, 'codex-tester');
     assert.equal(byName.identity_key, undefined);
-    assert.equal((byName.invoke as Record<string, unknown>).env, '[redacted]');
+    assert.equal(byName.invoke, undefined);
   });
 
   it('get(agent) throws EntityNotFoundError for an unknown id/name', () => {
     assert.throws(() => getEntity('agent', 'nope', workspace.dir), EntityNotFoundError);
+  });
+
+  it('find(agent, scope=global) unions the dispatchable catalog with dispatchable/registered flags', () => {
+    const projectScoped = listEntities('agent', workspace.dir, {}).items as Array<Record<string, unknown>>;
+    const globalScoped = listEntities('agent', workspace.dir, { scope: 'global' }).items as Array<Record<string, unknown>>;
+    // Global is a superset — it adds catalog-only (unregistered) agents.
+    assert.ok(globalScoped.length >= projectScoped.length);
+    // The registered agent is flagged registered:true with a boolean dispatchable.
+    const seeded = globalScoped.find((a) => a.name === 'codex-tester');
+    assert.ok(seeded);
+    assert.equal(seeded!.registered, true);
+    assert.equal(typeof seeded!.dispatchable, 'boolean');
+    // At least one catalog-only (unregistered but dispatchable) agent appears.
+    assert.ok(
+      globalScoped.some((a) => a.registered === false && a.dispatchable === true),
+      'scope=global should surface catalog-only dispatchable agents',
+    );
+    // Project scope carries neither flag (it is the plain audit registry).
+    assert.equal(projectScoped.find((a) => a.name === 'codex-tester')!.registered, undefined);
   });
 });
 
