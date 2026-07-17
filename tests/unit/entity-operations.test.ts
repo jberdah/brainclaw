@@ -4,6 +4,7 @@ import {
   EntityNotFoundError,
   EntityOperationUnsupportedError,
   InvalidTransitionError,
+  SystemManagedError,
   UnknownEntityError,
   createEntity,
   getEntity,
@@ -70,6 +71,47 @@ describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => 
       () => createEntity('handoff' as EntityName, { author: 'x' }, cwd),
       EntityOperationUnsupportedError,
     );
+  });
+});
+
+describe('core/entity-operations — writePolicy enforcement (pln#625 Phase 2)', () => {
+  // The default (unwired) write path throws before any I/O, so this path is never touched.
+  const cwd = 'C:/nonexistent/writepolicy-test-never-touched';
+
+  // create/update/remove throw at the switch default before any I/O, so the
+  // fake cwd is never touched. (transition does I/O first — its boundary is
+  // covered with a real record in the CRUD-dispatch describe below.)
+  it('a system-managed entity reports SystemManagedError on create/update/remove', () => {
+    assert.throws(() => createEntity('action' as EntityName, {}, cwd), SystemManagedError);
+    assert.throws(() => updateEntity('action' as EntityName, 'x', { tags: ['t'] }, cwd), SystemManagedError);
+    assert.throws(() => removeEntity('action' as EntityName, 'x', cwd), SystemManagedError);
+    assert.throws(() => createEntity('agent_run' as EntityName, {}, cwd), SystemManagedError);
+  });
+
+  it('the SystemManagedError is operator-legible: says system-managed AND names the authorized path (from writePolicyNote)', () => {
+    try {
+      createEntity('action' as EntityName, {}, cwd);
+      assert.fail('expected SystemManagedError');
+    } catch (err) {
+      assert.ok(err instanceof SystemManagedError, `expected SystemManagedError, got ${(err as Error).name}`);
+      const msg = (err as Error).message;
+      assert.match(msg, /system-managed/i);
+      assert.match(msg, /bclaw_assignment_action/, 'must name the authorized path from writePolicyNote');
+    }
+  });
+
+  it('an agent-ownable but not-yet-wired entity keeps the "not yet wired" signal, NOT the system boundary', () => {
+    // handoff has no writePolicy → defaults to 'agent': its unwired create is a
+    // "coming soon" gap, not a runtime-owned boundary. Proves writePolicy only
+    // relabels the default and does not over-classify agent-ownable entities.
+    try {
+      createEntity('handoff' as EntityName, { author: 'x' }, cwd);
+      assert.fail('expected EntityOperationUnsupportedError');
+    } catch (err) {
+      assert.ok(err instanceof EntityOperationUnsupportedError, `expected EntityOperationUnsupportedError, got ${(err as Error).name}`);
+      assert.ok(!(err instanceof SystemManagedError), 'agent-ownable entity must NOT get the system-managed boundary');
+      assert.match((err as Error).message, /not yet wired/);
+    }
   });
 });
 
@@ -525,10 +567,32 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       );
     });
 
-    it('create on unsupported entity throws with a helpful message', () => {
+    it('create on a system-managed entity throws the system-managed boundary (pln#625 Phase 2)', () => {
+      // assignment.writePolicy = 'system' — created by dispatch, not the grammar.
+      // (The agent-ownable "not yet wired" path is covered in the writePolicy
+      // enforcement describe above, via handoff.)
+      assert.throws(() => createEntity('assignment', {}, workspace.dir), SystemManagedError);
+      assert.throws(() => createEntity('assignment', {}, workspace.dir), /system-managed/);
+    });
+
+    it('transition on a system-managed entity (real record) reports the boundary past the I/O checks', async () => {
+      // transition does statusField + load + isValidTransition BEFORE the switch,
+      // so a fake id yields not-found / invalid-transition, not the boundary.
+      // Seed a real pending action and attempt a VALID transition: it clears
+      // those checks, reaches the switch default, and reports SystemManagedError
+      // (actions are resolved via bclaw_assignment_action, not the grammar).
+      const { createActionRequired } = await import('../../src/core/actions.js');
+      const action = createActionRequired({
+        assignment_id: 'asgn_test',
+        agent: 'claude-code',
+        kind: 'approval',
+        title: 'seed for transition boundary',
+        prompt: 'approve?',
+      }, workspace.dir);
+      assert.equal(action.status, 'pending');
       assert.throws(
-        () => createEntity('assignment', {}, workspace.dir),
-        /not yet wired/,
+        () => transitionEntity('action', action.id, 'resolved', workspace.dir),
+        SystemManagedError,
       );
     });
   });

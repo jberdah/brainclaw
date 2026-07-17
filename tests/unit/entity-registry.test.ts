@@ -181,6 +181,19 @@ describe('core/entity-registry — grammar consistency', () => {
       assert.equal(typeof (spec.schema as { parse: unknown }).parse, 'function', `${name}: schema has no .parse method`);
     }
   });
+
+  // pln#625 Phase 2 — a system-managed entity's unwired-write error names the
+  // authorized path from writePolicyNote; without one the error is vague.
+  it('every writePolicy:system entity names its authorized path (writePolicyNote)', () => {
+    for (const name of ENTITY_NAMES) {
+      const spec = ENTITY_REGISTRY[name];
+      if (spec.writePolicy !== 'system') continue;
+      assert.ok(
+        typeof spec.writePolicyNote === 'string' && spec.writePolicyNote.length > 0,
+        `${name}: writePolicy 'system' must set writePolicyNote (the authorized write path named in the error)`,
+      );
+    }
+  });
 });
 
 /**

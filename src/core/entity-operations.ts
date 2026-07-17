@@ -6,10 +6,12 @@
  * Phase 3 slice 3b (pln_c6472192). Keeps imperative code where it lives
  * (per P6.2) — this module only routes.
  *
- * MVP wiring (this landing): plan, decision, constraint, trap,
- * runtime_note, candidate. Other entities throw
- * `EntityOperationUnsupportedError` with a pointer at the legacy tool
- * until later slices wire them in.
+ * Write-verb wiring is per entity. An unwired write verb picks its error from
+ * the registry's writePolicy (pln#625 Phase 2): a `system` entity (session,
+ * inbox_message, instruction, assignment, agent_run, action) reports the
+ * curated `SystemManagedError` naming its authorized path; an agent-ownable one
+ * (default) reports `EntityOperationUnsupportedError` ("not yet wired"). An
+ * unknown entity name is rejected at the front door with `UnknownEntityError`.
  */
 
 import path from 'node:path';
@@ -163,6 +165,47 @@ export class EntityNotFoundError extends Error {
     super(`${entity} with id '${id}' not found`);
     this.name = 'EntityNotFoundError';
   }
+}
+
+/**
+ * Thrown when a write verb targets a `writePolicy:'system'` entity via a verb
+ * that is not agent-wired: the runtime owns these records, so this is a
+ * deliberate "not agent-writable" boundary, NOT a "coming soon" gap. Names the
+ * authorized path (writePolicyNote) so the caller knows where the write really
+ * happens. pln#625 Phase 2 — replaces the misleading "not yet wired. Use the
+ * legacy tool" for system entities.
+ */
+export class SystemManagedError extends Error {
+  constructor(entity: EntityName, verb: string, note?: string) {
+    super(
+      // Verb-scoped, not entity-scoped: some system entities have OTHER wired
+      // verbs (e.g. assignment transition/update), so don't claim the whole
+      // entity is unwritable — only that THIS verb is not an agent-facing
+      // grammar path for it.
+      `bclaw_${verb}(entity='${entity}'): ${entity} is system-managed — bclaw_${verb} is not available for it via the canonical grammar.`
+      + (note ? ` ${note}.` : ''),
+    );
+    this.name = 'SystemManagedError';
+  }
+}
+
+/**
+ * Pick the right "this write verb isn't available" error for an unwired entity,
+ * from the registry data (no per-switch string drift): a system-managed entity
+ * gets the SystemManagedError boundary; an agent-ownable one gets the
+ * "not yet wired" signal. Call this from a write verb's switch DEFAULT only —
+ * explicitly-wired verbs return before reaching it.
+ */
+function writeUnsupported(name: EntityName, verb: string): Error {
+  const spec = ENTITY_REGISTRY[name];
+  if (spec?.writePolicy === 'system') {
+    return new SystemManagedError(name, verb, spec.writePolicyNote);
+  }
+  // Preserve the transition-specific hint the old default carried, so an
+  // agent-ownable-but-unwired transition (e.g. handoff) keeps its precise
+  // message rather than the generic "use the legacy tool" filler.
+  const hint = verb === 'transition' ? `Lifecycle transitions for ${name} not yet wired.` : undefined;
+  return new EntityOperationUnsupportedError(name, verb, hint);
 }
 
 /**
@@ -627,7 +670,7 @@ export function createEntity(
       return { entity: name, id: link.name ?? link.path };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'create');
+      throw writeUnsupported(name, 'create');
   }
 }
 
@@ -756,7 +799,7 @@ export function updateEntity(
       return { entity: name, id: merged.name ?? merged.path };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'update');
+      throw writeUnsupported(name, 'update');
   }
 }
 
@@ -831,7 +874,7 @@ export function removeEntity(
       return { entity: name, id, archived: true, purged: false };
     }
     default:
-      throw new EntityOperationUnsupportedError(name, 'remove');
+      throw writeUnsupported(name, 'remove');
   }
 }
 
@@ -965,11 +1008,10 @@ export function transitionEntity(
       throw new InvalidTransitionError(name, from, to);
     }
     default:
-      throw new EntityOperationUnsupportedError(
-        name,
-        'transition',
-        `Lifecycle transitions for ${name} not yet wired.`,
-      );
+      // pln#625 Phase 2 — system-managed entities (action/agent_run) report the
+      // curated "system-managed" boundary; agent-ownable-but-unwired ones (e.g.
+      // handoff) keep the "not yet wired" signal.
+      throw writeUnsupported(name, 'transition');
   }
 }
 

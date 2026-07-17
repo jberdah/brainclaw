@@ -68,6 +68,19 @@ export interface EntitySpec {
   schema: ZodType;
   /** Fields bclaw_update may patch. Non-listed fields require a transition or re-create. */
   updatable: readonly string[];
+  /**
+   * Who may WRITE this entity through the canonical grammar, for verbs that are
+   * NOT explicitly wired (the switch default in entity-operations). Absent =
+   * 'agent' (agent-ownable; an unwired verb reports "not yet wired"). 'system' =
+   * created/mutated by the runtime (dispatch, reconciler, messaging,
+   * resolveAction) — an unwired verb reports the curated "system-managed, not
+   * agent-writable" error naming `writePolicyNote`. This only governs the
+   * default case: an explicitly-wired verb (e.g. assignment transition) runs
+   * regardless. pln#625 Phase 2.
+   */
+  writePolicy?: 'agent' | 'system';
+  /** For writePolicy:'system' — the authorized path that DOES mutate this entity (named in the error). */
+  writePolicyNote?: string;
   /** Name of the status-bearing field, if any. undefined = stateless entity. */
   statusField?: string;
   /** Declarative transition matrix: current → [next, …]. Empty when stateless. */
@@ -147,6 +160,8 @@ const claim: EntitySpec = {
 const session: EntitySpec = {
   name: 'session',
   shortLabelPrefix: 'sess',
+  writePolicy: 'system',
+  writePolicyNote: 'sessions are opened/refreshed by the runtime (bclaw_work + the session lifecycle), not written via the grammar',
   schema: CurrentSessionStateSchema,
   updatable: ['last_seen_at'],
   transitions: {},
@@ -300,6 +315,8 @@ const sequence: EntitySpec = {
 const inbox_message: EntitySpec = {
   name: 'inbox_message',
   shortLabelPrefix: 'msg',
+  writePolicy: 'system',
+  writePolicyNote: 'messages are created by bclaw_send_message and transitioned by bclaw_ack_message / bclaw_read_inbox',
   schema: InboxMessageSchema,
   updatable: [],
   statusField: 'status',
@@ -320,6 +337,8 @@ const inbox_message: EntitySpec = {
 const instruction: EntitySpec = {
   name: 'instruction',
   shortLabelPrefix: 'ins',
+  writePolicy: 'system',
+  writePolicyNote: 'instructions are managed via project setup / config (the instruction layer), not the grammar',
   schema: InstructionEntrySchema,
   updatable: ['text', 'tags', 'active'],
   transitions: {},
@@ -336,6 +355,8 @@ const instruction: EntitySpec = {
 const assignment: EntitySpec = {
   name: 'assignment',
   shortLabelPrefix: 'asgn',
+  writePolicy: 'system',
+  writePolicyNote: 'assignments are created by dispatch (bclaw_coordinate / bclaw_dispatch) and advanced via bclaw_assignment_update or the reconciler (transition IS wired)',
   schema: AssignmentSchema,
   updatable: ['description', 'status_reason', 'tags'],
   statusField: 'status',
@@ -364,6 +385,8 @@ const assignment: EntitySpec = {
 const agent_run: EntitySpec = {
   name: 'agent_run',
   shortLabelPrefix: 'run',
+  writePolicy: 'system',
+  writePolicyNote: 'agent_runs are created and reconciled by the dispatch/execution layer, not written via the grammar',
   schema: AgentRunSchema,
   updatable: ['output_summary', 'error_summary'],
   statusField: 'status',
@@ -397,15 +420,18 @@ const agent_run: EntitySpec = {
  * EntitySpec↔Zod consistency test now pins the FSM to the persisted enum so it
  * can never silently drift again.
  *
- * NB (pln#625 Phase 2): update(action) and transition(action) are NOT yet
- * routed in entity-operations.ts — both fall through to the "not yet wired"
- * error today. When Phase 2 wires update(action) it MUST gate patches to
+ * NB (pln#625 Phase 2): action is writePolicy:'system', so update/remove/
+ * transition(action) now return the curated SystemManagedError (managed via
+ * resolveAction / bclaw_assignment_action), not "not yet wired". If a later
+ * phase DOES wire an agent-facing update(action), it MUST gate patches to
  * status==='pending' (patching title/prompt on a resolved action would rewrite
  * the record of what a human already approved).
  */
 const action: EntitySpec = {
   name: 'action',
   shortLabelPrefix: 'act',
+  writePolicy: 'system',
+  writePolicyNote: 'actions are raised by the runtime and resolved via bclaw_assignment_action (resolveAction), not written via the grammar',
   schema: ActionRequiredSchema,
   updatable: ['title', 'prompt', 'tags'],
   statusField: 'status',
