@@ -452,7 +452,13 @@ describe('MCP server', () => {
           arguments: {},
         },
       });
-      assert.ok(agents.result.structuredContent.agents.some((agent: any) => agent.agent_name === 'github-copilot'));
+      // pln#625 Phase 2c — bclaw_list_agents now redacts through projectAgentForRead:
+      // agent_name → name, and NO key material / invoke.env leaks.
+      assert.ok(agents.result.structuredContent.agents.some((agent: any) => agent.name === 'github-copilot'));
+      assert.ok(
+        agents.result.structuredContent.agents.every((agent: any) => agent.identity_key === undefined && agent.invoke === undefined),
+        'bclaw_list_agents must not surface identity_key or invoke',
+      );
       assert.equal(agents.result.structuredContent.current_agent, 'testuser');
 
       const instructions = await sendMcpRequest(proc, {

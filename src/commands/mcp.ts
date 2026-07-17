@@ -1970,13 +1970,20 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const KNOWN_FILTER_KEYS = new Set([
           'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
           'assignment_id', 'claim_id', 'message_id',
+          'scope',
           'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
         ]);
         const agentRunOnlyFilterKeys = new Set(['assignment_id', 'claim_id', 'message_id']);
+        // pln#625 Phase 2c — `scope` (project|global) is agent-only, same
+        // entity-scoping contract as the agent_run keys above.
+        const agentOnlyFilterKeys = new Set(['scope']);
         const providedKeys = Object.keys(filter);
         const unknownKeys = providedKeys.filter((k) => !KNOWN_FILTER_KEYS.has(k));
         const misScopedKeys = providedKeys.filter((k) => agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run');
-        if (unknownKeys.length > 0 || misScopedKeys.length > 0) {
+        const agentMisScopedKeys = providedKeys.filter((k) => agentOnlyFilterKeys.has(k) && entity !== 'agent');
+        const scopeValueInvalid = entity === 'agent' && filter.scope !== undefined
+          && filter.scope !== 'project' && filter.scope !== 'global';
+        if (unknownKeys.length > 0 || misScopedKeys.length > 0 || agentMisScopedKeys.length > 0 || scopeValueInvalid) {
           const parts: string[] = [];
           if (unknownKeys.length > 0) {
             parts.push(`Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`);
@@ -1988,15 +1995,25 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
               + `Retry with entity="agent_run", or drop the ${misScopedKeys.join('/')} filter.`,
             );
           }
+          if (agentMisScopedKeys.length > 0) {
+            parts.push(
+              `Filter key(s) ${agentMisScopedKeys.map((k) => `"${k}"`).join(', ')} are only valid for entity="agent" `
+              + `(this call used entity="${entity}"). Retry with entity="agent", or drop the ${agentMisScopedKeys.join('/')} filter.`,
+            );
+          }
+          if (scopeValueInvalid) {
+            parts.push(`Filter "scope" must be "project" (default) or "global"; got ${JSON.stringify(filter.scope)}.`);
+          }
           return {
             response: createToolErrorResponse(
               'validation_error',
               parts.join(' '),
               {
                 unknown_keys: unknownKeys,
-                mis_scoped_keys: misScopedKeys,
+                mis_scoped_keys: [...misScopedKeys, ...agentMisScopedKeys],
                 accepted_keys: [...KNOWN_FILTER_KEYS].sort(),
                 agent_run_only_keys: [...agentRunOnlyFilterKeys],
+                agent_only_keys: [...agentOnlyFilterKeys],
               },
             ),
           };

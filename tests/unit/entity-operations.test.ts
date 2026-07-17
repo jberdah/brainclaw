@@ -9,6 +9,7 @@ import {
   createEntity,
   getEntity,
   listEntities,
+  projectAgentForRead,
   removeEntity,
   transitionEntity,
   updateEntity,
@@ -16,8 +17,10 @@ import {
 import type { EntityName } from '../../src/core/entity-registry.js';
 import { createAssignment, loadAssignment } from '../../src/core/assignments.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
+import { saveAgentIdentity } from '../../src/core/agent-registry.js';
 import { nowISO } from '../../src/core/ids.js';
-import { loadState } from '../../src/core/state.js';
+import { loadState, mutateState } from '../../src/core/state.js';
+import type { AgentIdentityDocument, Handoff } from '../../src/core/schema.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 
 describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => {
@@ -27,7 +30,11 @@ describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => 
   // TypeError for update/transition) — a different error class than
   // UnknownEntityError, so these assertions still catch the regression.
   const cwd = 'C:/nonexistent/guard-test-never-touched';
-  const unknown = 'agent' as EntityName; // the MCP layer passes entity as a free string
+  // NB 'agent' used to be the canonical "unknown entity" fixture here. pln#625
+  // Phase 2c promoted agent to a registered read-only entity (find/get wired,
+  // writes → SystemManagedError), so the fixture is now a name that is genuinely
+  // absent from the registry.
+  const unknown = 'widget' as EntityName; // the MCP layer passes entity as a free string
 
   it('every canonical verb rejects an unknown entity with a curated UnknownEntityError (not a raw TypeError)', () => {
     assert.throws(() => listEntities(unknown, cwd), UnknownEntityError);
@@ -38,28 +45,16 @@ describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => 
     assert.throws(() => transitionEntity(unknown, 'x', 'y', cwd), UnknownEntityError);
   });
 
-  it('the error is operator-legible: names the verb, the bad entity, the valid set, and the agent hint', () => {
+  it('the error is operator-legible: names the verb, the bad entity, and the valid set', () => {
     try {
-      updateEntity('agent' as EntityName, 'x', { title: 'y' }, cwd);
+      updateEntity(unknown, 'x', { title: 'y' }, cwd);
       assert.fail('expected UnknownEntityError');
     } catch (err) {
       assert.ok(err instanceof UnknownEntityError, `expected UnknownEntityError, got ${(err as Error).name}`);
       const msg = (err as Error).message;
-      assert.match(msg, /bclaw_update\(entity='agent'\)/);
+      assert.match(msg, /bclaw_update\(entity='widget'\)/);
       assert.match(msg, /unknown entity/i);
-      assert.match(msg, /register-agent/, 'agent name should get the identity-management hint');
       assert.match(msg, /decision/, 'should list the addressable entities');
-    }
-  });
-
-  it('a non-agent unknown name gets the curated error WITHOUT the agent hint', () => {
-    try {
-      getEntity('widget' as EntityName, 'x', cwd);
-      assert.fail('expected UnknownEntityError');
-    } catch (err) {
-      const msg = (err as Error).message;
-      assert.match(msg, /unknown entity/i);
-      assert.doesNotMatch(msg, /register-agent/);
     }
   });
 
@@ -86,6 +81,11 @@ describe('core/entity-operations — writePolicy enforcement (pln#625 Phase 2)',
     assert.throws(() => updateEntity('action' as EntityName, 'x', { tags: ['t'] }, cwd), SystemManagedError);
     assert.throws(() => removeEntity('action' as EntityName, 'x', cwd), SystemManagedError);
     assert.throws(() => createEntity('agent_run' as EntityName, {}, cwd), SystemManagedError);
+    // pln#625 Phase 2c — agent is read-only via the grammar: every write verb
+    // hits the system-managed boundary, not "not yet wired".
+    assert.throws(() => createEntity('agent' as EntityName, {}, cwd), SystemManagedError);
+    assert.throws(() => updateEntity('agent' as EntityName, 'x', { tags: ['t'] }, cwd), SystemManagedError);
+    assert.throws(() => removeEntity('agent' as EntityName, 'x', cwd), SystemManagedError);
   });
 
   it('the SystemManagedError is operator-legible: says system-managed AND names the authorized path (from writePolicyNote)', () => {
@@ -634,5 +634,171 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       assert.equal(result.to, 'resolved');
       assert.ok(result.side_effects.includes('audit:constraint_resolved'));
     });
+  });
+});
+
+describe('core/entity-operations — agent read-only projection (pln#625 Phase 2c)', () => {
+  let workspace: TestWorkspace;
+
+  const SECRET_KEY = 'sk-SECRET-do-not-leak';
+  const SECRET_PEM = '-----BEGIN PUBLIC KEY-----\nSECRETKEYMATERIAL\n-----END PUBLIC KEY-----';
+  const FULL_FINGERPRINT = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-agent-read-' });
+    const doc: AgentIdentityDocument = {
+      version: 1,
+      agent_id: 'agt_read0001',
+      agent_name: 'codex-tester',
+      created_at: nowISO(),
+      kind: 'agent',
+      trust_level: 'contributor',
+      capabilities: ['review', 'schema'],
+      identity_key: {
+        algorithm: 'ed25519',
+        public_key: SECRET_PEM,
+        fingerprint: FULL_FINGERPRINT,
+        created_at: nowISO(),
+      },
+      model: 'gpt-5-codex',
+      invoke: {
+        command: 'codex exec {prompt}',
+        channel: 'spawn',
+        timeout: 600,
+        env: { OPENAI_API_KEY: SECRET_KEY },
+      },
+    };
+    saveAgentIdentity(doc, workspace.dir);
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  it('find(agent) returns a redacted projection — key material dropped, invoke gone, FULL fingerprint', () => {
+    const listed = listEntities('agent', workspace.dir, {});
+    const hit = (listed.items as Array<Record<string, unknown>>).find((a) => a.name === 'codex-tester');
+    assert.ok(hit, 'saved agent should be findable');
+    assert.equal(hit!.id, 'agt_read0001');
+    assert.equal(hit!.kind, 'agent');
+    assert.equal(hit!.trust_level, 'contributor');
+    assert.deepEqual(hit!.capabilities, ['review', 'schema']);
+    // Full public fingerprint (public key id, matches the cloud) — NOT truncated;
+    // the private key material (identity_key / public_key PEM) is what's dropped.
+    assert.equal(hit!.fingerprint, FULL_FINGERPRINT);
+    assert.equal(hit!.identity_key, undefined);
+    // invoke is not projected at all (dead field + would leak invoke.command).
+    assert.equal(hit!.invoke, undefined);
+    // Belt-and-braces: no secret (env value / key PEM) leaks in the projection.
+    const serialized = JSON.stringify(hit);
+    assert.doesNotMatch(serialized, /sk-SECRET-do-not-leak/);
+    assert.doesNotMatch(serialized, /SECRETKEYMATERIAL/);
+  });
+
+  it('projection is a strict allow-list — an unknown future field stays hidden', () => {
+    const docWithSecret = {
+      version: 1,
+      agent_id: 'agt_alx',
+      agent_name: 'allowlist-probe',
+      created_at: nowISO(),
+      kind: 'agent',
+      trust_level: 'observer',
+      capabilities: [],
+      secret_field: 'LEAK-ME',
+    } as unknown as AgentIdentityDocument;
+    const projected = projectAgentForRead(docWithSecret) as Record<string, unknown>;
+    assert.equal(projected.secret_field, undefined);
+    assert.doesNotMatch(JSON.stringify(projected), /LEAK-ME/);
+  });
+
+  it('get(agent) resolves by id OR name (short_label alias) and is equally redacted', () => {
+    const byName = getEntity('agent', 'codex-tester', workspace.dir) as Record<string, unknown>;
+    const byId = getEntity('agent', 'agt_read0001', workspace.dir) as Record<string, unknown>;
+    assert.equal(byName.id, 'agt_read0001');
+    assert.equal(byId.name, 'codex-tester');
+    assert.equal(byName.identity_key, undefined);
+    assert.equal(byName.invoke, undefined);
+  });
+
+  it('get(agent) throws EntityNotFoundError for an unknown id/name', () => {
+    assert.throws(() => getEntity('agent', 'nope', workspace.dir), EntityNotFoundError);
+  });
+
+  it('find(agent, scope=global) unions the dispatchable catalog with dispatchable/registered flags', () => {
+    const projectScoped = listEntities('agent', workspace.dir, {}).items as Array<Record<string, unknown>>;
+    const globalScoped = listEntities('agent', workspace.dir, { scope: 'global' }).items as Array<Record<string, unknown>>;
+    // Global is a superset — it adds catalog-only (unregistered) agents.
+    assert.ok(globalScoped.length >= projectScoped.length);
+    // The registered agent is flagged registered:true with a boolean dispatchable.
+    const seeded = globalScoped.find((a) => a.name === 'codex-tester');
+    assert.ok(seeded);
+    assert.equal(seeded!.registered, true);
+    assert.equal(typeof seeded!.dispatchable, 'boolean');
+    // At least one catalog-only (unregistered but dispatchable) agent appears.
+    assert.ok(
+      globalScoped.some((a) => a.registered === false && a.dispatchable === true),
+      'scope=global should surface catalog-only dispatchable agents',
+    );
+    // Project scope carries neither flag (it is the plain audit registry).
+    assert.equal(projectScoped.find((a) => a.name === 'codex-tester')!.registered, undefined);
+  });
+});
+
+describe('core/entity-operations — handoff lifecycle transition (pln#625 Phase 2a)', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-handoff-tx-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  function pushHandoff(over: Partial<Handoff> & { id: string; status: Handoff['status'] }): void {
+    mutateState((state) => {
+      state.open_handoffs.push({
+        from: 'alice',
+        to: 'bob',
+        text: 'ship it',
+        created_at: nowISO(),
+        author: 'alice',
+        tags: [],
+        ...over,
+      } as Handoff);
+    }, workspace.dir);
+  }
+
+  it('wires open→accepted→closed and persists each step', () => {
+    pushHandoff({ id: 'hnd_tx1', status: 'open' });
+
+    const r1 = transitionEntity('handoff', 'hnd_tx1', 'accepted', workspace.dir);
+    assert.equal(r1.from, 'open');
+    assert.equal(r1.to, 'accepted');
+    assert.equal((getEntity('handoff', 'hnd_tx1', workspace.dir) as { status: string }).status, 'accepted');
+
+    const r2 = transitionEntity('handoff', 'hnd_tx1', 'closed', workspace.dir);
+    assert.equal(r2.to, 'closed');
+    assert.equal((getEntity('handoff', 'hnd_tx1', workspace.dir) as { status: string }).status, 'closed');
+  });
+
+  it('rejects a transition out of a terminal (closed) state', () => {
+    pushHandoff({ id: 'hnd_tx2', status: 'closed' });
+    assert.throws(
+      () => transitionEntity('handoff', 'hnd_tx2', 'accepted', workspace.dir),
+      InvalidTransitionError,
+    );
+  });
+
+  it('tip guard: refuses to transition a superseded (tombstoned) handoff and points at the tip', () => {
+    // correctHandoff leaves the original frozen with superseded_by set. Even a
+    // registry-valid transition (open→closed) must be refused on it.
+    pushHandoff({ id: 'hnd_orig', status: 'open', superseded_by: 'hnd_new' });
+    assert.throws(
+      () => transitionEntity('handoff', 'hnd_orig', 'closed', workspace.dir),
+      /immutable tombstone[\s\S]*Transition the current tip \(hnd_new\)/,
+    );
+    // The frozen record's status is untouched.
+    assert.equal((getEntity('handoff', 'hnd_orig', workspace.dir) as { status: string }).status, 'open');
   });
 });

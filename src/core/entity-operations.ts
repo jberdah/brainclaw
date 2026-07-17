@@ -40,6 +40,8 @@ import {
   type ReleaseClaimAuth,
 } from './claims.js';
 import { listActionRequired } from './actions.js';
+import { listAgentIdentities } from './agent-registry.js';
+import { getCapabilityProfile, getSpawnableAgents } from './agent-capability.js';
 import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
@@ -91,6 +93,7 @@ import {
   SeveritySchema,
 } from './schema.js';
 import type {
+  AgentIdentityDocument,
   AssignmentStatus,
   Candidate,
   Constraint,
@@ -220,15 +223,14 @@ function writeUnsupported(name: EntityName, verb: string): Error {
  */
 export class UnknownEntityError extends Error {
   constructor(entity: string, verb: string) {
-    const agentHint = entity === 'agent'
-      ? " The 'agent' identity is not addressable via the canonical grammar — manage agents with register-agent / list-agents."
-      : '';
     super(
       `bclaw_${verb}(entity='${entity}') — unknown entity. ` +
       // Deliberately "registered", not "supported": some listed entities are
       // not yet wired for every verb (they return EntityOperationUnsupportedError,
       // a different, already-curated signal). Don't imply all are writable here.
-      `Registered entities (not all are wired for every verb yet): ${ENTITY_NAMES.join(', ')}.${agentHint}`,
+      // NB agent is now a registered read-only entity (pln#625 Phase 2c): a write
+      // verb on it reaches the SystemManagedError boundary, not this front door.
+      `Registered entities (not all are wired for every verb yet): ${ENTITY_NAMES.join(', ')}.`,
     );
     this.name = 'UnknownEntityError';
   }
@@ -361,7 +363,7 @@ export function listEntities(
   filter: EntityFilter = {},
 ): ListResult {
   assertKnownEntity(name, 'find');
-  const all = loadAll(name, cwd);
+  const all = loadAll(name, cwd, filter);
   const fieldFiltered = applyFieldFilter(all, filter);
   const excludedLegacy = filter.includeLegacy === true
     ? 0
@@ -440,7 +442,89 @@ export function boundListResult<T = unknown>(
   return bounded;
 }
 
-function loadAll(name: EntityName, cwd: string): unknown[] {
+/**
+ * Redacted read-only projection of an agent identity (pln#625 Phase 2c;
+ * refined by ideation loop lop_f8e8d18cb8c27ada). Shared by the grammar
+ * (find/get) AND bclaw_list_agents so redaction has ONE source of truth.
+ *
+ * Strict ALLOW-LIST — any field added to AgentIdentityDocument later stays
+ * hidden until someone deliberately projects it here:
+ *  - identity_key (private-ish key material: the PEM public_key) is dropped.
+ *  - `fingerprint` is the sha256(PEM) — the PUBLIC canonical key id, equal to
+ *    the cloud's agents.key_fingerprint — so it is exposed IN FULL: truncating
+ *    it added no confidentiality (a hash never reveals its preimage; the id is
+ *    public) and broke the whole point (matching a local key against the
+ *    256-bit remote fingerprint).
+ *  - `invoke` is intentionally NOT projected: it is populated by no writer and
+ *    read by no spawn path (buildInvokeCommand uses the capability profile, not
+ *    identity.invoke), so exposing it was dead surface — and it would leak
+ *    invoke.command (spawn flags, possibly tokens) verbatim.
+ * `short_label` mirrors agent_name so the generic getEntity matcher resolves an
+ * agent by id OR name (same trick as session's session_id→id alias).
+ */
+export function projectAgentForRead(doc: AgentIdentityDocument): Record<string, unknown> {
+  return {
+    id: doc.agent_id,
+    short_label: doc.agent_name,
+    name: doc.agent_name,
+    kind: doc.kind,
+    trust_level: doc.trust_level,
+    capabilities: doc.capabilities,
+    fingerprint: doc.identity_key?.fingerprint,
+    model: doc.model,
+    context_profile: doc.context_profile,
+    created_at: doc.created_at,
+  };
+}
+
+/**
+ * Catalog-only stub for a spawnable agent that is NOT in this project's
+ * registry (scope='global' only). It has no identity document, so only the
+ * name + dispatchability are known.
+ */
+function projectCatalogAgentForRead(name: string): Record<string, unknown> {
+  return {
+    id: null,
+    short_label: name,
+    name,
+    kind: null,
+    trust_level: null,
+    capabilities: [],
+    dispatchable: true,
+    registered: false,
+  };
+}
+
+/**
+ * Load agents for a read (pln#625 Phase 2c, hybrid scope from lop_f8e8d18cb8c27ada).
+ * Default scope = the CURRENT PROJECT's registry (`.brainclaw/agents`, exactly
+ * what `list-agents` reads — there is NO global registry on disk). scope='global'
+ * additionally unions the static dispatchable catalog (getSpawnableAgents) and
+ * annotates each entry with `dispatchable` (canBeSpawnedCli) + `registered`
+ * (present in this project's registry) — the honest inventory a coordinator
+ * needs, since bclaw_dispatch resolves candidates from that catalog, NOT from
+ * the project registry.
+ */
+function loadAgentsForRead(cwd: string, filter?: EntityFilter): Record<string, unknown>[] {
+  const registered = listAgentIdentities(cwd).map(projectAgentForRead);
+  const scope = typeof filter?.scope === 'string' ? filter.scope : 'project';
+  if (scope !== 'global') return registered;
+
+  const byName = new Map<string, Record<string, unknown>>();
+  for (const a of registered) {
+    a.registered = true;
+    a.dispatchable = getCapabilityProfile(String(a.name))?.runtime.canBeSpawnedCli ?? false;
+    byName.set(String(a.name), a);
+  }
+  for (const { name } of getSpawnableAgents()) {
+    const existing = byName.get(name);
+    if (existing) { existing.dispatchable = true; continue; }
+    byName.set(name, projectCatalogAgentForRead(name));
+  }
+  return [...byName.values()];
+}
+
+function loadAll(name: EntityName, cwd: string, filter?: EntityFilter): unknown[] {
   switch (name) {
     case 'plan':                return loadState(cwd).plan_items;
     case 'decision':            return loadState(cwd).recent_decisions;
@@ -454,6 +538,10 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'action':              return listActionRequired(cwd);
     case 'assignment':          return listAssignments(cwd);
     case 'agent_run':           return loadAgentRunsWithReconciliation(cwd);
+    // pln#625 Phase 2c — agent is READ-ONLY via the grammar, redacted projection.
+    // Default scope = current project's registry; filter.scope='global' unions
+    // the dispatchable catalog. See loadAgentsForRead.
+    case 'agent':               return loadAgentsForRead(cwd, filter);
     case 'cross_project_link':  return resolveCrossProjectLinks(cwd);
     // pln#625 Phase 2 — wire the previously-unwired reads.
     case 'step':                return loadState(cwd).plan_items.flatMap((p) => p.steps ?? []);
@@ -700,6 +788,16 @@ export function updateEntity(
 ): UpdateResult {
   assertKnownEntity(name, 'update');
   const spec = ENTITY_REGISTRY[name];
+  // An entity with NO updatable fields is not patchable via the grammar at all,
+  // so route to the curated boundary (SystemManagedError for a system entity,
+  // "not yet wired" otherwise) rather than the misleading "Fields not updatable
+  // … use bclaw_transition" — which assumes a lifecycle the entity may not have
+  // (e.g. agent, inbox_message have neither updatable fields nor transitions).
+  // Entities with a non-empty updatable list (incl. the wired case 'assignment'
+  // below) are unaffected. pln#625 Phase 2c.
+  if (spec.updatable.length === 0) {
+    throw writeUnsupported(name, 'update');
+  }
   const invalidFields = Object.keys(patch).filter(
     (field) => !spec.updatable.includes(field),
   );
@@ -1023,10 +1121,35 @@ export function transitionEntity(
       // isValidTransition already excluded every other target — belt-and-braces:
       throw new InvalidTransitionError(name, from, to);
     }
+    case 'handoff': {
+      // pln#625 Phase 2a — wire the handoff lifecycle (open→accepted|closed,
+      // accepted→closed; the matrix is enforced by isValidTransition above).
+      // This also repairs `brainclaw stale resolve <handoff-id>`, which routes
+      // through bclaw_transition(entity='handoff') and previously fell to the
+      // "not yet wired" default (trp_ed1a21eb).
+      //
+      // Tip guard: a handoff carrying `superseded_by` is the frozen original a
+      // correction replaced — correctHandoff leaves it immutable and pushes the
+      // correction as the new tip (mcp-write-entities.ts:356). Transitioning a
+      // superseded record would mutate frozen history, so refuse it and point at
+      // the tip, mirroring correctHandoff's own guard.
+      if (typeof current.superseded_by === 'string' && current.superseded_by) {
+        throw new Error(
+          `Handoff '${id}' was superseded by ${current.superseded_by} and is an immutable tombstone. `
+          + `Transition the current tip (${current.superseded_by}) instead.`,
+        );
+      }
+      mutateState((state) => {
+        const item = state.open_handoffs.find((h) => h.id === id);
+        if (!item) throw new EntityNotFoundError(name, id);
+        (item as Record<string, unknown>)[statusField] = to;
+      }, cwd);
+      return { entity: name, id, from, to, side_effects: sideEffects };
+    }
     default:
       // pln#625 Phase 2 — system-managed entities (action/agent_run) report the
-      // curated "system-managed" boundary; agent-ownable-but-unwired ones (e.g.
-      // handoff) keep the "not yet wired" signal.
+      // curated "system-managed" boundary; agent-ownable-but-unwired ones keep
+      // the "not yet wired" signal.
       throw writeUnsupported(name, 'transition');
   }
 }

@@ -10,6 +10,36 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — read-only `agent` entity in the canonical grammar (pln#625 Phase 2c)**
+- `bclaw_find/get(entity='agent')` are now wired. They return a REDACTED,
+  read-only projection: `id`, `name`, `kind`, `trust_level`, `capabilities`,
+  `fingerprint` (full sha256(PEM) — the public canonical key id), `model`,
+  `context_profile`, `created_at`. The private key material (`identity_key`,
+  `public_key` PEM) and `invoke` (unpopulated dead field; would leak
+  `invoke.command`) are never surfaced. Writes (`create/update/remove/transition`)
+  return the `SystemManagedError` boundary — agents are managed via
+  `bclaw_setup` / `enable-agent`, not the grammar.
+- New agent-only filter `scope`: `bclaw_find(entity='agent')` defaults to the
+  current project's registry; `filter.scope='global'` additionally unions the
+  static dispatchable catalog (`getSpawnableAgents`) and annotates each entry
+  with `dispatchable` (canBeSpawnedCli) + `registered`. `scope` is rejected for
+  any other entity, and its value must be `project` (default) or `global`.
+- `bclaw_list_agents` now redacts through the SAME projection (one source of
+  truth). It previously spread the raw identity document, leaking
+  `identity_key.public_key` and `invoke.env` in the clear — a pre-existing
+  disclosure, now closed. `includeReputation` still attaches the reputation
+  add-on.
+- This supersedes the Phase 1a stopgap that reported `agent` as "not addressable
+  via the canonical grammar" (never released; last tag v1.15.0).
+
+**Fixed — `bclaw_transition(entity='handoff')` wired (pln#625 Phase 2a)**
+- The handoff lifecycle (`open→accepted|closed`, `accepted→closed`) is now
+  wired. It previously fell to the "not yet wired" default, which also broke
+  `brainclaw stale resolve <handoff-id>` (that command routes through the
+  canonical transition). A tip guard refuses to transition a handoff carrying
+  `superseded_by` (an immutable correction tombstone) and points at the tip.
+- No tool was added, removed, or renamed; no required argument changed.
+
 **Fixed — `bclaw_coordinate` published-schema parity (pln#622 PR0b)**
 - The published inputSchema of `bclaw_coordinate` now declares `preset`
   (loop preset selector, valid only with `intent='ideate'`; v1 ships the

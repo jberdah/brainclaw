@@ -37,6 +37,7 @@ import {
   AssignmentSchema,
   AgentRunSchema,
   ActionRequiredSchema,
+  AgentIdentityDocumentSchema,
 } from './schema.js';
 
 /** Every entity the canonical CRUD surface addresses. */
@@ -57,6 +58,7 @@ export type EntityName =
   | 'assignment'
   | 'agent_run'
   | 'action'
+  | 'agent'
   | 'cross_project_link';
 
 export interface EntitySpec {
@@ -451,6 +453,26 @@ const action: EntitySpec = {
 };
 
 /**
+ * Agent — identity-registry entry (agents/ dir). READ-ONLY through the grammar
+ * (pln#625 Phase 2c): find/get return a REDACTED projection — identity_key and
+ * invoke.env are never surfaced, the key fingerprint is truncated. Agents are
+ * registered/managed by bclaw_setup / enable-agent (the agent registry), NOT
+ * the grammar, so writePolicy:'system' routes every write verb to the curated
+ * SystemManagedError boundary. Stateless: no lifecycle, no transitions.
+ */
+const agent: EntitySpec = {
+  name: 'agent',
+  shortLabelPrefix: 'agt',
+  schema: AgentIdentityDocumentSchema,
+  updatable: [],
+  writePolicy: 'system',
+  writePolicyNote: 'agents are registered/managed via bclaw_setup / enable-agent (the agent registry); the grammar exposes only a redacted read-only view via bclaw_find/get',
+  transitions: {},
+  terminal: [],
+  sideEffects: {},
+};
+
+/**
  * Cross-project link — federation peer entry stored in config.yaml
  * (cross_project_links). Stateless: identified by `name`, no lifecycle.
  * Storage is YAML-in-config rather than a per-entity directory, so the
@@ -473,6 +495,7 @@ export const ENTITY_REGISTRY: Readonly<Record<EntityName, EntitySpec>> = {
   decision, constraint, trap, candidate, runtime_note, sequence,
   inbox_message, instruction,
   assignment, agent_run, action,
+  agent,
   cross_project_link,
 };
 
