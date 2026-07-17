@@ -69,6 +69,7 @@ import {
   updatePlan,
 } from './operations/plan.js';
 import {
+  ENTITY_NAMES,
   ENTITY_REGISTRY,
   isValidTransition,
   type EntityName,
@@ -161,6 +162,43 @@ export class EntityNotFoundError extends Error {
   constructor(entity: EntityName, id: string) {
     super(`${entity} with id '${id}' not found`);
     this.name = 'EntityNotFoundError';
+  }
+}
+
+/**
+ * Thrown when a canonical verb is called with an entity name that is not in the
+ * registry at all (e.g. bclaw_update(entity='agent')). Previously such a name
+ * reached `ENTITY_REGISTRY[name].updatable` and died on a raw TypeError
+ * ("Cannot read properties of undefined") — a leaked internal, not an
+ * operator-legible error. This front-door guard turns it into a curated message
+ * that lists the addressable entities (pln#625 Phase 1).
+ */
+export class UnknownEntityError extends Error {
+  constructor(entity: string, verb: string) {
+    const agentHint = entity === 'agent'
+      ? " The 'agent' identity is not addressable via the canonical grammar — manage agents with register-agent / list-agents."
+      : '';
+    super(
+      `bclaw_${verb}(entity='${entity}') — unknown entity. ` +
+      // Deliberately "registered", not "supported": some listed entities are
+      // not yet wired for every verb (they return EntityOperationUnsupportedError,
+      // a different, already-curated signal). Don't imply all are writable here.
+      `Registered entities (not all are wired for every verb yet): ${ENTITY_NAMES.join(', ')}.${agentHint}`,
+    );
+    this.name = 'UnknownEntityError';
+  }
+}
+
+/**
+ * Front-door guard for every canonical verb: reject an entity name that is not
+ * in the registry with a curated UnknownEntityError instead of letting it fall
+ * through to a raw property access. `name` is typed EntityName at the call
+ * sites, but the MCP layer passes an unvalidated string (entity is a free
+ * string on the published surface), so this runtime check is load-bearing.
+ */
+function assertKnownEntity(name: string, verb: string): void {
+  if (!Object.prototype.hasOwnProperty.call(ENTITY_REGISTRY, name)) {
+    throw new UnknownEntityError(name, verb);
   }
 }
 
@@ -277,6 +315,7 @@ export function listEntities(
   cwd: string,
   filter: EntityFilter = {},
 ): ListResult {
+  assertKnownEntity(name, 'find');
   const all = loadAll(name, cwd);
   const fieldFiltered = applyFieldFilter(all, filter);
   const excludedLegacy = filter.includeLegacy === true
@@ -433,6 +472,7 @@ export function getEntity(
   idOrShortLabel: string,
   cwd: string,
 ): unknown {
+  assertKnownEntity(name, 'get');
   if (name === 'cross_project_link') {
     const links = resolveCrossProjectLinks(cwd) as ResolvedCrossProjectLink[];
     const hit = links.find(
@@ -460,6 +500,7 @@ export function createEntity(
   data: Record<string, unknown>,
   cwd: string,
 ): CreateResult {
+  assertKnownEntity(name, 'create');
   switch (name) {
     case 'plan': {
       // Explicit field whitelist + required-author check brings plan create in line
@@ -598,6 +639,7 @@ export function updateEntity(
   patch: Record<string, unknown>,
   cwd: string,
 ): UpdateResult {
+  assertKnownEntity(name, 'update');
   const spec = ENTITY_REGISTRY[name];
   const invalidFields = Object.keys(patch).filter(
     (field) => !spec.updatable.includes(field),
@@ -726,6 +768,7 @@ export function removeEntity(
   cwd: string,
   purge: boolean = false,
 ): RemoveResult {
+  assertKnownEntity(name, 'remove');
   switch (name) {
     case 'plan': {
       deletePlan(id, cwd);
@@ -815,6 +858,7 @@ export function transitionEntity(
   _reason?: string,
   auth?: TransitionAuth,
 ): TransitionResult {
+  assertKnownEntity(name, 'transition');
   const spec = ENTITY_REGISTRY[name];
   if (!spec.statusField) {
     throw new Error(`${name} has no lifecycle (statusField is undefined)`);

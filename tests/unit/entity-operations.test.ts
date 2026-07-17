@@ -4,6 +4,7 @@ import {
   EntityNotFoundError,
   EntityOperationUnsupportedError,
   InvalidTransitionError,
+  UnknownEntityError,
   createEntity,
   getEntity,
   listEntities,
@@ -11,11 +12,66 @@ import {
   transitionEntity,
   updateEntity,
 } from '../../src/core/entity-operations.js';
+import type { EntityName } from '../../src/core/entity-registry.js';
 import { createAssignment, loadAssignment } from '../../src/core/assignments.js';
 import { loadClaim, saveClaim } from '../../src/core/claims.js';
 import { nowISO } from '../../src/core/ids.js';
 import { loadState } from '../../src/core/state.js';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
+
+describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => {
+  // The guard runs BEFORE any filesystem access, so this path is never touched.
+  // If the guard ever stopped firing first, the pre-guard behavior would surface
+  // instead (EntityOperationUnsupportedError for find/get/create/remove; a raw
+  // TypeError for update/transition) — a different error class than
+  // UnknownEntityError, so these assertions still catch the regression.
+  const cwd = 'C:/nonexistent/guard-test-never-touched';
+  const unknown = 'agent' as EntityName; // the MCP layer passes entity as a free string
+
+  it('every canonical verb rejects an unknown entity with a curated UnknownEntityError (not a raw TypeError)', () => {
+    assert.throws(() => listEntities(unknown, cwd), UnknownEntityError);
+    assert.throws(() => getEntity(unknown, 'x', cwd), UnknownEntityError);
+    assert.throws(() => createEntity(unknown, {}, cwd), UnknownEntityError);
+    assert.throws(() => updateEntity(unknown, 'x', {}, cwd), UnknownEntityError);
+    assert.throws(() => removeEntity(unknown, 'x', cwd), UnknownEntityError);
+    assert.throws(() => transitionEntity(unknown, 'x', 'y', cwd), UnknownEntityError);
+  });
+
+  it('the error is operator-legible: names the verb, the bad entity, the valid set, and the agent hint', () => {
+    try {
+      updateEntity('agent' as EntityName, 'x', { title: 'y' }, cwd);
+      assert.fail('expected UnknownEntityError');
+    } catch (err) {
+      assert.ok(err instanceof UnknownEntityError, `expected UnknownEntityError, got ${(err as Error).name}`);
+      const msg = (err as Error).message;
+      assert.match(msg, /bclaw_update\(entity='agent'\)/);
+      assert.match(msg, /unknown entity/i);
+      assert.match(msg, /register-agent/, 'agent name should get the identity-management hint');
+      assert.match(msg, /decision/, 'should list the addressable entities');
+    }
+  });
+
+  it('a non-agent unknown name gets the curated error WITHOUT the agent hint', () => {
+    try {
+      getEntity('widget' as EntityName, 'x', cwd);
+      assert.fail('expected UnknownEntityError');
+    } catch (err) {
+      const msg = (err as Error).message;
+      assert.match(msg, /unknown entity/i);
+      assert.doesNotMatch(msg, /register-agent/);
+    }
+  });
+
+  it('a KNOWN-but-unwired entity still gets EntityOperationUnsupportedError (guard is additive, not a shadow)', () => {
+    // handoff IS a registered entity but its create is not yet wired → the
+    // switch default must still fire. The guard only catches names absent from
+    // the registry, so it must not swallow the existing not-yet-wired signal.
+    assert.throws(
+      () => createEntity('handoff' as EntityName, { author: 'x' }, cwd),
+      EntityOperationUnsupportedError,
+    );
+  });
+});
 
 describe('core/entity-operations — CRUD verb dispatch', () => {
   let workspace: TestWorkspace;
