@@ -150,6 +150,12 @@ describe('attemptExecution', () => {
     });
     assert.equal(result.execution_status, 'command_ready_manual');
     assert.ok(result.command, 'should include the command string');
+    // pln#626 Phase 1 — a deliberate manual handoff is NOT a failure: it must
+    // carry the auto_execute_disabled reason and NEITHER an error NOR a
+    // failure_kind. (Guards against re-merging the two split branches.)
+    assert.equal(result.execution_reason, 'auto_execute_disabled');
+    assert.equal(result.failure_kind, undefined, 'auto_execute_disabled must carry no failure_kind');
+    assert.equal(result.error, undefined, 'auto_execute_disabled is not an error');
   });
 
   it('returns command_ready_manual when BRAINCLAW_NO_SPAWN is set', async () => {
@@ -166,6 +172,12 @@ describe('attemptExecution', () => {
       });
       assert.equal(result.execution_status, 'command_ready_manual');
       assert.ok(result.command, 'should include command for manual run');
+      // pln#626 Phase 1 — an autoExecute request that cannot spawn IS a failure
+      // of the caller's intent: surface failure_kind + reason + the dropped
+      // spawnCheck.reason as error, instead of a silent bare manual command.
+      assert.equal(result.failure_kind, 'not_spawnable');
+      assert.equal(result.execution_reason, 'not_spawnable');
+      assert.match(result.error ?? '', /BRAINCLAW_NO_SPAWN/);
     } finally {
       if (prev === undefined) delete process.env.BRAINCLAW_NO_SPAWN;
       else process.env.BRAINCLAW_NO_SPAWN = prev;

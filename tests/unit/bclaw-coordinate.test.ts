@@ -479,6 +479,30 @@ describe('bclaw_coordinate — side effects', () => {
       assert.equal(claimEffects.length, 1, 'Expected one claim side effect entry');
       assert.equal(claimEffects[0]?.action, 'reuse', 'Duplicate assign should report claim reuse');
     });
+
+    // pln#626 Phase 1 (rework) — the primary spawn path must be as honest as
+    // consult/ideate: an autoExecute:false assign is a manual handoff, and the
+    // reason must reach BOTH the delivery entry AND the top-level FacadeResponse
+    // (not die inside runCoordinateExecution as it did before the rework).
+    it('autoExecute:false surfaces execution_reason=auto_execute_disabled on the entry AND top-level (R3)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'assign',
+        task: 'Manual handoff, no spawn',
+        scope: 'src/core/manual-handoff.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: false,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'command_ready_manual');
+      const plan = result.delivery_plan as Array<Record<string, unknown>>;
+      assert.equal(plan[0]?.execution_status, 'command_ready_manual');
+      assert.equal(plan[0]?.execution_reason, 'auto_execute_disabled', 'delivery entry must carry the reason');
+      assert.equal(plan[0]?.failure_kind, undefined, 'a manual handoff is not a failure');
+      // Top-level aggregate must expose it — the crux of the review rework.
+      assert.equal(response.execution_reason, 'auto_execute_disabled');
+    });
   });
 
   // ── consult ─────────────────────────────────────────────
@@ -517,6 +541,40 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(typeof result.thread_id === 'string', 'Expected thread_id');
       assert.ok(Array.isArray(result.contacted), 'Expected contacted array');
       assert.deepEqual(result.contacted, ['codex', 'github-copilot']);
+    });
+
+    // pln#626 Phase 1 — contract honesty. consult is inbox-only; it must SAY so
+    // (never omit execution_status) and must not silently swallow autoExecute.
+    it('carries execution_status=inbox_only + execution_reason and warns when autoExecute=true is passed (pln#626 Phase 1)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'consult',
+        task: 'Is inbox-only honest now?',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: true,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'inbox_only', 'consult must report inbox_only, never omit the status');
+      assert.equal(result.execution_reason, 'intent_inbox_only');
+      assert.ok(
+        response.warnings.some((w) => w.includes("autoExecute has no effect on intent='consult'")),
+        `expected an autoExecute no-op warning, got: ${response.warnings.join(' | ')}`,
+      );
+    });
+
+    it('does NOT emit the autoExecute warning on a plain consult (no noise when the flag is absent)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'consult',
+        task: 'Plain consult, no autoExecute',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+      });
+      assert.equal((response.result as Record<string, unknown>).execution_status, 'inbox_only');
+      assert.ok(
+        !response.warnings.some((w) => w.includes('autoExecute has no effect')),
+        'a plain consult (no autoExecute) must not emit the no-op warning',
+      );
     });
   });
 
@@ -720,6 +778,30 @@ describe('bclaw_coordinate — side effects', () => {
         ['delivered_and_started', 'command_ready_manual', 'inbox_only'].includes(result.execution_status as string),
         `execution_status must be a known dispatch outcome; got ${result.execution_status}`,
       );
+    });
+
+    // pln#626 Phase 1 (review rework, R3) — review was the last silent path: its
+    // result exposed neither delivery_plan nor execution_reason, so a manual
+    // open_loop review said command_ready_manual with no WHY. It must now be as
+    // honest as assign/reroute — reason on the entries AND top-level.
+    it('open_loop review with autoExecute:false surfaces execution_reason on entries AND top-level (R3)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Manual open_loop review, no spawn',
+        scope: 'src/core/review-manual.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+        autoExecute: false,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'command_ready_manual');
+      const plan = result.delivery_plan as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(plan) && plan.length >= 1, 'review must expose a delivery_plan');
+      assert.equal(plan[0]?.execution_reason, 'auto_execute_disabled', 'reviewer entry must carry the reason');
+      // The crux of the rework: the reason reaches the top-level response for review too.
+      assert.equal(response.execution_reason, 'auto_execute_disabled');
     });
 
     it('open_loop with review_mode=symmetric persists protocol.review_mode on the loop', async () => {
@@ -1019,6 +1101,33 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(
         (proposal.body ?? '').length <= 4000,
         `proposal body must be sliced to ≤4000 chars; got ${proposal.body?.length}`,
+      );
+    });
+
+    // pln#626 Phase 1 — contract honesty. ideate delivers critic briefs to the
+    // inbox but does NOT yet spawn (Phase 2). It must report inbox_only, warn
+    // that autoExecute is a no-op, and make clear that `dispatched_critics`
+    // counts inbox messages, not running processes.
+    it('carries execution_status=inbox_only + execution_reason and clarifies dispatched_critics are inbox-only, not spawned (pln#626 Phase 1)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'ideate',
+        task: 'Approach A or B — inbox honesty check?',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: true,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'inbox_only', 'ideate must report inbox_only until Phase 2 wires spawning');
+      assert.equal(result.execution_reason, 'intent_inbox_only');
+      assert.equal(result.dispatched_critics, 1);
+      assert.ok(
+        response.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")),
+        `expected an autoExecute no-op warning, got: ${response.warnings.join(' | ')}`,
+      );
+      assert.ok(
+        response.warnings.some((w) => w.includes('NOT spawned as processes')),
+        `expected a dispatched_critics honesty warning, got: ${response.warnings.join(' | ')}`,
       );
     });
   });

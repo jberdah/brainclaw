@@ -30,7 +30,24 @@ export interface ExecutionResult {
   shell?: string;
   started_at?: string;
   error?: string;
-  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity' | 'spawn_no_worktree';
+  failure_kind?: 'spawn_no_handshake' | 'spawn_failed' | 'spawn_capacity' | 'spawn_no_worktree' | 'not_spawnable';
+  /**
+   * Machine-readable reason this execution ended in its status (pln#626
+   * Phase 1). Set on every non-`delivered_and_started` outcome so a
+   * `command_ready_manual` is never silent about WHY it did not spawn.
+   * Distinct from `failure_kind`: `auto_execute_disabled` is a deliberate
+   * manual handoff (not a failure and carries no `failure_kind`), whereas
+   * `not_spawnable` et al. ARE failures of an autoExecute intent.
+   */
+  execution_reason?:
+    | 'auto_execute_disabled'
+    | 'not_spawnable'
+    | 'spawn_no_worktree'
+    | 'spawn_capacity'
+    | 'spawn_no_handshake'
+    | 'spawn_failed'
+    | 'no_invoke_command'
+    | 'intent_inbox_only';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -214,19 +231,41 @@ export async function attemptExecution(
 
   // No invoke command available (IDE-only agents, etc.)
   if (!invoke) {
-    return { execution_status: 'inbox_only' };
+    return { execution_status: 'inbox_only', execution_reason: 'no_invoke_command' };
   }
 
   const spawnCheck = adapter.canSpawn(options.agent);
 
-  // Opt-out or can't spawn: return command for manual execution
-  // Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes correctly
-  if (!options.autoExecute || !spawnCheck.canSpawn) {
+  // pln#626 Phase 1 — split the old `(!autoExecute || !spawnCheck.canSpawn)`
+  // branch, which collapsed two very different outcomes into one silent
+  // command_ready_manual (no reason, no failure_kind — it even discarded
+  // spawnCheck.reason). Callers could not tell "you didn't ask me to spawn"
+  // apart from "I tried and can't".
+
+  // (1) autoExecute explicitly disabled: a deliberate manual handoff, NOT a
+  // failure. Prepend BRAINCLAW_CLAIM_ID so manual copy-paste still routes.
+  if (!options.autoExecute) {
     const manual = adapter.prepareManualCommand(invoke, options);
     return {
       execution_status: 'command_ready_manual',
       command: manual.command,
       shell: manual.shell,
+      execution_reason: 'auto_execute_disabled',
+    };
+  }
+
+  // (2) autoExecute requested but the agent cannot be spawned here: this IS a
+  // failure of the caller's intent. Surface spawnCheck.reason (previously
+  // dropped) instead of returning a bare manual command.
+  if (!spawnCheck.canSpawn) {
+    const manual = adapter.prepareManualCommand(invoke, options);
+    return {
+      execution_status: 'command_ready_manual',
+      command: manual.command,
+      shell: manual.shell,
+      error: spawnCheck.reason,
+      failure_kind: 'not_spawnable',
+      execution_reason: 'not_spawnable',
     };
   }
 
@@ -253,6 +292,7 @@ export async function attemptExecution(
       shell: manual.shell,
       error: 'Refusing to spawn without an isolated worktree: with no worktree the worker would run in the integration repo and edit the main tree. Fix worktree creation (see claim worktreeWarning) or run the command manually inside a worktree.',
       failure_kind: 'spawn_no_worktree',
+      execution_reason: 'spawn_no_worktree',
     };
   }
 
@@ -277,6 +317,7 @@ export async function attemptExecution(
         shell: manual.shell,
         error: `Spawn skipped: ${instanceCheck.reason}. Use the command manually.`,
         failure_kind: 'spawn_capacity',
+        execution_reason: 'spawn_capacity',
       };
     }
   }
@@ -319,6 +360,7 @@ export async function attemptExecution(
           shell: manual.shell,
           error: `Spawn launched (pid ${result.pid}) but assignment ${options.assignmentId} did not acknowledge within ${handshakeTimeoutMs}ms`,
           failure_kind: 'spawn_no_handshake',
+          execution_reason: 'spawn_no_handshake',
           pid: result.pid,
         };
       }
@@ -363,6 +405,7 @@ export async function attemptExecution(
       shell: manual.shell,
       error: `Spawn failed (${errorMsg}), falling back to manual execution`,
       failure_kind: 'spawn_failed',
+      execution_reason: 'spawn_failed',
     };
   }
 }
