@@ -467,4 +467,28 @@ describe('bclaw_find — filter honored end-to-end (pln#460)', () => {
       assert.equal(isError, false, 'agent_run must still accept the scoped keys');
     });
   });
+
+  describe('boolean-typed filter keys (Codex review of #83)', () => {
+    it('includeReputation with a non-boolean value is rejected (not silently coerced to a no-op)', async () => {
+      const { isError, content } = await find(workspace, 'agent', { includeReputation: 'true' });
+      assert.equal(isError, true, 'a stringy includeReputation must be rejected, not silently ignored');
+      const errorEnvelope = content as unknown as {
+        error?: { message?: string; details?: { non_boolean_keys?: string[] } };
+      };
+      const message = errorEnvelope.error?.message ?? '';
+      assert.match(message, /includeReputation/i, `error must name the key: ${message}`);
+      assert.match(message, /boolean/i, `error must say it must be boolean: ${message}`);
+      assert.ok(errorEnvelope.error?.details?.non_boolean_keys?.includes('includeReputation'));
+    });
+
+    it('includeReputation:true is accepted (agent-scoped boolean)', async () => {
+      const { isError } = await find(workspace, 'agent', { includeReputation: true });
+      assert.equal(isError, false, 'a proper boolean includeReputation must pass');
+    });
+
+    it('a numeric includeReputation is also rejected', async () => {
+      const { isError } = await find(workspace, 'agent', { includeReputation: 1 });
+      assert.equal(isError, true, 'a numeric includeReputation must be rejected');
+    });
+  });
 });

@@ -394,7 +394,9 @@ describe('MCP server', () => {
       });
       assert.equal(response.jsonrpc, '2.0');
       assert.ok(Array.isArray(response.result.tools));
-      assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_agents'));
+      // pln#625 — bclaw_list_agents retired (REMOVED_IN_V1_TOOLS): hidden from
+      // tools/list even in catalog:'all', migrated to bclaw_find(entity='agent').
+      assert.ok(!response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_agents'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_list_instructions'));
       assert.ok(response.result.tools.some((tool: { name: string }) => tool.name === 'bclaw_dispatch'));
     } finally {

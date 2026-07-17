@@ -272,6 +272,7 @@ const REMOVED_TOOL_REDIRECTS: Record<string, string> = {
   bclaw_list_actions: 'Removed in v1.0: use bclaw_find(entity: "action", filter).',
   bclaw_list_assignments: 'Removed in v1.0: use bclaw_find(entity: "assignment", filter).',
   bclaw_list_runs: 'Removed in v1.0: use bclaw_find(entity: "agent_run", filter).',
+  bclaw_list_agents: 'Removed in v1.0: use bclaw_find(entity: "agent", filter) — add filter.scope="global" for the dispatchable catalog, filter.includeReputation=true for reputation.',
   bclaw_read_handoff: 'Removed in v1.0: use bclaw_get(entity: "handoff", id).',
   bclaw_create_plan: 'Removed in v1.0: use bclaw_create(entity: "plan", data).',
   bclaw_update_plan: 'Removed in v1.0: use bclaw_update(entity: "plan", id, patch) for fields, bclaw_transition(entity: "plan", id, to) for status changes.',
@@ -1973,6 +1974,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // (pln#625, Codex review of PR #82).
         const agentRunOnlyFilterKeys = new Set<string>(GRAMMAR_FILTER_CONTRACT.entityScoped.agent_run);
         const agentOnlyFilterKeys = new Set<string>(GRAMMAR_FILTER_CONTRACT.entityScoped.agent);
+        const booleanFilterKeys = new Set<string>(GRAMMAR_FILTER_CONTRACT.booleanKeys);
         const KNOWN_FILTER_KEYS = new Set<string>([
           ...GRAMMAR_FILTER_CONTRACT.common,
           ...agentRunOnlyFilterKeys,
@@ -1985,7 +1987,10 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         const allowedScopes = GRAMMAR_FILTER_CONTRACT.constrainedValues.scope as readonly string[];
         const scopeValueInvalid = entity === 'agent' && filter.scope !== undefined
           && !allowedScopes.includes(filter.scope as string);
-        if (unknownKeys.length > 0 || misScopedKeys.length > 0 || agentMisScopedKeys.length > 0 || scopeValueInvalid) {
+        // Codex review of #83 — a boolean-typed key (e.g. includeReputation) with a
+        // non-boolean value must be rejected loudly, not silently coerced to a no-op.
+        const nonBooleanKeys = providedKeys.filter((k) => booleanFilterKeys.has(k) && typeof filter[k] !== 'boolean');
+        if (unknownKeys.length > 0 || misScopedKeys.length > 0 || agentMisScopedKeys.length > 0 || scopeValueInvalid || nonBooleanKeys.length > 0) {
           const parts: string[] = [];
           if (unknownKeys.length > 0) {
             parts.push(`Unknown filter key(s): ${unknownKeys.map((k) => `"${k}"`).join(', ')}. Accepted keys: ${[...KNOWN_FILTER_KEYS].sort().join(', ')}.`);
@@ -2006,6 +2011,12 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
           if (scopeValueInvalid) {
             parts.push(`Filter "scope" must be "project" (default) or "global"; got ${JSON.stringify(filter.scope)}.`);
           }
+          if (nonBooleanKeys.length > 0) {
+            parts.push(
+              `Filter key(s) ${nonBooleanKeys.map((k) => `"${k}"`).join(', ')} must be a boolean `
+              + `(got ${nonBooleanKeys.map((k) => JSON.stringify(filter[k])).join(', ')}).`,
+            );
+          }
           return {
             response: createToolErrorResponse(
               'validation_error',
@@ -2016,6 +2027,7 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
                 accepted_keys: [...KNOWN_FILTER_KEYS].sort(),
                 agent_run_only_keys: [...agentRunOnlyFilterKeys],
                 agent_only_keys: [...agentOnlyFilterKeys],
+                non_boolean_keys: nonBooleanKeys,
               },
             ),
           };
