@@ -98,6 +98,7 @@ export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
   'bclaw_list_actions',
   'bclaw_list_assignments',
   'bclaw_list_runs',
+  'bclaw_list_agents', // pln#625 — retired for bclaw_find(entity='agent')
   'bclaw_read_handoff',
   'bclaw_create_plan',
   'bclaw_update_plan',

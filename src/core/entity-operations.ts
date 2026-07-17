@@ -42,6 +42,7 @@ import {
 import { listActionRequired } from './actions.js';
 import { listAgentIdentities } from './agent-registry.js';
 import { getCapabilityProfile, getSpawnableAgents } from './agent-capability.js';
+import { buildReputationSnapshot, toPublicReputationSummary } from './reputation.js';
 import { loadAllSessions } from './identity.js';
 import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
@@ -297,7 +298,7 @@ export const GRAMMAR_FILTER_CONTRACT = {
   /** Keys accepted ONLY for the named entity (rejected with a validation_error elsewhere). */
   entityScoped: {
     agent_run: ['assignment_id', 'claim_id', 'message_id'],
-    agent: ['scope'],
+    agent: ['scope', 'includeReputation'],
   },
   /** Filter keys whose value is constrained to a fixed set. */
   constrainedValues: {
@@ -533,7 +534,18 @@ function projectCatalogAgentForRead(name: string): Record<string, unknown> {
  * the project registry.
  */
 function loadAgentsForRead(cwd: string, filter?: EntityFilter): Record<string, unknown>[] {
-  const registered = listAgentIdentities(cwd).map(projectAgentForRead);
+  // Opt-in reputation join (pln#625 — folds the sole capability bclaw_list_agents
+  // had that find(agent) lacked, so that tool can be retired). Keyed by agent_id,
+  // which the projection exposes as `id`; catalog-only agents carry no reputation.
+  const reputationById = filter?.includeReputation === true
+    ? new Map((buildReputationSnapshot(cwd).agents ?? []).map((a) => [a.agent_id ?? a.key, toPublicReputationSummary(a)]))
+    : undefined;
+  const project = (doc: AgentIdentityDocument): Record<string, unknown> => {
+    const row = projectAgentForRead(doc);
+    if (reputationById) row.reputation = reputationById.get(String(row.id));
+    return row;
+  };
+  const registered = listAgentIdentities(cwd).map(project);
   const scope = typeof filter?.scope === 'string' ? filter.scope : 'project';
   if (scope !== 'global') return registered;
 

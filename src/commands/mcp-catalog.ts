@@ -1156,7 +1156,7 @@ const MCP_WRITE_TOOLS = [
       type: 'object',
       properties: {
         entity: { type: 'string', description: 'Entity name: plan | decision | constraint | trap | handoff | runtime_note | candidate | sequence | claim | action | assignment | agent_run | agent (read-only, redacted projection) | cross_project_link. Others not yet wired.' },
-        filter: { type: 'object', description: 'Filter keys (ANY entity): status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). ENTITY-SCOPED keys (rejected with a validation_error if used with any other entity): assignment_id, claim_id, message_id — ONLY for entity="agent_run"; scope ("project" default | "global", the latter unions the dispatchable catalog + adds dispatchable/registered) — ONLY for entity="agent". Unknown/mis-scoped keys are rejected loudly.' },
+        filter: { type: 'object', description: 'Filter keys (ANY entity): status, tag (single tag), tags (array, any-match), author, plan_id, source, auto_generated, limit, offset, includeLegacy (bool, default false), minAutoReflectConfidence (0-1, default 0.6). ENTITY-SCOPED keys (rejected with a validation_error if used with any other entity): assignment_id, claim_id, message_id — ONLY for entity="agent_run"; scope ("project" default | "global", the latter unions the dispatchable catalog + adds dispatchable/registered) and includeReputation (bool — attaches a public reputation summary per agent) — ONLY for entity="agent". Unknown/mis-scoped keys are rejected loudly.' },
         project: { type: 'string', description: 'Optional: name (or path/basename) of a linked project to query. Defaults to the current project. Only cross_project_links (config.yaml) and workspace store-chain children are accepted — list with `brainclaw link list`.' },
         budget_tokens: { type: 'number', description: 'Optional token budget for the page payload (~4 chars/token). Tightens the default size cap; pagination metadata (has_more/next_offset) still applies.' },
       },
@@ -1338,6 +1338,10 @@ export const REMOVED_IN_V1_TOOLS: ReadonlySet<string> = new Set([
   'bclaw_list_actions',
   'bclaw_list_assignments',
   'bclaw_list_runs',
+  // pln#625 — the last surviving bclaw_list_* tool. Retired in favour of
+  // bclaw_find(entity='agent'), which now carries the redacted projection AND
+  // the includeReputation join. Handler stays as a redirect escape-hatch.
+  'bclaw_list_agents',
   'bclaw_read_handoff',
   'bclaw_create_plan',
   'bclaw_update_plan',
@@ -1364,6 +1368,7 @@ export const LEGACY_READ_TOOL_HANDLERS = new Set<string>([
   'bclaw_list_actions',
   'bclaw_list_assignments',
   'bclaw_list_runs',
+  'bclaw_list_agents',
   'bclaw_read_handoff',
 ]);
 

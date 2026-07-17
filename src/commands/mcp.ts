@@ -272,6 +272,7 @@ const REMOVED_TOOL_REDIRECTS: Record<string, string> = {
   bclaw_list_actions: 'Removed in v1.0: use bclaw_find(entity: "action", filter).',
   bclaw_list_assignments: 'Removed in v1.0: use bclaw_find(entity: "assignment", filter).',
   bclaw_list_runs: 'Removed in v1.0: use bclaw_find(entity: "agent_run", filter).',
+  bclaw_list_agents: 'Removed in v1.0: use bclaw_find(entity: "agent", filter) — add filter.scope="global" for the dispatchable catalog, filter.includeReputation=true for reputation.',
   bclaw_read_handoff: 'Removed in v1.0: use bclaw_get(entity: "handoff", id).',
   bclaw_create_plan: 'Removed in v1.0: use bclaw_create(entity: "plan", data).',
   bclaw_update_plan: 'Removed in v1.0: use bclaw_update(entity: "plan", id, patch) for fields, bclaw_transition(entity: "plan", id, to) for status changes.',

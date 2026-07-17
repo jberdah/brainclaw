@@ -10,6 +10,19 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Removed — `bclaw_list_agents` (pln#625; migrate to `bclaw_find(entity='agent')`)**
+- `bclaw_list_agents` — the last surviving `bclaw_list_*` tool — is retired into
+  `REMOVED_IN_V1_TOOLS`: hidden from every `tools/list`, with a direct-call
+  deprecation warning pointing at `bclaw_find(entity='agent')`. The handler
+  stays as a redacted read escape-hatch (`LEGACY_READ_TOOL_HANDLERS`), same as
+  its `list_*` siblings.
+- To preserve its one unique capability, `bclaw_find(entity='agent')` gains an
+  agent-only `includeReputation` filter that attaches the public reputation
+  summary per agent (same join the CLI `list-agents --with-reputation` uses).
+- Net surface coherence: `agent` reads now flow through one grammar path with a
+  single redacted projection (`projectAgentForRead`), closing the divergent
+  double-surface (the old tool leaked raw `identity_key`/`invoke.env`).
+
 **Changed — governance guard now covers grammar entities AND the filter contract (pln#625)**
 - `tests/unit/mcp-governance.test.ts` folds two free-form parts of the callable
   contract into the public-surface fingerprint: the set of addressable grammar
@@ -198,7 +211,13 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:e12fd2f34dae1ac0`
+- MCP public surface fingerprint: `sha256:be0df1e4cc33936f`
+  (updated 2026-07-17 for pln#625 PR #83: `bclaw_list_agents` retired from the
+  published surface — migrated to `bclaw_find(entity='agent')` which gains an
+  agent-only `includeReputation` filter. Both the removed tool and the new
+  filter key move the fingerprint via the guard now covering PUBLISHED_TOOLS +
+  ENTITY_NAMES + GRAMMAR_FILTER_CONTRACT.)
+  Previous: `sha256:e12fd2f34dae1ac0`
   (updated 2026-07-17 for pln#625 Phase 2c + PR #82: the fingerprint now folds in
   two parts of the callable contract that the tool inputSchema cannot express —
   the set of grammar-addressable entities (`ENTITY_NAMES`) and the find/get

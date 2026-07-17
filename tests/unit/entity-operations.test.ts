@@ -742,6 +742,20 @@ describe('core/entity-operations — agent read-only projection (pln#625 Phase 2
     // Project scope carries neither flag (it is the plain audit registry).
     assert.equal(projectScoped.find((a) => a.name === 'codex-tester')!.registered, undefined);
   });
+
+  it('find(agent, includeReputation) attaches a reputation field (opt-in), absent otherwise', () => {
+    const plain = listEntities('agent', workspace.dir, {}).items as Array<Record<string, unknown>>;
+    const withRep = listEntities('agent', workspace.dir, { includeReputation: true }).items as Array<Record<string, unknown>>;
+    const plainHit = plain.find((a) => a.name === 'codex-tester')!;
+    const repHit = withRep.find((a) => a.name === 'codex-tester')!;
+    // Opt-in: the key is present only when requested (value may be undefined when
+    // the agent has no reputation events yet — the join path is what we assert).
+    assert.equal('reputation' in plainHit, false);
+    assert.equal('reputation' in repHit, true);
+    // Redaction still holds with the join on.
+    assert.equal(repHit.identity_key, undefined);
+    assert.equal(repHit.invoke, undefined);
+  });
 });
 
 describe('core/entity-operations — handoff lifecycle transition (pln#625 Phase 2a)', () => {
