@@ -396,6 +396,12 @@ const agent_run: EntitySpec = {
  * have been dead-on-arrival (InvalidTransitionError / schema reject). The
  * EntitySpec↔Zod consistency test now pins the FSM to the persisted enum so it
  * can never silently drift again.
+ *
+ * NB (pln#625 Phase 2): update(action) and transition(action) are NOT yet
+ * routed in entity-operations.ts — both fall through to the "not yet wired"
+ * error today. When Phase 2 wires update(action) it MUST gate patches to
+ * status==='pending' (patching title/prompt on a resolved action would rewrite
+ * the record of what a human already approved).
  */
 const action: EntitySpec = {
   name: 'action',
@@ -411,7 +417,10 @@ const action: EntitySpec = {
     'pending->resolved': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_resume', 'sync:assignment_resume'],
     'pending->rejected': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_cancel', 'sync:assignment_fail'],
     'pending->cancelled': ['timestamp:resolved_at', 'audit:action_resolved', 'sync:agent_run_cancel', 'sync:assignment_fail'],
-    'pending->expired': ['timestamp:resolved_at', 'audit:action_expired', 'sync:agent_run_timeout', 'sync:assignment_fail'],
+    // The expire sweep (actions.ts) sets only status + updated_at — it does NOT
+    // stamp resolved_at (that is resolveActionRequired's job on the resolve/
+    // reject/cancel edges), so this edge intentionally carries no timestamp tag.
+    'pending->expired': ['audit:action_expired', 'sync:agent_run_timeout', 'sync:assignment_fail'],
   },
 };
 

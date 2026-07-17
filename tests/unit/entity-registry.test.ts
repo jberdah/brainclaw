@@ -277,6 +277,31 @@ describe('core/entity-registry — FSM ↔ Zod status enum (pln#625 Phase 0)', (
       }
     }
   });
+
+  // Set-EQUALITY, not just subset (review follow-up): the check above proves the
+  // FSM invents no status outside the enum; this proves the enum has no value
+  // the FSM can never reach or leave. An orphan enum value is a silent dead-end
+  // — isValidTransition treats an undeclared `from` as implicitly terminal — so
+  // it would ship undetected. Green today for all 13 stateful entities.
+  it('every persisted enum value is reachable in the FSM — no orphan statuses (pln#625 Phase 0)', () => {
+    for (const name of ENTITY_NAMES) {
+      const spec = ENTITY_REGISTRY[name];
+      if (!spec.statusField) continue;
+      const values = statusEnumFor(spec);
+      if (!values) continue; // covered by the guard test above
+      const declared = new Set<string>(spec.terminal);
+      for (const [from, targets] of Object.entries(spec.transitions)) {
+        declared.add(from);
+        for (const to of targets) declared.add(to);
+      }
+      for (const value of values) {
+        assert.ok(
+          declared.has(value),
+          `${name}: status enum value '${value}' is an ORPHAN — not a transition source, target, or terminal in the FSM. Add it to the matrix or remove it from ${spec.statusField}'s enum.`,
+        );
+      }
+    }
+  });
 });
 
 describe('core/entity-registry — known-good transitions', () => {
