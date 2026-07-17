@@ -81,11 +81,13 @@ import {
   isValidTransition,
   type EntityName,
 } from './entity-registry.js';
-import { generateId } from './ids.js';
+import { generateId, nowISO } from './ids.js';
 import {
   CandidateTypeSchema,
   ConstraintCategorySchema,
   DecisionOutcomeSchema,
+  HandoffContractSchema,
+  HandoffReviewSchema,
   MemoryVisibilitySchema,
   PlanTypeEnumSchema,
   PrioritySchema,
@@ -99,6 +101,8 @@ import type {
   Candidate,
   Constraint,
   Decision,
+  HandoffContract,
+  HandoffReview,
   PlanItem,
   Provenance,
   RuntimeNote,
@@ -956,6 +960,58 @@ export function updateEntity(
         force: true,
       });
       return { entity: name, id: merged.name ?? merged.path };
+    }
+    case 'handoff': {
+      // pln#625 Phase 3 — wire the handoff update path (previously unwired: the
+      // field check passed for narrative/tags but the switch fell to the default
+      // "not yet wired"). Restores the review-state write capability lost when
+      // update_handoff was removed at v1.0 — an agent can now write a review
+      // verdict via bclaw_update(entity='handoff', data={review:{verdict,…}}).
+      // review/contract are validated against their Zod schemas and MERGED onto
+      // the record (same field-merge semantics as the review loop's core
+      // applyHandoffUpdates); narrative/tags are set directly.
+      let parsedReview: HandoffReview | undefined;
+      let parsedContract: HandoffContract | undefined;
+      if (patch.review !== undefined) {
+        const r = HandoffReviewSchema.safeParse(patch.review);
+        if (!r.success) {
+          throw new Error(`Invalid handoff.review: ${r.error.issues.map((i) => i.message).join('; ')}`);
+        }
+        parsedReview = r.data;
+      }
+      if (patch.contract !== undefined) {
+        const c = HandoffContractSchema.safeParse(patch.contract);
+        if (!c.success) {
+          throw new Error(`Invalid handoff.contract: ${c.error.issues.map((i) => i.message).join('; ')}`);
+        }
+        parsedContract = c.data;
+      }
+      mutateState((state) => {
+        const item = state.open_handoffs.find((h) => h.id === id);
+        if (!item) throw new EntityNotFoundError(name, id);
+        // Tip guard (mirrors transition): a superseded handoff is a frozen
+        // tombstone — refuse to mutate it, point at the tip.
+        if (typeof item.superseded_by === 'string' && item.superseded_by) {
+          throw new Error(
+            `Handoff '${id}' was superseded by ${item.superseded_by} and is an immutable tombstone. `
+            + `Update the current tip (${item.superseded_by}) instead.`,
+          );
+        }
+        if (patch.narrative !== undefined) item.narrative = patch.narrative as string;
+        if (patch.tags !== undefined) item.tags = patch.tags as string[];
+        if (parsedReview !== undefined) {
+          const merged: HandoffReview = { ...(item.review ?? {}), ...parsedReview };
+          // Stamp reviewed_at when a verdict lands and the caller didn't set one.
+          if (merged.verdict !== undefined && merged.reviewed_at === undefined) {
+            merged.reviewed_at = nowISO();
+          }
+          item.review = merged;
+        }
+        if (parsedContract !== undefined) {
+          item.contract = { ...(item.contract ?? {}), ...parsedContract };
+        }
+      }, cwd);
+      return { entity: name, id };
     }
     default:
       throw writeUnsupported(name, 'update');
