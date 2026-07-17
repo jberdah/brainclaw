@@ -32,6 +32,7 @@ const EXPECTED_PREFIX: Record<EntityName, string> = {
   assignment: 'asgn',
   agent_run: 'run',
   action: 'act',
+  agent: 'agt',
   cross_project_link: 'xpl',
 };
 
