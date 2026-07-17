@@ -10,6 +10,22 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — `bclaw_update(entity='handoff')` incl. review/contract (pln#625 Phase 3)**
+- The handoff update path is now wired. Previously `bclaw_update(entity='handoff')`
+  fell through to "not yet wired" (the field check passed for narrative/tags but
+  there was no handler case). `handoff.updatable` now also includes `review` and
+  `contract`, each validated against `HandoffReviewSchema` / `HandoffContractSchema`
+  and merged onto the record.
+- This **restores the review-state write capability lost at v1.0** when
+  `bclaw_update_handoff` was removed: an agent can write a review verdict via
+  `bclaw_update(entity='handoff', data={ review: { verdict, summary, … } })`.
+  A verdict auto-stamps `review.reviewed_at`. The review loop's core
+  (`applyHandoffUpdates`) is unchanged — this is the canonical-grammar front door
+  onto the same record.
+- Tip guard: a superseded (tombstoned) handoff is refused, pointing at the tip.
+- No tool added/removed/renamed; `updatable` is not part of the surface
+  fingerprint, so no fingerprint change.
+
 **Removed — `bclaw_list_agents` (pln#625; migrate to `bclaw_find(entity='agent')`)**
 - `bclaw_list_agents` — the last surviving `bclaw_list_*` tool — is retired into
   `REMOVED_IN_V1_TOOLS`: hidden from every `tools/list`, with a direct-call

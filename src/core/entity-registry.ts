@@ -176,7 +176,12 @@ const handoff: EntitySpec = {
   name: 'handoff',
   shortLabelPrefix: 'hnd',
   schema: HandoffSchema,
-  updatable: ['narrative', 'tags'],
+  // pln#625 Phase 3 — review + contract are updatable so an agent can write a
+  // review verdict through the grammar (bclaw_update(entity='handoff',
+  // data={review:{…}})), restoring the capability lost when update_handoff was
+  // removed at v1.0. Validated against HandoffReviewSchema/HandoffContractSchema
+  // in updateEntity.
+  updatable: ['narrative', 'tags', 'review', 'contract'],
   statusField: 'status',
   transitions: {
     open: ['accepted', 'closed'],

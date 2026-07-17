@@ -1,7 +1,7 @@
 import { loadState, persistState } from '../core/state.js';
 import { memoryExists } from '../core/io.js';
-import { nowISO } from '../core/ids.js';
-import type { Handoff, HandoffStatus, ReviewVerdict } from '../core/schema.js';
+import { mergeHandoffReview } from '../core/handoff-review.js';
+import type { Handoff, HandoffReview, HandoffStatus, ReviewVerdict } from '../core/schema.js';
 
 export interface UpdateHandoffOptions {
   status?: HandoffStatus;
@@ -40,42 +40,23 @@ export function applyHandoffUpdates(handoff: Handoff, options: UpdateHandoffOpti
     handoff.contract = { ...handoff.contract, ...contractUpdates };
   }
 
-  const hasReviewUpdate =
-    options.reviewer !== undefined ||
-    options.requester !== undefined ||
-    options.requested_at !== undefined ||
-    options.review_thread_id !== undefined ||
-    options.review_message_id !== undefined ||
-    options.review_verdict !== undefined ||
-    options.reviewed_by !== undefined ||
-    options.review_summary !== undefined ||
-    options.blocking_issues !== undefined ||
-    options.suggestions !== undefined;
-
-  if (hasReviewUpdate) {
-    const review = { ...(handoff.review ?? {}) };
-    if (options.reviewer !== undefined) review.reviewer = options.reviewer;
-    if (options.requester !== undefined) review.requester = options.requester;
-    if (options.requested_at !== undefined) review.requested_at = options.requested_at;
-    if (options.review_thread_id !== undefined) review.thread_id = options.review_thread_id;
-    if (options.review_message_id !== undefined) review.message_id = options.review_message_id;
-    if (options.review_verdict !== undefined) review.verdict = options.review_verdict;
-    if (options.reviewed_by !== undefined) review.reviewed_by = options.reviewed_by;
-    if (options.review_summary !== undefined) review.summary = options.review_summary;
-    if (options.blocking_issues !== undefined) review.blocking_issues = options.blocking_issues;
-    if (options.suggestions !== undefined) review.suggestions = options.suggestions;
-
-    const reviewCompleted =
-      options.review_verdict !== undefined ||
-      options.reviewed_by !== undefined ||
-      options.review_summary !== undefined ||
-      options.blocking_issues !== undefined ||
-      options.suggestions !== undefined;
-    if (reviewCompleted) {
-      review.reviewed_at = nowISO();
-    }
-
-    handoff.review = review;
+  // Translate the flat options into a nested review patch and delegate the
+  // merge + reviewed_at stamping to the shared core helper — the SINGLE source
+  // of truth shared with updateEntity(handoff) so the two write paths cannot
+  // drift (pln#625 Phase 3, Codex review of #84).
+  const reviewPatch: Partial<HandoffReview> = {};
+  if (options.reviewer !== undefined) reviewPatch.reviewer = options.reviewer;
+  if (options.requester !== undefined) reviewPatch.requester = options.requester;
+  if (options.requested_at !== undefined) reviewPatch.requested_at = options.requested_at;
+  if (options.review_thread_id !== undefined) reviewPatch.thread_id = options.review_thread_id;
+  if (options.review_message_id !== undefined) reviewPatch.message_id = options.review_message_id;
+  if (options.review_verdict !== undefined) reviewPatch.verdict = options.review_verdict;
+  if (options.reviewed_by !== undefined) reviewPatch.reviewed_by = options.reviewed_by;
+  if (options.review_summary !== undefined) reviewPatch.summary = options.review_summary;
+  if (options.blocking_issues !== undefined) reviewPatch.blocking_issues = options.blocking_issues;
+  if (options.suggestions !== undefined) reviewPatch.suggestions = options.suggestions;
+  if (Object.keys(reviewPatch).length > 0) {
+    handoff.review = mergeHandoffReview(handoff.review, reviewPatch);
   }
 
   return handoff;

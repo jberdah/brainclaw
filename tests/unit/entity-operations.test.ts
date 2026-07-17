@@ -826,3 +826,133 @@ describe('core/entity-operations — handoff lifecycle transition (pln#625 Phase
     assert.equal((getEntity('handoff', 'hnd_orig', workspace.dir) as { status: string }).status, 'open');
   });
 });
+
+describe('core/entity-operations — handoff update / review-state (pln#625 Phase 3)', () => {
+  let workspace: TestWorkspace;
+
+  beforeEach(() => {
+    workspace = createTestWorkspace({ prefix: 'bclaw-handoff-update-' });
+  });
+
+  afterEach(() => {
+    workspace.cleanup();
+  });
+
+  function pushHandoff(over: Partial<Handoff> & { id: string; status: Handoff['status'] }): void {
+    mutateState((state) => {
+      state.open_handoffs.push({
+        from: 'alice', to: 'bob', text: 'ship it', created_at: nowISO(),
+        author: 'alice', tags: [], ...over,
+      } as Handoff);
+    }, workspace.dir);
+  }
+
+  it('wires narrative/tags update (previously fell through to "not yet wired")', () => {
+    pushHandoff({ id: 'hnd_u1', status: 'open' });
+    updateEntity('handoff', 'hnd_u1', { narrative: 'picked up the migration', tags: ['migration'] }, workspace.dir);
+    const h = getEntity('handoff', 'hnd_u1', workspace.dir) as { narrative: string; tags: string[] };
+    assert.equal(h.narrative, 'picked up the migration');
+    assert.deepEqual(h.tags, ['migration']);
+  });
+
+  it('writes a review verdict and stamps reviewed_at (review-state capability restored)', () => {
+    pushHandoff({ id: 'hnd_u2', status: 'open' });
+    updateEntity('handoff', 'hnd_u2', { review: { verdict: 'approve', summary: 'LGTM', blocking_issues: [] } }, workspace.dir);
+    const h = getEntity('handoff', 'hnd_u2', workspace.dir) as { review: { verdict: string; summary: string; reviewed_at?: string } };
+    assert.equal(h.review.verdict, 'approve');
+    assert.equal(h.review.summary, 'LGTM');
+    assert.ok(h.review.reviewed_at, 'reviewed_at should be stamped when a verdict lands');
+  });
+
+  it('merges successive review updates (does not wipe prior fields)', () => {
+    pushHandoff({ id: 'hnd_u3', status: 'open' });
+    updateEntity('handoff', 'hnd_u3', { review: { requester: 'alice', reviewer: 'codex' } }, workspace.dir);
+    updateEntity('handoff', 'hnd_u3', { review: { verdict: 'request_changes' } }, workspace.dir);
+    const h = getEntity('handoff', 'hnd_u3', workspace.dir) as { review: { requester?: string; reviewer?: string; verdict?: string } };
+    assert.equal(h.review.requester, 'alice', 'earlier review fields must survive a later merge');
+    assert.equal(h.review.reviewer, 'codex');
+    assert.equal(h.review.verdict, 'request_changes');
+  });
+
+  it('rejects an invalid review verdict (Zod-validated)', () => {
+    pushHandoff({ id: 'hnd_u4', status: 'open' });
+    assert.throws(
+      () => updateEntity('handoff', 'hnd_u4', { review: { verdict: 'bogus' } }, workspace.dir),
+      /Invalid handoff\.review/,
+    );
+  });
+
+  it('persists a contract update', () => {
+    pushHandoff({ id: 'hnd_u5', status: 'open' });
+    updateEntity('handoff', 'hnd_u5', { contract: { files_touched: ['src/a.ts'], tests_to_verify: ['a.test.ts'] } }, workspace.dir);
+    const h = getEntity('handoff', 'hnd_u5', workspace.dir) as { contract: { files_touched: string[] } };
+    assert.deepEqual(h.contract.files_touched, ['src/a.ts']);
+  });
+
+  it('tip guard: refuses to update a superseded (tombstoned) handoff', () => {
+    pushHandoff({ id: 'hnd_u6', status: 'open', superseded_by: 'hnd_u6b' });
+    assert.throws(
+      () => updateEntity('handoff', 'hnd_u6', { review: { verdict: 'approve' } }, workspace.dir),
+      /immutable tombstone[\s\S]*Update the current tip \(hnd_u6b\)/,
+    );
+  });
+
+  // Codex #84 P1 — the completion rule (which fields stamp reviewed_at) is a
+  // single source of truth shared with applyHandoffUpdates. Every one of the 5
+  // completion fields must stamp, matching the dispatcher path.
+  const COMPLETION_PATCHES: Array<Record<string, unknown>> = [
+    { verdict: 'approve' },
+    { reviewed_by: 'codex' },
+    { summary: 'looks good' },
+    { blocking_issues: ['none'] },
+    { suggestions: ['nit'] },
+  ];
+  for (const [i, reviewPatch] of COMPLETION_PATCHES.entries()) {
+    it(`review completion field #${i + 1} (${Object.keys(reviewPatch)[0]}) stamps reviewed_at`, () => {
+      const id = `hnd_cmpl_${i}`;
+      pushHandoff({ id, status: 'open' });
+      updateEntity('handoff', id, { review: reviewPatch }, workspace.dir);
+      const h = getEntity('handoff', id, workspace.dir) as { review: { reviewed_at?: string } };
+      assert.ok(h.review.reviewed_at, `${Object.keys(reviewPatch)[0]} must stamp reviewed_at (parity with applyHandoffUpdates)`);
+    });
+  }
+
+  it('a re-review re-stamps reviewed_at', async () => {
+    pushHandoff({ id: 'hnd_rr', status: 'open' });
+    updateEntity('handoff', 'hnd_rr', { review: { verdict: 'request_changes' } }, workspace.dir);
+    const first = (getEntity('handoff', 'hnd_rr', workspace.dir) as { review: { reviewed_at: string } }).review.reviewed_at;
+    // nowISO() is millisecond-resolution; ensure the clock advances before re-review.
+    await new Promise((r) => setTimeout(r, 5));
+    updateEntity('handoff', 'hnd_rr', { review: { verdict: 'approve' } }, workspace.dir);
+    const second = (getEntity('handoff', 'hnd_rr', workspace.dir) as { review: { reviewed_at: string } }).review.reviewed_at;
+    assert.notEqual(second, first, 're-review must re-stamp reviewed_at');
+  });
+
+  it('rejects an empty review patch (no silent no-op)', () => {
+    pushHandoff({ id: 'hnd_empty', status: 'open' });
+    assert.throws(
+      () => updateEntity('handoff', 'hnd_empty', { review: {} }, workspace.dir),
+      /no recognized fields/,
+    );
+    assert.equal((getEntity('handoff', 'hnd_empty', workspace.dir) as { review?: unknown }).review, undefined);
+  });
+
+  it('rejects an unknown review key instead of silently stripping it', () => {
+    pushHandoff({ id: 'hnd_unk', status: 'open' });
+    // `review_verdict` is a common mistake for `verdict` — Zod would strip it by
+    // default (silent no-op); the strict write-path parse must reject it.
+    assert.throws(
+      () => updateEntity('handoff', 'hnd_unk', { review: { review_verdict: 'approve' } }, workspace.dir),
+      /Invalid handoff\.review/,
+    );
+    assert.equal((getEntity('handoff', 'hnd_unk', workspace.dir) as { review?: unknown }).review, undefined);
+  });
+
+  it('rejects an unknown contract key', () => {
+    pushHandoff({ id: 'hnd_unkc', status: 'open' });
+    assert.throws(
+      () => updateEntity('handoff', 'hnd_unkc', { contract: { file_touched: ['a.ts'] } }, workspace.dir),
+      /Invalid handoff\.contract/,
+    );
+  });
+});

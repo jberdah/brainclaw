@@ -82,10 +82,13 @@ import {
   type EntityName,
 } from './entity-registry.js';
 import { generateId } from './ids.js';
+import { mergeHandoffReview } from './handoff-review.js';
 import {
   CandidateTypeSchema,
   ConstraintCategorySchema,
   DecisionOutcomeSchema,
+  HandoffContractSchema,
+  HandoffReviewSchema,
   MemoryVisibilitySchema,
   PlanTypeEnumSchema,
   PrioritySchema,
@@ -99,6 +102,8 @@ import type {
   Candidate,
   Constraint,
   Decision,
+  HandoffContract,
+  HandoffReview,
   PlanItem,
   Provenance,
   RuntimeNote,
@@ -956,6 +961,67 @@ export function updateEntity(
         force: true,
       });
       return { entity: name, id: merged.name ?? merged.path };
+    }
+    case 'handoff': {
+      // pln#625 Phase 3 — wire the handoff update path (previously unwired: the
+      // field check passed for narrative/tags but the switch fell to the default
+      // "not yet wired"). Restores the review-state write capability lost when
+      // update_handoff was removed at v1.0 — an agent can now write a review
+      // verdict via bclaw_update(entity='handoff', data={review:{verdict,…}}).
+      // review/contract are validated against their Zod schemas and MERGED onto
+      // the record (same field-merge semantics as the review loop's core
+      // applyHandoffUpdates); narrative/tags are set directly.
+      // Validate on the WRITE path with .strict() so an unknown key (e.g. a
+      // `review_verdict` typo that Zod would otherwise silently strip) is
+      // rejected loudly, and require at least one recognized field so an empty
+      // `{}` patch can't masquerade as a successful no-op (Codex review of #84).
+      // The base read schema stays non-strict — historical handoffs may carry
+      // extra fields.
+      let parsedReview: HandoffReview | undefined;
+      let parsedContract: HandoffContract | undefined;
+      if (patch.review !== undefined) {
+        const r = HandoffReviewSchema.strict().safeParse(patch.review);
+        if (!r.success) {
+          throw new Error(`Invalid handoff.review: ${r.error.issues.map((i) => i.message).join('; ')}`);
+        }
+        if (Object.keys(r.data).length === 0) {
+          throw new Error('handoff.review patch has no recognized fields (nothing to update).');
+        }
+        parsedReview = r.data;
+      }
+      if (patch.contract !== undefined) {
+        const c = HandoffContractSchema.strict().safeParse(patch.contract);
+        if (!c.success) {
+          throw new Error(`Invalid handoff.contract: ${c.error.issues.map((i) => i.message).join('; ')}`);
+        }
+        if (Object.keys(c.data).length === 0) {
+          throw new Error('handoff.contract patch has no recognized fields (nothing to update).');
+        }
+        parsedContract = c.data;
+      }
+      mutateState((state) => {
+        const item = state.open_handoffs.find((h) => h.id === id);
+        if (!item) throw new EntityNotFoundError(name, id);
+        // Tip guard (mirrors transition): a superseded handoff is a frozen
+        // tombstone — refuse to mutate it, point at the tip.
+        if (typeof item.superseded_by === 'string' && item.superseded_by) {
+          throw new Error(
+            `Handoff '${id}' was superseded by ${item.superseded_by} and is an immutable tombstone. `
+            + `Update the current tip (${item.superseded_by}) instead.`,
+          );
+        }
+        if (patch.narrative !== undefined) item.narrative = patch.narrative as string;
+        if (patch.tags !== undefined) item.tags = patch.tags as string[];
+        // Review merge + reviewed_at stamping via the shared core helper (single
+        // source of truth with applyHandoffUpdates — no drift between paths).
+        if (parsedReview !== undefined) {
+          item.review = mergeHandoffReview(item.review, parsedReview);
+        }
+        if (parsedContract !== undefined) {
+          item.contract = { ...(item.contract ?? {}), ...parsedContract };
+        }
+      }, cwd);
+      return { entity: name, id };
     }
     default:
       throw writeUnsupported(name, 'update');
