@@ -40,6 +40,8 @@ import {
   type ReleaseClaimAuth,
 } from './claims.js';
 import { listActionRequired } from './actions.js';
+import { loadAllSessions } from './identity.js';
+import { loadInstructions } from './instructions.js';
 import { deleteAssignment, listAssignments, loadAssignment, saveAssignment, transitionAssignment } from './assignments.js';
 import { listAgentRuns } from './agentruns.js';
 import { reconcileAgentRun, reconcileDeadPidRunningAgentRunAtRead, TERMINAL_STATUSES } from './agentrun-reconciler.js';
@@ -453,6 +455,20 @@ function loadAll(name: EntityName, cwd: string): unknown[] {
     case 'assignment':          return listAssignments(cwd);
     case 'agent_run':           return loadAgentRunsWithReconciliation(cwd);
     case 'cross_project_link':  return resolveCrossProjectLinks(cwd);
+    // pln#625 Phase 2 — wire the previously-unwired reads.
+    case 'step':                return loadState(cwd).plan_items.flatMap((p) => p.steps ?? []);
+    // session is keyed by session_id, not id — alias it so get/find match on either.
+    case 'session':             return loadAllSessions(cwd).map((s) => ({ ...s, id: s.session_id }));
+    case 'instruction':         return loadInstructions(cwd);
+    case 'inbox_message':
+      // Messages are inherently per-agent; the canonical find/get has no agent
+      // scope and there is no cross-agent aggregate loader. Route reads to the
+      // dedicated per-agent tool instead of inventing a misleading global list.
+      throw new EntityOperationUnsupportedError(
+        name,
+        'find',
+        'Messages are per-agent — read them via bclaw_read_inbox(agent=…), not the canonical grammar.',
+      );
     default:
       throw new EntityOperationUnsupportedError(name, 'find');
   }

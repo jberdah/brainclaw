@@ -560,11 +560,29 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
   });
 
   describe('unsupported entities', () => {
-    it('list on unsupported entity throws', () => {
-      assert.throws(
-        () => listEntities('session', workspace.dir, {}),
-        EntityOperationUnsupportedError,
-      );
+    it('find on inbox_message routes to bclaw_read_inbox (per-agent), not a misleading global list', () => {
+      assert.throws(() => listEntities('inbox_message', workspace.dir, {}), /bclaw_read_inbox/);
+    });
+
+    it('find/get is now wired for the previously-unwired reads: step / session / instruction (pln#625 Phase 2)', async () => {
+      // step + instruction: empty workspace → empty list, but no longer the
+      // EntityOperationUnsupportedError default.
+      assert.doesNotThrow(() => listEntities('step', workspace.dir, {}));
+      assert.doesNotThrow(() => listEntities('instruction', workspace.dir, {}));
+      // session: seed one and prove the session_id -> id alias makes get uniform.
+      const { saveCurrentSession } = await import('../../src/core/identity.js');
+      saveCurrentSession({
+        session_id: 'sess_readtest',
+        started_at: nowISO(),
+        last_seen_at: nowISO(),
+        agent: 'claude-code',
+        agent_id: 'agt_readtest',
+        host_id: 'host_readtest',
+      }, workspace.dir);
+      assert.doesNotThrow(() => listEntities('session', workspace.dir, {}));
+      const got = getEntity('session', 'sess_readtest', workspace.dir) as { session_id: string; id: string };
+      assert.equal(got.session_id, 'sess_readtest');
+      assert.equal(got.id, 'sess_readtest', 'session_id must be aliased to id for uniform get');
     });
 
     it('create on a system-managed entity throws the system-managed boundary (pln#625 Phase 2)', () => {
