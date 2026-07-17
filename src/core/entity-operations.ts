@@ -6,10 +6,12 @@
  * Phase 3 slice 3b (pln_c6472192). Keeps imperative code where it lives
  * (per P6.2) — this module only routes.
  *
- * MVP wiring (this landing): plan, decision, constraint, trap,
- * runtime_note, candidate. Other entities throw
- * `EntityOperationUnsupportedError` with a pointer at the legacy tool
- * until later slices wire them in.
+ * Write-verb wiring is per entity. An unwired write verb picks its error from
+ * the registry's writePolicy (pln#625 Phase 2): a `system` entity (session,
+ * inbox_message, instruction, assignment, agent_run, action) reports the
+ * curated `SystemManagedError` naming its authorized path; an agent-ownable one
+ * (default) reports `EntityOperationUnsupportedError` ("not yet wired"). An
+ * unknown entity name is rejected at the front door with `UnknownEntityError`.
  */
 
 import path from 'node:path';
@@ -176,7 +178,11 @@ export class EntityNotFoundError extends Error {
 export class SystemManagedError extends Error {
   constructor(entity: EntityName, verb: string, note?: string) {
     super(
-      `bclaw_${verb}(entity='${entity}'): ${entity} is system-managed — not writable via the canonical grammar.`
+      // Verb-scoped, not entity-scoped: some system entities have OTHER wired
+      // verbs (e.g. assignment transition/update), so don't claim the whole
+      // entity is unwritable — only that THIS verb is not an agent-facing
+      // grammar path for it.
+      `bclaw_${verb}(entity='${entity}'): ${entity} is system-managed — bclaw_${verb} is not available for it via the canonical grammar.`
       + (note ? ` ${note}.` : ''),
     );
     this.name = 'SystemManagedError';
@@ -195,7 +201,11 @@ function writeUnsupported(name: EntityName, verb: string): Error {
   if (spec?.writePolicy === 'system') {
     return new SystemManagedError(name, verb, spec.writePolicyNote);
   }
-  return new EntityOperationUnsupportedError(name, verb);
+  // Preserve the transition-specific hint the old default carried, so an
+  // agent-ownable-but-unwired transition (e.g. handoff) keeps its precise
+  // message rather than the generic "use the legacy tool" filler.
+  const hint = verb === 'transition' ? `Lifecycle transitions for ${name} not yet wired.` : undefined;
+  return new EntityOperationUnsupportedError(name, verb, hint);
 }
 
 /**

@@ -78,7 +78,10 @@ describe('core/entity-operations — writePolicy enforcement (pln#625 Phase 2)',
   // The default (unwired) write path throws before any I/O, so this path is never touched.
   const cwd = 'C:/nonexistent/writepolicy-test-never-touched';
 
-  it('a system-managed entity reports SystemManagedError on every unwired write verb', () => {
+  // create/update/remove throw at the switch default before any I/O, so the
+  // fake cwd is never touched. (transition does I/O first — its boundary is
+  // covered with a real record in the CRUD-dispatch describe below.)
+  it('a system-managed entity reports SystemManagedError on create/update/remove', () => {
     assert.throws(() => createEntity('action' as EntityName, {}, cwd), SystemManagedError);
     assert.throws(() => updateEntity('action' as EntityName, 'x', { tags: ['t'] }, cwd), SystemManagedError);
     assert.throws(() => removeEntity('action' as EntityName, 'x', cwd), SystemManagedError);
@@ -570,6 +573,27 @@ describe('core/entity-operations — CRUD verb dispatch', () => {
       // enforcement describe above, via handoff.)
       assert.throws(() => createEntity('assignment', {}, workspace.dir), SystemManagedError);
       assert.throws(() => createEntity('assignment', {}, workspace.dir), /system-managed/);
+    });
+
+    it('transition on a system-managed entity (real record) reports the boundary past the I/O checks', async () => {
+      // transition does statusField + load + isValidTransition BEFORE the switch,
+      // so a fake id yields not-found / invalid-transition, not the boundary.
+      // Seed a real pending action and attempt a VALID transition: it clears
+      // those checks, reaches the switch default, and reports SystemManagedError
+      // (actions are resolved via bclaw_assignment_action, not the grammar).
+      const { createActionRequired } = await import('../../src/core/actions.js');
+      const action = createActionRequired({
+        assignment_id: 'asgn_test',
+        agent: 'claude-code',
+        kind: 'approval',
+        title: 'seed for transition boundary',
+        prompt: 'approve?',
+      }, workspace.dir);
+      assert.equal(action.status, 'pending');
+      assert.throws(
+        () => transitionEntity('action', action.id, 'resolved', workspace.dir),
+        SystemManagedError,
+      );
     });
   });
 

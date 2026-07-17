@@ -420,9 +420,10 @@ const agent_run: EntitySpec = {
  * EntitySpec↔Zod consistency test now pins the FSM to the persisted enum so it
  * can never silently drift again.
  *
- * NB (pln#625 Phase 2): update(action) and transition(action) are NOT yet
- * routed in entity-operations.ts — both fall through to the "not yet wired"
- * error today. When Phase 2 wires update(action) it MUST gate patches to
+ * NB (pln#625 Phase 2): action is writePolicy:'system', so update/remove/
+ * transition(action) now return the curated SystemManagedError (managed via
+ * resolveAction / bclaw_assignment_action), not "not yet wired". If a later
+ * phase DOES wire an agent-facing update(action), it MUST gate patches to
  * status==='pending' (patching title/prompt on a resolved action would rewrite
  * the record of what a human already approved).
  */
