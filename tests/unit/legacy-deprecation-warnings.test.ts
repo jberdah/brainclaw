@@ -82,7 +82,7 @@ describe('commands/mcp — LEGACY_MCP_TOOL_WARNINGS coverage', () => {
 
 /**
  * v1.0 catalog integrity — regression guard.
- * Verifies that tools/list (default and catalog=all) excludes the 19
+ * Verifies that tools/list (default and catalog=all) excludes the 20
  * tools removed at v1.0, and that canonical verbs appear in the default
  * catalog. Guards against accidental re-introduction of removed tools.
  */
@@ -104,11 +104,13 @@ describe('commands/mcp — v1.0 catalog integrity', () => {
     'bclaw_correct_handoff',
   ];
 
-  it('REMOVED_IN_V1_TOOLS contains exactly 19 entries (v1.0 catalog snapshot)', () => {
+  it('REMOVED_IN_V1_TOOLS contains exactly 20 entries (v1.0 catalog snapshot)', () => {
+    // 20 = the original 19 + bclaw_list_agents, retired in pln#625 (the last
+    // surviving bclaw_list_* tool → bclaw_find(entity='agent')).
     assert.equal(
       REMOVED_IN_V1_TOOLS.size,
-      19,
-      `Expected 19 removed tools, got ${REMOVED_IN_V1_TOOLS.size}: ${[...REMOVED_IN_V1_TOOLS].join(', ')}`,
+      20,
+      `Expected 20 removed tools, got ${REMOVED_IN_V1_TOOLS.size}: ${[...REMOVED_IN_V1_TOOLS].join(', ')}`,
     );
   });
 
