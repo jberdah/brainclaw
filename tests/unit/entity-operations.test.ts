@@ -21,8 +21,10 @@ import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js
 
 describe('core/entity-operations — front-door guard (pln#625 Phase 1)', () => {
   // The guard runs BEFORE any filesystem access, so this path is never touched.
-  // If the guard ever stopped firing first, an ENOENT would surface here instead
-  // of UnknownEntityError — making these assertions a canary for that regression.
+  // If the guard ever stopped firing first, the pre-guard behavior would surface
+  // instead (EntityOperationUnsupportedError for find/get/create/remove; a raw
+  // TypeError for update/transition) — a different error class than
+  // UnknownEntityError, so these assertions still catch the regression.
   const cwd = 'C:/nonexistent/guard-test-never-touched';
   const unknown = 'agent' as EntityName; // the MCP layer passes entity as a free string
 

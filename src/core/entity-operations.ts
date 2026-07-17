@@ -180,7 +180,10 @@ export class UnknownEntityError extends Error {
       : '';
     super(
       `bclaw_${verb}(entity='${entity}') — unknown entity. ` +
-      `Canonical grammar entities: ${ENTITY_NAMES.join(', ')}.${agentHint}`,
+      // Deliberately "registered", not "supported": some listed entities are
+      // not yet wired for every verb (they return EntityOperationUnsupportedError,
+      // a different, already-curated signal). Don't imply all are writable here.
+      `Registered entities (not all are wired for every verb yet): ${ENTITY_NAMES.join(', ')}.${agentHint}`,
     );
     this.name = 'UnknownEntityError';
   }
