@@ -1104,31 +1104,36 @@ describe('bclaw_coordinate — side effects', () => {
       );
     });
 
-    // pln#626 Phase 1 — contract honesty. ideate delivers critic briefs to the
-    // inbox but does NOT yet spawn (Phase 2). It must report inbox_only, warn
-    // that autoExecute is a no-op, and make clear that `dispatched_critics`
-    // counts inbox messages, not running processes.
-    it('carries execution_status=inbox_only + execution_reason and clarifies dispatched_critics are inbox-only, not spawned (pln#626 Phase 1)', async () => {
+    // pln#626 Phase 2 (Option B) — multi-agent ideate now SPAWNS one worktree-
+    // isolated critic worker per target. Under BRAINCLAW_NO_SPAWN (test env) the
+    // spawn is refused with not_spawnable, but the whole chain (claim + assignment
+    // + delivery entry + honest execution_status/reason) must be wired — proving
+    // ideate no longer silently drops the dispatch to inbox-only.
+    it('multi-agent ideate spawns a worktree critic per target: claim + assignment + honest execution_status (pln#626 Phase 2)', async () => {
       const response = await coordinate(workspace, {
         intent: 'ideate',
-        task: 'Approach A or B — inbox honesty check?',
+        task: 'Approach A or B — spawn wiring check?',
         targetAgents: ['codex'],
         agent: 'claude-code',
         autoExecute: true,
       });
       assert.equal(response.status, 'ok');
       const result = response.result as Record<string, unknown>;
-      assert.equal(result.execution_status, 'inbox_only', 'ideate must report inbox_only until Phase 2 wires spawning');
-      assert.equal(result.execution_reason, 'intent_inbox_only');
+      assert.equal(result.mode, 'multi_agent');
       assert.equal(result.dispatched_critics, 1);
-      assert.ok(
-        response.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")),
-        `expected an autoExecute no-op warning, got: ${response.warnings.join(' | ')}`,
-      );
-      assert.ok(
-        response.warnings.some((w) => w.includes('NOT spawned as processes')),
-        `expected a dispatched_critics honesty warning, got: ${response.warnings.join(' | ')}`,
-      );
+      // Spawn chain wired: a claim + an assignment for the critic.
+      assert.ok(response.side_effects.some((e) => e.entity === 'claim'), 'a claim must be created for the critic');
+      assert.ok(response.artifacts.some((a) => a.type === 'assignment'), 'an assignment must be created for the critic');
+      // Honest status: under NO_SPAWN the spawn is refused as not_spawnable,
+      // NOT silently dropped to inbox_only.
+      assert.equal(result.execution_status, 'command_ready_manual');
+      const plan = result.delivery_plan as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(plan) && plan.length >= 1, 'ideate must expose the critic delivery_plan');
+      assert.equal(plan[0]?.execution_reason, 'not_spawnable');
+      assert.equal(response.execution_reason, 'not_spawnable', 'top-level reason must surface why it did not spawn');
+      // The Phase-1 interim warnings are gone — ideate no longer claims inbox-only.
+      assert.ok(!response.warnings.some((w) => w.includes('NOT spawned as processes')));
+      assert.ok(!response.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")));
     });
   });
 });

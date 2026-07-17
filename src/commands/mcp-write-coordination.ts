@@ -1418,15 +1418,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     result = { thread_id: threadId, message_count: messages.length, summary };
 
   } else if (req.intent === 'ideate') ideate: {
-    // pln#626 Phase 1 — ideate is inbox-only (Phase 2 will spawn critics), so
-    // autoExecute is a no-op. Warn HERE, at the top, so the notice fires on
-    // every ideate sub-path — including the bootstrap "join existing loop"
-    // early-return below, which `break ideate`s before the result assembly.
-    if (req.autoExecute === true) {
-      warnings.push(
-        "autoExecute has no effect on intent='ideate': ideate opens the loop and delivers critic briefs to the inbox but does not yet spawn critic agents (pln#626 Phase 2). Drive turns via bclaw_loop, or dispatch a sequence via bclaw_dispatch(intent='execute').",
-      );
-    }
+    // pln#626 Phase 2 — multi-agent ideate now SPAWNS its critics as
+    // worktree-isolated workers (Option B), so autoExecute IS honored on that
+    // path (no longer a no-op). Single-agent / bootstrap ideate still opens the
+    // loop for manual driving — covered by the "champion drives manually" and
+    // "joined existing" warnings below, so no blanket no-op warning here.
     // pln#492 phase 2.c (open + proposal) + 2.d.2 (multi-agent dispatch).
     // Single-agent mode (no targetAgents): open the loop with the task
     // as a proposal seed and stop there — the champion drives manually
@@ -1633,6 +1629,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     // at 'proposal', so this is backward compatible.
     let dispatchedCritics = 0;
     let dispatchedPhase = presetSelected ? presetSelected.phases[0].name : 'proposal';
+    // pln#626 Phase 2 (Option B) — prepared invokes for the critic spawn, run
+    // through runCoordinateExecution after the loop (mirrors intent=assign).
+    const preparedCritics: PreparedInvoke[] = [];
+    let ideateExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' | undefined;
     if (explicitTargets) {
       try {
         // Build a search-backed BriefMemoryProvider. Maps user-facing
@@ -1698,31 +1698,133 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             dispatchCwd,
           );
 
-          const queued = queueCoordinateMessage({
-            agent: slot.agent,
-            text: briefResult.text,
-            messageType: 'rfc',
-            ref: loopId,
-            scope: req.scope,
-            tags: ['coordinate', 'ideate', 'loop'],
-            payload: {
-              intent: 'ideate',
-              loop_id: loopId,
-              slot_id: slot.slot_id,
-              phase: advancedLoop.current_phase,
-              iteration: advancedLoop.iteration_count,
-              proposal_artifact_id: proposalArtifactId,
-            },
-            commandMode: 'consult',
-          });
-          void queued;
-          dispatchedCritics += 1;
+          // pln#626 Phase 2 (Option B) — spawn the critic as a worktree-isolated
+          // worker, mirroring the intent=assign / review chain. Each critic gets
+          // its OWN claim + worktree (scope is unique per slot) so parallel
+          // critics never share a checkout. The ideation brief is wrapped in the
+          // coordinate envelope (assignment header + ack instructions) so a
+          // spawned critic — even one without brainclaw MCP wired — can ack and
+          // reply. The brief instructs critique-only; the worktree makes any
+          // stray edit harmless (it lands in the throwaway checkout, not master).
+          const criticScope = `ideate-loop:${loopId}:${slot.slot_id}`;
+          const criticDescription =
+            `Ideation critic turn for loop ${loopId} slot ${slot.slot_id} (phase ${advancedLoop.current_phase}). `
+            + `Critique the proposal and reply with your critique — do not edit code. ${req.task}`;
+          try {
+            const claimResult = createCoordinatorClaim({
+              agent: slot.agent,
+              scope: criticScope,
+              description: criticDescription,
+              dispatcherAgent: senderAgent,
+              sessionId: connectionSessionId,
+              cwd: dispatchCwd,
+              worktreeBaseRef: req.ref,
+            });
+            if (claimResult.worktreeWarning) warnings.push(claimResult.worktreeWarning);
+            artifacts.push({ type: 'claim', id: claimResult.claimId });
+            side_effects.push({
+              action: claimResult.reusedExisting ? 'reuse' : 'create',
+              entity: 'claim',
+              id: claimResult.claimId,
+            });
+
+            let criticAssignmentId: string | undefined;
+            try {
+              const preId = generateAssignmentId(dispatchCwd);
+              const assignment = createAssignment({
+                id: preId.id,
+                short_label: preId.short_label,
+                claim_id: claimResult.claimId,
+                agent: slot.agent,
+                dispatcher_agent: senderAgent,
+                dispatcher_session_id: connectionSessionId,
+                scope: criticScope,
+                description: criticDescription,
+                tags: ['coordinate', 'ideate', 'loop'],
+              }, dispatchCwd);
+              criticAssignmentId = assignment.id;
+              artifacts.push({ type: 'assignment', id: assignment.id });
+            } catch (asgErr) {
+              warnings.push(
+                `ideate assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
+              );
+            }
+
+            const criticBrief = buildCoordinateBrief(slot.agent, briefResult.text, {
+              claimId: claimResult.claimId,
+              scope: criticScope,
+              worktreePath: claimResult.worktreePath,
+              assignmentId: criticAssignmentId,
+            });
+            const queued = queueCoordinateMessage({
+              agent: slot.agent,
+              text: criticBrief,
+              messageType: 'rfc',
+              ref: loopId,
+              scope: criticScope,
+              requiresAck: true,
+              claimId: claimResult.claimId,
+              assignmentId: criticAssignmentId,
+              tags: ['coordinate', 'ideate', 'loop'],
+              payload: {
+                intent: 'ideate',
+                loop_id: loopId,
+                slot_id: slot.slot_id,
+                phase: advancedLoop.current_phase,
+                iteration: advancedLoop.iteration_count,
+                proposal_artifact_id: proposalArtifactId,
+                ...(criticAssignmentId ? { assignment_id: criticAssignmentId } : {}),
+                worktree_path: claimResult.worktreePath,
+              },
+              commandMode: 'worker',
+            });
+
+            if (criticAssignmentId) {
+              try {
+                attachAssignmentMessageToClaim(claimResult.claimId, queued.entry.message_id, dispatchCwd);
+                linkClaimToAssignment(claimResult.claimId, criticAssignmentId, dispatchCwd);
+                transitionAssignment(criticAssignmentId, 'offered', { actor: senderAgent }, dispatchCwd);
+                patchAssignmentMessageId(criticAssignmentId, queued.entry.message_id, dispatchCwd);
+                queued.entry.assignment_id = criticAssignmentId;
+              } catch (linkErr) {
+                warnings.push(
+                  `ideate assignment linkage failed for ${criticAssignmentId}: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
+                );
+              }
+            }
+
+            preparedCritics.push({
+              entry: queued.entry,
+              invoke: queued.invoke,
+              worktreePath: claimResult.worktreePath,
+            });
+            dispatchedCritics += 1;
+          } catch (criticErr) {
+            facadeStatus = 'partial';
+            warnings.push(
+              `ideate critic dispatch failed for slot ${slot.slot_id} (${slot.agent}): ${criticErr instanceof Error ? criticErr.message : String(criticErr)}; loop ${loopId} stays open`,
+            );
+          }
 
           if (briefResult.truncated) {
             warnings.push(
               `Brief for critic slot ${slot.slot_id} (${slot.agent}) truncated: ${briefResult.droppedItems} memory items dropped to fit cap`,
             );
           }
+        }
+
+        // pln#626 Phase 2 (Option B) — spawn the prepared critics now that all
+        // loop state is mutated (mirrors intent=assign's post-loop execution).
+        // autoExecute=false yields command_ready_manual per critic; a target
+        // that can't spawn yields not_spawnable — both surfaced honestly.
+        if (preparedCritics.length > 0) {
+          ideateExecStatus = await runCoordinateExecution(preparedCritics, {
+            autoExecute: effectiveAutoExecute !== false,
+            senderAgent,
+            senderAgentId,
+            cwd: dispatchCwd,
+            warnings,
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1741,16 +1843,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       );
     }
 
-    // pln#626 Phase 1 — honesty of the contract. `dispatched_critics` counts
-    // inbox messages, not running processes → say so, so "dispatched_critics: 2"
-    // is never misread as 2 launched agents. (The autoExecute no-op warning is
-    // emitted at the top of the ideate block so it also covers the bootstrap
-    // join early-return.)
-    if (dispatchedCritics > 0) {
-      warnings.push(
-        `ideate: ${dispatchedCritics} critic brief(s) were delivered to the inbox, NOT spawned as processes — 'dispatched_critics' counts inbox messages, not running agents (pln#626 Phase 2 will wire real spawning). Drive the critics via bclaw_loop or launch them manually.`,
-      );
-    }
+    // pln#626 Phase 2 — multi-agent critics are now SPAWNED (worktree workers),
+    // so the result reports the real execution_status from runCoordinateExecution
+    // and exposes the delivery entries (each carrying execution_reason) so the
+    // top-level reason derivation works — exactly like intent=assign. Single-
+    // agent ideate spawns nothing, so it stays honestly inbox_only.
     result = {
       loop_id: loopId,
       proposal_artifact_id: proposalArtifactId,
@@ -1758,9 +1855,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       mode: explicitTargets ? 'multi_agent' : 'single_agent',
       dispatched_critics: dispatchedCritics,
       current_phase: dispatchedPhase,
-      // pln#626 Phase 1 — inbox-only until Phase 2 wires critic spawning.
-      execution_status: 'inbox_only',
-      execution_reason: 'intent_inbox_only',
+      delivery_plan: preparedCritics.map((p) => p.entry),
+      ...(ideateExecStatus
+        ? { execution_status: ideateExecStatus }
+        : { execution_status: 'inbox_only', execution_reason: 'intent_inbox_only' }),
       ...(presetSelected ? { preset: req.preset } : {}),
     };
 
