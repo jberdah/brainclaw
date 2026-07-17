@@ -278,6 +278,33 @@ export interface EntityFilter {
   [key: string]: unknown;
 }
 
+/**
+ * Canonical declaration of the bclaw_find/get FILTER grammar — the single
+ * source of truth for BOTH the MCP handler's validation and the governance
+ * fingerprint. Entity reachability lives in ENTITY_NAMES; this covers the
+ * filter contract, which is otherwise invisible to the published inputSchema
+ * (`filter` is an unconstrained object). Folded into the governance fingerprint
+ * (pln#625, Codex review of PR #82) so adding/renaming/re-scoping a filter key
+ * — or changing an accepted value — forces a changelog entry, closing the same
+ * blind-spot class as free-string `entity`.
+ */
+export const GRAMMAR_FILTER_CONTRACT = {
+  /** Accepted for ANY entity. */
+  common: [
+    'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
+    'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
+  ],
+  /** Keys accepted ONLY for the named entity (rejected with a validation_error elsewhere). */
+  entityScoped: {
+    agent_run: ['assignment_id', 'claim_id', 'message_id'],
+    agent: ['scope'],
+  },
+  /** Filter keys whose value is constrained to a fixed set. */
+  constrainedValues: {
+    scope: ['project', 'global'],
+  },
+} as const;
+
 export interface ListResult<T = unknown> {
   entity: EntityName;
   total: number;

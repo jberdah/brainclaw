@@ -10,13 +10,21 @@ guarantees this changelog follows.
 
 ## Unreleased
 
-**Changed — governance guard now covers grammar-addressable entities (pln#625)**
-- `tests/unit/mcp-governance.test.ts` folds the set of addressable grammar
-  entities (`ENTITY_NAMES`) into the public-surface fingerprint. Wiring a new
-  `bclaw_find/get(entity='…')` target previously moved nothing (the `entity`
-  arg is a free string and its enumerating description is stripped), so a new
-  addressable entity could ship without a changelog entry. Closes the blind
-  spot surfaced by the Phase 2c ideation loop.
+**Changed — governance guard now covers grammar entities AND the filter contract (pln#625)**
+- `tests/unit/mcp-governance.test.ts` folds two free-form parts of the callable
+  contract into the public-surface fingerprint: the set of addressable grammar
+  entities (`ENTITY_NAMES`) and the find/get filter grammar
+  (`GRAMMAR_FILTER_CONTRACT` — accepted keys, entity-scoping, constrained
+  values). Both were previously invisible (the `entity` and `filter` args are
+  free-form and their enumerating descriptions are stripped), so wiring a new
+  `bclaw_find/get(entity='…')` target or adding/re-scoping/re-valuing a filter
+  key (e.g. the Phase 2c `scope`) could ship without a changelog entry.
+- `GRAMMAR_FILTER_CONTRACT` (exported from `entity-operations.ts`) is now the
+  single source of truth for the handler's filter validation AND the
+  fingerprint, so the two can never drift. A mutation test proves the
+  fingerprint reacts to an added entity, key, re-scope, and new value.
+- Closes the blind spot surfaced by the Phase 2c ideation loop; the filter-grammar
+  extension came from the Codex review of PR #82.
 
 **Added — read-only `agent` entity in the canonical grammar (pln#625 Phase 2c)**
 - `bclaw_find/get(entity='agent')` are now wired. They return a REDACTED,
@@ -190,13 +198,16 @@ will still succeed. A follow-up PR will strip the dead handler code.
   changelog records the published MCP surface fingerprint. When a tool
   name, tier, category, or input schema changes, the test fails until
   this section is updated.
-- MCP public surface fingerprint: `sha256:cc21360e69fc2285`
-  (updated 2026-07-17 for pln#625 Phase 2c: the fingerprint now folds in the set
-  of grammar-addressable entities (`ENTITY_NAMES`), and `agent` was wired as a
-  read-only grammar entity. Previously the entity set was invisible to the
-  fingerprint — `entity` is a free `type: 'string'` and its enumerating
-  description is stripped — so wiring a new addressable entity moved nothing and
-  slipped past this guard. Additive: no tool added, removed, or renamed.)
+- MCP public surface fingerprint: `sha256:e12fd2f34dae1ac0`
+  (updated 2026-07-17 for pln#625 Phase 2c + PR #82: the fingerprint now folds in
+  two parts of the callable contract that the tool inputSchema cannot express —
+  the set of grammar-addressable entities (`ENTITY_NAMES`) and the find/get
+  filter grammar (`GRAMMAR_FILTER_CONTRACT`: accepted keys, entity-scoping, and
+  constrained values such as `scope=project|global`). Both were invisible to the
+  fingerprint before (`entity` and `filter` are free-form and their enumerating
+  descriptions are stripped), so wiring a new addressable entity — or adding /
+  re-scoping / re-valuing a filter key like the Phase 2c `scope` — slipped past
+  this guard. Additive: no tool added, removed, or renamed.)
   Previous: `sha256:45c02576aff36244`
   (updated 2026-07-15 for pln#622 PR0b: `preset` and `client_request_id` added
   to the published `bclaw_coordinate` input schema. Both were already accepted

@@ -16,6 +16,7 @@ import {
   listEntities,
   boundListResult,
   DEFAULT_FIND_CHAR_BUDGET,
+  GRAMMAR_FILTER_CONTRACT,
   type EntityFilter,
 } from '../core/entity-operations.js';
 import { handoffDiffPreviewNote } from '../core/handoff-snapshot.js';
@@ -1967,22 +1968,23 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
         // callers who'd cross-reference the description. Now the message names
         // the constraint AND the entity that DOES accept the key so the user
         // can fix the call without hunting through docs. (pln#599 docs-vs-facts.)
-        const KNOWN_FILTER_KEYS = new Set([
-          'status', 'tag', 'tags', 'author', 'plan_id', 'source', 'auto_generated',
-          'assignment_id', 'claim_id', 'message_id',
-          'scope',
-          'limit', 'offset', 'includeLegacy', 'minAutoReflectConfidence',
+        // Derived from the single-source-of-truth GRAMMAR_FILTER_CONTRACT so the
+        // handler's accepted keys and the governance fingerprint can never drift
+        // (pln#625, Codex review of PR #82).
+        const agentRunOnlyFilterKeys = new Set<string>(GRAMMAR_FILTER_CONTRACT.entityScoped.agent_run);
+        const agentOnlyFilterKeys = new Set<string>(GRAMMAR_FILTER_CONTRACT.entityScoped.agent);
+        const KNOWN_FILTER_KEYS = new Set<string>([
+          ...GRAMMAR_FILTER_CONTRACT.common,
+          ...agentRunOnlyFilterKeys,
+          ...agentOnlyFilterKeys,
         ]);
-        const agentRunOnlyFilterKeys = new Set(['assignment_id', 'claim_id', 'message_id']);
-        // pln#625 Phase 2c — `scope` (project|global) is agent-only, same
-        // entity-scoping contract as the agent_run keys above.
-        const agentOnlyFilterKeys = new Set(['scope']);
         const providedKeys = Object.keys(filter);
         const unknownKeys = providedKeys.filter((k) => !KNOWN_FILTER_KEYS.has(k));
         const misScopedKeys = providedKeys.filter((k) => agentRunOnlyFilterKeys.has(k) && entity !== 'agent_run');
         const agentMisScopedKeys = providedKeys.filter((k) => agentOnlyFilterKeys.has(k) && entity !== 'agent');
+        const allowedScopes = GRAMMAR_FILTER_CONTRACT.constrainedValues.scope as readonly string[];
         const scopeValueInvalid = entity === 'agent' && filter.scope !== undefined
-          && filter.scope !== 'project' && filter.scope !== 'global';
+          && !allowedScopes.includes(filter.scope as string);
         if (unknownKeys.length > 0 || misScopedKeys.length > 0 || agentMisScopedKeys.length > 0 || scopeValueInvalid) {
           const parts: string[] = [];
           if (unknownKeys.length > 0) {
