@@ -1233,6 +1233,12 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     result = {
       candidate_id: output.candidateId,
       selected_targets: resolvedAgents,
+      // pln#626 Phase 1 (review rework) — expose the reviewer delivery entries
+      // so review is as honest as assign/reroute: each entry's execution_reason
+      // (set by runCoordinateExecution) feeds the top-level derivation, so a
+      // manual (autoExecute=false) open_loop review no longer hides WHY it
+      // didn't spawn. Empty when there was nothing to dispatch (plain review).
+      delivery_plan: output.preparedReviews.map((p) => p.entry),
       ...(output.loopId ? { loop_id: output.loopId } : {}),
       ...(reviewExecStatus ? { execution_status: reviewExecStatus } : {}),
     };
@@ -1768,12 +1774,16 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     : undefined;
 
   // pln#626 Phase 1 — surface the REASON WHY at the top level, not just per
-  // delivery entry. Prefer an explicit result.execution_reason (consult /
-  // ideate / bootstrap-join set it); otherwise derive it from the delivery
-  // plan — the first non-started entry's reason explains why the overall
-  // status isn't delivered_and_started (e.g. auto_execute_disabled on a manual
-  // assign, not_spawnable on an IDE-only target). No reason when all started.
+  // delivery entry. The reason accompanies execution_status only when it is
+  // NOT delivered_and_started (mixed dispatches where ≥1 target spawned report
+  // delivered_and_started overall, and their per-entry failures stay visible in
+  // delivery_plan + warnings — the top-level reason must not contradict the
+  // status). Prefer an explicit result.execution_reason (consult / ideate /
+  // bootstrap-join set it); otherwise derive it from the first non-started
+  // delivery entry (e.g. auto_execute_disabled on a manual assign/review,
+  // not_spawnable on an IDE-only target).
   const resultExecReason: string | undefined = (() => {
+    if (resultExecStatus === 'delivered_and_started') return undefined;
     if (!result || typeof result !== 'object') return undefined;
     const r = result as Record<string, unknown>;
     if (typeof r.execution_reason === 'string') return r.execution_reason;

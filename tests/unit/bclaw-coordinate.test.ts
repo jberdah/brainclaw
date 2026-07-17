@@ -780,6 +780,30 @@ describe('bclaw_coordinate — side effects', () => {
       );
     });
 
+    // pln#626 Phase 1 (review rework, R3) — review was the last silent path: its
+    // result exposed neither delivery_plan nor execution_reason, so a manual
+    // open_loop review said command_ready_manual with no WHY. It must now be as
+    // honest as assign/reroute — reason on the entries AND top-level.
+    it('open_loop review with autoExecute:false surfaces execution_reason on entries AND top-level (R3)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'review',
+        task: 'Manual open_loop review, no spawn',
+        scope: 'src/core/review-manual.ts',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        open_loop: true,
+        autoExecute: false,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      assert.equal(result.execution_status, 'command_ready_manual');
+      const plan = result.delivery_plan as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(plan) && plan.length >= 1, 'review must expose a delivery_plan');
+      assert.equal(plan[0]?.execution_reason, 'auto_execute_disabled', 'reviewer entry must carry the reason');
+      // The crux of the rework: the reason reaches the top-level response for review too.
+      assert.equal(response.execution_reason, 'auto_execute_disabled');
+    });
+
     it('open_loop with review_mode=symmetric persists protocol.review_mode on the loop', async () => {
       const response = await coordinate(workspace, {
         intent: 'review',
