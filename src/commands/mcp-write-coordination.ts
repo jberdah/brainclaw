@@ -419,16 +419,21 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
 
   // can_30c295b4 / trp#371 Tier 2 — scope-aware dirty-working-tree guard.
-  // Only intents that spawn a worktree worker from HEAD can review/edit
-  // stale code, so consult/ideate/summarize are NOT guarded (no worktree
-  // → nothing to protect). Cross-project dispatch is inbox-only (no local
-  // worktree spawned here) so it is skipped too — the target agent builds
-  // its own worktree later via bclaw_work. The guard compares the dirty
-  // files against the dispatch scope and only blocks when overlap can't be
-  // ruled out; allow_dirty=true downgrades a block to a warning, and an
-  // explicit ref makes working-tree dirt intentionally out of scope.
+  // Intents that spawn a worktree worker from HEAD can review/edit stale code,
+  // so they are guarded; consult/summarize (no worktree) are not. pln#626
+  // Phase 2 — multi-agent ideate now ALSO builds a worktree (from HEAD) per
+  // critic, so it is subject to the same stale-code concern; but ideation ABOUT
+  // in-progress work is legitimate, so ideate only WARNS (never blocks) that
+  // critics see HEAD, not the working tree. Cross-project dispatch is inbox-only
+  // (no local worktree here) so it is skipped. The guard compares dirty files
+  // against the dispatch scope and only blocks when overlap can't be ruled out;
+  // allow_dirty=true downgrades a block to a warning; an explicit ref makes
+  // working-tree dirt intentionally out of scope.
   const WORKTREE_SPAWNING_INTENTS = new Set(['assign', 'review', 'reroute']);
-  if (!isCrossProject && WORKTREE_SPAWNING_INTENTS.has(req.intent)) {
+  const ideateWillSpawn = req.intent === 'ideate'
+    && Array.isArray(req.targetAgents) && req.targetAgents.length > 0
+    && req.preset !== 'bootstrap';
+  if (!isCrossProject && (WORKTREE_SPAWNING_INTENTS.has(req.intent) || ideateWillSpawn)) {
     // Probe with the SAME scope the dispatch will actually claim, so the
     // resolution mirrors reality (codex r1): assign falls back to the task
     // text (mcp ~assignScope), reroute to the targeted active claim's scope.
@@ -445,13 +450,17 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       allowDirty: req.allow_dirty,
       checkoutRef: req.ref,
     });
-    if (assessment.decision === 'block') {
+    // ideate never blocks (ideating on dirty work is valid) — its block downgrades to a warn.
+    if (assessment.decision === 'block' && !ideateWillSpawn) {
       return {
         response: createToolErrorResponse('dirty_working_tree', `${assessment.reason} (cwd: ${dispatchCwd})`),
       };
     }
-    if (assessment.decision === 'warn') {
-      warnings.push(`dirty_working_tree: ${assessment.reason}`);
+    if (assessment.decision === 'warn' || (assessment.decision === 'block' && ideateWillSpawn)) {
+      warnings.push(
+        `dirty_working_tree: ${assessment.reason}`
+        + (ideateWillSpawn ? ' — ideate critics spawn from HEAD and will not see your uncommitted changes' : ''),
+      );
     }
   }
 
@@ -1682,6 +1691,20 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         const criticSlots = advancedLoop.slots.filter((s) => s.role === 'critic');
         for (const slot of criticSlots) {
           if (!slot.agent) continue;
+          // pln#626 Phase 2 — validate the target BEFORE any claim/worktree churn
+          // (mirrors intent=assign). A typo'd or non-spawnable critic is skipped
+          // with a clear warning instead of leaving a claim+worktree+assignment
+          // behind that only fails later at spawn time.
+          const critCheck = validateAgentForDispatch(slot.agent, { requireSpawnable: true });
+          if (!critCheck.valid) {
+            warnings.push(JSON.stringify({
+              warning: 'agent_validation_failed',
+              agent: slot.agent,
+              code: critCheck.code,
+              reason: critCheck.reason,
+            }));
+            continue;
+          }
           const briefResult = buildIdeationBrief({
             thread: advancedLoop,
             slotRole: slot.role,
@@ -1750,7 +1773,16 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               );
             }
 
-            const criticBrief = buildCoordinateBrief(slot.agent, briefResult.text, {
+            // pln#626 Phase 2 — the critique-only contract must reach the
+            // DELIVERED brief, not just the claim record: buildCoordinateBrief
+            // wraps this in a worker envelope, so prepend the constraint + the
+            // reply path (MCP complete_turn, or LANE-RESULT.json for a sandboxed
+            // critic without brainclaw MCP) ahead of the ideation brief body.
+            const criticTaskText =
+              `CRITIQUE-ONLY TASK — do NOT edit code or commit. Read the proposal below and reply with your critique: `
+              + `call bclaw_loop(intent='complete_turn') if you have brainclaw MCP, otherwise write your critique to LANE-RESULT.json in your worktree root (the coordinator harvests it).\n\n`
+              + briefResult.text;
+            const criticBrief = buildCoordinateBrief(slot.agent, criticTaskText, {
               claimId: claimResult.claimId,
               scope: criticScope,
               worktreePath: claimResult.worktreePath,
@@ -1858,7 +1890,12 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       delivery_plan: preparedCritics.map((p) => p.entry),
       ...(ideateExecStatus
         ? { execution_status: ideateExecStatus }
-        : { execution_status: 'inbox_only', execution_reason: 'intent_inbox_only' }),
+        : explicitTargets
+          // Multi-agent was intended but nothing prepared (advance() threw, or
+          // every per-critic prep failed) — that's a failure, not by-design
+          // inbox delivery. facadeStatus is already 'partial'; say so honestly.
+          ? { execution_status: 'inbox_only', execution_reason: 'dispatch_failed' }
+          : { execution_status: 'inbox_only', execution_reason: 'intent_inbox_only' }),
       ...(presetSelected ? { preset: req.preset } : {}),
     };
 
