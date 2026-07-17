@@ -161,15 +161,19 @@ describe('ideate e2e — search-backed memory makes it into the brief (pln#492 s
       `expected truncation warning, got: ${response.warnings.join(' | ')}`,
     );
 
-    // The dispatched brief itself should also stay within a sane envelope —
-    // after truncation, the brief text length should be within the cap +
-    // a small overhead for the truncation tail.
+    // The dispatched brief itself should stay within a sane envelope — after
+    // truncation the ideation CONTENT is capped at ~48 000 chars. pln#626 Phase 2
+    // wraps that content in the coordinate dispatch envelope (assignment header +
+    // ack instructions + worktree path + the critique-only preamble, ~3.4 KB) so
+    // the spawned critic can ack; allow for that overhead. This still catches a
+    // truncation failure — the raw 8×7 KB bundle would be ≈56 KB, well past this.
     const messages = readInbox({ agent: 'codex' }, workspace.dir).messages;
     assert.ok(messages.length > 0);
     const briefBody = messages[0].text;
+    const BRIEF_ENVELOPE_MAX = 48_000 + 6_000;
     assert.ok(
-      briefBody.length <= 48_000 + 500,
-      `brief should be near the 48 000 char budget; got ${briefBody.length}`,
+      briefBody.length <= BRIEF_ENVELOPE_MAX,
+      `brief (content cap + Phase 2 dispatch envelope) should be <= ${BRIEF_ENVELOPE_MAX}; got ${briefBody.length}`,
     );
     assert.match(briefBody, /memory bundle truncated/, 'brief should carry the truncation tail');
   });

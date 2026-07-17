@@ -419,16 +419,21 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
   const effectiveAutoExecute = isCrossProject ? false : req.autoExecute;
 
   // can_30c295b4 / trp#371 Tier 2 — scope-aware dirty-working-tree guard.
-  // Only intents that spawn a worktree worker from HEAD can review/edit
-  // stale code, so consult/ideate/summarize are NOT guarded (no worktree
-  // → nothing to protect). Cross-project dispatch is inbox-only (no local
-  // worktree spawned here) so it is skipped too — the target agent builds
-  // its own worktree later via bclaw_work. The guard compares the dirty
-  // files against the dispatch scope and only blocks when overlap can't be
-  // ruled out; allow_dirty=true downgrades a block to a warning, and an
-  // explicit ref makes working-tree dirt intentionally out of scope.
+  // Intents that spawn a worktree worker from HEAD can review/edit stale code,
+  // so they are guarded; consult/summarize (no worktree) are not. pln#626
+  // Phase 2 — multi-agent ideate now ALSO builds a worktree (from HEAD) per
+  // critic, so it is subject to the same stale-code concern; but ideation ABOUT
+  // in-progress work is legitimate, so ideate only WARNS (never blocks) that
+  // critics see HEAD, not the working tree. Cross-project dispatch is inbox-only
+  // (no local worktree here) so it is skipped. The guard compares dirty files
+  // against the dispatch scope and only blocks when overlap can't be ruled out;
+  // allow_dirty=true downgrades a block to a warning; an explicit ref makes
+  // working-tree dirt intentionally out of scope.
   const WORKTREE_SPAWNING_INTENTS = new Set(['assign', 'review', 'reroute']);
-  if (!isCrossProject && WORKTREE_SPAWNING_INTENTS.has(req.intent)) {
+  const ideateWillSpawn = req.intent === 'ideate'
+    && Array.isArray(req.targetAgents) && req.targetAgents.length > 0
+    && req.preset !== 'bootstrap';
+  if (!isCrossProject && (WORKTREE_SPAWNING_INTENTS.has(req.intent) || ideateWillSpawn)) {
     // Probe with the SAME scope the dispatch will actually claim, so the
     // resolution mirrors reality (codex r1): assign falls back to the task
     // text (mcp ~assignScope), reroute to the targeted active claim's scope.
@@ -445,13 +450,17 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       allowDirty: req.allow_dirty,
       checkoutRef: req.ref,
     });
-    if (assessment.decision === 'block') {
+    // ideate never blocks (ideating on dirty work is valid) — its block downgrades to a warn.
+    if (assessment.decision === 'block' && !ideateWillSpawn) {
       return {
         response: createToolErrorResponse('dirty_working_tree', `${assessment.reason} (cwd: ${dispatchCwd})`),
       };
     }
-    if (assessment.decision === 'warn') {
-      warnings.push(`dirty_working_tree: ${assessment.reason}`);
+    if (assessment.decision === 'warn' || (assessment.decision === 'block' && ideateWillSpawn)) {
+      warnings.push(
+        `dirty_working_tree: ${assessment.reason}`
+        + (ideateWillSpawn ? ' — ideate critics spawn from HEAD and will not see your uncommitted changes' : ''),
+      );
     }
   }
 
@@ -1418,15 +1427,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     result = { thread_id: threadId, message_count: messages.length, summary };
 
   } else if (req.intent === 'ideate') ideate: {
-    // pln#626 Phase 1 — ideate is inbox-only (Phase 2 will spawn critics), so
-    // autoExecute is a no-op. Warn HERE, at the top, so the notice fires on
-    // every ideate sub-path — including the bootstrap "join existing loop"
-    // early-return below, which `break ideate`s before the result assembly.
-    if (req.autoExecute === true) {
-      warnings.push(
-        "autoExecute has no effect on intent='ideate': ideate opens the loop and delivers critic briefs to the inbox but does not yet spawn critic agents (pln#626 Phase 2). Drive turns via bclaw_loop, or dispatch a sequence via bclaw_dispatch(intent='execute').",
-      );
-    }
+    // pln#626 Phase 2 — multi-agent ideate now SPAWNS its critics as
+    // worktree-isolated workers (Option B), so autoExecute IS honored on that
+    // path (no longer a no-op). Single-agent / bootstrap ideate still opens the
+    // loop for manual driving — covered by the "champion drives manually" and
+    // "joined existing" warnings below, so no blanket no-op warning here.
     // pln#492 phase 2.c (open + proposal) + 2.d.2 (multi-agent dispatch).
     // Single-agent mode (no targetAgents): open the loop with the task
     // as a proposal seed and stop there — the champion drives manually
@@ -1633,6 +1638,10 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     // at 'proposal', so this is backward compatible.
     let dispatchedCritics = 0;
     let dispatchedPhase = presetSelected ? presetSelected.phases[0].name : 'proposal';
+    // pln#626 Phase 2 (Option B) — prepared invokes for the critic spawn, run
+    // through runCoordinateExecution after the loop (mirrors intent=assign).
+    const preparedCritics: PreparedInvoke[] = [];
+    let ideateExecStatus: 'delivered_and_started' | 'command_ready_manual' | 'inbox_only' | undefined;
     if (explicitTargets) {
       try {
         // Build a search-backed BriefMemoryProvider. Maps user-facing
@@ -1682,6 +1691,20 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         const criticSlots = advancedLoop.slots.filter((s) => s.role === 'critic');
         for (const slot of criticSlots) {
           if (!slot.agent) continue;
+          // pln#626 Phase 2 — validate the target BEFORE any claim/worktree churn
+          // (mirrors intent=assign). A typo'd or non-spawnable critic is skipped
+          // with a clear warning instead of leaving a claim+worktree+assignment
+          // behind that only fails later at spawn time.
+          const critCheck = validateAgentForDispatch(slot.agent, { requireSpawnable: true });
+          if (!critCheck.valid) {
+            warnings.push(JSON.stringify({
+              warning: 'agent_validation_failed',
+              agent: slot.agent,
+              code: critCheck.code,
+              reason: critCheck.reason,
+            }));
+            continue;
+          }
           const briefResult = buildIdeationBrief({
             thread: advancedLoop,
             slotRole: slot.role,
@@ -1698,31 +1721,142 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             dispatchCwd,
           );
 
-          const queued = queueCoordinateMessage({
-            agent: slot.agent,
-            text: briefResult.text,
-            messageType: 'rfc',
-            ref: loopId,
-            scope: req.scope,
-            tags: ['coordinate', 'ideate', 'loop'],
-            payload: {
-              intent: 'ideate',
-              loop_id: loopId,
-              slot_id: slot.slot_id,
-              phase: advancedLoop.current_phase,
-              iteration: advancedLoop.iteration_count,
-              proposal_artifact_id: proposalArtifactId,
-            },
-            commandMode: 'consult',
-          });
-          void queued;
-          dispatchedCritics += 1;
+          // pln#626 Phase 2 (Option B) — spawn the critic as a worktree-isolated
+          // worker, mirroring the intent=assign / review chain. Each critic gets
+          // its OWN claim + worktree (scope is unique per slot) so parallel
+          // critics never share a checkout. The ideation brief is wrapped in the
+          // coordinate envelope (assignment header + ack instructions) so a
+          // spawned critic — even one without brainclaw MCP wired — can ack and
+          // reply. The brief instructs critique-only; the worktree makes any
+          // stray edit harmless (it lands in the throwaway checkout, not master).
+          const criticScope = `ideate-loop:${loopId}:${slot.slot_id}`;
+          const criticDescription =
+            `Ideation critic turn for loop ${loopId} slot ${slot.slot_id} (phase ${advancedLoop.current_phase}). `
+            + `Critique the proposal and reply with your critique — do not edit code. ${req.task}`;
+          try {
+            const claimResult = createCoordinatorClaim({
+              agent: slot.agent,
+              scope: criticScope,
+              description: criticDescription,
+              dispatcherAgent: senderAgent,
+              sessionId: connectionSessionId,
+              cwd: dispatchCwd,
+              worktreeBaseRef: req.ref,
+            });
+            if (claimResult.worktreeWarning) warnings.push(claimResult.worktreeWarning);
+            artifacts.push({ type: 'claim', id: claimResult.claimId });
+            side_effects.push({
+              action: claimResult.reusedExisting ? 'reuse' : 'create',
+              entity: 'claim',
+              id: claimResult.claimId,
+            });
+
+            let criticAssignmentId: string | undefined;
+            try {
+              const preId = generateAssignmentId(dispatchCwd);
+              const assignment = createAssignment({
+                id: preId.id,
+                short_label: preId.short_label,
+                claim_id: claimResult.claimId,
+                agent: slot.agent,
+                dispatcher_agent: senderAgent,
+                dispatcher_session_id: connectionSessionId,
+                scope: criticScope,
+                description: criticDescription,
+                tags: ['coordinate', 'ideate', 'loop'],
+              }, dispatchCwd);
+              criticAssignmentId = assignment.id;
+              artifacts.push({ type: 'assignment', id: assignment.id });
+            } catch (asgErr) {
+              warnings.push(
+                `ideate assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
+              );
+            }
+
+            // pln#626 Phase 2 — the critique-only contract must reach the
+            // DELIVERED brief, not just the claim record: buildCoordinateBrief
+            // wraps this in a worker envelope, so prepend the constraint + the
+            // reply path (MCP complete_turn, or LANE-RESULT.json for a sandboxed
+            // critic without brainclaw MCP) ahead of the ideation brief body.
+            const criticTaskText =
+              `CRITIQUE-ONLY TASK — do NOT edit code or commit. Read the proposal below and reply with your critique: `
+              + `call bclaw_loop(intent='complete_turn') if you have brainclaw MCP, otherwise write your critique to LANE-RESULT.json in your worktree root (the coordinator harvests it).\n\n`
+              + briefResult.text;
+            const criticBrief = buildCoordinateBrief(slot.agent, criticTaskText, {
+              claimId: claimResult.claimId,
+              scope: criticScope,
+              worktreePath: claimResult.worktreePath,
+              assignmentId: criticAssignmentId,
+            });
+            const queued = queueCoordinateMessage({
+              agent: slot.agent,
+              text: criticBrief,
+              messageType: 'rfc',
+              ref: loopId,
+              scope: criticScope,
+              requiresAck: true,
+              claimId: claimResult.claimId,
+              assignmentId: criticAssignmentId,
+              tags: ['coordinate', 'ideate', 'loop'],
+              payload: {
+                intent: 'ideate',
+                loop_id: loopId,
+                slot_id: slot.slot_id,
+                phase: advancedLoop.current_phase,
+                iteration: advancedLoop.iteration_count,
+                proposal_artifact_id: proposalArtifactId,
+                ...(criticAssignmentId ? { assignment_id: criticAssignmentId } : {}),
+                worktree_path: claimResult.worktreePath,
+              },
+              commandMode: 'worker',
+            });
+
+            if (criticAssignmentId) {
+              try {
+                attachAssignmentMessageToClaim(claimResult.claimId, queued.entry.message_id, dispatchCwd);
+                linkClaimToAssignment(claimResult.claimId, criticAssignmentId, dispatchCwd);
+                transitionAssignment(criticAssignmentId, 'offered', { actor: senderAgent }, dispatchCwd);
+                patchAssignmentMessageId(criticAssignmentId, queued.entry.message_id, dispatchCwd);
+                queued.entry.assignment_id = criticAssignmentId;
+              } catch (linkErr) {
+                warnings.push(
+                  `ideate assignment linkage failed for ${criticAssignmentId}: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`,
+                );
+              }
+            }
+
+            preparedCritics.push({
+              entry: queued.entry,
+              invoke: queued.invoke,
+              worktreePath: claimResult.worktreePath,
+            });
+            dispatchedCritics += 1;
+          } catch (criticErr) {
+            facadeStatus = 'partial';
+            warnings.push(
+              `ideate critic dispatch failed for slot ${slot.slot_id} (${slot.agent}): ${criticErr instanceof Error ? criticErr.message : String(criticErr)}; loop ${loopId} stays open`,
+            );
+          }
 
           if (briefResult.truncated) {
             warnings.push(
               `Brief for critic slot ${slot.slot_id} (${slot.agent}) truncated: ${briefResult.droppedItems} memory items dropped to fit cap`,
             );
           }
+        }
+
+        // pln#626 Phase 2 (Option B) — spawn the prepared critics now that all
+        // loop state is mutated (mirrors intent=assign's post-loop execution).
+        // autoExecute=false yields command_ready_manual per critic; a target
+        // that can't spawn yields not_spawnable — both surfaced honestly.
+        if (preparedCritics.length > 0) {
+          ideateExecStatus = await runCoordinateExecution(preparedCritics, {
+            autoExecute: effectiveAutoExecute !== false,
+            senderAgent,
+            senderAgentId,
+            cwd: dispatchCwd,
+            warnings,
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1741,16 +1875,11 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       );
     }
 
-    // pln#626 Phase 1 — honesty of the contract. `dispatched_critics` counts
-    // inbox messages, not running processes → say so, so "dispatched_critics: 2"
-    // is never misread as 2 launched agents. (The autoExecute no-op warning is
-    // emitted at the top of the ideate block so it also covers the bootstrap
-    // join early-return.)
-    if (dispatchedCritics > 0) {
-      warnings.push(
-        `ideate: ${dispatchedCritics} critic brief(s) were delivered to the inbox, NOT spawned as processes — 'dispatched_critics' counts inbox messages, not running agents (pln#626 Phase 2 will wire real spawning). Drive the critics via bclaw_loop or launch them manually.`,
-      );
-    }
+    // pln#626 Phase 2 — multi-agent critics are now SPAWNED (worktree workers),
+    // so the result reports the real execution_status from runCoordinateExecution
+    // and exposes the delivery entries (each carrying execution_reason) so the
+    // top-level reason derivation works — exactly like intent=assign. Single-
+    // agent ideate spawns nothing, so it stays honestly inbox_only.
     result = {
       loop_id: loopId,
       proposal_artifact_id: proposalArtifactId,
@@ -1758,9 +1887,15 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
       mode: explicitTargets ? 'multi_agent' : 'single_agent',
       dispatched_critics: dispatchedCritics,
       current_phase: dispatchedPhase,
-      // pln#626 Phase 1 — inbox-only until Phase 2 wires critic spawning.
-      execution_status: 'inbox_only',
-      execution_reason: 'intent_inbox_only',
+      delivery_plan: preparedCritics.map((p) => p.entry),
+      ...(ideateExecStatus
+        ? { execution_status: ideateExecStatus }
+        : explicitTargets
+          // Multi-agent was intended but nothing prepared (advance() threw, or
+          // every per-critic prep failed) — that's a failure, not by-design
+          // inbox delivery. facadeStatus is already 'partial'; say so honestly.
+          ? { execution_status: 'inbox_only', execution_reason: 'dispatch_failed' }
+          : { execution_status: 'inbox_only', execution_reason: 'intent_inbox_only' }),
       ...(presetSelected ? { preset: req.preset } : {}),
     };
 
