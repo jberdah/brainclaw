@@ -423,13 +423,19 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     //     including a dev server, works directly; no reinstall needed.
     //   - none: no deps provisioned — run the project's install first.
     let depsMode = 'link';
+    let depsProvisioned: boolean | undefined;
     try {
       const sidecar = JSON.parse(
         fs.readFileSync(path.join(options.worktreePath, '.brainclaw-worktree.json'), 'utf-8'),
-      ) as { deps_mode?: string };
+      ) as { deps_mode?: string; deps_provisioned?: boolean };
       if (sidecar.deps_mode) depsMode = sidecar.deps_mode;
+      depsProvisioned = sidecar.deps_provisioned;
     } catch { /* sidecar absent/unreadable — assume the default `link` */ }
-    if (depsMode === 'install' || depsMode === 'copy') {
+    if ((depsMode === 'install' || depsMode === 'copy') && depsProvisioned === false) {
+      // Codex review P1: provisioning was ATTEMPTED but FAILED (best-effort, non-fatal).
+      // Do not claim node_modules is usable — tell the worker to install it.
+      parts.push(`Dependencies: in-root provisioning was attempted (deps_mode=${depsMode}) but FAILED — node_modules may be missing or incomplete. Run the project's install (npm/pnpm/yarn/bun) in the worktree before building; see .brainclaw-worktree.json symlink_warnings for the failure.`);
+    } else if (depsMode === 'install' || depsMode === 'copy') {
       parts.push(`Dependencies: node_modules is a real in-root directory (deps_mode=${depsMode}) — build, typecheck, and dev server all work directly; do NOT reinstall. If anything is missing, see .brainclaw-worktree.json symlink_warnings.`);
     } else if (depsMode === 'none') {
       parts.push('Dependencies: none were provisioned (deps_mode=none) — run the project\'s install (npm/pnpm/yarn/bun) in the worktree before building.');

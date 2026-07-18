@@ -784,9 +784,15 @@ export function provisionWorktreeDeps(
     try {
       const parentDir = path.dirname(dest);
       if (parentDir !== targetPath) fs.mkdirSync(parentDir, { recursive: true });
-      // verbatimSymlinks: copy symlinks as-is (don't resolve) so pnpm's relative
-      // link farm stays internally consistent inside the copied tree.
-      fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
+      // Codex review P1: if the SOURCE node_modules is itself a symlink/junction
+      // (e.g. a main tree that is itself a linked worktree, or a user-linked
+      // node_modules), a verbatim copy would reproduce that out-of-root link and
+      // Turbopack would still reject it — defeating copy mode. Dereference the
+      // TOP-LEVEL entry to its real directory before copying, then copy with
+      // verbatimSymlinks so the tree's INTERNAL relative links (pnpm's farm)
+      // stay intact. A real dir source copies straight through.
+      const srcReal = fs.lstatSync(src).isSymbolicLink() ? fs.realpathSync(src) : src;
+      fs.cpSync(srcReal, dest, { recursive: true, verbatimSymlinks: true });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       const msg = `deps_mode=copy: failed to copy '${rel}' into worktree (${reason}). `
@@ -976,10 +982,15 @@ export function createWorktree(
     trySymlinkSharedPath(entry);
   }
 
+  // Codex review P1: track whether in-root provisioning actually succeeded, so
+  // the dispatch brief can tell the worker the truth. A failed install/copy is
+  // best-effort (non-fatal) but the worker must then install itself — the brief
+  // must NOT claim "node_modules is real, do not reinstall" over a failure.
+  let depsProvisioned: boolean | undefined;
   if (provisionDeps) {
-    symlinkWarnings.push(
-      ...provisionWorktreeDeps(depsMode, mainWorktreePath, targetPath, nodeModulesPaths),
-    );
+    const provisionWarnings = provisionWorktreeDeps(depsMode, mainWorktreePath, targetPath, nodeModulesPaths);
+    symlinkWarnings.push(...provisionWarnings);
+    depsProvisioned = provisionWarnings.length === 0;
   } else if (depsMode === 'link') {
     // trp_37b05a15 (field report, Next.js 16 / Turbopack) — the node_modules link
     // brainclaw provisions is an out-of-worktree-root symlink to the main repo.
@@ -1045,7 +1056,11 @@ export function createWorktree(
     // trp_37b05a15: how JS deps were provisioned (link junction / real install /
     // copy / none) — non-default modes are recorded so a worker/supervisor knows
     // whether node_modules is an out-of-root link (dev-server caveat) or in-root.
+    // `deps_provisioned` (install/copy only) records whether the in-root
+    // provisioning actually succeeded — false means best-effort failed and the
+    // worker must install itself (Codex review P1).
     ...(depsMode !== 'link' ? { deps_mode: depsMode } : {}),
+    ...(depsProvisioned !== undefined ? { deps_provisioned: depsProvisioned } : {}),
     // pln#523: surface any shared-path link failures (e.g. node_modules junction
     // that could not be created) so the worker / supervisor can see why a build
     // might fail, instead of an invisible degradation.

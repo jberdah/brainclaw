@@ -25,6 +25,7 @@ import {
   provisionWorktreeDeps,
 } from '../../src/core/worktree.js';
 import { saveConfig, defaultConfig } from '../../src/core/config.js';
+import { buildProtocolSection } from '../../src/core/dispatcher.js';
 
 // trp_37b05a15 — Next.js detection drives the Turbopack node_modules-symlink
 // warning at worktree creation.
@@ -244,6 +245,68 @@ describe('provisionWorktreeDeps', () => {
       fs.rmSync(target, { recursive: true, force: true });
     }
   });
+
+  // Codex review P1: a SOURCE node_modules that is itself a symlink/junction must
+  // be dereferenced so the copy is a REAL in-root dir (else Turbopack still rejects).
+  it('copy mode dereferences a symlinked source node_modules into a real in-root dir', () => {
+    const { main, target } = tmpPair();
+    // The real node_modules lives elsewhere; main/node_modules is a junction to it
+    // (mirrors a main tree whose node_modules is itself linked).
+    const realStore = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-prov-store-'));
+    try {
+      fs.mkdirSync(path.join(realStore, 'left-pad'), { recursive: true });
+      fs.writeFileSync(path.join(realStore, 'left-pad', 'index.js'), 'module.exports = 0;');
+      try {
+        fs.symlinkSync(realStore, path.join(main, 'node_modules'), 'junction');
+      } catch {
+        return; // environment can't create junctions — skip (link mode is the fallback anyway)
+      }
+      assert.ok(fs.lstatSync(path.join(main, 'node_modules')).isSymbolicLink(), 'precondition: source is a link');
+      const warnings = provisionWorktreeDeps('copy', main, target, ['node_modules']);
+      assert.deepEqual(warnings, []);
+      const nm = path.join(target, 'node_modules');
+      assert.ok(!fs.lstatSync(nm).isSymbolicLink(), 'dest node_modules is a REAL dir, not a re-copied link');
+      assert.ok(fs.existsSync(path.join(nm, 'left-pad', 'index.js')), 'contents dereferenced through the link');
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+      fs.rmSync(realStore, { recursive: true, force: true });
+    }
+  });
+});
+
+// Codex review P1 — the dispatch brief must reflect whether in-root provisioning
+// actually succeeded, not just the requested mode.
+describe('buildProtocolSection — deps-mode brief honesty (trp_37b05a15)', () => {
+  function worktreeWithSidecar(sidecar: Record<string, unknown>): string {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-brief-'));
+    fs.writeFileSync(path.join(wt, '.brainclaw-worktree.json'), JSON.stringify(sidecar));
+    return wt;
+  }
+
+  it('install + deps_provisioned=true → tells the worker deps are ready (do NOT reinstall)', () => {
+    const wt = worktreeWithSidecar({ deps_mode: 'install', deps_provisioned: true });
+    const brief = buildProtocolSection({ worktreePath: wt });
+    assert.match(brief, /real in-root directory \(deps_mode=install\)/);
+    assert.match(brief, /do NOT reinstall/);
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it('install + deps_provisioned=false → tells the worker provisioning FAILED, install first', () => {
+    const wt = worktreeWithSidecar({ deps_mode: 'install', deps_provisioned: false });
+    const brief = buildProtocolSection({ worktreePath: wt });
+    assert.match(brief, /FAILED/);
+    assert.match(brief, /Run the project's install/);
+    assert.ok(!/do NOT reinstall/.test(brief), 'must not claim deps are ready on failure');
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
+
+  it('no sidecar → default link-mode dependency text', () => {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-brief-nolink-'));
+    const brief = buildProtocolSection({ worktreePath: wt });
+    assert.match(brief, /node_modules is linked from the main repo/);
+    fs.rmSync(wt, { recursive: true, force: true });
+  });
 });
 
 describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
@@ -258,7 +321,7 @@ describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
     return { repo, git };
   }
 
-  function readSidecar(wt: string): { deps_mode?: string; symlink_warnings?: string[] } {
+  function readSidecar(wt: string): { deps_mode?: string; deps_provisioned?: boolean; symlink_warnings?: string[] } {
     return JSON.parse(fs.readFileSync(path.join(wt, '.brainclaw-worktree.json'), 'utf-8'));
   }
 
@@ -322,6 +385,34 @@ describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
       const wt = createWorktree(repo, 'feat/none');
       assert.ok(!fs.existsSync(path.join(wt, 'node_modules')), 'no node_modules in none mode');
       assert.equal(readSidecar(wt).deps_mode, 'none');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (prev === undefined) delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+      else process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
+    }
+  });
+
+  // Codex review P1: a failed best-effort provisioning must record deps_provisioned=false
+  // so the brief can tell the worker to install. copy mode + a JS project with NO
+  // node_modules in the main tree is a deterministic provisioning failure.
+  it('copy mode with nothing to copy records deps_provisioned=false in the sidecar', () => {
+    const prev = process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    process.env.BRAINCLAW_WORKTREE_DEPS_MODE = 'copy';
+    const { repo, git } = initRepo('bclaw-wt-copyfail-');
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ dependencies: { next: '16.0.0' } }));
+    // committed so the worktree checkout has it (the "nothing to copy but JS
+    // project" warning checks the worktree root); deliberately NO node_modules.
+    git(['add', 'package.json']);
+    git(['commit', '-m', 'add package.json']);
+    const targetPath = resolveWorktreePath(repo, 'feat/copyfail');
+    try {
+      const wt = createWorktree(repo, 'feat/copyfail');
+      const sidecar = readSidecar(wt);
+      assert.equal(sidecar.deps_mode, 'copy');
+      assert.equal(sidecar.deps_provisioned, false, 'failed provisioning recorded');
+      assert.ok(!fs.existsSync(path.join(wt, 'node_modules')), 'no node_modules materialized');
     } finally {
       spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
       fs.rmSync(targetPath, { recursive: true, force: true });
