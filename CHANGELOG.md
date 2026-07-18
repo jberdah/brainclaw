@@ -5,6 +5,12 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Per-worktree dependency mode** (`worktree.deps_mode`, trp_37b05a15 — the Turbopack-compatible follow-up to 1.16.0's warning). A dispatched worktree's JS `node_modules` was always a junction to the main tree — an out-of-worktree-root symlink that `next dev` (Turbopack) rejects (`tsc`/`vitest`/`build` are fine). `createWorktree` now supports four modes: `link` (default, unchanged — the junction), `install` (runs the detected package manager's install at the worktree root for a real in-root `node_modules`), `copy` (recursively mirrors `node_modules` from the main tree — offline, disk-heavy), and `none` (no deps). `install`/`copy` yield a Turbopack-compatible in-root `node_modules` and suppress the Next.js warning (whose text, in the unchanged default `link` mode, now points at `deps_mode`). A failed best-effort install/copy is recorded as `deps_provisioned: false` in the sidecar, and the dispatch brief then tells the worker to install rather than claiming the deps are ready. The package manager is auto-detected from the lockfile (pnpm/yarn/bun/npm) or the `packageManager` field. Precedence: `BRAINCLAW_WORKTREE_DEPS_MODE` (env) > `BRAINCLAW_NO_LINK_DEPS=1` (→ `none`) > config `worktree.deps_mode` > `link`. Install timeout is bounded by `BRAINCLAW_WORKTREE_INSTALL_TIMEOUT_MS` (default 10 min). Provisioning is best-effort — a failed install/copy is recorded as a `symlink_warnings` note (the worker can install by hand), never fatal to worktree creation. The chosen mode is recorded in `.brainclaw-worktree.json` (`deps_mode`) and the dispatch brief tells the worker whether `node_modules` is an out-of-root link, a real in-root dir, or absent, so it doesn't needlessly reinstall. Default behavior is unchanged.
+
 ## [1.16.0] — 2026-07-18
 
 Autonomous review-loop convergence (the flagship of the pln#628 hardening push) plus a batch of cross-platform dispatch fixes from a macOS field report. Each change was Codex-reviewed before merge; the review findings (dual harvest path, slot↔assignment binding, atomic+resumable close, tracked-aware node_modules exclusion) were applied and locked with tests. No breaking changes.

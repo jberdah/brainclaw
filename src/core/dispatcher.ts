@@ -412,13 +412,36 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
   }
   if (options?.worktreePath) {
     parts.push(`Worktree: ${options.worktreePath}`);
-    // pln#523: tell the worker how dependencies are provisioned so it does not
-    // stall trying to install them. node_modules (and per-package node_modules in
-    // monorepos) are junction-linked from the main repo — run builds/typecheck
-    // directly. If they are missing, do NOT `npm install` in the worktree: check
-    // `.brainclaw-worktree.json` → `symlink_warnings` (a link may have failed,
-    // e.g. cross-volume) and validate the build centrally with the coordinator.
-    parts.push('Dependencies: node_modules is linked from the main repo (incl. monorepo per-package). Build/typecheck directly; if deps are missing, do NOT npm install here — see .brainclaw-worktree.json symlink_warnings and validate centrally.');
+    // pln#523 / trp_37b05a15: tell the worker how dependencies are provisioned so
+    // it does not stall trying to (re)install them. The authoritative record is
+    // the worktree's `.brainclaw-worktree.json` → `deps_mode` (absent ⇒ `link`).
+    //   - link (default): node_modules (incl. monorepo per-package) is
+    //     junction-linked from the main repo — build/typecheck directly; do NOT
+    //     `npm install`. An out-of-root symlink, so `next dev`/Turbopack rejects
+    //     it (build/tsc/vitest are fine).
+    //   - install/copy: node_modules is a REAL in-root directory — everything,
+    //     including a dev server, works directly; no reinstall needed.
+    //   - none: no deps provisioned — run the project's install first.
+    let depsMode = 'link';
+    let depsProvisioned: boolean | undefined;
+    try {
+      const sidecar = JSON.parse(
+        fs.readFileSync(path.join(options.worktreePath, '.brainclaw-worktree.json'), 'utf-8'),
+      ) as { deps_mode?: string; deps_provisioned?: boolean };
+      if (sidecar.deps_mode) depsMode = sidecar.deps_mode;
+      depsProvisioned = sidecar.deps_provisioned;
+    } catch { /* sidecar absent/unreadable — assume the default `link` */ }
+    if ((depsMode === 'install' || depsMode === 'copy') && depsProvisioned === false) {
+      // Codex review P1: provisioning was ATTEMPTED but FAILED (best-effort, non-fatal).
+      // Do not claim node_modules is usable — tell the worker to install it.
+      parts.push(`Dependencies: in-root provisioning was attempted (deps_mode=${depsMode}) but FAILED — node_modules may be missing or incomplete. Run the project's install (npm/pnpm/yarn/bun) in the worktree before building; see .brainclaw-worktree.json symlink_warnings for the failure.`);
+    } else if (depsMode === 'install' || depsMode === 'copy') {
+      parts.push(`Dependencies: node_modules is a real in-root directory (deps_mode=${depsMode}) — build, typecheck, and dev server all work directly; do NOT reinstall. If anything is missing, see .brainclaw-worktree.json symlink_warnings.`);
+    } else if (depsMode === 'none') {
+      parts.push('Dependencies: none were provisioned (deps_mode=none) — run the project\'s install (npm/pnpm/yarn/bun) in the worktree before building.');
+    } else {
+      parts.push('Dependencies: node_modules is linked from the main repo (incl. monorepo per-package). Build/typecheck directly; if deps are missing, do NOT npm install here — see .brainclaw-worktree.json symlink_warnings and validate centrally. (Out-of-root symlink: next dev/Turbopack needs deps_mode=install.)');
+    }
   }
   parts.push('');
 
