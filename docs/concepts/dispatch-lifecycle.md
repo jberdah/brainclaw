@@ -155,13 +155,13 @@ You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back
 Some dispatched workers cannot self-commit. For example, a sandboxed Codex run has `dispatchCanCommit=false` because its writable root is the linked worktree, while `.git` lives outside that root — so it cannot `git commit`. (It *can* still call brainclaw MCP — dec#133 — but the file-based contract below is used regardless, so harvesting stays coordinator-owned and does not depend on the worker's MCP writes.) In that case the worker contract is intentionally small:
 
 1. Edit files inside the dispatched worktree.
-2. Write `LANE-RESULT.json` at the worktree root.
+2. Write `LANE-RESULT.json` at the worktree root — `{ assignment_id, status: completed|blocked|failed, summary, files_changed?, artifacts?, notes? }`. For a **review** lane, the worker also sets `review_verdict` (`approve` | `request_changes`) and `review_summary`; harvest maps those onto the review loop and auto-closes it on `approve` (pln#628 Focus 4B — see [loop-engine.md](./loop-engine.md#automation-extending-bclaw_coordinateintentreview)).
 
 The worker does not need to commit, call `bclaw_assignment_update`, or release the claim itself. The worktree is the contract.
 
 When the coordinator runs `brainclaw harvest <assignment_id> --integrate`, brainclaw reads the worker's `LANE-RESULT.json`, commits the linked worktree diff on the worker's behalf onto the lane branch, then completes the assignment and releases the claim, including the normal plan-status cascade.
 
-The on-behalf commit is guarded by the linked-worktree check (`isLinkedWorktree`): integration only targets the worktree associated with the assignment, never the main repository. This keeps sandboxed-worker harvesting from turning into an accidental main-repo commit path.
+The on-behalf commit is guarded by the linked-worktree check (`isLinkedWorktree`): integration only targets the worktree associated with the assignment, never the main repository. This keeps sandboxed-worker harvesting from turning into an accidental main-repo commit path. It also excludes brainclaw's own transient/provisioned files from the lane commit — `LANE-RESULT.json`, `.brainclaw/`, `.brainclaw-worktree.json`, heartbeat files, and the `node_modules` link(s) brainclaw provisions (top-level + monorepo `**/node_modules`). The `node_modules` exclusion is tracked-aware: a project that *vendors* (commits) `node_modules` keeps a worker's change to a tracked file — only the freshly-provisioned link/dir is dropped.
 
 Integration is strictly additive and opt-in. Plain `brainclaw harvest <assignment_id>` remains report-only; it reads and reports the lane result without committing or mutating assignment / claim state. The on-behalf commit and lifecycle completion happen only when the coordinator passes `--integrate`.
 

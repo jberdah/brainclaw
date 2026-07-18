@@ -24,7 +24,7 @@ With the plan and sequences established, assign the work to execution agents.
 
 - **Sequence-driven execution:** Use `bclaw_dispatch(intent="execute")` to parallelize plans across your defined sequence lanes automatically.
 - **Direct orchestration:** For ad-hoc delegation, use `bclaw_coordinate(intent="assign")` to assign specific tasks to target agents. This seamlessly generates the necessary claims and dispatch briefs.
-- **Reviews & Loops:** To open a structured review process on completed work, use `bclaw_coordinate(intent="review", open_loop=true)`.
+- **Reviews & Loops:** To open a structured review process on completed work, use `bclaw_coordinate(intent="review", open_loop=true)`. The reviewer's verdict is harvested from its `LANE-RESULT.json` (`review_verdict`) and the loop **auto-closes on approve** — no manual `complete_turn`/`advance` round-trip to close the approve path (pln#628 Focus 4B).
 - Use `bclaw_dispatch_status` to verify worker liveness, examine log tails, and ensure dispatches are progressing healthily.
 
 ## Step 4: Manage the Inbox

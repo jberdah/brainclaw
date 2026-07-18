@@ -103,7 +103,7 @@ The developer can dial back individual surfaces if needed, but the default is fu
 
 brainclaw's store mutations are serialized (MCP single-writer queue + file-based lock), so memory writes are safe even under contention.
 
-For **parallel work**, dispatch a sequence with `bclaw_dispatch(intent="execute")` — each lane gets its own auto-worktree under `~/.brainclaw/worktrees/<project-hash>/`, and the coordinator integrates with an octopus merge. For **review-fix loops**, `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions. These are the supported parallel paths today.
+For **parallel work**, dispatch a sequence with `bclaw_dispatch(intent="execute")` — each lane gets its own auto-worktree under `~/.brainclaw/worktrees/<project-hash>/`, and the coordinator integrates with an octopus merge. For **review-fix loops**, `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions — and the loop **auto-closes on reviewer approve** (the verdict is harvested from `LANE-RESULT.json`, no manual drive). These are the supported parallel paths today.
 
 For **sequential work** in the same project, let one agent claim at a time and rely on handoffs to keep continuity across sessions.
 

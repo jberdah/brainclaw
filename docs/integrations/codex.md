@@ -43,7 +43,7 @@ Codex is CLI-spawnable for parallel lanes and dispatched workflows. The canonica
 codex exec -c approval_policy="never" --sandbox workspace-write "{prompt}"
 ```
 
-The `--sandbox workspace-write` setting is required, **not `read-only`** — the read-only sandbox blocks the MCP filesystem writes that brainclaw needs (worktree handoffs, session files, etc.) and forces fallback to GitHub connectors which fail for local-only commits.
+The `--sandbox workspace-write` setting is required, **not `read-only`** — the worker needs to write files in its own worktree (the edits it produces, plus its `LANE-RESULT.json`) so the coordinator has a harvestable diff. This is about the worker's *file* writes, not MCP: the brainclaw MCP server runs out-of-sandbox and is reachable under either sandbox mode (dec#133). What the sandbox does block is `git commit` (`.git` is outside the writable root), so the coordinator commits the worktree diff at harvest.
 
 ### Prompt delivery: stdin_pipe (preferred)
 

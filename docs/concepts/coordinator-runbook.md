@@ -41,6 +41,9 @@ worker presumed dead
 │
 ├─ 1. LANE-RESULT.json at the worktree root?
 │     yes → it FINISHED. `brainclaw harvest <asgn> [--integrate]`. Done.
+│     (review lane: a `review_verdict` in the file is mapped onto the review
+│      loop by harvest — a `verdict` artifact is recorded and the loop
+│      auto-closes on `approve`; no manual bclaw_loop drive needed.)
 │
 ├─ 2. git evidence (shared helper: commits_ahead + dirty_tracked,
 │     surfaced by dispatch-status / dispatch watch):

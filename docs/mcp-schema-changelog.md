@@ -10,6 +10,17 @@ guarantees this changelog follows.
 
 ## Unreleased
 
+**Added — `LaneResultSchema.review_verdict` / `review_summary` (pln#628 Focus 4B)**
+- `LANE-RESULT.json` (the worktree-root file a dispatched worker writes) gains two
+  optional fields: `review_verdict` (`approve` | `request_changes`) and
+  `review_summary` (one-line rationale). Absent on non-review lanes.
+- Consumed by `brainclaw harvest` (report path + `--integrate`): a review lane
+  carrying a `review_verdict` is mapped onto its review loop — a `verdict` artifact
+  is recorded and the loop advances, auto-closing on `reviewer_green` for
+  `approve`. Additive + backward-compatible; no tool added/removed/renamed and no
+  surface-fingerprint change (LaneResultSchema is not part of the read/write
+  contract fingerprint).
+
 **Added — `bclaw_update(entity='handoff')` incl. review/contract (pln#625 Phase 3)**
 - The handoff update path is now wired. Previously `bclaw_update(entity='handoff')`
   fell through to "not yet wired" (the field check passed for narrative/tags but

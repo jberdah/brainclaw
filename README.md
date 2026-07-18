@@ -255,8 +255,10 @@ bclaw_coordinate({
   targetAgents: ["claude-code"] 
 });
 
-// 4. The loop progresses as agents interact and resolve findings
-bclaw_loop({ intent: "advance", loop_id: "lop_abc" });
+// 4. The reviewer's verdict is harvested from its LANE-RESULT.json and the loop
+//    auto-closes on approve — no manual advance needed for the approve path.
+//    (bclaw_loop remains available to drive the request_changes fix cycle by hand.)
+bclaw_loop({ intent: "get", loop_id: "lop_abc" }); // inspect status any time
 ```
 
 ## The Loop Engine (Multi-Turn Workflows)
@@ -267,6 +269,8 @@ Brainclaw's Loop Engine moves beyond manual ping-pong by formalizing multi-turn 
 - **Symmetric Mode**: Eliminates unnecessary round-trips. Both the author and reviewer slots can apply fixes directly, drastically speeding up spec and documentation reviews.
 
 Each loop maintains a structured lifecycle, explicit phases, iteration bounds, and per-phase memory filters, executed seamlessly via `bclaw_loop`.
+
+**Autonomous convergence (pln#628 Focus 4B):** a dispatched reviewer doesn't need to be driven by hand. It writes its verdict (`review_verdict: approve | request_changes`) into its `LANE-RESULT.json`; when the coordinator harvests the lane, brainclaw records the verdict on the loop and **auto-closes it on approve** — the review loop reaches `reviewer_green` with no human ping-pong. `request_changes` advances to the author phase (the automated fix→re-review cycle is a planned follow-up).
 
 ## Enterprise Ready: Mono-repo & Micro-services
 
@@ -306,7 +310,7 @@ Recent releases have moved a lot of multi-agent parallel work from "risky" to "s
 
 - **Per-claim auto-worktree** — each dispatched lane gets its own isolated git worktree; the coordinator integrates with an octopus merge.
 - **Sequenced parallel execute** — `bclaw_dispatch(intent="execute")` fans out independent lanes across several agent instances and integrates the result.
-- **Symmetric review-fix loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions.
+- **Symmetric review-fix loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="symmetric")` runs an alternating review-and-fix conversation across two slots without shared-checkout collisions. The reviewer's verdict is harvested from `LANE-RESULT.json` and the loop **auto-closes on approve** — no manual round-trip to converge the approve path.
 - **Cross-platform spawn** — OS-aware prompt delivery (stdin pipe / inline arg) plus a brief-ack file handshake, so spawned workers can be detected and timed out reliably on Windows and Unix.
 - **Worktree GC is scope-bounded** — symlinks and junctions are no longer followed during cleanup, so post-merge sweeps can't wipe `node_modules` or other neighboring directories.
 - **MCP runtime self-heal** — when the runtime is corrupted, the server logs an actionable repair pointer; `brainclaw doctor --repair` rebuilds dist in one step.
@@ -315,6 +319,7 @@ Still sharp:
 
 1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
 2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
+3. **Next.js / Turbopack dev server in a worktree** — the provisioned `node_modules` symlink points outside the worktree root, which `next dev` (Turbopack) rejects (build/tsc/vitest are fine). brainclaw warns; `npm install` in the worktree or smoke-test on the merged branch. A Turbopack-compatible dependency mode is a planned follow-up.
 3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
 4. **Live state for hook-less agents** — supported hook-less file surfaces such as Cline, Windsurf, Continue, Antigravity/Gemini CLI, and Mistral Vibe can get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
@@ -343,6 +348,8 @@ When brainclaw creates an agent worktree, it auto-detects which dependency direc
 Maven, Gradle, and Cargo are intentionally excluded — their dependency caches are machine-global (`~/.m2`, `~/.gradle/caches`, `~/.cargo/registry`) and found automatically by the toolchain.
 
 Build outputs like `dist` are **not** symlinked — they must be per-worktree to avoid EBUSY errors when other processes hold handles on the output directory.
+
+> **Next.js / Turbopack caveat.** The `node_modules` link is a symlink to the main worktree, i.e. it points **outside** the agent worktree's root. `tsc`, `vitest`, and production `build` follow it fine, but `next dev` (Turbopack) panics on a `node_modules` link outside the worktree root. brainclaw detects Next.js projects and surfaces a `symlink_warnings` note at worktree creation. Workaround for dev-server work: run `npm install` inside the worktree (optionally with `BRAINCLAW_NO_LINK_DEPS=1`), or smoke-test on the merged branch. A Turbopack-compatible per-worktree dependency mode is a planned follow-up.
 
 Override detection in `.brainclaw/config.yaml`:
 
