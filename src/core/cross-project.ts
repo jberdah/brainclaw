@@ -178,6 +178,34 @@ export function writeCrossProjectSignal(
 }
 
 /**
+ * Runtime shape guard for a cross-project signal envelope. A second signaling
+ * subsystem can drop schema-incompatible (but valid-JSON) files into the same
+ * directory; without this guard a consumer that reads envelope.from_project.name
+ * / from_agent.name / created_at crashes with a TypeError on every read
+ * (e.g. bclaw_context board — reachable purely locally). Guarding here — the
+ * single source of these envelopes — keeps every consumer safe.
+ */
+const CROSS_PROJECT_SIGNAL_ENTITIES: ReadonlySet<string> = new Set<CrossProjectSignalEntity>(['candidate', 'handoff', 'runtime_note']);
+
+function isCrossProjectSignalEnvelope(value: unknown): value is CrossProjectSignalEnvelope {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  const fromProject = v.from_project as { name?: unknown } | undefined;
+  const fromAgent = v.from_agent as { name?: unknown } | undefined;
+  return typeof v.id === 'string'
+    && typeof v.entity_type === 'string'
+    // entity_type must be one of ours — a foreign subsystem's value would flow
+    // downstream as a bogus type.
+    && CROSS_PROJECT_SIGNAL_ENTITIES.has(v.entity_type)
+    && typeof v.created_at === 'string'
+    && typeof fromProject?.name === 'string'
+    && typeof fromAgent?.name === 'string'
+    // payload MUST be a non-null object: the consumer does `'text' in payload`,
+    // which throws a TypeError on a primitive/null payload (Codex review of #85).
+    && typeof v.payload === 'object' && v.payload !== null;
+}
+
+/**
  * Lists cross-project signals materialized in the local inbox.
  */
 export function listIncomingCrossProjectSignals(cwd?: string): CrossProjectSignalEnvelope[] {
@@ -191,7 +219,14 @@ export function listIncomingCrossProjectSignals(cwd?: string): CrossProjectSigna
     if (!entry.endsWith('.json')) continue;
     const filepath = path.join(dir, entry);
     try {
-      signals.push(JSON.parse(fs.readFileSync(filepath, 'utf-8')) as CrossProjectSignalEnvelope);
+      const parsed: unknown = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+      // Skip files that are valid JSON but not our envelope shape (schema drift
+      // from another signaling subsystem sharing this directory) — matching the
+      // existing "ignore malformed" intent, but for wrong-shape as well as
+      // wrong-syntax.
+      if (isCrossProjectSignalEnvelope(parsed)) {
+        signals.push(parsed);
+      }
     } catch {
       // Ignore malformed signal files.
     }

@@ -160,6 +160,59 @@ describe('cross-project', () => {
     assert.equal(incoming[0].from_project.name, 'brainclaw-tests');
     assert.equal((incoming[0].payload as Candidate).id, 'cnd_signal01');
   });
+
+  it('skips valid-JSON but wrong-shape signal files instead of crashing (trp_e90b3198)', () => {
+    const config = loadConfig(workspace.dir);
+    config.cross_project_links = [{ path: linkedDir, name: 'brainclaw-website', role: 'publisher' }];
+    saveConfig(config, workspace.dir);
+
+    const candidate: Candidate = {
+      id: 'cnd_ok', short_label: 'cnd#ok', type: 'decision', text: 'well-formed signal',
+      created_at: new Date().toISOString(), author: workspace.currentAgent.agent_name,
+      author_id: workspace.currentAgent.agent_id, project_id: 'prj_xp_main', session_id: 'sess_ok',
+      tags: [], status: 'pending', star_count: 0, starred_by: [], usage_count: 0, usage_events: [],
+    };
+    writeCrossProjectSignal('brainclaw-website', 'candidate', candidate, workspace.dir);
+
+    // Locate the materialized signal dir under the linked project and drop in
+    // files that are valid JSON but NOT our envelope shape — as a second
+    // signaling subsystem sharing the directory would (missing from_project.name
+    // / from_agent.name / created_at). Before the guard these crashed every
+    // read with a TypeError (bclaw_context board, reachable purely locally).
+    const findSignalDir = (root: string): string | undefined => {
+      const stack = [root];
+      while (stack.length) {
+        const d = stack.pop()!;
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          if (!e.isDirectory()) continue;
+          const full = path.join(d, e.name);
+          if (e.name === 'cross-project') return full;
+          stack.push(full);
+        }
+      }
+      return undefined;
+    };
+    const signalDir = findSignalDir(path.join(linkedDir, '.brainclaw'));
+    assert.ok(signalDir, 'expected a materialized cross-project signal dir');
+    const wellFormed = JSON.parse(fs.readFileSync(path.join(signalDir!, fs.readdirSync(signalDir!).find((f) => f.endsWith('.json'))!), 'utf-8'));
+    // A grab-bag of valid-JSON but non-conforming files a second subsystem might leave:
+    fs.writeFileSync(path.join(signalDir!, 'a-other-subsystem.json'), JSON.stringify({ type: 'other-subsystem', from: { project_name: 'x' } }));
+    fs.writeFileSync(path.join(signalDir!, 'a-empty.json'), JSON.stringify({}));
+    // Full envelope shape but payload is null / a primitive → the consumer's
+    // `'text' in payload` would throw without the payload-object guard.
+    fs.writeFileSync(path.join(signalDir!, 'a-null-payload.json'), JSON.stringify({ ...wellFormed, id: 'sig_null', payload: null }));
+    fs.writeFileSync(path.join(signalDir!, 'a-primitive-payload.json'), JSON.stringify({ ...wellFormed, id: 'sig_prim', payload: 'not-an-object' }));
+    // Foreign entity_type must not flow downstream as a bogus type.
+    fs.writeFileSync(path.join(signalDir!, 'a-bad-entity.json'), JSON.stringify({ ...wellFormed, id: 'sig_bad', entity_type: 'widget' }));
+
+    let incoming: ReturnType<typeof listIncomingCrossProjectSignals> = [];
+    assert.doesNotThrow(() => { incoming = listIncomingCrossProjectSignals(linkedDir); });
+    assert.equal(incoming.length, 1, 'only the well-formed envelope survives; every non-conforming file is skipped');
+    assert.equal((incoming[0].payload as Candidate).id, 'cnd_ok');
+
+    // Prove the board's data-feeding function stays crash-free with all that garbage present.
+    assert.doesNotThrow(() => listIncomingCrossProjectSignals(linkedDir));
+  });
 });
 
 describe('resolveProjectCwd (pln#359)', () => {
