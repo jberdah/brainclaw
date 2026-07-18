@@ -1838,7 +1838,11 @@ async function _executeMcpToolCallInner(payload: McpToolExecutionPayload): Promi
       if (noPlansYet && (storeDensity === 'empty' || storeDensity === 'low')) {
         nextActions.push({
           tool: 'bclaw_create',
-          args: { entity: 'plan', input: { title: '<plan title>', steps: ['<first step>'] } },
+          // Must match the canonical bclaw_create contract: data:{text} (author is
+          // auto-filled from identity). The previous input:{title,steps} shape was
+          // rejected by the handler — a fresh agent following next_actions failed on
+          // its very first write (trp_dfb58908). Steps are added later via bclaw_add_step.
+          args: { entity: 'plan', data: { text: '<what this plan will achieve>' } },
           when: 'memory has no plans yet — once you know what you are doing, create a plan so progress is tracked',
         });
       }

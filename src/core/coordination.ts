@@ -369,8 +369,11 @@ function buildIncomingSignalsSummary(cwd?: string): IncomingSignalSummary[] | un
     return {
       id: signal.id,
       entity_type: signal.entity_type,
-      from_project: signal.from_project.name,
-      from_agent: signal.from_agent.name,
+      // Defence-in-depth: listIncomingCrossProjectSignals already filters
+      // wrong-shape envelopes, but never let a single missing field crash the
+      // whole board render (trp_e90b3198).
+      from_project: signal.from_project?.name ?? '?',
+      from_agent: signal.from_agent?.name ?? '?',
       created_at: signal.created_at,
       preview: text.length > 120 ? text.slice(0, 117) + '...' : text,
     };

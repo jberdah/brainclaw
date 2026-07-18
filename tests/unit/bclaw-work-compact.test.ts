@@ -202,5 +202,19 @@ describe('bclaw_work compact mode', () => {
       (entry) => entry.tool === 'bclaw_create' && (entry.args as { entity?: string })?.entity === 'plan',
     );
     assert.ok(createPlanHint, `expected a bclaw_create(entity='plan') hint, got ${JSON.stringify(response.next_actions)}`);
+
+    // Contract: the hint must use the canonical bclaw_create shape (data:{text}),
+    // NOT the rejected input:{title,steps} — and it must be EXECUTABLE as-is
+    // (trp_dfb58908: a fresh agent following next_actions failed on its first write).
+    const hintArgs = createPlanHint!.args as { entity?: string; data?: Record<string, unknown>; input?: unknown };
+    assert.ok(hintArgs.data && typeof hintArgs.data === 'object', 'create hint must carry a `data` object');
+    assert.equal(hintArgs.input, undefined, 'create hint must NOT use the rejected `input` shape');
+
+    const created = await executeMcpToolCall({
+      name: 'bclaw_create',
+      args: { entity: 'plan', data: { text: 'first plan from the onboarding affordance' } },
+      cwd: workspace.dir,
+    });
+    assert.equal(created.response.isError, false, `executing the onboarding create hint must succeed, got ${JSON.stringify(created.response)}`);
   });
 });
