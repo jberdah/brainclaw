@@ -152,4 +152,14 @@ describe('dispatch watch — parseChildCommsByPpid (cross-platform child probe)'
     const out = '  501 codex\n 1234 node\n';
     assert.deepEqual(parseChildCommsByPpid(out, 1234), ['node']);
   });
+
+  it('preserves bracketed kernel-thread names and commands containing spaces (Codex review of #88)', () => {
+    // The first whitespace-delimited token is the PPID; everything after it is
+    // the command verbatim (which may contain spaces or brackets).
+    const out = '    2 [kthreadd]\n  902 /path with spaces/CODEX\n  902 node --inspect\n';
+    assert.deepEqual(parseChildCommsByPpid(out, 2), ['[kthreadd]']);
+    const kids = parseChildCommsByPpid(out, 902);
+    assert.deepEqual(kids, ['/path with spaces/codex', 'node --inspect']);
+    assert.ok(kids.some((c) => c.includes('codex')), 'a spaced full-path codex child is still detectable');
+  });
 });
