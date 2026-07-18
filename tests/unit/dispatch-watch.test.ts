@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateWatchTick, type WatchTickInput } from '../../src/commands/dispatch-watch.js';
+import { evaluateWatchTick, parseChildCommsByPpid, type WatchTickInput } from '../../src/commands/dispatch-watch.js';
 
 /**
  * Each case replays a real scenario from the 2026-06-10 coordination session —
@@ -122,5 +122,44 @@ describe('dispatch watch — evaluateWatchTick decision core', () => {
       evaluateWatchTick(tick({ runStatus: 'interrupted', commitsAhead: 5, dirtyTracked: 0, agentChildAlive: false })),
       'committed-clean',
     );
+  });
+});
+
+// trp_3b096bf4 — the child-pid probe filters `ps -A -o ppid=,comm=` output by
+// ppid in JS (BSD `ps` on macOS rejects the GNU `--ppid` flag). Cover the parse
+// directly so the fix is validated regardless of the platform the test runs on.
+describe('dispatch watch — parseChildCommsByPpid (cross-platform child probe)', () => {
+  it('filters by parent pid and lowercases the command (Linux bare comm)', () => {
+    const out = '  501 codex\n  501 node\n    1 systemd\n  777 bash\n';
+    assert.deepEqual(parseChildCommsByPpid(out, 501), ['codex', 'node']);
+  });
+
+  it('handles macOS full-path comm (so AGENT_CHILD_NAMES .includes still matches)', () => {
+    const out = '  902 /usr/local/bin/CODEX\n  902 /usr/bin/node\n    1 /sbin/launchd\n';
+    const comms = parseChildCommsByPpid(out, 902);
+    assert.deepEqual(comms, ['/usr/local/bin/codex', '/usr/bin/node']);
+    assert.ok(comms.some((c) => c.includes('codex')), 'a full-path codex child is still detectable');
+  });
+
+  it('returns empty for a ppid with no children, and ignores blank/malformed lines', () => {
+    const out = '  501 codex\n\n   garbage-no-ppid\n    1 systemd\n';
+    assert.deepEqual(parseChildCommsByPpid(out, 999), []);
+  });
+
+  it('does not match a pid that only appears as a child pid, only as ppid', () => {
+    // "  501 codex" — 501 is the PARENT here; querying for a different ppid must
+    // not return it, and the command token (codex) is never mistaken for a ppid.
+    const out = '  501 codex\n 1234 node\n';
+    assert.deepEqual(parseChildCommsByPpid(out, 1234), ['node']);
+  });
+
+  it('preserves bracketed kernel-thread names and commands containing spaces (Codex review of #88)', () => {
+    // The first whitespace-delimited token is the PPID; everything after it is
+    // the command verbatim (which may contain spaces or brackets).
+    const out = '    2 [kthreadd]\n  902 /path with spaces/CODEX\n  902 node --inspect\n';
+    assert.deepEqual(parseChildCommsByPpid(out, 2), ['[kthreadd]']);
+    const kids = parseChildCommsByPpid(out, 902);
+    assert.deepEqual(kids, ['/path with spaces/codex', 'node --inspect']);
+    assert.ok(kids.some((c) => c.includes('codex')), 'a spaced full-path codex child is still detectable');
   });
 });

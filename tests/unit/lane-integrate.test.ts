@@ -117,6 +117,68 @@ describe('isLinkedWorktree + commitWorktreeOnBehalf — guards', () => {
     assert.ok(r.files_changed.includes('new-file.ts'));
     assert.notEqual(git(wt, 'rev-parse', 'HEAD').stdout, before, 'HEAD moved');
   });
+
+  it('commitWorktreeOnBehalf: excludes node_modules + .brainclaw-worktree.json from the commit (trp_01a2ba2a)', () => {
+    const wt = addLinkedWorktree(ws.dir, 'feat/exclusions'); created.push(wt);
+    // The real deliverable…
+    fs.writeFileSync(path.join(wt, 'deliverable.ts'), 'export const ok = 1;\n');
+    // …alongside brainclaw-provisioned / transient artefacts that a field report
+    // (Codex on macOS) caught landing in a lane commit.
+    fs.writeFileSync(path.join(wt, '.brainclaw-worktree.json'), '{"marker":true}\n');
+    fs.mkdirSync(path.join(wt, 'node_modules', 'left-pad'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
+    fs.mkdirSync(path.join(wt, 'packages', 'api', 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'packages', 'api', 'node_modules', 'dep.js'), 'x\n');
+    // A real file inside a package (NOT node_modules) must still be committed.
+    fs.writeFileSync(path.join(wt, 'packages', 'api', 'src.ts'), 'export const y = 2;\n');
+    // Similarly-named deliverables that must NOT be caught by the exclusion
+    // (component-bounded pathspecs — Codex review of #88 MINOR).
+    fs.writeFileSync(path.join(wt, 'node_modules_helper.ts'), 'export const helper = 1;\n');
+    fs.mkdirSync(path.join(wt, 'docs', 'node_modules_guide'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'docs', 'node_modules_guide', 'readme.md'), '# guide\n');
+
+    const r = commitWorktreeOnBehalf(wt, 'feat: with exclusions');
+    assert.equal(r.committed, true, 'the real deliverable is committable');
+    assert.ok(r.files_changed.includes('deliverable.ts'));
+    assert.ok(r.files_changed.some((f) => f.replace(/\\/g, '/') === 'packages/api/src.ts'), 'real package source is committed');
+    for (const excluded of r.files_changed) {
+      const norm = excluded.replace(/\\/g, '/');
+      // A path whose COMPONENT is node_modules is excluded; a similarly-named
+      // file/dir (node_modules_helper.ts, node_modules_guide/) is NOT.
+      assert.ok(!/(^|\/)node_modules(\/|$)/.test(norm), `node_modules component must be excluded, got ${norm}`);
+      assert.notEqual(norm, '.brainclaw-worktree.json', '.brainclaw-worktree.json must be excluded');
+    }
+    // And prove it against the actual commit, not just the reported list.
+    const committed = git(wt, 'log', '-1', '--name-only', '--format=').stdout.replace(/\\/g, '/');
+    assert.doesNotMatch(committed, /(^|\/)node_modules(\/|$)/m, 'no node_modules-component path in the commit');
+    assert.doesNotMatch(committed, /\.brainclaw-worktree\.json/, 'no worktree marker in the commit');
+    assert.match(committed, /deliverable\.ts/);
+    assert.match(committed, /node_modules_helper\.ts/, 'similarly-named deliverable is NOT excluded');
+    assert.match(committed, /node_modules_guide\/readme\.md/, 'similarly-named dir is NOT excluded');
+    // The excluded files remain in the worktree (untracked), not lost.
+    assert.ok(fs.existsSync(path.join(wt, '.brainclaw-worktree.json')));
+    assert.ok(fs.existsSync(path.join(wt, 'node_modules', 'left-pad', 'index.js')));
+  });
+
+  it('KEEPS a change to a VENDORED/tracked node_modules file — does not drop the deliverable (#88 BLOCKING)', () => {
+    const wt = addLinkedWorktree(ws.dir, 'feat/vendored-nm'); created.push(wt);
+    // Vendor node_modules: commit it as tracked at the worktree HEAD (a project
+    // that intentionally commits its dependencies).
+    fs.mkdirSync(path.join(wt, 'node_modules', 'vendored'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'node_modules', 'vendored', 'dep.js'), 'export const v = 1;\n');
+    assert.ok(git(wt, 'add', 'node_modules/vendored/dep.js').ok);
+    assert.ok(git(wt, 'commit', '-q', '-m', 'vendor: track node_modules').ok);
+
+    // Worker patches the vendored file (a REAL deliverable) + a normal file.
+    fs.writeFileSync(path.join(wt, 'node_modules', 'vendored', 'dep.js'), 'export const v = 2; // patched\n');
+    fs.writeFileSync(path.join(wt, 'app.ts'), 'export const app = 1;\n');
+
+    const r = commitWorktreeOnBehalf(wt, 'feat: patch vendored dep');
+    assert.equal(r.committed, true);
+    const committed = git(wt, 'log', '-1', '--name-only', '--format=').stdout.replace(/\\/g, '/');
+    assert.match(committed, /app\.ts/);
+    assert.match(committed, /node_modules\/vendored\/dep\.js/, 'a TRACKED node_modules change must be KEPT, not silently dropped');
+  });
 });
 
 describe('integrateLaneResults — worktree-as-contract (pln#534)', () => {

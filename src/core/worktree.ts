@@ -407,14 +407,46 @@ export function commitWorktreeOnBehalf(
   }
 
   // Stage everything, then UNSTAGE the transient files that must never land on
-  // the lane branch: the worker's own `LANE-RESULT.json` report and any
-  // `.brainclaw/` coordination state. Committing those would pollute the branch
-  // (and master, on merge) with non-deliverable artefacts.
+  // the lane branch: the worker's own `LANE-RESULT.json` report, any
+  // `.brainclaw/` coordination state, and the `.brainclaw-worktree.json` marker.
+  // Committing those would pollute the branch (and master, on merge) with
+  // non-deliverable artefacts — a field report (Codex on macOS) caught them
+  // landing in a lane commit (trp_01a2ba2a). `.brainclaw-worktree.json` sits at
+  // the worktree ROOT (NOT inside `.brainclaw/`), so the `.brainclaw` pathspec
+  // does not cover it — it needs its own entry. These are ALWAYS transient, so
+  // the unstage is unconditional.
   const add = runGit(['add', '-A'], worktreePath);
   if (!add.ok) {
     return { committed: false, files_changed: [], reason: `git add failed: ${add.stderr.trim()}` };
   }
-  runGit(['reset', '-q', '--', 'LANE-RESULT.json', '.brainclaw', '.brainclaw-heartbeat-*'], worktreePath);
+  runGit([
+    'reset', '-q', '--',
+    'LANE-RESULT.json',
+    '.brainclaw',
+    '.brainclaw-worktree.json',
+    '.brainclaw-heartbeat-*',
+  ], worktreePath);
+
+  // node_modules needs a TRACKED-AWARE exclusion (Codex review of #88, BLOCKING).
+  // Unstage the links/dirs brainclaw provisions — but a project that VENDORS
+  // node_modules tracks those files, and a worker's change to a TRACKED
+  // node_modules file is a REAL deliverable; dropping it would silently omit
+  // work. Strategy: unstage every node_modules path, then RE-ADD only the ones
+  // already tracked at HEAD and modified/deleted (never the fresh provisioned
+  // link/dir, which is `A` vs HEAD). The component-bounded pathspecs never match
+  // a similarly-named deliverable such as `src/node_modules_helper.ts` — the
+  // plain `node_modules` is root-leading-dir only, the `:(glob)` forms match the
+  // `node_modules` path component exactly (nested link entry + nested contents).
+  const NODE_MODULES_SPECS = ['node_modules', ':(glob)**/node_modules', ':(glob)**/node_modules/**'];
+  runGit(['reset', '-q', '--', ...NODE_MODULES_SPECS], worktreePath);
+  const trackedNm = runGit(
+    ['diff', '--name-only', '--diff-filter=MD', 'HEAD', '--', ...NODE_MODULES_SPECS],
+    worktreePath,
+  );
+  const keepNm = trackedNm.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (keepNm.length > 0) {
+    runGit(['add', '--', ...keepNm], worktreePath);
+  }
 
   // The files actually staged for this commit (post-exclusion) — also the
   // truthful files_changed report.
@@ -424,7 +456,7 @@ export function commitWorktreeOnBehalf(
     // Only transient files changed — nothing deliverable to commit. Restore the
     // index so the worktree is left exactly as the worker left it.
     runGit(['reset', '-q'], worktreePath);
-    return { committed: false, files_changed: [], reason: 'no committable changes (only transient LANE-RESULT.json / .brainclaw)' };
+    return { committed: false, files_changed: [], reason: 'no committable changes (only transient LANE-RESULT.json / .brainclaw / node_modules links)' };
   }
 
   const authorName = options.authorName ?? 'brainclaw (on behalf)';
