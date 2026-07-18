@@ -19,7 +19,49 @@ import {
   resetWorktreeToRef,
   sanitizeBranchComponent,
   resolveWorktreeAddTimeoutMs,
+  projectUsesNextjs,
 } from '../../src/core/worktree.js';
+
+// trp_37b05a15 — Next.js detection drives the Turbopack node_modules-symlink
+// warning at worktree creation.
+describe('projectUsesNextjs (Turbopack worktree warning)', () => {
+  function tmpProject(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-next-'));
+  }
+
+  it('true when package.json has a `next` dependency', () => {
+    const dir = tmpProject();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { next: '16.0.0', react: '19' } }));
+    assert.equal(projectUsesNextjs(dir), true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('true when next is a devDependency, or a next.config.* exists', () => {
+    const dir = tmpProject();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ devDependencies: { next: '16' } }));
+    assert.equal(projectUsesNextjs(dir), true);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const dir2 = tmpProject();
+    fs.writeFileSync(path.join(dir2, 'package.json'), JSON.stringify({ dependencies: {} }));
+    fs.writeFileSync(path.join(dir2, 'next.config.mjs'), 'export default {};\n');
+    assert.equal(projectUsesNextjs(dir2), true);
+    fs.rmSync(dir2, { recursive: true, force: true });
+  });
+
+  it('false for a non-Next project, and never throws on missing/malformed package.json', () => {
+    const dir = tmpProject();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { react: '19' } }));
+    assert.equal(projectUsesNextjs(dir), false);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const empty = tmpProject();
+    assert.equal(projectUsesNextjs(empty), false, 'no package.json → false, no throw');
+    fs.writeFileSync(path.join(empty, 'package.json'), '{ not valid json');
+    assert.equal(projectUsesNextjs(empty), false, 'malformed package.json → false, no throw');
+    fs.rmSync(empty, { recursive: true, force: true });
+  });
+});
 
 describe('worktreesBaseDir', () => {
   it('returns a path inside ~/.brainclaw/worktrees/', () => {

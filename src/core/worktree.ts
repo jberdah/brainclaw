@@ -592,6 +592,31 @@ export function findWorktreePathForBranch(
  *
  * Returns the absolute path to the newly created worktree.
  */
+/**
+ * Whether the project looks like a Next.js app — a `next` dependency in
+ * package.json or a `next.config.*` at the root. Used to warn that the
+ * out-of-root `node_modules` symlink brainclaw provisions is rejected by
+ * `next dev` / Turbopack (trp_37b05a15), even though tsc / vitest / build accept
+ * it. Best-effort + defensive: any read/parse error → false (never blocks
+ * worktree creation over a heuristic).
+ */
+export function projectUsesNextjs(projectRoot: string): boolean {
+  try {
+    for (const cfg of ['next.config.js', 'next.config.mjs', 'next.config.ts', 'next.config.cjs']) {
+      if (fs.existsSync(path.join(projectRoot, cfg))) return true;
+    }
+    const pkgPath = path.join(projectRoot, 'package.json');
+    if (!fs.existsSync(pkgPath)) return false;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      dependencies?: Record<string, unknown>;
+      devDependencies?: Record<string, unknown>;
+    };
+    return Boolean(pkg.dependencies?.next ?? pkg.devDependencies?.next);
+  } catch {
+    return false;
+  }
+}
+
 export function createWorktree(
   mainWorktreePath: string,
   branchName: string,
@@ -756,6 +781,25 @@ export function createWorktree(
   for (const entry of sharedPaths) {
     trySymlinkSharedPath(entry);
   }
+
+  // trp_37b05a15 (field report, Next.js 16 / Turbopack) — the node_modules link
+  // brainclaw provisions is an out-of-worktree-root symlink to the main repo.
+  // tsc / vitest / build follow it fine, but `next dev` (Turbopack) PANICS on a
+  // node_modules link that points outside the worktree root. Surface a warning
+  // (not a failure — the link is still correct for build/typecheck) so a worker
+  // or operator doing dev-server work knows the workaround up front. A full
+  // Turbopack-compatible per-worktree dependency mode is a planned follow-up.
+  const linkedNodeModules = sharedPaths.some((p) => p === 'node_modules' || p.endsWith('/node_modules'));
+  if (linkedNodeModules && projectUsesNextjs(mainWorktreePath)) {
+    const msg =
+      'Next.js detected: node_modules is linked as an out-of-worktree-root symlink, which '
+      + '`next dev` / Turbopack rejects (it requires node_modules under the worktree root). '
+      + 'tsc / vitest / build are unaffected. For dev-server work in this worktree, run '
+      + '`npm install` here (optionally with BRAINCLAW_NO_LINK_DEPS=1), or smoke-test on the merged branch.';
+    symlinkWarnings.push(msg);
+    logger.warn(`[worktree] ${msg}`);
+  }
+
   // NOTE: .brainclaw/ is intentionally NOT symlinked.
   // Symlinking .brainclaw/ causes hooks and session_start to trigger on the
   // shared store, creating session conflicts and potentially blocking agents
