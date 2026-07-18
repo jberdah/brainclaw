@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { createTestWorkspace, type TestWorkspace } from '../helpers/workspace.js';
 import { integrateLaneResults, getLaneResultPath } from '../../src/commands/harvest.js';
 import { commitWorktreeOnBehalf, isLinkedWorktree } from '../../src/core/worktree.js';
+import { openLoop, advance, turn, getLoop } from '../../src/core/loops/index.js';
 import { saveAssignment, loadAssignment } from '../../src/core/assignments.js';
 import { saveClaim, loadClaim } from '../../src/core/claims.js';
 import { persistState, loadState } from '../../src/core/state.js';
@@ -274,6 +275,41 @@ describe('integrateLaneResults — worktree-as-contract (pln#534)', () => {
     assert.equal(e.claim_released, true);
     // No commit was authored on the lane branch.
     assert.equal(git(wt, 'log', '--oneline').stdout.split(/\r?\n/).filter(Boolean).length, 1, 'only the bootstrap commit exists');
+  });
+
+  it('review-loop lane with review_verdict=approve → integrate auto-closes the loop (pln#628 Focus 4B)', () => {
+    const wt = addLinkedWorktree(ws.dir, 'feat/lane-review'); created.push(wt);
+    // Open a review loop, advance to findings, assign the reviewer — the state a
+    // reviewer turn runs in — then tie an assignment to it via the review scope.
+    const loop = openLoop({
+      kind: 'review', title: 'integrate review', created_by: 'agt_test',
+      slots: [
+        { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+        { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer' },
+      ],
+    }, ws.dir);
+    advance({ id: loop.id, actor: 'agt_test' }, ws.dir); // change_summary → findings
+    const reviewer = getLoop(loop.id, ws.dir)!.slots.find((s) => s.role === 'reviewer')!;
+    turn({ id: loop.id, slot_id: reviewer.slot_id, actor: 'agt_test' }, ws.dir);
+
+    const scope = `review-loop:${loop.id}`;
+    seedClaim(ws, 'clm_rev', { scope, worktree_path: wt });
+    seedAssignment(ws, 'asgn_rev', { claim_id: 'clm_rev', agent: 'codex', scope, worktree_path: wt });
+    // Reviewer reports via LANE-RESULT.json carrying the machine-readable verdict.
+    fs.writeFileSync(getLaneResultPath(wt), JSON.stringify({
+      assignment_id: 'asgn_rev', status: 'completed', summary: 'reviewed the diff',
+      review_verdict: 'approve', review_summary: 'LGTM',
+    }));
+
+    const res = integrateLaneResults({ worktreePaths: [wt], cwd: ws.dir });
+    const e = res.integrated[0]!;
+    assert.equal(e.assignment_completed, true, 'assignment lifecycled');
+    assert.ok(e.review_loop, 'integrate records the review-loop close on the entry');
+    assert.equal(e.review_loop!.action, 'closed');
+    assert.equal(
+      getLoop(loop.id, ws.dir)!.status, 'completed',
+      'the review loop auto-closed on approve straight from harvest — no human drove complete_turn/advance',
+    );
   });
 
   it('dry-run: reports the plan but writes no commit, no lifecycle', () => {

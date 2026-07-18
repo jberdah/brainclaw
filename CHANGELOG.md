@@ -7,6 +7,10 @@ and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Autonomous review-loop close on approve** (pln#628 Focus 4B, PR1). A review loop opened via `bclaw_coordinate(intent="review", open_loop=true)` used to spawn the reviewer automatically but then stall: the worker reported via `LANE-RESULT.json`, and nothing mapped that back into the loop, so `reviewer_green` was never evaluated and a human had to drive `complete_turn`/`advance` by hand. Now `LaneResultSchema` carries an optional `review_verdict` (`approve`/`request_changes`) + `review_summary`; the reviewer brief instructs the worker to set them; and `brainclaw harvest --integrate` maps a completed review lane onto its loop — recording a `verdict` artifact and advancing, which **auto-closes the loop on `approve`** (`reviewer_green`) with no human in the loop. `request_changes` records the verdict and advances to `author_response` without closing (the automated re-review cycle is a follow-up). The callback is idempotent and never blocks harvest. Non-review lanes and lanes without a verdict are unaffected.
+
 ### Fixed
 
 - **Cross-platform dispatch tooling (macOS)** — two bugs surfaced by an external field report (Codex driving a real project on macOS with the shipped release). (1) The dispatch watcher's child-process probe called `ps -o comm= --ppid <pid>`; `--ppid` is a GNU flag that BSD `ps` (macOS) rejects, so the probe errored on **every** poll and child-pid liveness detection was broken on Mac. It now lists processes with `ps -A -o ppid=,comm=` (portable) and filters by parent pid in code (`parseChildCommsByPpid`, unit-tested). (2) `commitWorktreeOnBehalf` staged everything and only unstaged `LANE-RESULT.json` / `.brainclaw` / heartbeat files — so the `node_modules` link(s) brainclaw provisions **and** the `.brainclaw-worktree.json` marker (which sits at the worktree root, outside `.brainclaw/`) leaked into on-behalf lane commits. The exclusion list now also covers `.brainclaw-worktree.json`, top-level `node_modules`, and monorepo per-package `**/node_modules` (both the link entry and its contents).
