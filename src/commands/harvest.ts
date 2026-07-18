@@ -132,10 +132,11 @@ function collectWorktreeCandidateFiles(worktreePath: string): string[] {
 /**
  * Harvest candidates from worktree inboxes into the main project store.
  *
- * This is the coordinator-side fix for gap 5 of E2E test n°1: agents
- * running under `--sandbox workspace-write` cannot reach the main store
- * via MCP. They write candidates directly to their worktree inbox; the
- * coordinator calls `harvestCandidates` to sync them.
+ * This is the coordinator-side fix for gap 5 of E2E test n°1: a worker that
+ * cannot write to the main store — a genuinely MCP-less agent, or (post
+ * dec#133) a sandboxed codex whose `.git` is read-only so it cannot commit —
+ * leaves candidates in its worktree inbox; the coordinator calls
+ * `harvestCandidates` to sync them.
  *
  * @returns HarvestResult with counts of harvested, skipped, and errors.
  */
@@ -283,8 +284,9 @@ export function runHarvestCandidates(options: RunHarvestOptions = {}): void {
 //
 // A dispatched worker writes a single `LANE-RESULT.json` at its worktree root
 // as its final step. This is the standard, brief-boilerplate-free channel for a
-// worker (especially a sandboxed one that cannot reach MCP) to report its
-// outcome. The coordinator ingests it with `brainclaw harvest <assignment_id>`.
+// worker (a genuinely MCP-less agent, or a sandboxed codex that cannot git
+// commit) to report its outcome. The coordinator ingests it with
+// `brainclaw harvest <assignment_id>`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Conventional path of a worker's lane-result file at the worktree root. */

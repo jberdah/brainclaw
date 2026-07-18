@@ -268,10 +268,16 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
     invoke_binary: 'opencode',
     invoke_review_template: 'opencode "{prompt}"',
   },
-  // Sandbox note: when running under --sandbox workspace-write, Codex cannot reach
-  // the main project store via MCP. Use filesystem-direct writes instead:
-  // write candidates to .brainclaw/coordination/inbox/cnd_<id>.json in the active
-  // worktree. The coordinator then syncs them via bclaw_harvest_candidates.
+  // Sandbox note (CORRECTED — dec#133, empirical probe codex 0.144.4, 2026-07-18):
+  // the earlier belief that `--sandbox workspace-write` blocks brainclaw MCP was
+  // FALSE and never re-verified. The MCP server runs as a SEPARATE process outside
+  // the sandbox, and `approval_policy=never` (baked into the invoke template below)
+  // auto-approves every tool call in headless mode — so MCP reads/writes are
+  // reachable from a sandboxed codex run. The REAL residual constraint is `git
+  // commit`: the sandbox root excludes `.git`, so the coordinator commits the
+  // worktree diff at harvest time (see dispatchCanCommit / harvest.ts). Candidates
+  // can still be dropped as filesystem JSON as a fallback, but MCP is not the
+  // blocker.
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
     hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
@@ -870,7 +876,10 @@ export function buildInvokeCommand(
  * - `full`      : Complete brief — Protocol section, available tools, handoffs, context.
  *                 For CLI-spawnable agents that can call MCP (Claude Code, Cline, etc.).
  * - `compact`   : Task description + file paths + steps + constraints only.
- *                 No MCP protocol section — for sandboxed agents that cannot call MCP (Codex).
+ *                 No MCP protocol section — for task-based agents WITHOUT MCP
+ *                 access (nanoclaw/nemoclaw/picoclaw/zeroclaw). NOTE: codex is
+ *                 NOT compact — it is `full`, because a sandboxed codex run CAN
+ *                 reach MCP (dec#133); the sandbox only makes `.git` read-only.
  * - `task_card` : Ultra-short, human-readable task card.
  *                 For IDE-only agents where a human will paste the task (Cursor, Windsurf, Roo).
  */
@@ -921,27 +930,38 @@ export function resolveBriefMode(agentName: string): BriefMode {
  * pln#528 — capability matrix DERIVED from the spawn template, so it stays in
  * sync with how each agent is actually invoked (no per-profile duplication).
  *
- * The motivating reality (a cross-project field debrief): codex is spawned with
- * `--sandbox workspace-write`, which (a) does NOT wire the brainclaw MCP server
- * and (b) puts `.git` outside the sandbox root — so a sandboxed worker can
- * neither call `bclaw_*` nor `git commit`, regardless of the profile's nominal
- * `runtime.mcp_direct` flag. These helpers expose that so the brief / handoff /
- * harvest logic can adapt to the transport instead of issuing instructions the
- * worker cannot follow.
+ * pln#628 Focus 4A CORRECTION (dec#133, empirical probe codex 0.144.4): the
+ * original pln#528 belief — that a `--sandbox` spawn "does NOT wire the brainclaw
+ * MCP server" — was a FALSE premise that was never re-verified. In reality the MCP
+ * server is a separate out-of-sandbox process and `approval_policy=never`
+ * auto-approves every tool call, so MCP is reachable from a sandboxed run. The
+ * ONE residual constraint the sandbox actually imposes is `git commit` (.git sits
+ * outside the writable root). So the two capabilities are now decoupled: sandbox
+ * ⇏ no-MCP, sandbox ⇒ no-commit.
  */
 export function isSandboxedSpawn(profile: AgentCapabilityProfile): boolean {
   return /--sandbox\b/.test(profile.invoke_template ?? '');
 }
 
-/** Whether the agent, AS SPAWNED by the dispatcher, can reach brainclaw MCP. */
+/**
+ * Whether the agent, AS SPAWNED by the dispatcher, can reach brainclaw MCP.
+ *
+ * pln#628 Focus 4A: this is NO LONGER gated by isSandboxedSpawn. dec#133 proved
+ * empirically that a sandboxed codex run reaches MCP (both whitelisted and
+ * non-whitelisted tools fired) — the sandbox does not sever MCP, it only makes
+ * `.git` read-only. MCP reachability therefore tracks `runtime.mcp_direct` alone;
+ * the commit constraint is expressed separately by dispatchCanCommit.
+ */
 export function dispatchHasMcp(profile: AgentCapabilityProfile): boolean {
-  return profile.runtime.mcp_direct && !isSandboxedSpawn(profile);
+  return profile.runtime.mcp_direct;
 }
 
 /**
  * Whether the spawned worker can `git commit`. A sandbox whose root excludes
  * `.git` cannot — the coordinator must integrate the worker's output instead of
- * relying on a self-commit handoff.
+ * relying on a self-commit handoff. NOTE (dec#133): commit-from-sandbox was NOT
+ * verified to work even on Windows, so this stays conservative (sandbox ⇒ no
+ * commit); do not relax it to a platform check without an empirical probe.
  */
 export function dispatchCanCommit(profile: AgentCapabilityProfile): boolean {
   return !isSandboxedSpawn(profile);

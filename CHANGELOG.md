@@ -5,6 +5,12 @@ All notable changes to brainclaw are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and brainclaw adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Sandboxed-dispatch brief coherence** (pln#628 Focus 4A). A dispatch brief for a sandboxed worker (codex `--sandbox`) simultaneously carried a Protocol section instructing `bclaw_*` calls **and** a transport addendum stating "the brainclaw MCP server is NOT reachable — Do NOT call bclaw_* tools" — a self-contradiction that gave the worker two incompatible sets of instructions. An empirical probe (codex 0.144.4; dec#133) proved the addendum's premise false: the MCP server runs as a separate out-of-sandbox process and `approval_policy=never` auto-approves every tool call, so MCP **is** reachable from a sandboxed run. `dispatchHasMcp` is now driven by `runtime.mcp_direct` alone (decoupled from `isSandboxedSpawn`), so the no-MCP addendum fires only for genuinely MCP-less agents (nanoclaw/nemoclaw/picoclaw/zeroclaw). The sandbox's one real constraint — `.git` is read-only, so `git commit` is unavailable — is still communicated (working-defaults: the coordinator commits the worktree at harvest). `dispatchCanCommit` is deliberately left conservative (sandbox ⇒ no commit) since commit-from-sandbox was not empirically verified.
+
 ## [1.15.0] — 2026-07-15
 
 MCP model-selection parity, federation increment 1 (signed claim sync), and two dogfooding fixes. Each change was reviewed before merge (gpt-5.6-luna review on the model + worktree work). No breaking changes.

@@ -678,9 +678,20 @@ describe('dispatch-regression/generateDispatchBrief', () => {
       brief.includes('do not explore the broader codebase'),
       'codex constraints warn against broad exploration',
     );
+    // pln#628 Focus 4A (dec#133): codex is sandboxed but MCP-capable, so the brief
+    // must be internally COHERENT — it must NOT carry the old "no MCP / Do NOT call
+    // bclaw_*" note that contradicted the Protocol section's bclaw_* instructions.
     assert.ok(
-      brief.includes('Transport: sandboxed run'),
-      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
+      !brief.includes('Transport: no MCP') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief omits the no-MCP note (MCP IS reachable from a sandboxed run — dec#133)',
+    );
+    assert.ok(
+      brief.includes('bclaw_release_claim') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief is coherent: it instructs bclaw_* calls and never contradicts them',
+    );
+    assert.ok(
+      brief.includes('coordinator commits the worktree on your behalf'),
+      'codex brief still states the REAL constraint: no git commit → coordinator commits at harvest',
     );
   });
 
@@ -692,10 +703,31 @@ describe('dispatch-regression/generateDispatchBrief', () => {
     });
     assert.ok(!brief.includes('## Constraints'), 'claude-code brief omits Constraints section');
     assert.ok(
-      !brief.includes('Transport: sandboxed run'),
-      'claude-code (MCP, non-sandboxed) brief omits the sandboxed-transport note',
+      !brief.includes('Transport: no MCP'),
+      'claude-code (MCP, non-sandboxed) brief omits the no-MCP transport note',
     );
   });
+
+  // pln#628 Focus 4A: the no-MCP addendum must still fire for GENUINELY MCP-less
+  // agents (mcp_direct=false). Table-driven so a future profile change that
+  // silently drops MCP-less handling is caught.
+  for (const mcpless of ['nanoclaw', 'nemoclaw', 'picoclaw', 'zeroclaw']) {
+    it(`emits the no-MCP addendum for the MCP-less agent ${mcpless}`, () => {
+      const brief = generateDispatchBrief({
+        task: 'Do the task',
+        agent: mcpless,
+        claimId: `clm_${mcpless}`,
+      });
+      assert.ok(
+        brief.includes('Transport: no MCP'),
+        `${mcpless} (mcp_direct=false) must receive the no-MCP addendum`,
+      );
+      assert.ok(
+        brief.includes('Do NOT call bclaw_*'),
+        `${mcpless} has no MCP, so the file-only instruction is correct here`,
+      );
+    });
+  }
 });
 
 // ── brief-hardening: release claim step + codex constraints ───────────────
@@ -747,6 +779,36 @@ describe('dispatch-regression/brief-hardening', () => {
     assert.ok(brief.includes('planStatus: "done"'), 'release step specifies planStatus done');
   });
 
+  // pln#628 Focus 4A: a FULL-mode codex plan brief (generateBrief, not just
+  // generateDispatchBrief) must be internally coherent — Protocol lifecycle
+  // present, the no-MCP addendum absent (codex reaches MCP — dec#133), the real
+  // no-commit constraint stated, and never a "Do NOT call bclaw_*" contradiction.
+  it('full-mode generateBrief for codex is coherent (MCP protocol, no no-MCP addendum, no-commit stated)', () => {
+    const plan = makePlan({ id: 'pln_cx1', text: 'Codex plan task' });
+    persistState({
+      version: 1, write_version: 1,
+      active_constraints: [], recent_decisions: [], known_traps: [],
+      open_handoffs: [], plan_items: [plan],
+    }, testDir);
+
+    const item = { planId: 'pln_cx1', rank: 1, hard_after: [], soft_after: [] };
+    const brief = generateBrief(plan, item, testDir, 'full', {
+      claimId: 'clm_cx1',
+      assignmentId: 'asgn_cx1',
+      agent: 'codex',
+    });
+
+    assert.ok(brief.includes('bclaw_assignment_update'), 'codex full brief carries the MCP lifecycle Protocol');
+    assert.ok(
+      !brief.includes('Transport: no MCP') && !brief.includes('Do NOT call bclaw_*'),
+      'codex full brief has NO no-MCP addendum and no self-contradiction (dec#133)',
+    );
+    assert.ok(
+      brief.includes('coordinator commits the worktree on your behalf'),
+      'codex full brief still states the real constraint: no git commit → coordinator commits at harvest',
+    );
+  });
+
   // GAP 7: codex constraints section
 
   it('generateDispatchBrief includes ## Constraints section when agent=codex', () => {
@@ -761,9 +823,14 @@ describe('dispatch-regression/brief-hardening', () => {
       brief.includes('Focus on specified files only'),
       'codex brief warns against broad exploration',
     );
+    // pln#628 Focus 4A (dec#133): coherent brief — no self-contradictory no-MCP note.
     assert.ok(
-      brief.includes('Transport: sandboxed run'),
-      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
+      !brief.includes('Transport: no MCP') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief omits the no-MCP note (MCP IS reachable from a sandboxed run — dec#133)',
+    );
+    assert.ok(
+      brief.includes('coordinator commits the worktree on your behalf'),
+      'codex brief still states the real constraint: no git commit → coordinator commits at harvest',
     );
   });
 
@@ -776,8 +843,8 @@ describe('dispatch-regression/brief-hardening', () => {
       scope: 'src/core/feature-y.ts',
     });
     assert.ok(
-      !brief.includes('Transport: sandboxed run'),
-      'non-codex (MCP) brief does not include the sandboxed-transport note',
+      !brief.includes('Transport: no MCP'),
+      'non-codex (MCP) brief does not include the no-MCP transport note',
     );
   });
 });
