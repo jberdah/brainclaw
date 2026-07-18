@@ -441,9 +441,11 @@ export function buildProtocolSection(options?: { claimId?: string; worktreePath?
     if (options.worktreePath) {
       parts.push('**Compile check**: before every commit, `tsc --noEmit` (or the project build) must pass — a per-worktree pre-commit gate may enforce this and reject the commit otherwise. Do not bypass with --no-verify unless you intend to hand off a known-broken state.');
     }
-    // pln#526: standard fallback channel — works even when MCP is unreachable
-    // (sandboxed agents). The coordinator ingests it with `brainclaw harvest`.
-    parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable, e.g. a sandboxed agent): write LANE-RESULT.json at the worktree root — {"assignment_id":"${options.assignmentId}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."],"artifacts":["..."]}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
+    // pln#526: standard fallback channel — works even if bclaw_assignment_update
+    // fails in your environment. pln#628 Focus 4A: sandbox is NO LONGER a reason
+    // MCP is unavailable (dec#133), so this is framed as a generic fallback, not a
+    // sandbox instruction. The coordinator ingests it with `brainclaw harvest`.
+    parts.push(`Final fallback (if bclaw_assignment_update / MCP is unavailable in your environment): write LANE-RESULT.json at the worktree root — {"assignment_id":"${options.assignmentId}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."],"artifacts":["..."]}. The coordinator harvests it via \`brainclaw harvest ${options.assignmentId}\`.`);
   } else if (options?.claimId) {
     parts.push('1. Call bclaw_session_start to register your session');
     if (options.worktreePath) {
@@ -613,22 +615,25 @@ export function generateBrief(
     parts.push(buildProtocolSection(options));
   }
 
-  // pln#528 — transport-aware addendum (field debrief P1#2). When the agent is
-  // spawned sandboxed (no MCP + no git commit — e.g. codex --sandbox
-  // workspace-write), the MCP lifecycle lines in the Protocol section do NOT
-  // apply. Say so explicitly and make the FILE protocol authoritative, so the
-  // worker never receives instructions it cannot follow nor has to guess the
-  // fallback. (Note: resolveBriefMode still returns 'full' for codex per pln#496
-  // so the reconciler-independent path is preserved; this addendum disambiguates
-  // the transport rather than stripping the section — the full compact reversal
-  // is a separate human-owned call on the May-vs-June MCP-availability conflict.)
+  // pln#628 Focus 4A — transport addendum, now keyed to the ACTUAL missing
+  // capability. Originally (pln#528) this fired for any sandboxed spawn and
+  // claimed "no MCP + no commit". dec#133 proved the "no MCP" half FALSE: a
+  // sandboxed codex reaches MCP (separate out-of-sandbox process +
+  // approval_policy=never). dispatchHasMcp now tracks runtime.mcp_direct alone,
+  // so this block only fires for genuinely MCP-less agents (nanoclaw/nemoclaw/
+  // zeroclaw). For them the Protocol section's MCP lifecycle does not apply and
+  // the file protocol is the sole channel. Sandboxed-but-MCP-capable agents
+  // (codex) no longer receive a self-contradictory "MCP NOT reachable / Do NOT
+  // call bclaw_*" note: their coherent message is carried by the Protocol section
+  // (MCP primary + LANE-RESULT.json fallback) and working-defaults (canCommit=
+  // false → the coordinator commits their worktree at harvest).
   if (briefProfile && !dispatchHasMcp(briefProfile)) {
-    parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
-    parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');
+    parts.push('## ⚠ Transport: no MCP (file protocol only)');
+    parts.push('Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:');
     const asgn = options?.assignmentId ?? '<assignment_id>';
     parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
     parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
-    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates/commits it.');
+    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates it.');
     parts.push('');
   }
 
@@ -698,14 +703,17 @@ export function generateDispatchBrief(options: DispatchBriefOptions): string {
     }));
   }
 
-  // pln#528 — transport-aware addendum for sandboxed agents (see generateBrief).
+  // pln#628 Focus 4A — transport addendum keyed to the ACTUAL missing capability
+  // (see generateBrief for the full rationale + dec#133). Fires only for
+  // genuinely MCP-less agents; sandboxed-but-MCP-capable codex no longer gets a
+  // self-contradictory "no MCP / Do NOT call bclaw_*" note.
   if (taskBriefProfile && !dispatchHasMcp(taskBriefProfile)) {
-    parts.push('## ⚠ Transport: sandboxed run (no MCP, no commit)');
-    parts.push('Your runtime is sandboxed — the brainclaw MCP server is NOT reachable and `git commit` is unavailable (.git is outside the sandbox root). Any `bclaw_*` MCP instruction above does NOT apply to you. Report your outcome via the FILE protocol only — it is authoritative for this run:');
+    parts.push('## ⚠ Transport: no MCP (file protocol only)');
+    parts.push('Your runtime has no brainclaw MCP access — any `bclaw_*` instruction above does NOT apply to you. Report your outcome via the FILE protocol only; it is authoritative for this run:');
     const asgn = options.assignmentId ?? '<assignment_id>';
     parts.push(`- When done, write LANE-RESULT.json at the worktree root: {"assignment_id":"${asgn}","status":"completed|blocked|failed","summary":"<what you did>","files_changed":["..."]}.`);
     parts.push('- Capture decisions/traps as candidate JSON under .brainclaw/coordination/inbox/ (the coordinator harvests them).');
-    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates/commits it.');
+    parts.push('- Do NOT call bclaw_* tools — they are unavailable here. The coordinator harvests your result and integrates it.');
     parts.push('');
   }
 

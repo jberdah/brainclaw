@@ -678,9 +678,20 @@ describe('dispatch-regression/generateDispatchBrief', () => {
       brief.includes('do not explore the broader codebase'),
       'codex constraints warn against broad exploration',
     );
+    // pln#628 Focus 4A (dec#133): codex is sandboxed but MCP-capable, so the brief
+    // must be internally COHERENT — it must NOT carry the old "no MCP / Do NOT call
+    // bclaw_*" note that contradicted the Protocol section's bclaw_* instructions.
     assert.ok(
-      brief.includes('Transport: sandboxed run'),
-      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
+      !brief.includes('Transport: no MCP') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief omits the no-MCP note (MCP IS reachable from a sandboxed run — dec#133)',
+    );
+    assert.ok(
+      brief.includes('bclaw_release_claim') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief is coherent: it instructs bclaw_* calls and never contradicts them',
+    );
+    assert.ok(
+      brief.includes('coordinator commits the worktree on your behalf'),
+      'codex brief still states the REAL constraint: no git commit → coordinator commits at harvest',
     );
   });
 
@@ -692,8 +703,8 @@ describe('dispatch-regression/generateDispatchBrief', () => {
     });
     assert.ok(!brief.includes('## Constraints'), 'claude-code brief omits Constraints section');
     assert.ok(
-      !brief.includes('Transport: sandboxed run'),
-      'claude-code (MCP, non-sandboxed) brief omits the sandboxed-transport note',
+      !brief.includes('Transport: no MCP'),
+      'claude-code (MCP, non-sandboxed) brief omits the no-MCP transport note',
     );
   });
 });
@@ -761,9 +772,14 @@ describe('dispatch-regression/brief-hardening', () => {
       brief.includes('Focus on specified files only'),
       'codex brief warns against broad exploration',
     );
+    // pln#628 Focus 4A (dec#133): coherent brief — no self-contradictory no-MCP note.
     assert.ok(
-      brief.includes('Transport: sandboxed run'),
-      'codex brief carries the sandboxed-transport note (no MCP / file protocol)',
+      !brief.includes('Transport: no MCP') && !brief.includes('Do NOT call bclaw_*'),
+      'codex brief omits the no-MCP note (MCP IS reachable from a sandboxed run — dec#133)',
+    );
+    assert.ok(
+      brief.includes('coordinator commits the worktree on your behalf'),
+      'codex brief still states the real constraint: no git commit → coordinator commits at harvest',
     );
   });
 
@@ -776,8 +792,8 @@ describe('dispatch-regression/brief-hardening', () => {
       scope: 'src/core/feature-y.ts',
     });
     assert.ok(
-      !brief.includes('Transport: sandboxed run'),
-      'non-codex (MCP) brief does not include the sandboxed-transport note',
+      !brief.includes('Transport: no MCP'),
+      'non-codex (MCP) brief does not include the no-MCP transport note',
     );
   });
 });
