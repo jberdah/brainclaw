@@ -185,6 +185,8 @@ export function writeCrossProjectSignal(
  * (e.g. bclaw_context board — reachable purely locally). Guarding here — the
  * single source of these envelopes — keeps every consumer safe.
  */
+const CROSS_PROJECT_SIGNAL_ENTITIES: ReadonlySet<string> = new Set<CrossProjectSignalEntity>(['candidate', 'handoff', 'runtime_note']);
+
 function isCrossProjectSignalEnvelope(value: unknown): value is CrossProjectSignalEnvelope {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -192,9 +194,15 @@ function isCrossProjectSignalEnvelope(value: unknown): value is CrossProjectSign
   const fromAgent = v.from_agent as { name?: unknown } | undefined;
   return typeof v.id === 'string'
     && typeof v.entity_type === 'string'
+    // entity_type must be one of ours — a foreign subsystem's value would flow
+    // downstream as a bogus type.
+    && CROSS_PROJECT_SIGNAL_ENTITIES.has(v.entity_type)
     && typeof v.created_at === 'string'
     && typeof fromProject?.name === 'string'
-    && typeof fromAgent?.name === 'string';
+    && typeof fromAgent?.name === 'string'
+    // payload MUST be a non-null object: the consumer does `'text' in payload`,
+    // which throws a TypeError on a primitive/null payload (Codex review of #85).
+    && typeof v.payload === 'object' && v.payload !== null;
 }
 
 /**

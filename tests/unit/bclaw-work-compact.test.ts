@@ -204,17 +204,23 @@ describe('bclaw_work compact mode', () => {
     assert.ok(createPlanHint, `expected a bclaw_create(entity='plan') hint, got ${JSON.stringify(response.next_actions)}`);
 
     // Contract: the hint must use the canonical bclaw_create shape (data:{text}),
-    // NOT the rejected input:{title,steps} — and it must be EXECUTABLE as-is
-    // (trp_dfb58908: a fresh agent following next_actions failed on its first write).
-    const hintArgs = createPlanHint!.args as { entity?: string; data?: Record<string, unknown>; input?: unknown };
+    // NOT the rejected input:{title,steps} — and the EXACT args it returns must be
+    // executable (trp_dfb58908: a fresh agent following next_actions failed on its
+    // first write). Executing a hand-built copy would pass even if the hint were
+    // wrong, so we run createPlanHint.args verbatim (Codex review of #85).
+    const hintArgs = createPlanHint!.args as { entity?: string; data?: { text?: unknown }; input?: unknown };
     assert.ok(hintArgs.data && typeof hintArgs.data === 'object', 'create hint must carry a `data` object');
     assert.equal(hintArgs.input, undefined, 'create hint must NOT use the rejected `input` shape');
+    assert.ok(
+      typeof hintArgs.data.text === 'string' && (hintArgs.data.text as string).length > 0,
+      'create hint data.text must be a non-empty string',
+    );
 
     const created = await executeMcpToolCall({
-      name: 'bclaw_create',
-      args: { entity: 'plan', data: { text: 'first plan from the onboarding affordance' } },
+      name: createPlanHint!.tool,
+      args: createPlanHint!.args as Record<string, unknown>,
       cwd: workspace.dir,
     });
-    assert.equal(created.response.isError, false, `executing the onboarding create hint must succeed, got ${JSON.stringify(created.response)}`);
+    assert.equal(created.response.isError, false, `executing the onboarding create hint AS-IS must succeed, got ${JSON.stringify(created.response)}`);
   });
 });
