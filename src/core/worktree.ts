@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
 import { logger } from './logger.js';
+import { loadConfig } from './config.js';
 import { parsePorcelainZ, isSystemDirtyPath } from './dirty-scope.js';
 
 /** Normalizes a path for use in git CLI arguments (forward slashes on Windows). */
@@ -93,6 +94,89 @@ export function detectStackSharedPaths(projectRoot: string): string[] {
     }
   }
   return [...result];
+}
+
+/**
+ * How a dispatched worktree gets its JS dependencies (`node_modules`).
+ *
+ * - `link`    (default) — junction the main tree's `node_modules` into the
+ *              worktree. Instant, zero disk, but an OUT-OF-WORKTREE-ROOT symlink
+ *              that `next dev` / Turbopack rejects (trp_37b05a15).
+ * - `install` — run the detected package manager's install AT THE WORKTREE ROOT
+ *              after creation, yielding a real in-root `node_modules`
+ *              (Turbopack-compatible). Slower; may need the network/cache.
+ * - `copy`    — recursively copy `node_modules` from the main tree into the
+ *              worktree (real in-root dir, offline, but disk-heavy).
+ * - `none`    — provision no JS deps at all (the historical
+ *              `BRAINCLAW_NO_LINK_DEPS=1` behavior).
+ */
+export type WorktreeDepsMode = 'link' | 'install' | 'copy' | 'none';
+
+const WORKTREE_DEPS_MODES: readonly WorktreeDepsMode[] = ['link', 'install', 'copy', 'none'];
+
+/**
+ * Resolves the JS dependency provisioning mode for a worktree.
+ *
+ * Precedence (first match wins):
+ *   1. env `BRAINCLAW_WORKTREE_DEPS_MODE` (link|install|copy|none)
+ *   2. env `BRAINCLAW_NO_LINK_DEPS=1` → `none` (backward compat)
+ *   3. config `worktree.deps_mode` in `.brainclaw/config.yaml`
+ *   4. `link` (default — unchanged behavior)
+ *
+ * An unrecognized env value is ignored (falls through) with a warning, so a
+ * typo never silently changes provisioning.
+ */
+export function resolveWorktreeDepsMode(projectRoot: string): WorktreeDepsMode {
+  const envMode = process.env.BRAINCLAW_WORKTREE_DEPS_MODE?.trim().toLowerCase();
+  if (envMode) {
+    if ((WORKTREE_DEPS_MODES as readonly string[]).includes(envMode)) {
+      return envMode as WorktreeDepsMode;
+    }
+    logger.warn(
+      `[worktree] Ignoring invalid BRAINCLAW_WORKTREE_DEPS_MODE='${envMode}' `
+      + `(expected one of ${WORKTREE_DEPS_MODES.join('|')}).`,
+    );
+  }
+  if (process.env.BRAINCLAW_NO_LINK_DEPS === '1') return 'none';
+  try {
+    const configured = loadConfig(projectRoot).worktree?.deps_mode;
+    if (configured && (WORKTREE_DEPS_MODES as readonly string[]).includes(configured)) {
+      return configured;
+    }
+  } catch { /* no / invalid config — fall through to default */ }
+  return 'link';
+}
+
+/** Package manager brainclaw knows how to drive for `install` deps mode. */
+export type PackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm';
+
+/**
+ * Detects the JS package manager for a project from its lockfile, falling back
+ * to the `packageManager` field of package.json, then to `npm`. Lockfile wins
+ * because it reflects what actually produced the main tree's `node_modules`.
+ */
+export function detectPackageManager(projectRoot: string): PackageManager {
+  const lockfiles: Array<[string, PackageManager]> = [
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['bun.lockb', 'bun'],
+    ['bun.lock', 'bun'],
+    ['package-lock.json', 'npm'],
+    ['npm-shrinkwrap.json', 'npm'],
+  ];
+  for (const [file, pm] of lockfiles) {
+    if (fs.existsSync(path.join(projectRoot, file))) return pm;
+  }
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')) as {
+      packageManager?: string;
+    };
+    const declared = pkg.packageManager?.split('@')[0]?.trim();
+    if (declared === 'pnpm' || declared === 'yarn' || declared === 'bun' || declared === 'npm') {
+      return declared;
+    }
+  } catch { /* no / invalid package.json — default below */ }
+  return 'npm';
 }
 
 /**
@@ -617,6 +701,103 @@ export function projectUsesNextjs(projectRoot: string): boolean {
   }
 }
 
+/**
+ * Timeout for a per-worktree package-manager install (`deps_mode=install`).
+ * Defaults to 10 minutes; override with BRAINCLAW_WORKTREE_INSTALL_TIMEOUT_MS.
+ */
+export function resolveWorktreeInstallTimeoutMs(): number {
+  const raw = process.env.BRAINCLAW_WORKTREE_INSTALL_TIMEOUT_MS;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 600_000;
+}
+
+/**
+ * Provisions a worktree's JS dependencies for `install` / `copy` deps modes,
+ * yielding a real in-root `node_modules` that `next dev` / Turbopack accepts
+ * (unlike the out-of-root junction of `link` mode; trp_37b05a15).
+ *
+ * Best-effort: any failure is recorded as a warning (the worker can still
+ * install by hand) and NEVER thrown — worktree creation must not fail over
+ * dependency provisioning. Returns human-readable warnings (empty on success).
+ *
+ * - `install` runs ONE package-manager install at the worktree root, which
+ *   natively populates monorepo workspace `node_modules` too — so it ignores
+ *   `nodeModulesRelPaths`. No-op when the project has no `package.json`.
+ * - `copy` recursively mirrors each existing `node_modules` dir from the main
+ *   tree (symlinks copied verbatim so pnpm's relative link farm stays valid).
+ */
+export function provisionWorktreeDeps(
+  mode: 'install' | 'copy',
+  mainWorktreePath: string,
+  targetPath: string,
+  nodeModulesRelPaths: string[],
+): string[] {
+  const warnings: string[] = [];
+
+  if (mode === 'install') {
+    if (!fs.existsSync(path.join(targetPath, 'package.json'))) return warnings;
+    const pm = detectPackageManager(mainWorktreePath);
+    const timeoutMs = resolveWorktreeInstallTimeoutMs();
+    // Windows: npm/pnpm/yarn/bun are `.cmd` shims, only found via the shell — so
+    // pass ONE static command string (pm is validated; 'install' is literal → no
+    // injection) and NO args array (avoids DEP0190). Unix: the binaries are on
+    // PATH, so spawn directly with an args array and no shell.
+    const result = process.platform === 'win32'
+      ? spawnSync(`${pm} install`, { cwd: targetPath, encoding: 'utf-8', timeout: timeoutMs, shell: true })
+      : spawnSync(pm, ['install'], { cwd: targetPath, encoding: 'utf-8', timeout: timeoutMs });
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+      const msg = `deps_mode=install: '${pm} install' timed out after ${timeoutMs}ms and was killed `
+        + `(raise BRAINCLAW_WORKTREE_INSTALL_TIMEOUT_MS). Run '${pm} install' in the worktree manually.`;
+      warnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    } else if (result.error) {
+      const msg = `deps_mode=install: could not run '${pm} install' (${result.error.message}). `
+        + `Is ${pm} on PATH? Run '${pm} install' in the worktree manually.`;
+      warnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    } else if (result.status !== 0) {
+      const tail = (result.stderr || result.stdout || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | ');
+      const msg = `deps_mode=install: '${pm} install' exited ${result.status ?? '?'}${tail ? ` — ${tail}` : ''}. `
+        + `Run '${pm} install' in the worktree manually.`;
+      warnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    }
+    return warnings;
+  }
+
+  // copy
+  const copyable = nodeModulesRelPaths.filter((rel) => fs.existsSync(path.join(mainWorktreePath, rel)));
+  if (copyable.length === 0) {
+    if (fs.existsSync(path.join(targetPath, 'package.json'))) {
+      const pm = detectPackageManager(mainWorktreePath);
+      const msg = `deps_mode=copy: no node_modules found in the main tree to copy — `
+        + `run '${pm} install' in the worktree.`;
+      warnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    }
+    return warnings;
+  }
+  for (const rel of copyable) {
+    const src = path.join(mainWorktreePath, rel);
+    const dest = path.join(targetPath, rel);
+    if (fs.existsSync(dest)) continue;
+    try {
+      const parentDir = path.dirname(dest);
+      if (parentDir !== targetPath) fs.mkdirSync(parentDir, { recursive: true });
+      // verbatimSymlinks: copy symlinks as-is (don't resolve) so pnpm's relative
+      // link farm stays internally consistent inside the copied tree.
+      fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const msg = `deps_mode=copy: failed to copy '${rel}' into worktree (${reason}). `
+        + `Run the package manager's install in the worktree manually.`;
+      warnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    }
+  }
+  return warnings;
+}
+
 export function createWorktree(
   mainWorktreePath: string,
   branchName: string,
@@ -767,37 +948,56 @@ export function createWorktree(
   // `dist` intentionally excluded — build outputs must be per-worktree
   // (EBUSY during clean:dist when MCP/extension holds a handle on junction target).
   // pln#523: also link per-package node_modules for JS/TS monorepos so workers
-  // can build/typecheck sub-packages, not just the root. Set
-  // BRAINCLAW_NO_LINK_DEPS=1 to disable auto dependency linking (e.g. when the
-  // worktree lives on a different volume and central validation is preferred);
-  // explicit options.sharedPaths are still honored.
-  const linkDepsDisabled = process.env.BRAINCLAW_NO_LINK_DEPS === '1';
-  const detected = linkDepsDisabled
+  // can build/typecheck sub-packages, not just the root.
+  //
+  // trp_37b05a15: the JS dependency provisioning mode (link | install | copy |
+  // none) is opt-in via BRAINCLAW_WORKTREE_DEPS_MODE / config worktree.deps_mode
+  // (BRAINCLAW_NO_LINK_DEPS=1 still maps to `none`). `link` (default) junctions
+  // node_modules from the main tree — an out-of-root symlink `next dev` rejects;
+  // `install`/`copy` provision a real in-root node_modules (Turbopack-ok);
+  // `none` provisions no deps (central validation). Explicit options.sharedPaths
+  // are always honored.
+  const isNodeModulesPath = (p: string): boolean => p === 'node_modules' || p.endsWith('/node_modules');
+  const depsMode = resolveWorktreeDepsMode(mainWorktreePath);
+  const detected = depsMode === 'none'
     ? []
     : [...detectStackSharedPaths(mainWorktreePath), ...detectWorkspaceNodeModules(mainWorktreePath)];
   const extra = options.sharedPaths ?? [];
   const excluded = new Set(options.excludeShared ?? []);
-  const sharedPaths = [...new Set([...detected, ...extra])].filter((p) => !excluded.has(p));
+  const requested = [...new Set([...detected, ...extra])].filter((p) => !excluded.has(p));
+
+  // In install/copy mode, node_modules becomes a REAL in-root directory instead
+  // of an out-of-root junction — so it is excluded from the symlink pass and
+  // provisioned separately. Other stack dirs (venv, vendor, …) still link.
+  const provisionDeps = depsMode === 'install' || depsMode === 'copy';
+  const nodeModulesPaths = requested.filter(isNodeModulesPath);
+  const sharedPaths = provisionDeps ? requested.filter((p) => !isNodeModulesPath(p)) : requested;
   for (const entry of sharedPaths) {
     trySymlinkSharedPath(entry);
   }
 
-  // trp_37b05a15 (field report, Next.js 16 / Turbopack) — the node_modules link
-  // brainclaw provisions is an out-of-worktree-root symlink to the main repo.
-  // tsc / vitest / build follow it fine, but `next dev` (Turbopack) PANICS on a
-  // node_modules link that points outside the worktree root. Surface a warning
-  // (not a failure — the link is still correct for build/typecheck) so a worker
-  // or operator doing dev-server work knows the workaround up front. A full
-  // Turbopack-compatible per-worktree dependency mode is a planned follow-up.
-  const linkedNodeModules = sharedPaths.some((p) => p === 'node_modules' || p.endsWith('/node_modules'));
-  if (linkedNodeModules && projectUsesNextjs(mainWorktreePath)) {
-    const msg =
-      'Next.js detected: node_modules is linked as an out-of-worktree-root symlink, which '
-      + '`next dev` / Turbopack rejects (it requires node_modules under the worktree root). '
-      + 'tsc / vitest / build are unaffected. For dev-server work in this worktree, run '
-      + '`npm install` here (optionally with BRAINCLAW_NO_LINK_DEPS=1), or smoke-test on the merged branch.';
-    symlinkWarnings.push(msg);
-    logger.warn(`[worktree] ${msg}`);
+  if (provisionDeps) {
+    symlinkWarnings.push(
+      ...provisionWorktreeDeps(depsMode, mainWorktreePath, targetPath, nodeModulesPaths),
+    );
+  } else if (depsMode === 'link') {
+    // trp_37b05a15 (field report, Next.js 16 / Turbopack) — the node_modules link
+    // brainclaw provisions is an out-of-worktree-root symlink to the main repo.
+    // tsc / vitest / build follow it fine, but `next dev` (Turbopack) PANICS on a
+    // node_modules link that points outside the worktree root. Surface a warning
+    // (not a failure — the link is still correct for build/typecheck) so a worker
+    // or operator doing dev-server work knows the workaround up front.
+    const linkedNodeModules = sharedPaths.some(isNodeModulesPath);
+    if (linkedNodeModules && projectUsesNextjs(mainWorktreePath)) {
+      const msg =
+        'Next.js detected: node_modules is linked as an out-of-worktree-root symlink, which '
+        + '`next dev` / Turbopack rejects (it requires node_modules under the worktree root). '
+        + 'tsc / vitest / build are unaffected. For dev-server work, set deps_mode=install '
+        + '(config worktree.deps_mode or BRAINCLAW_WORKTREE_DEPS_MODE=install), run `npm install` '
+        + 'here, or smoke-test on the merged branch.';
+      symlinkWarnings.push(msg);
+      logger.warn(`[worktree] ${msg}`);
+    }
   }
 
   // NOTE: .brainclaw/ is intentionally NOT symlinked.
@@ -842,6 +1042,10 @@ export function createWorktree(
     ...(baseRefSha ? { base_ref_sha: baseRefSha } : {}),
     reset_existing_branch: options.resetExistingBranch === true,
     git_advice: 'git add ONLY specific files, NEVER git add -A.',
+    // trp_37b05a15: how JS deps were provisioned (link junction / real install /
+    // copy / none) — non-default modes are recorded so a worker/supervisor knows
+    // whether node_modules is an out-of-root link (dev-server caveat) or in-root.
+    ...(depsMode !== 'link' ? { deps_mode: depsMode } : {}),
     // pln#523: surface any shared-path link failures (e.g. node_modules junction
     // that could not be created) so the worker / supervisor can see why a build
     // might fail, instead of an invisible degradation.

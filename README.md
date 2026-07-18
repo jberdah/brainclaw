@@ -319,7 +319,7 @@ Still sharp:
 
 1. **Same-checkout concurrent edits** — running two agents in the *same* working tree (no per-claim worktree) is still the wrong answer. Use the dispatch path (auto-worktree per claim) instead of raw concurrent CLI sessions.
 2. **Cross-machine sync** — federation across machines is on the roadmap, not in v1.x. Today brainclaw's store is local and one-machine-per-project.
-3. **Next.js / Turbopack dev server in a worktree** — the provisioned `node_modules` symlink points outside the worktree root, which `next dev` (Turbopack) rejects (build/tsc/vitest are fine). brainclaw warns; `npm install` in the worktree or smoke-test on the merged branch. A Turbopack-compatible dependency mode is a planned follow-up.
+3. **Next.js / Turbopack dev server in a worktree** — in the default `link` mode the provisioned `node_modules` symlink points outside the worktree root, which `next dev` (Turbopack) rejects (build/tsc/vitest are fine); brainclaw warns. Fix: opt into a Turbopack-compatible **per-worktree dependency mode** — set `worktree.deps_mode: install` (or `copy`) in config, or `BRAINCLAW_WORKTREE_DEPS_MODE=install`, so the worktree gets a real in-root `node_modules` (see [Multi-stack worktree](#multi-stack-worktree)).
 3. **Spawn-and-forget assumptions** — spawned workers don't always commit their work cleanly. The brief-ack file confirms the spawn started; in the worst case the coordinator harvests open changes.
 4. **Live state for hook-less agents** — supported hook-less file surfaces such as Cline, Windsurf, Continue, Antigravity/Gemini CLI, and Mistral Vibe can get live context via `.live.md` companions regenerated on session-end and handoff, not via real-time push.
 
@@ -349,12 +349,26 @@ Maven, Gradle, and Cargo are intentionally excluded — their dependency caches 
 
 Build outputs like `dist` are **not** symlinked — they must be per-worktree to avoid EBUSY errors when other processes hold handles on the output directory.
 
-> **Next.js / Turbopack caveat.** The `node_modules` link is a symlink to the main worktree, i.e. it points **outside** the agent worktree's root. `tsc`, `vitest`, and production `build` follow it fine, but `next dev` (Turbopack) panics on a `node_modules` link outside the worktree root. brainclaw detects Next.js projects and surfaces a `symlink_warnings` note at worktree creation. Workaround for dev-server work: run `npm install` inside the worktree (optionally with `BRAINCLAW_NO_LINK_DEPS=1`), or smoke-test on the merged branch. A Turbopack-compatible per-worktree dependency mode is a planned follow-up.
+### Dependency provisioning mode (`deps_mode`)
+
+How a worktree gets its JS `node_modules` is controlled by `deps_mode` (default `link`):
+
+| Mode      | How `node_modules` is provisioned                                             | Turbopack / `next dev` | Cost |
+| --------- | ------------------------------------------------------------------------------- | ---------------------- | ---- |
+| `link`  | junction/symlink to the main tree (out-of-root)                                 | ❌ rejected            | instant, zero disk |
+| `install` | runs the detected package manager's install at the worktree root (real in-root) | ✅ works               | slower, may hit network/cache |
+| `copy`  | recursively copies `node_modules` from the main tree (real in-root)             | ✅ works               | disk-heavy, offline |
+| `none`  | provisions nothing (central validation / manual install)                        | n/a                    | instant |
+
+> **Next.js / Turbopack caveat.** In the default `link` mode the `node_modules` link points **outside** the worktree root. `tsc`, `vitest`, and production `build` follow it fine, but `next dev` (Turbopack) panics on it. brainclaw detects Next.js projects and surfaces a `symlink_warnings` note at worktree creation. For dev-server work, switch to `deps_mode: install` (or `copy`) — the worktree then gets a real in-root `node_modules` that Turbopack accepts. The package manager is auto-detected from the lockfile (`pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lock*` → bun, else npm) or the `packageManager` field.
+
+Precedence: `BRAINCLAW_WORKTREE_DEPS_MODE` (env) > `BRAINCLAW_NO_LINK_DEPS=1` (→ `none`, backward compat) > `worktree.deps_mode` (config) > `link`. Install timeout: `BRAINCLAW_WORKTREE_INSTALL_TIMEOUT_MS` (default 10 min).
 
 Override detection in `.brainclaw/config.yaml`:
 
 ```yaml
 worktree:
+  deps_mode: install               # link (default) | install | copy | none
   shared_paths: [".cache"]        # additive to auto-detected
   exclude_shared: ["node_modules"] # opt-out a detected entry
 ```

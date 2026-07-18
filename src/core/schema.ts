@@ -1708,6 +1708,16 @@ export const ConfigSchema = z.object({
   worktree: z.object({
     shared_paths: z.array(z.string()).default([]),
     exclude_shared: z.array(z.string()).default([]),
+    /**
+     * How a dispatched worktree gets its JS dependencies (`node_modules`).
+     * trp_37b05a15 — the default `link` (out-of-root junction) is rejected by
+     * `next dev` / Turbopack. Set `install` (real per-worktree install, native
+     * package manager) or `copy` (recursive copy from the main tree) for a
+     * Turbopack-compatible in-root `node_modules`; `none` provisions no deps.
+     * Env `BRAINCLAW_WORKTREE_DEPS_MODE` overrides this; `BRAINCLAW_NO_LINK_DEPS=1`
+     * still forces `none`.
+     */
+    deps_mode: z.enum(['link', 'install', 'copy', 'none']).optional(),
   }).optional(),
   // Event-log store (pln#543). Absent ⇒ off — fresh and existing stores keep
   // today's behavior; the journal only activates when explicitly set here (or

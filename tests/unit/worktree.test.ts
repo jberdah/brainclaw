@@ -20,7 +20,11 @@ import {
   sanitizeBranchComponent,
   resolveWorktreeAddTimeoutMs,
   projectUsesNextjs,
+  resolveWorktreeDepsMode,
+  detectPackageManager,
+  provisionWorktreeDeps,
 } from '../../src/core/worktree.js';
+import { saveConfig, defaultConfig } from '../../src/core/config.js';
 
 // trp_37b05a15 — Next.js detection drives the Turbopack node_modules-symlink
 // warning at worktree creation.
@@ -60,6 +64,271 @@ describe('projectUsesNextjs (Turbopack worktree warning)', () => {
     fs.writeFileSync(path.join(empty, 'package.json'), '{ not valid json');
     assert.equal(projectUsesNextjs(empty), false, 'malformed package.json → false, no throw');
     fs.rmSync(empty, { recursive: true, force: true });
+  });
+});
+
+// trp_37b05a15 — per-worktree dependency mode (link | install | copy | none).
+describe('resolveWorktreeDepsMode', () => {
+  function tmpProject(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-depsmode-'));
+  }
+
+  // Save/restore the env vars this resolver reads so tests never leak into each
+  // other or inherit an agent shell's settings.
+  function withCleanEnv<T>(fn: () => T): T {
+    const saved = {
+      mode: process.env.BRAINCLAW_WORKTREE_DEPS_MODE,
+      noLink: process.env.BRAINCLAW_NO_LINK_DEPS,
+    };
+    delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    delete process.env.BRAINCLAW_NO_LINK_DEPS;
+    try {
+      return fn();
+    } finally {
+      if (saved.mode === undefined) delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+      else process.env.BRAINCLAW_WORKTREE_DEPS_MODE = saved.mode;
+      if (saved.noLink === undefined) delete process.env.BRAINCLAW_NO_LINK_DEPS;
+      else process.env.BRAINCLAW_NO_LINK_DEPS = saved.noLink;
+    }
+  }
+
+  it('defaults to `link` with no env and no config', () => {
+    withCleanEnv(() => {
+      const dir = tmpProject();
+      assert.equal(resolveWorktreeDepsMode(dir), 'link');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  it('env BRAINCLAW_WORKTREE_DEPS_MODE wins over everything (case-insensitive)', () => {
+    withCleanEnv(() => {
+      const dir = tmpProject();
+      const cfg = defaultConfig('test');
+      cfg.worktree = { shared_paths: [], exclude_shared: [], deps_mode: 'copy' };
+      saveConfig(cfg, dir);
+      process.env.BRAINCLAW_NO_LINK_DEPS = '1'; // would map to none…
+      process.env.BRAINCLAW_WORKTREE_DEPS_MODE = 'INSTALL'; // …but the explicit mode wins
+      assert.equal(resolveWorktreeDepsMode(dir), 'install');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  it('BRAINCLAW_NO_LINK_DEPS=1 maps to `none` (backward compat), above config', () => {
+    withCleanEnv(() => {
+      const dir = tmpProject();
+      const cfg = defaultConfig('test');
+      cfg.worktree = { shared_paths: [], exclude_shared: [], deps_mode: 'install' };
+      saveConfig(cfg, dir);
+      process.env.BRAINCLAW_NO_LINK_DEPS = '1';
+      assert.equal(resolveWorktreeDepsMode(dir), 'none');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  it('reads config worktree.deps_mode when no env override', () => {
+    withCleanEnv(() => {
+      const dir = tmpProject();
+      const cfg = defaultConfig('test');
+      cfg.worktree = { shared_paths: [], exclude_shared: [], deps_mode: 'install' };
+      saveConfig(cfg, dir);
+      assert.equal(resolveWorktreeDepsMode(dir), 'install');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  it('ignores an invalid env value and falls through to the default', () => {
+    withCleanEnv(() => {
+      const dir = tmpProject();
+      process.env.BRAINCLAW_WORKTREE_DEPS_MODE = 'symlink'; // not a valid mode
+      assert.equal(resolveWorktreeDepsMode(dir), 'link');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  });
+});
+
+describe('detectPackageManager', () => {
+  function tmpProject(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-pm-'));
+  }
+
+  it('detects each package manager from its lockfile', () => {
+    const cases: Array<[string, string]> = [
+      ['pnpm-lock.yaml', 'pnpm'],
+      ['yarn.lock', 'yarn'],
+      ['bun.lockb', 'bun'],
+      ['package-lock.json', 'npm'],
+    ];
+    for (const [lockfile, expected] of cases) {
+      const dir = tmpProject();
+      fs.writeFileSync(path.join(dir, lockfile), '');
+      assert.equal(detectPackageManager(dir), expected, `${lockfile} → ${expected}`);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('lockfile beats the packageManager field', () => {
+    const dir = tmpProject();
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.0.0' }));
+    assert.equal(detectPackageManager(dir), 'pnpm');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('falls back to the packageManager field, then to npm', () => {
+    const dir = tmpProject();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ packageManager: 'yarn@4.0.0' }));
+    assert.equal(detectPackageManager(dir), 'yarn');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const bare = tmpProject();
+    assert.equal(detectPackageManager(bare), 'npm', 'no lockfile, no field → npm');
+    fs.rmSync(bare, { recursive: true, force: true });
+  });
+});
+
+describe('provisionWorktreeDeps', () => {
+  function tmpPair(): { main: string; target: string } {
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-prov-main-'));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-prov-tgt-'));
+    return { main, target };
+  }
+
+  it('copy mode mirrors node_modules as a REAL in-root directory', () => {
+    const { main, target } = tmpPair();
+    try {
+      fs.mkdirSync(path.join(main, 'node_modules', 'left-pad'), { recursive: true });
+      fs.writeFileSync(path.join(main, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 0;');
+      const warnings = provisionWorktreeDeps('copy', main, target, ['node_modules']);
+      assert.deepEqual(warnings, []);
+      const dest = path.join(target, 'node_modules', 'left-pad', 'index.js');
+      assert.ok(fs.existsSync(dest), 'copied file exists in worktree');
+      assert.ok(!fs.lstatSync(path.join(target, 'node_modules')).isSymbolicLink(), 'node_modules is a real dir, not a symlink');
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('copy mode warns (does not throw) when there is nothing to copy but the project is JS', () => {
+    const { main, target } = tmpPair();
+    try {
+      fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name: 'x' }));
+      const warnings = provisionWorktreeDeps('copy', main, target, ['node_modules']);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /no node_modules found in the main tree/);
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('copy mode is a silent no-op for a non-JS project with nothing to copy', () => {
+    const { main, target } = tmpPair();
+    try {
+      const warnings = provisionWorktreeDeps('copy', main, target, ['node_modules']);
+      assert.deepEqual(warnings, []);
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('install mode is a silent no-op when the worktree has no package.json (never shells out)', () => {
+    const { main, target } = tmpPair();
+    try {
+      const warnings = provisionWorktreeDeps('install', main, target, []);
+      assert.deepEqual(warnings, []);
+      assert.ok(!fs.existsSync(path.join(target, 'node_modules')), 'no install ran');
+    } finally {
+      fs.rmSync(main, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createWorktree deps_mode wiring (trp_37b05a15)', () => {
+  function initRepo(prefix: string): { repo: string; git: (args: string[]) => void } {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const git = (args: string[]): void => {
+      const r = spawnSync('git', ['-c', 'user.email=t@e.com', '-c', 'user.name=T', ...args], { cwd: repo, encoding: 'utf-8' });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+    };
+    git(['init']);
+    git(['commit', '--allow-empty', '-m', 'init']);
+    return { repo, git };
+  }
+
+  function readSidecar(wt: string): { deps_mode?: string; symlink_warnings?: string[] } {
+    return JSON.parse(fs.readFileSync(path.join(wt, '.brainclaw-worktree.json'), 'utf-8'));
+  }
+
+  it('copy mode → node_modules is a real in-root dir, no Turbopack warning, sidecar records deps_mode', () => {
+    const prev = process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    process.env.BRAINCLAW_WORKTREE_DEPS_MODE = 'copy';
+    const { repo } = initRepo('bclaw-wt-copy-');
+    // A Next.js project WITH a populated node_modules in the main tree.
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ dependencies: { next: '16.0.0' } }));
+    fs.mkdirSync(path.join(repo, 'node_modules', 'next'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'node_modules', 'next', 'index.js'), '');
+    const targetPath = resolveWorktreePath(repo, 'feat/copy');
+    try {
+      const wt = createWorktree(repo, 'feat/copy');
+      const nm = path.join(wt, 'node_modules');
+      assert.ok(fs.existsSync(path.join(nm, 'next', 'index.js')), 'node_modules copied into worktree');
+      assert.ok(!fs.lstatSync(nm).isSymbolicLink(), 'node_modules is a real dir, not an out-of-root symlink');
+      const sidecar = readSidecar(wt);
+      assert.equal(sidecar.deps_mode, 'copy');
+      assert.ok(!(sidecar.symlink_warnings ?? []).some((w) => /Turbopack/.test(w)), 'no Turbopack warning in copy mode');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (prev === undefined) delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+      else process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
+    }
+  });
+
+  it('link mode (default) → Next.js project gets the Turbopack symlink warning', () => {
+    const prev = process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE; // default → link
+    const prevNoLink = process.env.BRAINCLAW_NO_LINK_DEPS;
+    delete process.env.BRAINCLAW_NO_LINK_DEPS;
+    const { repo } = initRepo('bclaw-wt-link-');
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ dependencies: { next: '16.0.0' } }));
+    fs.mkdirSync(path.join(repo, 'node_modules', 'next'), { recursive: true });
+    const targetPath = resolveWorktreePath(repo, 'feat/link');
+    try {
+      const wt = createWorktree(repo, 'feat/link');
+      const sidecar = readSidecar(wt);
+      assert.ok((sidecar.symlink_warnings ?? []).some((w) => /Turbopack/.test(w)), 'Turbopack warning present in link mode');
+      assert.equal(sidecar.deps_mode, undefined, 'default link mode is not recorded in the sidecar');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (prev !== undefined) process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
+      if (prevNoLink !== undefined) process.env.BRAINCLAW_NO_LINK_DEPS = prevNoLink;
+    }
+  });
+
+  it('none mode → no node_modules provisioned at all', () => {
+    const prev = process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+    process.env.BRAINCLAW_WORKTREE_DEPS_MODE = 'none';
+    const { repo } = initRepo('bclaw-wt-none-');
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ dependencies: { next: '16.0.0' } }));
+    fs.mkdirSync(path.join(repo, 'node_modules', 'next'), { recursive: true });
+    const targetPath = resolveWorktreePath(repo, 'feat/none');
+    try {
+      const wt = createWorktree(repo, 'feat/none');
+      assert.ok(!fs.existsSync(path.join(wt, 'node_modules')), 'no node_modules in none mode');
+      assert.equal(readSidecar(wt).deps_mode, 'none');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', targetPath], { cwd: repo, encoding: 'utf-8' });
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (prev === undefined) delete process.env.BRAINCLAW_WORKTREE_DEPS_MODE;
+      else process.env.BRAINCLAW_WORKTREE_DEPS_MODE = prev;
+    }
   });
 });
 
