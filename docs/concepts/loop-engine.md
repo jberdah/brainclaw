@@ -332,6 +332,8 @@ When `bclaw_coordinate(intent='review', open_loop: true)` is called, it:
 5. On turn completion with a verdict artifact, auto-advances; `reviewer_green` stop closes.
 6. On non-green verdict with `iteration_count < max`, advances to `author_response`, dispatches to author.
 
+**How the verdict reaches the loop (shipped, pln#628 Focus 4B).** A dispatched reviewer worker does not call `bclaw_loop` itself — it writes its outcome to `LANE-RESULT.json` at the worktree root, now including an optional `review_verdict` (`approve` | `request_changes`) and `review_summary`. When the coordinator runs `brainclaw harvest <assignment_id>` (both the report-only path and `--integrate`), a review lane carrying a `review_verdict` is mapped onto its loop: brainclaw records a `verdict` artifact on the reviewer slot (`approve` → an `accepted…` body) and calls `advance`, which **auto-closes the loop on `reviewer_green` for `approve`** — no human driving `complete_turn`/`advance`. `request_changes` records the verdict and advances to `author_response` (the automated fix→re-review cycle is a follow-up). The mapping is idempotent, resolves the reviewer slot strictly by `assignment_id` (so symmetric multi-reviewer loops target the right slot), and runs the `complete_turn`+`advance` pair under the loop lock so an interrupted pass resumes rather than stalls.
+
 ### Symmetric review-AND-fix mode
 
 By default, the phases `findings` and `author_response` follow the classical asymmetric split — the reviewer identifies issues, the author applies fixes on the next turn. That doubles the number of round-trips: every issue needs one full turn to be identified, then another to be fixed.
@@ -514,7 +516,7 @@ Status after Codex schema review (cnd#574 / `dec_be66ccbf`, verdict `needs_revis
 
 The loop surface exposed over MCP is intentionally narrow:
 
-- **Review loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="asymmetric"|"symmetric", targetAgents=[…])` opens the loop and dispatches the first turn. Drive subsequent turns with `bclaw_loop(intent="turn"|"complete_turn"|"advance"|"close")`.
+- **Review loops** — `bclaw_coordinate(intent="review", open_loop=true, review_mode="asymmetric"|"symmetric", targetAgents=[…])` opens the loop and dispatches the first turn. The reviewer's verdict is then harvested from `LANE-RESULT.json` (`review_verdict`) and **auto-advances/closes the loop on approve** — no manual driving needed for the approve path (pln#628 Focus 4B). `bclaw_loop(intent="turn"|"complete_turn"|"advance"|"close")` remains available to drive turns by hand (e.g. the `request_changes` fix cycle, or a human-operated slot).
 - **Ideation loops** — `bclaw_coordinate(intent="ideate", preset="bootstrap")` opens an ideation loop from a preset.
 
 Custom phase lists (`LoopPhase[]`) and bespoke `StopCondition` logic exist in the loop engine internally, but are **not** exposed through the MCP facade today: `CoordinateRequestSchema` accepts only `open_loop`, `review_mode`, `preflight`, `ref`, and `preset` — no `phases` or `stop_condition` — and the standalone `bclaw_loop` tool does not expose an `open` intent. Programmatic construction of ad-hoc loops is therefore internal / future work until the facade is extended.

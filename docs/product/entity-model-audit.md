@@ -84,8 +84,9 @@ load-bearing; simplifications cannot break them.
     "never init --force"). Strongest concept; drives hook injection
     to remind agents of the process.
   - **Trap**: environmental or process pitfall to avoid (e.g., "git
-    merge wipes node_modules", "sandbox X blocks MCP writes"). May
-    trigger a corrective plan when resolvable.
+    merge wipes node_modules", "a sandboxed worker's `.git` is read-only
+    → it cannot `git commit`"). May trigger a corrective plan when
+    resolvable.
   All three drive different agent behaviours (decisions = retrieve for
   context, constraints = enforce, traps = warn + resolve).
 

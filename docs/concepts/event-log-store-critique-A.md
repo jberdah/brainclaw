@@ -195,9 +195,12 @@ Three concrete failure shapes:
    imported batch; a 10k-event pull holds the lock long enough to starve local
    agents at 20-agent scale. Needs chunked import with lock release between
    chunks — neither proposal says so.
-3. **Sandboxed/worktree workers** (the facades-in-sandbox failure is on
-   record: sandboxed agents could not reach MCP) **cannot append at all**.
-   Their work produces zero journal events until a sync point — meaning the
+3. **Sandboxed/worktree workers cannot append at all** — not because MCP is
+   unreachable (dec#133 later refuted that: a sandboxed worker DOES reach the
+   out-of-process MCP server; the earlier "facades-in-sandbox" failure was about
+   `.git`/out-of-worktree file writes, not MCP), but because a worktree worker's
+   writes land in its own worktree, not the main store journal.
+   Their work produces zero main-store journal events until a sync point — meaning the
    journal is the truth of the *store*, not of the *system*, and nobody should
    pretend otherwise.
 

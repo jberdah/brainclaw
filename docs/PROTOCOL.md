@@ -131,9 +131,13 @@ offered → accepted → started → (progress)* → completed
 ```
 
 Each transition is emitted via `transition('assignment', id, <status>)`.
-A worker that cannot reach the protocol transport (sandboxed) MAY drop a
-`LANE-RESULT.json` file at the worktree root as the fallback signal — the
-coordinator harvests it.
+A worker MAY drop a `LANE-RESULT.json` file at the worktree root and let the
+coordinator harvest it instead of emitting transitions itself. This is the
+coordinator-owned contract for a sandboxed worker: its sandbox makes `.git`
+read-only (so it cannot `git commit`), and the file is the harvestable signal —
+NOT because MCP is unreachable (a sandboxed worker does reach the MCP server,
+which runs out-of-process; dec#133). A genuinely MCP-less agent uses the same
+file as its only channel.
 
 ### 5.3 Claim sentinels
 
