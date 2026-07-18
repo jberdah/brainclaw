@@ -1082,22 +1082,17 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
         );
         const reviewerSlots = advanced.loop.slots.filter((s) => s.role === 'reviewer');
         for (const slot of reviewerSlots) {
-          turn(
-            {
-              id: loop.id,
-              slot_id: slot.slot_id,
-              actor: creatorActor,
-              input: req.task,
-            },
-            dispatchCwd,
-          );
-
           // pln#458 stp_daffa477: turn() is pure state mutation — it does
           // NOT spawn the reviewer. Without the linkage below, the loop
           // stays "assigned" forever and no work ever runs (symptom
           // observed on lop_0a0cb84a7bf8dd92). Build the same claim +
           // assignment + queued message chain as intent=assign so that
           // the downstream runCoordinateExecution actually spawns.
+          // pln#628 Focus 4B (Codex review of #87, BLOCKING 2): turn() is now
+          // called AFTER the claim + assignment exist so the reviewer slot is
+          // BOUND to its assignment_id/claim_id. Previously turn() ran first with
+          // no ids, so a harvest could only match reviewer slots by agent name —
+          // which completes the WRONG slot in symmetric (multi-reviewer) mode.
           try {
             const reviewScope = `review-loop:${loop.id}`;
             const reviewDescription =
@@ -1141,6 +1136,23 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
                 `Review assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
               );
             }
+
+            // pln#628 Focus 4B (BLOCKING 2) — assign the slot NOW that the
+            // claim/assignment exist, binding their ids onto the slot so the
+            // harvest close resolves this exact reviewer by assignment_id. Runs
+            // even if assignment creation failed (undefined id → the harvest
+            // falls back to the legacy agent match for this one slot).
+            turn(
+              {
+                id: loop.id,
+                slot_id: slot.slot_id,
+                actor: creatorActor,
+                input: req.task,
+                assignment_id: reviewAssignmentId,
+                claim_id: claimResult.claimId,
+              },
+              dispatchCwd,
+            );
 
             const reviewBrief = buildCoordinateBrief(slot.agent ?? '', reviewDescription + reviewVerdictBriefSuffix, {
               claimId: claimResult.claimId,

@@ -347,6 +347,17 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // Assignment filter (when harvesting a specific lane).
     if (options.assignmentId && lane.assignment_id !== options.assignmentId) continue;
 
+    // pln#628 Focus 4B (Codex review of #87 BLOCKING 1) — a review lane must
+    // close/advance its loop on the plain report-only harvest path too, not only
+    // on `--integrate`. closeReviewLoopFromLaneResult is convergent + idempotent
+    // (a terminal loop is a no-op; a stuck approve is resumed), so firing it here
+    // AND in integrateLaneResults is safe — and it runs BEFORE the harvested
+    // marker short-circuits below, so a re-harvest still resumes a stuck loop.
+    try {
+      const laneAssignment = loadAssignment(lane.assignment_id, cwd);
+      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+    } catch { /* never block harvest on loop-close */ }
+
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
     if (fs.existsSync(marker)) {
       result.skipped.push(lane.assignment_id);

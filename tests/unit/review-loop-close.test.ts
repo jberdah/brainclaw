@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { openLoop, advance, turn, getLoop, type LoopThread } from '../../src/core/loops/index.js';
+import { openLoop, advance, turn, complete_turn, getLoop, type LoopThread } from '../../src/core/loops/index.js';
 import { closeReviewLoopFromLaneResult } from '../../src/core/review-loop-close.js';
 import type { Assignment, LaneResult } from '../../src/core/schema.js';
 
@@ -41,8 +41,8 @@ function setupReviewAtFindings(cwd: string): LoopThread {
   return getLoop(loop.id, cwd)!;
 }
 
-function reviewAssignment(loopId: string): Pick<Assignment, 'scope' | 'agent'> {
-  return { scope: `review-loop:${loopId}`, agent: 'codex' };
+function reviewAssignment(loopId: string, id = 'asgn_rev'): Pick<Assignment, 'id' | 'scope' | 'agent'> {
+  return { id, scope: `review-loop:${loopId}`, agent: 'codex' };
 }
 
 function laneWith(verdict?: LaneResult['review_verdict'], summary?: string): Pick<LaneResult, 'review_verdict' | 'review_summary'> {
@@ -100,7 +100,7 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
   });
 
   it('returns undefined for a non-review-loop scope (harvest proceeds unchanged)', () => {
-    const res = closeReviewLoopFromLaneResult({ scope: 'src/core/foo.ts', agent: 'codex' }, laneWith('approve'), 'coordinator', cwd);
+    const res = closeReviewLoopFromLaneResult({ id: 'asgn_x', scope: 'src/core/foo.ts', agent: 'codex' }, laneWith('approve'), 'coordinator', cwd);
     assert.equal(res, undefined);
   });
 
@@ -112,9 +112,61 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
   });
 
   it('no-ops gracefully when the referenced loop does not exist', () => {
-    const res = closeReviewLoopFromLaneResult({ scope: 'review-loop:lop_deadbeef', agent: 'codex' }, laneWith('approve'), 'coordinator', cwd);
+    const res = closeReviewLoopFromLaneResult({ id: 'asgn_x', scope: 'review-loop:lop_deadbeef', agent: 'codex' }, laneWith('approve'), 'coordinator', cwd);
     assert.ok(res);
     assert.equal(res!.action, 'noop');
     assert.match(res!.reason, /loop not found/);
+  });
+
+  // BLOCKING 2 (Codex review of #87) — symmetric loops have >1 reviewer slot.
+  // The verdict must land on the slot BOUND to this lane's assignment_id, never
+  // "any active reviewer" (which would complete the wrong reviewer's turn).
+  it('completes the slot bound to THIS assignment, not a sibling reviewer (symmetric binding)', () => {
+    const loop = openLoop({
+      kind: 'review', title: 'symmetric', created_by: 'agt_test', mode: 'symmetric',
+      slots: [
+        { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
+        { role: 'reviewer', agent: 'codex', agent_id: 'agt_r1' },
+        { role: 'reviewer', agent: 'codex', agent_id: 'agt_r2' },
+      ],
+    }, cwd);
+    advance({ id: loop.id, actor: 'agt_test' }, cwd); // → findings
+    const [rA, rB] = getLoop(loop.id, cwd)!.slots.filter((s) => s.role === 'reviewer');
+    // Bind each reviewer slot to a distinct assignment (the #87 coordinate fix).
+    turn({ id: loop.id, slot_id: rA!.slot_id, actor: 'agt_test', assignment_id: 'asgn_A' }, cwd);
+    turn({ id: loop.id, slot_id: rB!.slot_id, actor: 'agt_test', assignment_id: 'asgn_B' }, cwd);
+
+    // Harvest the lane for assignment A with request_changes (so the loop stays
+    // open and we can inspect both slots afterwards).
+    const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id, 'asgn_A'), laneWith('request_changes', 'A says fix'), 'coordinator', cwd);
+    assert.ok(res);
+    const after = getLoop(loop.id, cwd)!;
+    const slotA = after.slots.find((s) => s.assignment_id === 'asgn_A')!;
+    const slotB = after.slots.find((s) => s.assignment_id === 'asgn_B')!;
+    assert.equal(slotA.status, 'done', 'the bound slot (asgn_A) got the verdict');
+    assert.notEqual(slotB.status, 'done', 'the sibling reviewer (asgn_B) is untouched');
+    // The verdict artifact was produced by slot A, not B.
+    const verdict = after.artifacts.find((a) => a.type === 'verdict');
+    assert.equal(verdict?.produced_by, slotA.slot_id, 'verdict attributed to the correct reviewer slot');
+  });
+
+  // BLOCKING 3 (Codex review of #87) — if a prior pass recorded an accepted
+  // verdict but died BEFORE advancing (interruption between the two writes), a
+  // later harvest must RESUME the advance and close, not no-op on the done slot.
+  it('resumes an interrupted approve: verdict recorded, advance never ran → later pass closes', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const reviewer = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+    // Simulate the crash window: complete the reviewer turn with an accepted
+    // verdict, but do NOT advance.
+    complete_turn(
+      { id: loop.id, slot_id: reviewer.slot_id, actor: 'coordinator', artifact: { phase: 'findings', type: 'verdict', body: 'accepted: prior pass' } },
+      cwd,
+    );
+    assert.equal(getLoop(loop.id, cwd)!.status, 'open', 'precondition: verdict recorded but loop not advanced/closed');
+
+    const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id), laneWith('approve'), 'coordinator', cwd);
+    assert.ok(res);
+    assert.equal(res!.action, 'closed', 'the stuck approve is resumed and closed');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
   });
 });
