@@ -597,6 +597,18 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
     return overall;
   };
 
+  // pln#628 Focus 4B — appended to a REVIEW dispatch brief only. Tells the
+  // reviewer to emit a machine-readable verdict in LANE-RESULT.json so the
+  // coordinator's harvest can close the review loop (reviewer_green) without a
+  // human driving complete_turn/advance. Findings prose still goes wherever the
+  // task asks (e.g. a REVIEW-*.md); this is the structured signal the loop reads.
+  const reviewVerdictBriefSuffix =
+    '\n\n## Review verdict (required — drives autonomous loop convergence)\n'
+    + 'In your LANE-RESULT.json set "status":"completed" AND add "review_verdict": '
+    + '"approve" (change is good to merge) or "request_changes" (needs fixes), plus '
+    + '"review_summary":"<one-line rationale>". The coordinator reads review_verdict '
+    + 'to close the review loop on approve, or continue it on request_changes.';
+
   /** Build a coordinate brief: delegates to shared generateDispatchBrief(). */
   const buildCoordinateBrief = (agentName: string, task: string, options?: { claimId?: string; scope?: string; worktreePath?: string; assignmentId?: string }): string => {
     return generateDispatchBrief({
@@ -1130,7 +1142,7 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
               );
             }
 
-            const reviewBrief = buildCoordinateBrief(slot.agent ?? '', reviewDescription, {
+            const reviewBrief = buildCoordinateBrief(slot.agent ?? '', reviewDescription + reviewVerdictBriefSuffix, {
               claimId: claimResult.claimId,
               scope: reviewScope,
               worktreePath: claimResult.worktreePath,
