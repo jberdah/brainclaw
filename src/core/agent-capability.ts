@@ -876,7 +876,10 @@ export function buildInvokeCommand(
  * - `full`      : Complete brief — Protocol section, available tools, handoffs, context.
  *                 For CLI-spawnable agents that can call MCP (Claude Code, Cline, etc.).
  * - `compact`   : Task description + file paths + steps + constraints only.
- *                 No MCP protocol section — for sandboxed agents that cannot call MCP (Codex).
+ *                 No MCP protocol section — for task-based agents WITHOUT MCP
+ *                 access (nanoclaw/nemoclaw/picoclaw/zeroclaw). NOTE: codex is
+ *                 NOT compact — it is `full`, because a sandboxed codex run CAN
+ *                 reach MCP (dec#133); the sandbox only makes `.git` read-only.
  * - `task_card` : Ultra-short, human-readable task card.
  *                 For IDE-only agents where a human will paste the task (Cursor, Windsurf, Roo).
  */

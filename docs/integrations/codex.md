@@ -53,7 +53,7 @@ When you (or the dispatcher) calls Codex with no positional `[PROMPT]`, Codex re
 
 ### Brief-ack handshake
 
-Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started` once the wrapping shell touches a brief-ack sentinel at `.brainclaw/coordination/runtime/ack/<assignmentId>.ack`. This proves the spawn actually executed and decouples the handshake from MCP availability inside the worker — important because Codex spawned in `--sandbox workspace-write` may not have brainclaw MCP wired in its session.
+Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started` once the wrapping shell touches a brief-ack sentinel at `.brainclaw/coordination/runtime/ack/<assignmentId>.ack`. This proves the spawn actually executed and decouples the handshake from whatever the worker does next — the spawn is confirmed even before the worker makes its first MCP call. (Note — dec#133: a sandboxed Codex run **does** reach brainclaw MCP; the server runs out-of-sandbox and `approval_policy=never` auto-approves. The sentinel is about confirming the spawn, not about MCP being unavailable.)
 
 ## Capability profile
 
@@ -72,7 +72,7 @@ Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started
 
 ## Caveats
 
-- **Sandbox blocks MCP writes**: when running with strict sandbox, the spawned Codex cannot write to `.brainclaw/` directly. Use the brief-ack file plus filesystem-direct candidate writes (the dispatcher harvests them).
+- **Sandbox blocks `git commit`, not MCP** (dec#133): a sandboxed Codex run reaches brainclaw MCP (the server is a separate out-of-sandbox process; `approval_policy=never` auto-approves). What the sandbox *does* block is direct writes to paths outside the worktree root — notably `.git`, so the worker cannot `git commit`. Leave fixes uncommitted; the coordinator integrates + commits the worktree diff at harvest. A LANE-RESULT.json / filesystem-direct candidate write remains a valid fallback for reporting.
 - **Windows quoting**: long prompts containing backticks or `#` fail when passed as inline args through `cmd.exe`. The default stdin_pipe path avoids this.
 - **Sandbox vs review parity**: review runs use the same `workspace-write` sandbox as execution runs (older templates forced `read-only` on reviews; that path blocked PowerShell exec on Windows).
 - **No always-allow**: each MCP tool call still respects per-call approval policy unless explicitly set with `-c approval_policy="never"`.

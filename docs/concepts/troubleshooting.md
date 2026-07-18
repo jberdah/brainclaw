@@ -206,7 +206,7 @@ brainclaw stale resolve <plan_id>            # → dropped (default for stale)
 
 **Symptom**: a dispatched assignment shows `running` indefinitely, and `bclaw_assignment_events` shows `run_running` but no further progress.
 
-**Why**: the spawned worker process either (a) crashed before reading its inbox, (b) read the inbox but couldn't acknowledge (e.g., MCP unavailable inside the spawned sandbox — common with codex `--sandbox workspace-write`), or (c) is genuinely still working but slow.
+**Why**: the spawned worker process either (a) crashed before reading its inbox, (b) started but the brief-ack sentinel never fired (spawn wrapper died, wrong CODEX_HOME/auth, or the CLI exited early — NOT because the sandbox blocks MCP: dec#133 shows a sandboxed codex reaches MCP fine), or (c) is genuinely still working but slow.
 
 **Diagnostic order**:
 

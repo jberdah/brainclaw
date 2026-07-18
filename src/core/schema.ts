@@ -1108,8 +1108,9 @@ export type RuntimeEventType = z.infer<typeof RuntimeEventTypeSchema>;
 /**
  * pln#526 — LANE-RESULT convention. A dispatched worker writes a single
  * `LANE-RESULT.json` at its worktree root as its final step (a fallback that
- * works even when bclaw_assignment_update / MCP is unavailable, e.g. sandboxed
- * agents). The coordinator ingests it with `brainclaw harvest <assignment_id>`.
+ * works even when bclaw_assignment_update / MCP is unavailable in the worker's
+ * environment, e.g. a genuinely MCP-less agent). The coordinator ingests it with
+ * `brainclaw harvest <assignment_id>`.
  */
 export const LaneResultSchema = z.object({
   assignment_id: z.string(),

@@ -44,4 +44,16 @@ describe('dispatch capability matrix (pln#528 / pln#628 Focus 4A)', () => {
     // Sanity: the helper never throws on a real profile.
     assert.equal(typeof dispatchHasMcp(getCapabilityProfile('claude-code')!), 'boolean');
   });
+
+  it('sandboxed AND mcp_direct=false → no MCP (locks against `mcp_direct || isSandboxedSpawn`)', () => {
+    // No real agent is both sandboxed and MCP-less, so synthesize the case that
+    // distinguishes the correct impl (`mcp_direct`) from a plausible-wrong one
+    // (`mcp_direct || isSandboxedSpawn`): a --sandbox template with mcp_direct=false.
+    // Correct answer is dispatchHasMcp=false; the wrong impl would return true.
+    const codex = getCapabilityProfile('codex')!;
+    const synthetic = { ...codex, runtime: { ...codex.runtime, mcp_direct: false } };
+    assert.equal(isSandboxedSpawn(synthetic), true, 'still sandboxed (codex --sandbox template)');
+    assert.equal(dispatchHasMcp(synthetic), false, 'mcp_direct=false wins — no MCP despite sandbox');
+    assert.equal(dispatchCanCommit(synthetic), false, 'still cannot commit (sandboxed)');
+  });
 });

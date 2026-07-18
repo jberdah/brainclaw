@@ -152,7 +152,7 @@ You called `bclaw_coordinate(intent="review", open_loop=true, …)` and got back
 
 ## Worktree-as-contract harvest
 
-Some dispatched workers cannot self-commit or call MCP. For example, a sandboxed Codex run may have `dispatchCanCommit=false` because its writable root is the linked worktree, while `.git` lives outside that root. In that case the worker contract is intentionally small:
+Some dispatched workers cannot self-commit. For example, a sandboxed Codex run has `dispatchCanCommit=false` because its writable root is the linked worktree, while `.git` lives outside that root — so it cannot `git commit`. (It *can* still call brainclaw MCP — dec#133 — but the file-based contract below is used regardless, so harvesting stays coordinator-owned and does not depend on the worker's MCP writes.) In that case the worker contract is intentionally small:
 
 1. Edit files inside the dispatched worktree.
 2. Write `LANE-RESULT.json` at the worktree root.
@@ -255,7 +255,7 @@ A dead dispatch needs four cleanup steps (no single facade does all of them toda
 
 Spawn behaviour varies by agent. The capability profile in `src/core/agent-capability.ts` describes each agent's prompt delivery, sandbox model, and MCP availability. Per-agent caveats:
 
-- [codex.md](../integrations/codex.md#caveats) — `--sandbox workspace-write` required; spawned codex may not have brainclaw MCP wired; stdin_pipe prompt delivery; brief-ack required for headless dispatch detection.
+- [codex.md](../integrations/codex.md#caveats) — `--sandbox workspace-write` required; sandboxed codex reaches MCP but cannot `git commit` (dec#133 — coordinator harvests the worktree diff); stdin_pipe prompt delivery; brief-ack required for headless dispatch detection.
 - [claude-code.md](../integrations/claude-code.md) — interactive vs `-p` headless modes; tools whitelist.
 - [copilot.md](../integrations/copilot.md), [windsurf.md](../integrations/windsurf.md), [cline.md](../integrations/cline.md), [opencode.md](../integrations/opencode.md), [roo.md](../integrations/roo.md), [kilocode.md](../integrations/kilocode.md), [continue.md](../integrations/continue.md) — per-agent specifics.
 - [mistral-vibe.md](../integrations/mistral-vibe.md) — EU/GDPR self-hosted option.
