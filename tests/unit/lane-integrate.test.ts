@@ -116,6 +116,39 @@ describe('isLinkedWorktree + commitWorktreeOnBehalf — guards', () => {
     assert.ok(r.files_changed.includes('new-file.ts'));
     assert.notEqual(git(wt, 'rev-parse', 'HEAD').stdout, before, 'HEAD moved');
   });
+
+  it('commitWorktreeOnBehalf: excludes node_modules + .brainclaw-worktree.json from the commit (trp_01a2ba2a)', () => {
+    const wt = addLinkedWorktree(ws.dir, 'feat/exclusions'); created.push(wt);
+    // The real deliverable…
+    fs.writeFileSync(path.join(wt, 'deliverable.ts'), 'export const ok = 1;\n');
+    // …alongside brainclaw-provisioned / transient artefacts that a field report
+    // (Codex on macOS) caught landing in a lane commit.
+    fs.writeFileSync(path.join(wt, '.brainclaw-worktree.json'), '{"marker":true}\n');
+    fs.mkdirSync(path.join(wt, 'node_modules', 'left-pad'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
+    fs.mkdirSync(path.join(wt, 'packages', 'api', 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'packages', 'api', 'node_modules', 'dep.js'), 'x\n');
+    // A real file inside a package (NOT node_modules) must still be committed.
+    fs.writeFileSync(path.join(wt, 'packages', 'api', 'src.ts'), 'export const y = 2;\n');
+
+    const r = commitWorktreeOnBehalf(wt, 'feat: with exclusions');
+    assert.equal(r.committed, true, 'the real deliverable is committable');
+    assert.ok(r.files_changed.includes('deliverable.ts'));
+    assert.ok(r.files_changed.some((f) => f.replace(/\\/g, '/') === 'packages/api/src.ts'), 'real package source is committed');
+    for (const excluded of r.files_changed) {
+      const norm = excluded.replace(/\\/g, '/');
+      assert.ok(!norm.includes('node_modules'), `node_modules must be excluded, got ${norm}`);
+      assert.notEqual(norm, '.brainclaw-worktree.json', '.brainclaw-worktree.json must be excluded');
+    }
+    // And prove it against the actual commit, not just the reported list.
+    const committed = git(wt, 'log', '-1', '--name-only', '--format=').stdout.replace(/\\/g, '/');
+    assert.doesNotMatch(committed, /node_modules/, 'no node_modules path in the commit');
+    assert.doesNotMatch(committed, /\.brainclaw-worktree\.json/, 'no worktree marker in the commit');
+    assert.match(committed, /deliverable\.ts/);
+    // The excluded files remain in the worktree (untracked), not lost.
+    assert.ok(fs.existsSync(path.join(wt, '.brainclaw-worktree.json')));
+    assert.ok(fs.existsSync(path.join(wt, 'node_modules', 'left-pad', 'index.js')));
+  });
 });
 
 describe('integrateLaneResults — worktree-as-contract (pln#534)', () => {

@@ -101,6 +101,24 @@ export function evaluateWatchTick(input: WatchTickInput): WatchState {
 const AGENT_CHILD_NAMES = ['claude', 'codex', 'copilot', 'node'];
 
 /**
+ * Parse `ps -A -o ppid=,comm=` output and return the lowercased command names
+ * whose parent pid equals `ppid`. Pure + exported so the ppid-filter logic is
+ * unit-tested independently of the platform the test runs on (trp_3b096bf4:
+ * BSD `ps` on macOS rejects the GNU `--ppid` flag, so we filter here instead).
+ */
+export function parseChildCommsByPpid(psOutput: string, ppid: number): string[] {
+  const target = Math.floor(ppid);
+  return psOutput
+    .split('\n')
+    .map((line) => {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (!m || Number(m[1]) !== target) return undefined;
+      return m[2]!.trim().toLowerCase();
+    })
+    .filter((n): n is string => !!n);
+}
+
+/**
  * Does a real agent process live under the wrapper pid?
  * Returns undefined when the observation itself fails (never treated as death).
  */
@@ -116,10 +134,15 @@ export function probeAgentChildAlive(wrapperPid: number | undefined): boolean | 
       const names = out.split(/\r?\n/).map((l) => l.trim().toLowerCase()).filter(Boolean);
       return names.some((n) => AGENT_CHILD_NAMES.some((a) => n.startsWith(a)));
     }
-    const out = execFileSync('ps', ['-o', 'comm=', '--ppid', String(wrapperPid)], {
+    // BSD `ps` (macOS) does NOT support the GNU `--ppid` flag — it errored on
+    // every poll on macOS and broke child-pid discovery there (trp_3b096bf4).
+    // List every process with its parent pid + command (portable across Linux
+    // and macOS — same `-A -o …=` form already used in ai-surface-inventory.ts)
+    // and filter by ppid in parseChildCommsByPpid.
+    const out = execFileSync('ps', ['-A', '-o', 'ppid=,comm='], {
       encoding: 'utf-8', timeout: 15000,
     });
-    const names = out.split('\n').map((l) => l.trim().toLowerCase()).filter(Boolean);
+    const names = parseChildCommsByPpid(out, wrapperPid);
     return names.some((n) => AGENT_CHILD_NAMES.some((a) => n.includes(a)));
   } catch {
     return undefined;

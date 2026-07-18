@@ -407,14 +407,33 @@ export function commitWorktreeOnBehalf(
   }
 
   // Stage everything, then UNSTAGE the transient files that must never land on
-  // the lane branch: the worker's own `LANE-RESULT.json` report and any
-  // `.brainclaw/` coordination state. Committing those would pollute the branch
-  // (and master, on merge) with non-deliverable artefacts.
+  // the lane branch: the worker's own `LANE-RESULT.json` report, any
+  // `.brainclaw/` coordination state, the `.brainclaw-worktree.json` marker, and
+  // the `node_modules` link(s) brainclaw provisions into the worktree. Committing
+  // those would pollute the branch (and master, on merge) with non-deliverable
+  // artefacts — a field report (Codex on macOS) caught node_modules + the
+  // worktree marker landing in a lane commit (trp_01a2ba2a). `.brainclaw-worktree.json`
+  // sits at the worktree ROOT (NOT inside `.brainclaw/`), so the `.brainclaw`
+  // pathspec does not cover it — it needs its own entry.
   const add = runGit(['add', '-A'], worktreePath);
   if (!add.ok) {
     return { committed: false, files_changed: [], reason: `git add failed: ${add.stderr.trim()}` };
   }
-  runGit(['reset', '-q', '--', 'LANE-RESULT.json', '.brainclaw', '.brainclaw-heartbeat-*'], worktreePath);
+  runGit([
+    'reset', '-q', '--',
+    'LANE-RESULT.json',
+    '.brainclaw',
+    '.brainclaw-worktree.json',
+    '.brainclaw-heartbeat-*',
+    // Top-level node_modules — a plain pathspec is a leading-dir prefix, so it
+    // covers both a symlink entry and a real dir's files.
+    'node_modules',
+    // Monorepo per-package links (pln#523). A `:(glob)` pathspec drops the
+    // leading-dir prefix semantics, so we need BOTH the dir entry (nested
+    // symlink) AND its contents (nested real dir) to catch every shape.
+    ':(glob)**/node_modules',
+    ':(glob)**/node_modules/**',
+  ], worktreePath);
 
   // The files actually staged for this commit (post-exclusion) — also the
   // truthful files_changed report.
@@ -424,7 +443,7 @@ export function commitWorktreeOnBehalf(
     // Only transient files changed — nothing deliverable to commit. Restore the
     // index so the worktree is left exactly as the worker left it.
     runGit(['reset', '-q'], worktreePath);
-    return { committed: false, files_changed: [], reason: 'no committable changes (only transient LANE-RESULT.json / .brainclaw)' };
+    return { committed: false, files_changed: [], reason: 'no committable changes (only transient LANE-RESULT.json / .brainclaw / node_modules links)' };
   }
 
   const authorName = options.authorName ?? 'brainclaw (on behalf)';
