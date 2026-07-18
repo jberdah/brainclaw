@@ -1122,6 +1122,17 @@ export const LaneResultSchema = z.object({
   files_changed: z.array(z.string()).optional(),
   /** Free-form notes (blockers, follow-ups). */
   notes: z.string().optional(),
+  /**
+   * pln#628 Focus 4B — review-loop verdict. A worker running a review-loop turn
+   * sets this to signal whether the change is good to merge (`approve`) or needs
+   * fixes (`request_changes`). The coordinator's harvest maps it onto a loop
+   * `verdict` artifact so `reviewer_green` can fire and the loop auto-closes
+   * without a human driving complete_turn/advance by hand. Absent on
+   * non-review lanes — harvest simply skips the loop-close callback then.
+   */
+  review_verdict: z.enum(['approve', 'request_changes']).optional(),
+  /** One-line rationale accompanying review_verdict (shown in the verdict artifact). */
+  review_summary: z.string().optional(),
 });
 export type LaneResult = z.infer<typeof LaneResultSchema>;
 

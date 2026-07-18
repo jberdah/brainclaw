@@ -23,6 +23,7 @@ import { loadAssignment, transitionAssignment } from '../core/assignments.js';
 import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
+import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult } from '../core/review-loop-close.js';
 
 export interface HarvestOptions {
   /**
@@ -346,6 +347,17 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // Assignment filter (when harvesting a specific lane).
     if (options.assignmentId && lane.assignment_id !== options.assignmentId) continue;
 
+    // pln#628 Focus 4B (Codex review of #87 BLOCKING 1) — a review lane must
+    // close/advance its loop on the plain report-only harvest path too, not only
+    // on `--integrate`. closeReviewLoopFromLaneResult is convergent + idempotent
+    // (a terminal loop is a no-op; a stuck approve is resumed), so firing it here
+    // AND in integrateLaneResults is safe — and it runs BEFORE the harvested
+    // marker short-circuits below, so a re-harvest still resumes a stuck loop.
+    try {
+      const laneAssignment = loadAssignment(lane.assignment_id, cwd);
+      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+    } catch { /* never block harvest on loop-close */ }
+
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
     if (fs.existsSync(marker)) {
       result.skipped.push(lane.assignment_id);
@@ -473,6 +485,8 @@ export interface LaneIntegrateEntry {
   assignment_completed: boolean;
   claim_released: boolean;
   reason: string;
+  /** pln#628 Focus 4B — set when this lane closed/advanced a review loop. */
+  review_loop?: ReviewLoopCloseResult;
 }
 
 export interface LaneIntegrateResult {
@@ -583,6 +597,17 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         entry.claim_released = claimEntry?.released === true;
         if (claimEntry && !claimEntry.released) {
           reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
+        }
+
+        // pln#628 Focus 4B — if this lane is a review-loop turn carrying a
+        // verdict, map it onto the loop: record the verdict artifact + advance,
+        // which auto-closes the loop on reviewer_green (approve) without a human
+        // driving complete_turn/advance by hand. No-op for non-review lanes or
+        // lanes without a verdict; never throws (harvest is not blocked on it).
+        const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
+        if (loopClose) {
+          entry.review_loop = loopClose;
+          reasons.push(`review-loop ${loopClose.loop_id}: ${loopClose.action} — ${loopClose.reason}`);
         }
       } else {
         // blocked / failed: best-effort lifecycle (FSM may reject from offered).
