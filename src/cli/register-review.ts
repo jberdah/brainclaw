@@ -113,9 +113,9 @@ export function registerReviewCommands(program: Command): void {
     .option('--dry-run', 'Preview without writing events/markers')
     .option('--worktree <path>', 'Explicit worktree path to scan (repeatable)', collect, [])
     .option('--json', 'Output as JSON')
-    .action((assignmentId, options) => {
+    .action(async (assignmentId, options) => {
       const globalOpts = program.opts();
-      runHarvestLane(assignmentId, { ...options, cwd: globalOpts.cwd });
+      await runHarvestLane(assignmentId, { ...options, cwd: globalOpts.cwd });
     });
 
   // --- prune-candidates ---

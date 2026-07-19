@@ -9,9 +9,10 @@ import { closeReviewLoopFromLaneResult } from '../../src/core/review-loop-close.
 import type { Assignment, LaneResult } from '../../src/core/schema.js';
 
 // pln#628 Focus 4B — the harvest→loop callback. A harvested review lane carrying
-// a review_verdict must map onto the loop: approve → reviewer_green → auto-close;
-// request_changes → advance to author_response (no close). Idempotent + a no-op
-// for non-review lanes or lanes without a verdict.
+// a review_verdict must map onto the loop: approve → reviewer_green → auto-close
+// (PR1); request_changes → PR2 fix cycle: bump the round counter, keep the claim
+// alive, and emit a next_turn (until the max_iterations cap → auto-close blocked).
+// Idempotent + a no-op for non-review lanes or lanes without a verdict.
 
 function makeWorkspace(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-review-loop-close-'));
@@ -70,21 +71,91 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
     assert.match(verdictArtifact!.body ?? '', /looks good/, 'the review_summary is carried into the verdict body');
   });
 
-  it('request_changes → records the verdict and advances to author_response WITHOUT closing', () => {
+  it('request_changes → records the verdict, bumps the round, keeps the claim, emits a next_turn (PR2)', () => {
     const loop = setupReviewAtFindings(cwd);
     const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id), laneWith('request_changes', 'fix the guard'), 'coordinator', cwd);
 
     assert.ok(res);
     assert.equal(res!.action, 'advanced');
-    assert.equal(res!.loop_status, 'open', 'loop stays open (re-review cycle is PR2)');
+    assert.equal(res!.loop_status, 'open', 'loop stays open for the fix cycle');
+    assert.equal(res!.keep_claim, true, 'the claim/worktree is kept alive for the re-dispatch');
+    assert.ok(res!.next_turn, 'a next_turn is emitted for harvest to re-dispatch');
+    assert.equal(res!.next_turn!.role, 'reviewer', 'symmetric: the same reviewer takes the fix+re-review turn');
+    assert.equal(res!.next_turn!.agent, 'codex');
+    assert.equal(res!.next_turn!.iteration, 1, 'round counter bumped to 1');
+    assert.match(res!.next_turn!.task, /fix cycle round 1/i);
+    assert.match(res!.next_turn!.task, /fix the guard/, 'the requested changes are carried into the brief');
 
     const after = getLoop(loop.id, cwd)!;
     assert.equal(after.status, 'open');
-    assert.equal(after.current_phase, 'author_response', 'advanced one phase past findings');
+    assert.equal(after.iteration_count, 1, 'iteration_count bumped');
     const verdictArtifact = after.artifacts.find((a) => a.type === 'verdict');
     assert.ok(verdictArtifact);
-    assert.doesNotMatch(verdictArtifact!.body ?? '', /^accepted/, 'request_changes must NOT produce an accepted body');
+    assert.doesNotMatch(verdictArtifact!.body ?? '', /^accepted/, 'request_changes must NOT produce an accepted body (reviewer_green must not fire)');
     assert.match(verdictArtifact!.body ?? '', /^changes-requested/, 'request_changes body is explicit');
+  });
+
+  it('report path (cycleOnRequestChanges=false) does NOT cycle request_changes — deferred to --integrate', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const res = closeReviewLoopFromLaneResult(
+      reviewAssignment(loop.id), laneWith('request_changes', 'fix'), 'coordinator', cwd,
+      { cycleOnRequestChanges: false },
+    );
+    assert.ok(res);
+    assert.equal(res!.action, 'noop', 'report path defers the cycle');
+    assert.match(res!.reason, /deferred to --integrate/);
+    const after = getLoop(loop.id, cwd)!;
+    assert.equal(after.iteration_count, 0, 'no round bump on the report path');
+    assert.equal(after.artifacts.some((a) => a.type === 'verdict'), false, 'no verdict recorded on the report path');
+    // …but approve still closes on the report path (PR1 BLOCKING 1 unchanged).
+    const approve = closeReviewLoopFromLaneResult(
+      reviewAssignment(loop.id), laneWith('approve'), 'coordinator', cwd,
+      { cycleOnRequestChanges: false },
+    );
+    assert.equal(approve!.action, 'closed');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
+  });
+
+  it('cycles request_changes until the max_iterations(3) cap → auto-close blocked', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const asg = reviewAssignment(loop.id);
+    // Each request_changes bumps the round. Re-bind the (re-activated) reviewer
+    // slot to the same assignment before each harvest, mirroring how harvest's
+    // re-dispatch re-binds the slot via turn().
+    const rebindReviewer = () => {
+      const slot = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+      turn({ id: loop.id, slot_id: slot.slot_id, actor: 'coordinator', assignment_id: asg.id }, cwd);
+    };
+
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    assert.equal(r1!.next_turn!.iteration, 1);
+
+    rebindReviewer();
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r2!.action, 'advanced');
+    assert.equal(r2!.next_turn!.iteration, 2);
+    assert.equal(getLoop(loop.id, cwd)!.status, 'open');
+
+    rebindReviewer();
+    const r3 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r3!.action, 'closed', 'the 3rd round hits the cap');
+    assert.equal(r3!.loop_status, 'blocked', 'max_iterations(3) → blocked for a human');
+    assert.equal(r3!.keep_claim, undefined, 'a blocked loop is torn down, not kept');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'blocked');
+  });
+
+  it('approve at any round closes on reviewer_green (mid-cycle exit)', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const asg = reviewAssignment(loop.id);
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    // Re-dispatch re-activates the slot; the next pass approves.
+    const slot = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+    turn({ id: loop.id, slot_id: slot.slot_id, actor: 'coordinator', assignment_id: asg.id }, cwd);
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('approve', 'now good'), 'coordinator', cwd);
+    assert.equal(r2!.action, 'closed');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
   });
 
   it('is idempotent — a second harvest pass on an already-closed loop is a no-op', () => {

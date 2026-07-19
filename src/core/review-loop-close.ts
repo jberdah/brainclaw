@@ -8,14 +8,20 @@
  * complete_turn + advance, so `reviewer_green` was never evaluated and a human
  * had to drive the loop closed by hand (dec_a0d16802).
  *
- * This module closes that gap for the LGTM path (PR1): given a harvested review
- * lane carrying a `review_verdict`, it records a loop `verdict` artifact on the
- * reviewer slot and advances the loop — which auto-closes on `reviewer_green`
- * (verbs.ts:evaluateStopCondition). `request_changes` records the verdict and
- * advances to `author_response` but does NOT auto-close (the re-review cycle is
- * PR2). The reverse direction (loop terminal → assignment converge) is the
- * existing Layer B backstop in assignment-reconciler.ts; this is Layer A's
- * missing complement for review loops.
+ * PR1 closed the LGTM path: a harvested lane carrying `review_verdict: approve`
+ * records an accepted `verdict` artifact and advances the loop, which auto-closes
+ * on `reviewer_green` (verbs.ts:evaluateStopCondition).
+ *
+ * PR2 makes `request_changes` converge autonomously too (symmetric mode). Instead
+ * of stalling, it records the changes-requested verdict, bumps the loop's round
+ * counter (advance to the same phase → iteration_count += 1), and — unless the
+ * `max_iterations` cap is hit (→ auto-close as `blocked` for a human) — returns a
+ * `next_turn` + `keep_claim` so harvest re-dispatches the SAME reviewer slot into
+ * the SAME persistent worktree. The reviewer applies the requested fixes and
+ * re-reviews; commits accumulate on one branch (no fresh-worktree-per-turn, so the
+ * branch-per-scope / refuse-unharvested invariants are never violated). The
+ * reverse direction (loop terminal → assignment converge) is the existing Layer B
+ * backstop in assignment-reconciler.ts; this is Layer A's complement for review loops.
  *
  * Robustness (Codex review of #87):
  *  - The compound complete_turn + advance runs under `withLoopLock`, so a
@@ -41,6 +47,40 @@ import type { LoopArtifact, LoopSlot, LoopThread } from './loops/types.js';
 const REVIEW_LOOP_SCOPE_RE = /^review-loop:(lop_[0-9a-z]+)/;
 const LOOP_TERMINAL = new Set(['completed', 'cancelled', 'blocked']);
 
+/**
+ * pln#628 Focus 4B PR2 — the next turn the coordinator should dispatch to keep
+ * the review loop converging autonomously. Emitted on a `request_changes` that
+ * did NOT hit the iteration cap: the same reviewer slot takes another turn in
+ * the SAME (persistent) worktree, applying the requested fixes and re-reviewing.
+ * Symmetric mode only in v1 (a single agent both fixes and reviews); the reused
+ * worktree keeps commits accumulating on one branch, sidestepping the
+ * branch-per-scope / refuse-unharvested-commits worktree invariants that a
+ * fresh-worktree-per-turn design would violate (can_2e282880).
+ */
+export interface ReviewLoopNextTurn {
+  slot_id: string;
+  role: string;
+  agent: string;
+  agent_id?: string;
+  phase: string;
+  /** Round index (loop.iteration_count) this turn belongs to, for observability. */
+  iteration: number;
+  /** Brief body for the re-dispatched fix+re-review turn (findings-aware). */
+  task: string;
+}
+
+/** Build the fix+re-review brief for a request_changes cycle turn (symmetric). */
+function buildFixCycleTask(summary: string, iteration: number): string {
+  return (
+    `The reviewer requested changes (fix cycle round ${iteration}). `
+    + 'Apply the requested changes DIRECTLY in this worktree (it is the same '
+    + 'checkout, kept across turns so your commits accumulate), then RE-REVIEW '
+    + 'the result. Set review_verdict="approve" once the change is correct and '
+    + 'complete, or "request_changes" to take another pass.'
+    + (summary ? `\n\nRequested changes: ${summary}` : '')
+  );
+}
+
 export interface ReviewLoopCloseResult {
   loop_id: string;
   verdict: 'approve' | 'request_changes';
@@ -49,6 +89,14 @@ export interface ReviewLoopCloseResult {
   reason: string;
   /** Loop status after the call (for observability / tests). */
   loop_status?: string;
+  /**
+   * PR2: when true, the coordinator (harvest) must NOT release the claim /
+   * tear down the worktree — the fix cycle reuses it for `next_turn`. When
+   * false/absent, harvest tears down as usual (approve close, or blocked cap).
+   */
+  keep_claim?: boolean;
+  /** PR2: the turn to re-dispatch into the kept worktree (present iff keep_claim). */
+  next_turn?: ReviewLoopNextTurn;
 }
 
 /** Mirrors verbs.ts:isVerdictAccepted — reviewer_green fires only on a `verdict`
@@ -94,15 +142,30 @@ function resolveReviewerSlot(loop: LoopThread, assignment: Pick<Assignment, 'id'
  * loop-verb / lock error is swallowed into a `noop` result so a loop-close
  * failure never breaks harvest (mirrors convergeSlotAssignmentsForClosedLoop).
  */
+export interface CloseReviewLoopOptions {
+  /**
+   * PR2: whether a `request_changes` verdict may advance the round counter and
+   * emit a `next_turn` for the fix cycle. Only the `--integrate` path sets this
+   * true — it is the one that can both re-dispatch the next turn AND keep the
+   * claim/worktree alive. The report-only path passes false so it never advances
+   * a request_changes cycle it cannot follow through on (which would strand the
+   * loop mid-round with the claim released). Approve-close fires on both paths.
+   * Default true (safe for the primary integrate caller).
+   */
+  cycleOnRequestChanges?: boolean;
+}
+
 export function closeReviewLoopFromLaneResult(
   assignment: Pick<Assignment, 'id' | 'scope' | 'agent'>,
   lane: Pick<LaneResult, 'review_verdict' | 'review_summary'>,
   actor: string,
   cwd?: string,
+  options?: CloseReviewLoopOptions,
 ): ReviewLoopCloseResult | undefined {
   const scopeMatch = assignment.scope?.match(REVIEW_LOOP_SCOPE_RE);
   if (!scopeMatch) return undefined;
   if (!lane.review_verdict) return undefined;
+  const cycleOnRequestChanges = options?.cycleOnRequestChanges ?? true;
 
   const loopId = scopeMatch[1]!;
   const verdict = lane.review_verdict;
@@ -126,40 +189,90 @@ export function closeReviewLoopFromLaneResult(
 
         const slot = resolveReviewerSlot(loop, assignment);
         const acceptedVerdictExists = loop.artifacts.some(isAcceptedVerdict);
+        const summary = (lane.review_summary ?? '').trim();
 
-        if (slot) {
-          // Active reviewer slot → record the verdict on it. isVerdictAccepted
-          // fires reviewer_green ONLY on an "accepted…" body, so approve MUST
-          // start with "accepted" and request_changes must NOT.
-          const summary = (lane.review_summary ?? '').trim();
-          const body =
-            verdict === 'approve'
-              ? `accepted${summary ? `: ${summary}` : ''}`
-              : `changes-requested${summary ? `: ${summary}` : ''}`;
-          complete_turn(
-            { id: loopId, slot_id: slot.slot_id, actor, artifact: { phase: loop.current_phase, type: 'verdict', body } },
-            cwd,
-          );
-        } else if (!(verdict === 'approve' && acceptedVerdictExists)) {
-          // No reviewer slot is ours to complete. Resume ONLY the approve→close
-          // case: a prior pass recorded an accepted verdict but died before
-          // advancing. For request_changes (or no accepted verdict), the single
-          // advance already happened on the first pass — do not re-advance.
-          return noop('already processed (no active reviewer slot to (re)advance)', loop.status);
+        // ── approve → close on reviewer_green ───────────────────────────────
+        if (verdict === 'approve') {
+          if (slot) {
+            // isVerdictAccepted fires reviewer_green ONLY on an "accepted…" body.
+            complete_turn(
+              {
+                id: loopId, slot_id: slot.slot_id, actor,
+                artifact: { phase: loop.current_phase, type: 'verdict', body: `accepted${summary ? `: ${summary}` : ''}` },
+              },
+              cwd,
+            );
+          } else if (!acceptedVerdictExists) {
+            // No slot to complete and no accepted verdict recorded → a prior pass
+            // already processed this (idempotent no-op).
+            return noop('already processed (no active reviewer slot; no accepted verdict to resume)', loop.status);
+          }
+          // Advance: closes on reviewer_green. Convergent — safe whether we just
+          // recorded the verdict or are resuming an interrupted approve.
+          const advanced = advance({ id: loopId, actor }, cwd);
+          return {
+            loop_id: loopId,
+            verdict,
+            action: advanced.auto_closed ? 'closed' : 'advanced',
+            reason: advanced.auto_closed
+              ? `reviewer_green → loop ${advanced.loop.status}`
+              : `accepted verdict recorded → advanced to "${advanced.loop.current_phase}"`,
+            loop_status: advanced.loop.status,
+          };
         }
 
-        // Advance: closes on reviewer_green (approve), else moves one phase.
-        // Convergent — safe whether we just recorded the verdict or are resuming
-        // an interrupted approve.
-        const advanced = advance({ id: loopId, actor }, cwd);
+        // ── request_changes → autonomous fix cycle (PR2) ────────────────────
+        if (!slot) {
+          // The cycle already advanced + re-dispatched on the first pass (the
+          // re-dispatched slot is now bound to a NEWER assignment, so
+          // resolveReviewerSlot returned undefined here → idempotent no-op).
+          return noop('already processed (no active reviewer slot to cycle)', loop.status);
+        }
+        if (!cycleOnRequestChanges) {
+          // Report-only path: never advance a cycle it can't follow through on
+          // (no re-dispatch, no claim retention). Defer to `harvest --integrate`.
+          return noop('request_changes deferred to --integrate (report path does not cycle)', loop.status);
+        }
+        // Record the changes-requested verdict, then bump the round counter by
+        // advancing to the SAME phase (advance treats to_phase <= current as a
+        // backward iteration → iteration_count += 1). The post-advance
+        // stop_condition (max_iterations n=3) auto-closes the loop as `blocked`
+        // once the cap is hit; otherwise the loop stays open and we hand harvest
+        // a `next_turn` to re-dispatch into the SAME (kept) worktree so fixes
+        // accumulate on one branch.
+        complete_turn(
+          {
+            id: loopId, slot_id: slot.slot_id, actor,
+            artifact: { phase: loop.current_phase, type: 'verdict', body: `changes-requested${summary ? `: ${summary}` : ''}` },
+          },
+          cwd,
+        );
+        const advanced = advance({ id: loopId, to_phase: loop.current_phase, actor }, cwd);
+        if (advanced.auto_closed) {
+          return {
+            loop_id: loopId,
+            verdict,
+            action: 'closed',
+            reason: `request_changes hit iteration cap → loop ${advanced.loop.status} (needs human)`,
+            loop_status: advanced.loop.status,
+          };
+        }
         return {
           loop_id: loopId,
           verdict,
-          action: advanced.auto_closed ? 'closed' : 'advanced',
-          reason: advanced.auto_closed
-            ? `reviewer_green → loop ${advanced.loop.status}`
-            : `verdict recorded → advanced to phase "${advanced.loop.current_phase}" (awaiting fix cycle — PR2)`,
+          action: 'advanced',
+          reason: `request_changes (round ${advanced.loop.iteration_count}) → re-dispatch same reviewer into kept worktree`,
           loop_status: advanced.loop.status,
+          keep_claim: true,
+          next_turn: {
+            slot_id: slot.slot_id,
+            role: slot.role,
+            agent: slot.agent ?? '',
+            agent_id: slot.agent_id,
+            phase: advanced.loop.current_phase,
+            iteration: advanced.loop.iteration_count,
+            task: buildFixCycleTask(summary, advanced.loop.iteration_count),
+          },
         };
       },
     });
