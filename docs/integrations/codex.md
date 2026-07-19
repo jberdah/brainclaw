@@ -80,7 +80,11 @@ Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started
 | `UserPromptSubmit` | `brainclaw context-diff` | Surface what changed since the last turn |
 | `Stop` | `brainclaw session-end --auto-release --reflect --reflect-handoff --dispatch-review` | Release claims, reflect, and dispatch review at turn end |
 
-The file shape is `{ "hooks": { "<Event>": [ { "hooks": [ { "type": "command", "command": "…" } ] } ] } }` (matcher omitted = match all). Writes are idempotent — reruns replace only brainclaw-emitted hooks and preserve user-authored ones. Non-managed command hooks require a one-time `/hooks` trust in Codex before they run.
+The file shape is `{ "hooks": { "<Event>": [ { "matcher": "", "hooks": [ { "type": "command", "command": "…" } ] } ] } }` (`matcher: ""` = match all occurrences). Writes are idempotent — reruns replace only brainclaw-emitted hooks (recognized path-independently by their `session-start` / `context-diff` / `session-end` subcommand) and preserve user-authored hooks in the same event untouched.
+
+**Scope — interactive sessions, not headless dispatch.** These hooks serve an *interactive* Codex session: they inject shared context on start and clean up on stop, exactly like the Claude Code hooks. Non-managed command hooks require a one-time trust in Codex (`/hooks` — inspect and trust) before they run, so a fresh `.codex/hooks.json` is inert until the user trusts it. Headless dispatched workers (`codex exec`, used by `bclaw_dispatch` / `bclaw_coordinate`) do **not** rely on these hooks at all — they receive their context in the dispatch brief and report via `LANE-RESULT.json`; an untrusted project hook is simply skipped there, which is harmless. (A "managed" hook path via `requirements.toml`/MDM could bypass the trust step for fleets — a possible future enhancement.)
+
+**Output contract.** brainclaw's hook commands run for their side effects (loading context into the store, releasing claims, dispatching review) and print human-readable status; they are not Codex JSON-response hooks that gate the turn. Wiring the structured JSON response protocol per event (e.g. a `Stop` decision payload) is a possible follow-up if a use case needs it.
 
 ## Caveats
 

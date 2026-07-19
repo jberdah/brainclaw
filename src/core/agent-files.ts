@@ -1216,7 +1216,13 @@ function isBrainclawHookCommand(command: string): boolean {
   // extension) and check-events only as a standalone shell word — the old
   // substring regex ate any user hook that merely MENTIONED these words.
   if (command.includes('.bclaw-session')) return true;
-  if (/(^|\s)check-events(\s|$)/.test(command)) return true;
+  // Standalone brainclaw CLI subcommands are path-independent markers: they
+  // identify a brainclaw hook even when the resolved bin path carries no
+  // `brainclaw`/`bclaw` token (e.g. a dev checkout at `.../<project>/dist/cli.js`,
+  // or a globally-linked bin). Without this, replaceBrainclawHooks fails to
+  // recognize its own just-written hook and duplicates it on every rerun
+  // (Codex review of #94). Matched as whole shell words only.
+  if (/(^|\s)(check-events|session-start|session-end|context-diff)(\s|$)/.test(command)) return true;
   return /(^|[\s/\\"'`;&|(])(brainclaw|bclaw)(\.(cmd|exe|js|mjs|ps1))?([\s"')`;&|]|$)/.test(command);
 }
 
@@ -2392,12 +2398,11 @@ export function ensureAntigravityHooks(homeDir: string | undefined): AutoConfigW
  *
  * Events (PascalCase, per the Codex schema): `SessionStart` loads shared context,
  * `UserPromptSubmit` surfaces the context diff, `Stop` runs session-end cleanup.
- * File shape: `{ "hooks": { "<Event>": [ { "hooks": [ { "type": "command", "command": "…" } ] } ] } }`
- * — the top-level `hooks` wrapper + per-entry `hooks` array (matcher omitted = match all).
- * Like the Cursor / Antigravity `hooks.json` writers, brainclaw OWNS these three
- * event arrays (overwrite, not merge): unconditionally idempotent regardless of
- * how the CLI path resolves, and no cross-upgrade pile-up. Other events the user
- * defines are preserved (only these three keys are set).
+ * File shape: `{ "hooks": { "<Event>": [ { "matcher": "", "hooks": [ { "type": "command", "command": "…" } ] } ] } }`
+ * — the top-level `hooks` wrapper + per-entry `hooks` array (`matcher: ""` = match all).
+ * `replaceBrainclawHooks` keeps this idempotent across upgrades AND preserves
+ * user-authored hooks in the same event untouched (recognition is path-independent
+ * — see isBrainclawHookCommand's subcommand markers, Codex review of #94).
  */
 export function ensureCodexHooks(cwd: string): AutoConfigWriteResult {
   const filePath = path.join(cwd, CODEX_HOOKS_RELATIVE_PATH);
@@ -2411,9 +2416,18 @@ export function ensureCodexHooks(cwd: string): AutoConfigWriteResult {
   const contextDiffCmd = buildHookCommand(['context-diff']);
   const sessionEndCmd = buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review']);
 
-  hooks.SessionStart = [buildCommandHookEntry(sessionStartCmd)];
-  hooks.UserPromptSubmit = [buildCommandHookEntry(contextDiffCmd)];
-  hooks.Stop = [buildCommandHookEntry(sessionEndCmd)];
+  hooks.SessionStart = replaceBrainclawHooks(
+    Array.isArray(hooks.SessionStart) ? hooks.SessionStart as unknown[] : [],
+    buildCommandHookEntry(sessionStartCmd),
+  );
+  hooks.UserPromptSubmit = replaceBrainclawHooks(
+    Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as unknown[] : [],
+    buildCommandHookEntry(contextDiffCmd),
+  );
+  hooks.Stop = replaceBrainclawHooks(
+    Array.isArray(hooks.Stop) ? hooks.Stop as unknown[] : [],
+    buildCommandHookEntry(sessionEndCmd),
+  );
 
   const { created, updated } = writeJsonFileIfChanged(filePath, {
     ...existing,
