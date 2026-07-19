@@ -9,9 +9,10 @@ import { closeReviewLoopFromLaneResult } from '../../src/core/review-loop-close.
 import type { Assignment, LaneResult } from '../../src/core/schema.js';
 
 // pln#628 Focus 4B — the harvest→loop callback. A harvested review lane carrying
-// a review_verdict must map onto the loop: approve → reviewer_green → auto-close;
-// request_changes → advance to author_response (no close). Idempotent + a no-op
-// for non-review lanes or lanes without a verdict.
+// a review_verdict must map onto the loop: approve → reviewer_green → auto-close
+// (PR1); request_changes → PR2 fix cycle: bump the round counter, keep the claim
+// alive, and emit a next_turn (until the max_iterations cap → auto-close blocked).
+// Idempotent + a no-op for non-review lanes or lanes without a verdict.
 
 function makeWorkspace(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bclaw-review-loop-close-'));
@@ -22,12 +23,13 @@ function makeWorkspace(): string {
 /** Open a review loop and put it in the state the reviewer turn runs in:
  * advanced to `findings` with the reviewer slot assigned (mirrors the real
  * bclaw_coordinate(intent='review', open_loop=true) flow). */
-function setupReviewAtFindings(cwd: string): LoopThread {
+function setupReviewAtFindings(cwd: string, mode: 'symmetric' | 'asymmetric' = 'symmetric'): LoopThread {
   const loop = openLoop(
     {
       kind: 'review',
       title: 'focus-4b review',
       created_by: 'agt_test',
+      mode,
       slots: [
         { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
         { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer' },
@@ -70,21 +72,126 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
     assert.match(verdictArtifact!.body ?? '', /looks good/, 'the review_summary is carried into the verdict body');
   });
 
-  it('request_changes → records the verdict and advances to author_response WITHOUT closing', () => {
+  it('request_changes → records the verdict, bumps the round, keeps the claim, emits a next_turn (PR2)', () => {
     const loop = setupReviewAtFindings(cwd);
     const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id), laneWith('request_changes', 'fix the guard'), 'coordinator', cwd);
 
     assert.ok(res);
     assert.equal(res!.action, 'advanced');
-    assert.equal(res!.loop_status, 'open', 'loop stays open (re-review cycle is PR2)');
+    assert.equal(res!.loop_status, 'open', 'loop stays open for the fix cycle');
+    assert.equal(res!.keep_claim, true, 'the claim/worktree is kept alive for the re-dispatch');
+    assert.ok(res!.next_turn, 'a next_turn is emitted for harvest to re-dispatch');
+    assert.equal(res!.next_turn!.role, 'reviewer', 'symmetric: the same reviewer takes the fix+re-review turn');
+    assert.equal(res!.next_turn!.agent, 'codex');
+    assert.equal(res!.next_turn!.iteration, 1, 'round counter bumped to 1');
+    assert.match(res!.next_turn!.task, /fix cycle round 1/i);
+    assert.match(res!.next_turn!.task, /fix the guard/, 'the requested changes are carried into the brief');
 
     const after = getLoop(loop.id, cwd)!;
     assert.equal(after.status, 'open');
-    assert.equal(after.current_phase, 'author_response', 'advanced one phase past findings');
+    assert.equal(after.iteration_count, 1, 'iteration_count bumped');
     const verdictArtifact = after.artifacts.find((a) => a.type === 'verdict');
     assert.ok(verdictArtifact);
-    assert.doesNotMatch(verdictArtifact!.body ?? '', /^accepted/, 'request_changes must NOT produce an accepted body');
+    assert.doesNotMatch(verdictArtifact!.body ?? '', /^accepted/, 'request_changes must NOT produce an accepted body (reviewer_green must not fire)');
     assert.match(verdictArtifact!.body ?? '', /^changes-requested/, 'request_changes body is explicit');
+  });
+
+  it('report path (cycleOnRequestChanges=false) does NOT cycle request_changes — deferred to --integrate', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const res = closeReviewLoopFromLaneResult(
+      reviewAssignment(loop.id), laneWith('request_changes', 'fix'), 'coordinator', cwd,
+      { cycleOnRequestChanges: false },
+    );
+    assert.ok(res);
+    assert.equal(res!.action, 'noop', 'report path defers the cycle');
+    assert.match(res!.reason, /deferred to --integrate/);
+    const after = getLoop(loop.id, cwd)!;
+    assert.equal(after.iteration_count, 0, 'no round bump on the report path');
+    assert.equal(after.artifacts.some((a) => a.type === 'verdict'), false, 'no verdict recorded on the report path');
+    // …but approve still closes on the report path (PR1 BLOCKING 1 unchanged).
+    const approve = closeReviewLoopFromLaneResult(
+      reviewAssignment(loop.id), laneWith('approve'), 'coordinator', cwd,
+      { cycleOnRequestChanges: false },
+    );
+    assert.equal(approve!.action, 'closed');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
+  });
+
+  it('cycles request_changes until the max_iterations(3) cap → auto-close blocked', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const asg = reviewAssignment(loop.id);
+    // Each request_changes bumps the round. Re-bind the (re-activated) reviewer
+    // slot to the same assignment before each harvest, mirroring how harvest's
+    // re-dispatch re-binds the slot via turn().
+    const rebindReviewer = () => {
+      const slot = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+      turn({ id: loop.id, slot_id: slot.slot_id, actor: 'coordinator', assignment_id: asg.id }, cwd);
+    };
+
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    assert.equal(r1!.next_turn!.iteration, 1);
+
+    rebindReviewer();
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r2!.action, 'advanced');
+    assert.equal(r2!.next_turn!.iteration, 2);
+    assert.equal(getLoop(loop.id, cwd)!.status, 'open');
+
+    rebindReviewer();
+    const r3 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r3!.action, 'closed', 'the 3rd round hits the cap');
+    assert.equal(r3!.loop_status, 'blocked', 'max_iterations(3) → blocked for a human');
+    assert.equal(r3!.keep_claim, undefined, 'a blocked loop is torn down, not kept');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'blocked');
+  });
+
+  it('approve at any round closes on reviewer_green (mid-cycle exit)', () => {
+    const loop = setupReviewAtFindings(cwd);
+    const asg = reviewAssignment(loop.id);
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    // Re-dispatch re-activates the slot; the next pass approves.
+    const slot = getLoop(loop.id, cwd)!.slots.find((s) => s.role === 'reviewer')!;
+    turn({ id: loop.id, slot_id: slot.slot_id, actor: 'coordinator', assignment_id: asg.id }, cwd);
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('approve', 'now good'), 'coordinator', cwd);
+    assert.equal(r2!.action, 'closed');
+    assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
+  });
+
+  // Codex review P1 — the fix cycle is SYMMETRIC-only in v1. An asymmetric review
+  // loop (the default) must NOT re-dispatch the reviewer to self-fix; it defers to
+  // the PR1 behavior (advance to author_response, no keep_claim / next_turn).
+  it('asymmetric request_changes does NOT cycle — advances to author_response, no keep_claim/next_turn (deferred)', () => {
+    const loop = setupReviewAtFindings(cwd, 'asymmetric');
+    const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id), laneWith('request_changes', 'fix it'), 'coordinator', cwd);
+    assert.ok(res);
+    assert.equal(res!.action, 'advanced');
+    assert.equal(res!.keep_claim, undefined, 'asymmetric must NOT keep the claim (no re-dispatch)');
+    assert.equal(res!.next_turn, undefined, 'asymmetric emits no fix-cycle turn');
+    const after = getLoop(loop.id, cwd)!;
+    assert.equal(after.current_phase, 'author_response', 'advanced linearly to author_response (PR1 behavior)');
+    assert.equal(after.iteration_count, 0, 'no round bump in asymmetric mode');
+  });
+
+  // Codex review P0 — a re-harvest of an OLD lane after the cycle re-dispatched
+  // (reviewer slot now bound to a NEWER assignment) must return a `noop` whose
+  // loop_status is still OPEN. harvest reads that signal to SKIP the claim release
+  // — releasing would tear down the reused worktree and strand the live cycle.
+  it('idempotent re-harvest of a cycled lane returns noop with loop_status=open (no strand signal)', () => {
+    const loop = setupReviewAtFindings(cwd, 'symmetric');
+    const asg = reviewAssignment(loop.id);
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    assert.equal(r1!.keep_claim, true);
+    // Re-harvest the SAME (now stale) lane: the reviewer slot was completed and
+    // no live re-activation happened in this unit, so no active slot resolves.
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.ok(r2);
+    assert.equal(r2!.action, 'noop');
+    assert.equal(r2!.keep_claim, undefined, 'a noop carries no keep_claim…');
+    assert.equal(r2!.loop_status, 'open', '…so harvest must gate on loop_status=open to avoid releasing the reused claim');
+    assert.equal(getLoop(loop.id, cwd)!.iteration_count, 1, 'no double-advance on the re-harvest');
   });
 
   it('is idempotent — a second harvest pass on an already-closed loop is a no-op', () => {

@@ -23,7 +23,8 @@ import { loadAssignment, transitionAssignment } from '../core/assignments.js';
 import { loadClaim, releaseClaimsCascade, logCascadeReleaseResult } from '../core/claims.js';
 import { getCapabilityProfile, dispatchCanCommit } from '../core/agent-capability.js';
 import { commitWorktreeOnBehalf, worktreesBaseDir, resolveGitToplevel } from '../core/worktree.js';
-import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult } from '../core/review-loop-close.js';
+import { closeReviewLoopFromLaneResult, type ReviewLoopCloseResult, type ReviewLoopNextTurn } from '../core/review-loop-close.js';
+import { dispatchReviewLoopTurn } from '../core/review-loop-turn-dispatch.js';
 
 export interface HarvestOptions {
   /**
@@ -353,9 +354,12 @@ export function harvestLaneResults(options: LaneHarvestOptions = {}): LaneHarves
     // (a terminal loop is a no-op; a stuck approve is resumed), so firing it here
     // AND in integrateLaneResults is safe — and it runs BEFORE the harvested
     // marker short-circuits below, so a re-harvest still resumes a stuck loop.
+    // PR2: cycleOnRequestChanges=false — the report path only closes on approve;
+    // it must NOT advance a request_changes cycle it cannot follow through on
+    // (no re-dispatch, no claim retention). `harvest --integrate` owns the cycle.
     try {
       const laneAssignment = loadAssignment(lane.assignment_id, cwd);
-      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd);
+      if (laneAssignment) closeReviewLoopFromLaneResult(laneAssignment, lane, agent, cwd, { cycleOnRequestChanges: false });
     } catch { /* never block harvest on loop-close */ }
 
     const marker = laneHarvestedMarkerPath(cwd, lane.assignment_id);
@@ -494,6 +498,13 @@ export interface LaneIntegrateResult {
   /** assignment_ids skipped (no assignment record, or unmapped). */
   skipped: string[];
   errors: string[];
+  /**
+   * PR2 (pln#628 Focus 4B) — review-loop fix-cycle turns to re-dispatch. Emitted
+   * (not spawned) by the sync integrate pass so the async caller (runHarvestLane)
+   * can await the actual spawn. Each entry keeps the loop's claim/worktree alive
+   * for the same reviewer to apply fixes + re-review.
+   */
+  next_turns: Array<ReviewLoopNextTurn & { loop_id: string }>;
 }
 
 /**
@@ -514,7 +525,7 @@ export interface LaneIntegrateResult {
 export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIntegrateResult {
   const cwd = options.cwd ?? process.cwd();
   const actor = options.agent ?? 'coordinator';
-  const result: LaneIntegrateResult = { integrated: [], skipped: [], errors: [] };
+  const result: LaneIntegrateResult = { integrated: [], skipped: [], errors: [], next_turns: [] };
 
   const worktreePaths = resolveLaneScanPaths(options, cwd);
 
@@ -587,27 +598,60 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
         entry.assignment_completed = forceCompleteAssignment(
           lane.assignment_id, artifacts, `pln#534 on-behalf integration: ${lane.summary.slice(0, 120)}`, actor, cwd,
         );
-        // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
-        // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
-        // so a silent ownership failure is observable in the runtime event log
-        // rather than only in this in-memory `reasons` string).
-        const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
-        logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
-        const claimEntry = cascade.entries[0];
-        entry.claim_released = claimEntry?.released === true;
-        if (claimEntry && !claimEntry.released) {
-          reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
-        }
 
-        // pln#628 Focus 4B — if this lane is a review-loop turn carrying a
-        // verdict, map it onto the loop: record the verdict artifact + advance,
-        // which auto-closes the loop on reviewer_green (approve) without a human
-        // driving complete_turn/advance by hand. No-op for non-review lanes or
-        // lanes without a verdict; never throws (harvest is not blocked on it).
+        // pln#628 Focus 4B — map this lane onto its review loop BEFORE deciding
+        // teardown: PR1 records the verdict + advances (auto-close on approve);
+        // PR2 continues the fix cycle on request_changes (bump round, emit a
+        // next_turn) unless the iteration cap is hit. This is the --integrate
+        // path, so it MAY cycle (it can re-dispatch AND retain the claim). No-op
+        // for non-review lanes / lanes without a verdict; never throws.
         const loopClose = closeReviewLoopFromLaneResult(assignment, lane, actor, cwd);
         if (loopClose) {
           entry.review_loop = loopClose;
           reasons.push(`review-loop ${loopClose.loop_id}: ${loopClose.action} — ${loopClose.reason}`);
+          if (loopClose.next_turn) {
+            result.next_turns.push({ loop_id: loopClose.loop_id, ...loopClose.next_turn });
+          }
+        }
+
+        // PR2 claim-teardown gate. Skip the release when either:
+        //  (a) keep_claim — the symmetric fix cycle reuses the claim/worktree for
+        //      the re-dispatched turn (commits accumulate on one branch); or
+        //  (b) Codex review P0 — an idempotent re-harvest of an OLD lane whose
+        //      loop is still OPEN returns a `noop` (the reviewer slot is now bound
+        //      to a NEWER assignment under an active cycle). Releasing here would
+        //      tear down the reused claim/worktree out from under the live turn
+        //      and strand the fix cycle. The loop machinery owns the lifecycle
+        //      while it is open; only a terminal close (approve/blocked, action
+        //      'closed') or an asymmetric hand-off ('advanced' without keep_claim)
+        //      releases here. A `noop` on a TERMINAL loop still releases (safe —
+        //      the closing pass already released, so this is a no-op).
+        const loopStillOpen =
+          loopClose?.loop_status !== undefined &&
+          !['completed', 'cancelled', 'blocked'].includes(loopClose.loop_status);
+        const keepClaimAlive =
+          loopClose?.keep_claim === true || (loopClose?.action === 'noop' && loopStillOpen);
+        if (keepClaimAlive) {
+          // The next_turn spawn (async) is awaited by runHarvestLane. The
+          // assignment for THIS turn is still completed above.
+          entry.claim_released = false;
+          reasons.push(
+            loopClose?.keep_claim
+              ? 'claim kept alive for review fix-cycle re-dispatch (PR2)'
+              : 'claim left intact — idempotent re-harvest on an active review loop (no strand)',
+          );
+        } else {
+          // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
+          // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
+          // so a silent ownership failure is observable in the runtime event log
+          // rather than only in this in-memory `reasons` string).
+          const cascade = releaseClaimsCascade([assignment.claim_id], { cwd, planStatus: 'done' });
+          logCascadeReleaseResult({ actor, trigger: 'harvest_integrate', assignment_id: lane.assignment_id, claim_id: assignment.claim_id, cascade, cwd });
+          const claimEntry = cascade.entries[0];
+          entry.claim_released = claimEntry?.released === true;
+          if (claimEntry && !claimEntry.released) {
+            reasons.push(`claim release ${claimEntry.reason}${claimEntry.error ? `: ${claimEntry.error}` : ''}`);
+          }
         }
       } else {
         // blocked / failed: best-effort lifecycle (FSM may reject from offered).
@@ -890,9 +934,11 @@ export interface RunHarvestLaneOptions {
   orphaned?: boolean;
   /** Base ref for --orphaned commits-ahead comparison. Default 'master'. */
   base?: string;
+  /** Coordinator identity used as the dispatcher for PR2 fix-cycle re-dispatch. */
+  agent?: string;
 }
 
-export function runHarvestLane(assignmentId: string | undefined, options: RunHarvestLaneOptions = {}): void {
+export async function runHarvestLane(assignmentId: string | undefined, options: RunHarvestLaneOptions = {}): Promise<void> {
   const cwd = options.cwd ?? process.cwd();
 
   if (!memoryExists(cwd)) {
@@ -952,8 +998,30 @@ export function runHarvestLane(assignmentId: string | undefined, options: RunHar
       dryRun: options.dryRun,
       cwd,
     });
+    // pln#628 Focus 4B PR2 — spawn the review fix-cycle turns the sync integrate
+    // pass emitted. Re-dispatches the SAME reviewer into the SAME (kept) worktree
+    // to apply the requested changes + re-review. Dry-run only reports them.
+    const dispatchedTurns: Array<{ loop_id: string; agent: string; iteration: number; execution_status?: string; error?: string }> = [];
+    if (!options.dryRun) {
+      for (const nt of integ.next_turns) {
+        const dispatched = await dispatchReviewLoopTurn({
+          loopId: nt.loop_id,
+          slot: { slot_id: nt.slot_id, role: nt.role, agent: nt.agent, agent_id: nt.agent_id },
+          phase: nt.phase,
+          task: nt.task,
+          dispatcherAgent: options.agent ?? 'coordinator',
+          cwd,
+          // NO worktreeBaseRef: reuse the kept worktree so the fixes accumulate;
+          // pinning a ref would reset the branch and wipe prior-round commits.
+        });
+        dispatchedTurns.push({
+          loop_id: nt.loop_id, agent: nt.agent, iteration: nt.iteration,
+          execution_status: dispatched.execution_status, error: dispatched.error,
+        });
+      }
+    }
     if (options.json) {
-      console.log(JSON.stringify(integ, null, 2));
+      console.log(JSON.stringify({ ...integ, dispatched_turns: dispatchedTurns }, null, 2));
       return;
     }
     const dry = options.dryRun ? ' (dry-run)' : '';
@@ -976,7 +1044,14 @@ export function runHarvestLane(assignmentId: string | undefined, options: RunHar
       if (e.reason) console.log(`      ${e.reason}`);
     }
     for (const err of integ.errors) console.error(`  ✗ ${err}`);
-    console.log(`\n✔ Lane integrate complete${dry}: ${integ.integrated.length} integrated, ${integ.errors.length} error(s).`);
+    for (const dt of dispatchedTurns) {
+      const status = dt.error ? `error: ${dt.error}` : (dt.execution_status ?? 'unknown');
+      console.log(`  ↻ Fix-cycle re-dispatch [${dt.loop_id}] round ${dt.iteration} → ${dt.agent} (${status})`);
+    }
+    if (options.dryRun && integ.next_turns.length > 0) {
+      console.log(`  (dry-run) ${integ.next_turns.length} fix-cycle turn(s) would be re-dispatched.`);
+    }
+    console.log(`\n✔ Lane integrate complete${dry}: ${integ.integrated.length} integrated, ${dispatchedTurns.length} re-dispatched, ${integ.errors.length} error(s).`);
     return;
   }
 
