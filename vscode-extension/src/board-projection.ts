@@ -186,12 +186,10 @@ export function projectBoard(projection: Projection): ProjectedBoard {
  * candidates + blocked assignments + stale runs). Computed from the journal
  * projection so the surface no longer reads it from `board_summary`.
  *
- * Note: today EVERY input to this composite is absent from the journal —
- * actions and candidates are not journaled at all, assignments/runs are
- * envelope-only (see the module-header coverage note). So this returns 0 in
- * pure-journal mode; the caller MUST overlay the composite from the MCP seed
- * until the writer journals those families with payloads. The computation is
- * correct and stays unchanged — it simply has nothing to count yet.
+ * Since pln#568 every input to this composite IS journaled with post-images;
+ * the caller trusts it once the journal is authoritative for the registry
+ * families (`registry_genesis` marker seen — see the module-header CUTOVER
+ * note), and overlays the MCP seed until then.
  */
 export function attentionRequired(board: ProjectedBoard): AttentionBreakdown {
   const pending_actions = board.active_actions.filter((a) => statusOf(a, 'pending') === 'pending').length;
@@ -206,6 +204,87 @@ export function attentionRequired(board: ProjectedBoard): AttentionBreakdown {
   return {
     total: pending_actions + pending_human_candidates + blocked_assignments + stale_runs,
     pending_actions, pending_human_candidates, blocked_assignments, stale_runs,
+  };
+}
+
+/**
+ * Terminal statuses for the IN_PROGRESS split (pln#559, moved here from
+ * board-tree.ts so the MCP and journal section paths share ONE definition).
+ * Exhaustive exclusion lists so pre-v1 states like 'interrupted' / 'timed_out'
+ * (terminal for all practical purposes) don't render as active work. Anything
+ * surviving the filter is genuinely in flight right now.
+ */
+export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+  'blocked', 'waiting_input', 'failed', 'completed', 'cancelled',
+  'interrupted', 'timed_out', 'expired', 'rerouted',
+]);
+export const TERMINAL_ASSIGNMENT_STATUSES: ReadonlySet<string> = new Set([
+  'completed', 'expired', 'rerouted', 'cancelled', 'failed', 'timed_out',
+]);
+
+/** Records whose `status` is `pending` (default when absent). The journal
+ *  projection is unfiltered post-images, so sections whose MCP fetch used a
+ *  server-side `status: 'pending'` filter (candidates, actions) apply this
+ *  before handing the array to renderers that assume the fetch pre-filtered. */
+export function filterPending(records: Record<string, unknown>[]): Record<string, unknown>[] {
+  return records.filter((r) => statusOf(r, 'pending') === 'pending');
+}
+
+/** The Live-activity (IN_PROGRESS) content split. Mirrors what board-tree's
+ *  MCP load path computed inline before this was extracted. */
+export interface InProgressSelection {
+  /** Claims currently held (status `active`). */
+  active_claims: Record<string, unknown>[];
+  /** Assignments in a non-terminal state (may include `blocked` — the
+   *  renderer routes blocked rows to ATTENTION, running rows here). */
+  live_assignments: Record<string, unknown>[];
+  /** Runs in a non-terminal state. */
+  live_runs: Record<string, unknown>[];
+  /** pln#559 step 2 — assignments terminal within the window, newest first,
+   *  rendered under "Recently terminal" so a dead worker doesn't vanish. */
+  recently_terminal_assignments: Record<string, unknown>[];
+}
+
+function terminalTimestampMs(assignment: Record<string, unknown>): number | undefined {
+  const raw =
+    assignment['completed_at'] ?? assignment['expired_at'] ?? assignment['failed_at'] ??
+    assignment['timed_out_at'] ?? assignment['rerouted_at'] ?? assignment['cancelled_at'] ??
+    assignment['updated_at'] ?? assignment['created_at'];
+  if (typeof raw !== 'string' || !raw) { return undefined; }
+  const ts = Date.parse(raw);
+  return Number.isFinite(ts) ? ts : undefined;
+}
+
+function recencyMs(record: Record<string, unknown>): number {
+  const raw = record['updated_at'] ?? record['created_at'];
+  return typeof raw === 'string' ? (Date.parse(raw) || 0) : 0;
+}
+
+/**
+ * Split claims/assignments/runs into the Live-activity view. PURE — the caller
+ * passes `nowMs` (`Date.now()`) and the recently-terminal window. Works on both
+ * MCP-fetched arrays and the journal projection's slots: the inputs are full
+ * entity records either way, so the two section paths cannot drift (the exact
+ * bug class trp#559 was about, applied to section content instead of counts).
+ */
+export function selectInProgress(
+  claims: Record<string, unknown>[],
+  assignments: Record<string, unknown>[],
+  runs: Record<string, unknown>[],
+  nowMs: number,
+  recentlyTerminalWindowMs: number,
+): InProgressSelection {
+  return {
+    active_claims: claims.filter((c) => statusOf(c, 'active') === 'active'),
+    live_assignments: assignments.filter((a) => !TERMINAL_ASSIGNMENT_STATUSES.has(statusOf(a, 'active'))),
+    live_runs: runs.filter((r) => !TERMINAL_RUN_STATUSES.has(statusOf(r, 'active'))),
+    recently_terminal_assignments: assignments
+      .filter((a) => TERMINAL_ASSIGNMENT_STATUSES.has(statusOf(a, 'active')))
+      .filter((a) => {
+        const ts = terminalTimestampMs(a);
+        return ts !== undefined && nowMs - ts <= recentlyTerminalWindowMs;
+      })
+      .sort((a, b) => recencyMs(b) - recencyMs(a)),
   };
 }
 

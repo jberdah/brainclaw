@@ -20,6 +20,7 @@ import {
 } from './tree-helpers';
 import type { OpenEntityArgs, SupportedEntity } from './content-provider';
 import { BoardObserver, mergeCounts, type CursorMemento, type SeedCounts } from './board-observer';
+import { filterPending, selectInProgress } from './board-projection';
 
 export interface BoardProject {
   path: string;
@@ -362,10 +363,25 @@ const REFRESHABLE_SECTION_IDS: readonly string[] = [
 // pln#560 slice3 — sections whose ENTIRE content is journal-driven (plans /
 // traps / handoffs all reach the journal with payloads, trp_2a89ae97). In
 // observerMode these render from the in-memory projection with zero MCP calls.
-// Mixed/degraded sections (ATTENTION, IN_PROGRESS, SYSTEM, SPRINTS) keep their
-// MCP fetch because claims/actions/candidates/runs/sequence are not journaled.
 const JOURNAL_DRIVEN_SECTIONS: ReadonlySet<string> = new Set([
   SECTION.BACKLOG, SECTION.PLANS, SECTION.TRAPS, SECTION.HANDOFFS,
+]);
+
+// pln#560 completion — the registry/coordination families (claim, assignment,
+// agent_run, action_required, candidate, sequence) are journaled with full
+// post-images since pln#568, so their sections serve entity content from the
+// projection too — but ONLY once the journal is authoritative for the registry
+// (the registry_genesis backfill marker was ingested — see
+// BoardObserver.registryAuthoritative). Before the marker, a partially-journaled
+// store would under-render these sections (the trp#559 bug class, applied to
+// content instead of counts), so they keep the MCP fetch. Non-journaled extras
+// on the composite sections (workflow_hints, loops, dispatch_status evidence)
+// stay best-effort MCP reads through the observer-flagged client.
+// SYSTEM stays MCP either way: it mixes private/machine runtime_notes (never
+// journaled — visibility boundary, dec_8705fb8e) and cross_project config.
+const REGISTRY_JOURNAL_SECTIONS: ReadonlySet<string> = new Set([
+  SECTION.ATTENTION, SECTION.IN_PROGRESS, SECTION.SPRINTS, SECTION.SPRINT,
+  SECTION.CLAIMS, SECTION.ASSIGNMENTS, SECTION.RUNS, SECTION.ACTIONS, SECTION.CANDIDATES,
 ]);
 
 const COMMAND = {
@@ -1643,6 +1659,12 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
     for (const sectionId of JOURNAL_DRIVEN_SECTIONS) {
       this._sectionBoards.delete(this._sectionCacheKey(normalizedPath, sectionId));
     }
+    // Registry sections are journal-served once authoritative; clearing them
+    // unconditionally is harmless before that (they just refetch via MCP on
+    // the next expand, same as the TTL expiry path).
+    for (const sectionId of REGISTRY_JOURNAL_SECTIONS) {
+      this._sectionBoards.delete(this._sectionCacheKey(normalizedPath, sectionId));
+    }
   }
 
   private _emptyBoard(): BoardData {
@@ -1778,6 +1800,22 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
       }
     }
 
+    // pln#560 completion — registry/coordination sections from the projection,
+    // gated on registry authority (see REGISTRY_JOURNAL_SECTIONS). Entity
+    // content is zero-MCP; the composites (ATTENTION, IN_PROGRESS) enrich with
+    // the non-journaled extras through a NULLABLE client — no brainclaw binary
+    // still renders the entities, just without hints/loops/evidence.
+    if (this._observerEnabled() && REGISTRY_JOURNAL_SECTIONS.has(sectionId)) {
+      const normalizedPath = this._normalizePath(projectPath);
+      const observer = this._observers.get(normalizedPath);
+      if (observer && fs.existsSync(path.join(normalizedPath, '.brainclaw', 'events'))) {
+        observer.ingest();
+        if (observer.registryAuthoritative()) {
+          return this._buildRegistrySectionFromJournal(normalizedPath, sectionId, observer);
+        }
+      }
+    }
+
     const client = await this._getMcpClient(projectPath);
     if (!client) {
       throw new Error(`No brainclaw command found for ${projectPath}`);
@@ -1807,80 +1845,25 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.IN_PROGRESS: {
-        // Strict live-work filter. Exhaustive exclusion list so pre-v1 states
-        // like 'interrupted' / 'timed_out' (which are terminal for all
-        // practical purposes) don't render as active work. Anything surviving
-        // the filter is genuinely in flight right now.
-        const TERMINAL_RUN_STATUSES = new Set([
-          'blocked', 'waiting_input', 'failed', 'completed', 'cancelled',
-          'interrupted', 'timed_out', 'expired', 'rerouted',
-        ]);
-        const TERMINAL_ASSIGNMENT_STATUSES = new Set([
-          'completed', 'expired', 'rerouted', 'cancelled', 'failed', 'timed_out',
-        ]);
         const [claims, assignments, runs, loopsResult] = await Promise.all([
           this._findEntities(client, 'claim', { status: 'active', limit: 100, includeLegacy: true }),
           this._findEntities(client, 'assignment', { limit: 100, includeLegacy: true }),
           this._findEntities(client, 'agent_run', { limit: 100, includeLegacy: true }),
-          // pln#559 — surface active loops in the tree (the 2026-06-10 review
-          // loop was invisible because nothing rendered loops). Loops aren't
-          // a bclaw_find entity; the canonical surface is bclaw_loop(intent='list').
-          // Best-effort: pre-loop brainclaw versions return an error, treat as empty.
-          client.callTool('bclaw_loop', { intent: 'list', limit: 50 })
-            .then((r) => (Array.isArray((r as any).loops) ? (r as any).loops : []) as any[])
-            .catch(() => [] as any[]),
+          this._fetchActiveLoops(client),
         ]);
-        board.active_claims = claims;
-        const liveAssignments = assignments.filter((a: any) =>
-          !TERMINAL_ASSIGNMENT_STATUSES.has(a.status));
-        board.active_assignments = liveAssignments;
-        board.active_runs = runs.filter((run: any) =>
-          !TERMINAL_RUN_STATUSES.has(run.status));
-        board.active_loops = loopsResult.filter((l: any) =>
-          l.status === 'open' || l.status === 'paused');
-
-        // pln#559 step 2 — terminal-within-window assignments rendered under
-        // "Recently terminal" so a worker that died doesn't vanish without
-        // trace (the 4 false-expirations of 2026-06-10).
-        const now = Date.now();
-        board.recently_terminal_assignments = assignments
-          .filter((a: any) => TERMINAL_ASSIGNMENT_STATUSES.has(a.status))
-          .filter((a: any) => {
-            const tsRaw =
-              a.completed_at ?? a.expired_at ?? a.failed_at ?? a.timed_out_at ??
-              a.rerouted_at ?? a.cancelled_at ?? a.updated_at ?? a.created_at;
-            if (!tsRaw) return false;
-            const ts = Date.parse(tsRaw);
-            return Number.isFinite(ts) && now - ts <= RECENTLY_TERMINAL_WINDOW_MS;
-          })
-          .sort((a: any, b: any) => {
-            const tsA = Date.parse(a.updated_at ?? a.created_at ?? '0') || 0;
-            const tsB = Date.parse(b.updated_at ?? b.created_at ?? '0') || 0;
-            return tsB - tsA;
-          });
-
-        // pln#559 step 1 — evidence overrides administrative status: fetch
-        // bclaw_dispatch_status for live assignments first, then recently-
-        // terminal ones, capped at DISPATCH_STATUS_BUDGET. The facade does
-        // every entity resolution itself, so one call per assignment is fine.
-        const enrichTargets = [
-          ...liveAssignments,
-          ...board.recently_terminal_assignments,
-        ].slice(0, DISPATCH_STATUS_BUDGET);
-        const statuses: Record<string, DispatchStatusLite> = {};
-        if (enrichTargets.length > 0) {
-          const results = await Promise.allSettled(
-            enrichTargets.map((a: any) =>
-              client.callTool('bclaw_dispatch_status', { target_id: a.id, tail_log_lines: 0 })),
-          );
-          enrichTargets.forEach((a: any, i: number) => {
-            const r = results[i];
-            if (r.status === 'fulfilled' && r.value && typeof r.value === 'object') {
-              statuses[a.id] = r.value as DispatchStatusLite;
-            }
-          });
-        }
-        board.dispatch_statuses = statuses;
+        // Strict live-work filter + recently-terminal window (pln#559) — the
+        // semantics live in board-projection.selectInProgress so the MCP and
+        // journal section paths cannot drift.
+        const selection = selectInProgress(claims, assignments, runs, Date.now(), RECENTLY_TERMINAL_WINDOW_MS);
+        board.active_claims = selection.active_claims;
+        board.active_assignments = selection.live_assignments;
+        board.active_runs = selection.live_runs;
+        board.active_loops = loopsResult;
+        board.recently_terminal_assignments = selection.recently_terminal_assignments;
+        board.dispatch_statuses = await this._enrichDispatchStatuses(client, [
+          ...selection.live_assignments,
+          ...selection.recently_terminal_assignments,
+        ]);
         return board;
       }
       case SECTION.SPRINTS:
@@ -1968,6 +1951,138 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return fullBoard;
       }
     }
+  }
+
+  /**
+   * pln#560 completion — registry/coordination section content served from the
+   * journal projection. Only called once `registryAuthoritative()` is true
+   * (see REGISTRY_JOURNAL_SECTIONS). The projection slots are UNFILTERED
+   * post-images; sections whose renderers assume a server-side filter get the
+   * equivalent pure filter here (pending candidates/…), the rest re-filter at
+   * render time exactly as they do for MCP-fetched arrays.
+   *
+   * The composites keep their non-journaled enrichments (workflow_hints,
+   * loops, dispatch evidence) as BEST-EFFORT MCP reads: `client` may be null
+   * (no brainclaw binary resolved) and the section still renders its entities
+   * — a strict improvement over the MCP path, which throws without a client.
+   */
+  private async _buildRegistrySectionFromJournal(
+    normalizedPath: string,
+    sectionId: string,
+    observer: BoardObserver,
+  ): Promise<BoardData> {
+    const projected = observer.board();
+    const board = this._cloneBoard(this._getBoardForPath(normalizedPath));
+
+    switch (sectionId) {
+      case SECTION.ATTENTION: {
+        board.active_actions = projected.active_actions;
+        board.pending_candidates = filterPending(projected.pending_candidates);
+        board.active_assignments = projected.active_assignments;
+        board.active_runs = projected.active_runs;
+        const client = await this._getMcpClient(normalizedPath);
+        const context = client
+          ? await client.callTool('bclaw_context', { kind: 'memory', profile: 'quick' })
+            .catch(() => ({} as Record<string, unknown>))
+          : {};
+        const hints = (context as { workflow_hints?: string[] }).workflow_hints;
+        board.workflow_hints = Array.isArray(hints) ? hints : [];
+        return board;
+      }
+      case SECTION.IN_PROGRESS: {
+        const selection = selectInProgress(
+          projected.active_claims,
+          projected.active_assignments,
+          projected.active_runs,
+          Date.now(),
+          RECENTLY_TERMINAL_WINDOW_MS,
+        );
+        board.active_claims = selection.active_claims;
+        board.active_assignments = selection.live_assignments;
+        board.active_runs = selection.live_runs;
+        board.recently_terminal_assignments = selection.recently_terminal_assignments;
+        const client = await this._getMcpClient(normalizedPath);
+        board.active_loops = client ? await this._fetchActiveLoops(client) : [];
+        board.dispatch_statuses = await this._enrichDispatchStatuses(client, [
+          ...selection.live_assignments,
+          ...selection.recently_terminal_assignments,
+        ]);
+        return board;
+      }
+      case SECTION.SPRINTS:
+      case SECTION.SPRINT: {
+        // The MCP path fetches sequences with status 'active'; the projection
+        // collapses to active-first-else-first-seen, so gate on the status.
+        const seq = projected.active_sequence;
+        board.active_sequence = seq && (seq as any).status === 'active' ? seq : undefined;
+        return board;
+      }
+      case SECTION.CLAIMS: {
+        board.active_claims = projected.active_claims;
+        return board;
+      }
+      case SECTION.ASSIGNMENTS: {
+        board.active_assignments = projected.active_assignments;
+        return board;
+      }
+      case SECTION.RUNS: {
+        board.active_runs = projected.active_runs;
+        return board;
+      }
+      case SECTION.ACTIONS: {
+        board.active_actions = projected.active_actions;
+        return board;
+      }
+      case SECTION.CANDIDATES: {
+        board.pending_candidates = filterPending(projected.pending_candidates);
+        return board;
+      }
+      default:
+        return board;
+    }
+  }
+
+  /**
+   * pln#559 — surface active loops in the tree (the 2026-06-10 review loop was
+   * invisible because nothing rendered loops). Loops aren't a bclaw_find
+   * entity; the canonical surface is bclaw_loop(intent='list'). Best-effort:
+   * pre-loop brainclaw versions return an error, treat as empty.
+   */
+  private async _fetchActiveLoops(client: McpClient): Promise<any[]> {
+    return client.callTool('bclaw_loop', { intent: 'list', limit: 50 })
+      .then((r) => (Array.isArray((r as any).loops) ? (r as any).loops : []) as any[])
+      .then((loops) => loops.filter((l: any) => l.status === 'open' || l.status === 'paused'))
+      .catch(() => [] as any[]);
+  }
+
+  /**
+   * pln#559 step 1 — evidence overrides administrative status: fetch
+   * bclaw_dispatch_status for live assignments first, then recently-terminal
+   * ones, capped at DISPATCH_STATUS_BUDGET (git execs aren't cheap on
+   * Windows). The facade does every entity resolution itself, so one call per
+   * assignment is fine. A null client (journal path without a resolved
+   * brainclaw binary) yields no evidence — rows fall back to their
+   * administrative status.
+   */
+  private async _enrichDispatchStatuses(
+    client: McpClient | null,
+    targets: any[],
+  ): Promise<Record<string, DispatchStatusLite>> {
+    const statuses: Record<string, DispatchStatusLite> = {};
+    if (!client) return statuses;
+    const enrichTargets = targets.slice(0, DISPATCH_STATUS_BUDGET);
+    if (enrichTargets.length === 0) return statuses;
+    const results = await Promise.allSettled(
+      enrichTargets.map((a: any) =>
+        client.callTool('bclaw_dispatch_status', { target_id: a.id, tail_log_lines: 0 })),
+    );
+    enrichTargets.forEach((a: any, i: number) => {
+      const r = results[i];
+      if (r.status === 'fulfilled' && r.value && typeof r.value === 'object') {
+        statuses[a.id] = r.value as DispatchStatusLite;
+      }
+    });
+    return statuses;
   }
 
   private _buildBoardSections(board: BoardData, projectPath: string, expandWhenPopulated: boolean): BrainclawTreeItem[] {

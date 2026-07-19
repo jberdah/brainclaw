@@ -213,6 +213,18 @@ the projection rule).
 > from the seed otherwise. `agents`/`sessions` are never journaled → always seed.
 > A store that has NOT run the supplement keeps the seed (no regression).
 >
+> **Section CONTENT cutover (pln#560 completion):** once `registryAuthoritative()`
+> is set, the registry/coordination sections (ATTENTION, IN_PROGRESS, SPRINTS,
+> and the flat claims/assignments/runs/actions/candidates drill-downs) serve
+> their entity content from the projection too — zero MCP display fetches on
+> expand. The non-journaled extras on the composites (server-computed
+> `workflow_hints`, loops via `bclaw_loop(intent='list')`, and the
+> `bclaw_dispatch_status` evidence digests of §6/§7) remain best-effort reads
+> through the observer-flagged client: when no client resolves, the section
+> still renders its entities. SYSTEM keeps its MCP fetch regardless — it mixes
+> private/machine runtime_notes (never journaled, visibility boundary) and
+> cross-project config, neither derivable from the shared journal.
+>
 > The historical (pre-pln#568) description below is kept for context.
 
 The journal classifies records into five classes (§2). In phase 1 / `dual`
