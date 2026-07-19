@@ -1907,7 +1907,10 @@ export function ensureCodexMcpConfig(homeDir: string | undefined, env: NodeJS.Pr
     '\n[mcp_servers.brainclaw]',
     `command = "${normalizedCommand}"`,
     `args = [${normalizedArgs.map(a => `"${a}"`).join(', ')}]`,
-    'startup_timeout_ms = 20000',
+    // Codex renamed this field to `_sec` (developers.openai.com/codex/extend/mcp;
+    // the docs note "uses _sec, not _ms"). The old `startup_timeout_ms` is an
+    // unrecognized key → Codex silently falls back to its default startup timeout.
+    'startup_timeout_sec = 20',
     '',
     '[mcp_servers.brainclaw.env]',
     'BRAINCLAW_AGENT = "codex"',

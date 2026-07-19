@@ -1245,7 +1245,7 @@ describe('core/agent-files — auto-config writers', () => {
       assert.ok(!content.includes('\\'), 'config.toml must not contain backslash characters');
       assert.ok(content.includes('[mcp_servers.brainclaw]'));
       assert.ok(content.includes('BRAINCLAW_AGENT = "codex"'));
-      assert.ok(content.includes('startup_timeout_ms = 20000'));
+      assert.ok(content.includes('startup_timeout_sec = 20'), 'Codex uses startup_timeout_sec (not _ms)');
     } finally {
       resetMcpCommandCache();
       fs.rmSync(homeDir, { recursive: true, force: true });
