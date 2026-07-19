@@ -1086,31 +1086,29 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
-  it('ensureCodexHooks preserves user hooks WITHIN a brainclaw event, replacing only brainclaw ones (Codex review #94 P1)', () => {
+  it('ensureCodexHooks owns its 3 events (overwrite) and leaves other user events untouched (Codex review #94)', () => {
     const dir = tmpDir();
     try {
-      // Pre-seed, in the SAME SessionStart event: a user hook + a stale brainclaw
-      // hook (dev-path form, no `brainclaw` token — only recognizable via the
-      // subcommand marker) + a user hook on a different event.
+      // Pre-seed a user hook on an UNRELATED event (PreToolUse) + a stale entry on
+      // a brainclaw-owned event (SessionStart). Overwrite (not bare-subcommand
+      // recognition, which would over-match user hooks — round-2 P1) owns the 3.
       fs.mkdirSync(path.join(dir, '.codex'), { recursive: true });
       fs.writeFileSync(path.join(dir, '.codex', 'hooks.json'), JSON.stringify({
         hooks: {
-          SessionStart: [
-            { matcher: '', hooks: [{ type: 'command', command: 'my-own-tool --do-thing' }] },
-            { matcher: '', hooks: [{ type: 'command', command: 'node /repo/dist/cli.js session-start --include-context 2>/dev/null' }] },
-          ],
           PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: 'my-guard.py' }] }],
+          SessionStart: [{ matcher: '', hooks: [{ type: 'command', command: 'stale-old-thing' }] }],
         },
       }));
       ensureCodexHooks(dir);
       const content = JSON.parse(fs.readFileSync(path.join(dir, '.codex', 'hooks.json'), 'utf-8')) as {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
-      const ssCmds = (content.hooks?.SessionStart ?? []).flatMap((e) => (e.hooks ?? []).map((h) => h.command ?? ''));
-      assert.ok(ssCmds.some((c) => c.includes('my-own-tool')), 'user hook in the same event preserved');
-      assert.equal(ssCmds.filter((c) => /session-start/.test(c)).length, 1, 'stale brainclaw hook collapsed to one canonical entry (path-independent recognition)');
-      // Unrelated user event untouched.
+      // Unrelated user event preserved untouched.
       assert.equal(content.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command, 'my-guard.py', 'unrelated user event preserved');
+      // Brainclaw-owned event overwritten to exactly one canonical entry.
+      assert.equal(content.hooks?.SessionStart?.length, 1, 'SessionStart owned by brainclaw (single entry)');
+      assert.ok(content.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes('session-start'), 'SessionStart is the brainclaw hook');
+      assert.ok(!content.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes('stale-old-thing'), 'stale entry replaced');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
