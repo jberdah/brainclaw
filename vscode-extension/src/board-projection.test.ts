@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { applyRecord, type Projection, type JournalRecord } from './journal-consumer.js';
-import { projectBoard, projectCounts, attentionRequired } from './board-projection.js';
+import { projectBoard, projectCounts, attentionRequired, selectInProgress, filterPending } from './board-projection.js';
 
 let seq = 0;
 function put(proj: Projection, item_type: string, item_id: string, payload: Record<string, unknown>): void {
@@ -138,5 +138,97 @@ describe('board adapters (pln#560 s2 slice2)', () => {
     assert.doesNotThrow(() => projectBoard(proj as Projection));
     assert.doesNotThrow(() => projectCounts(proj as Projection));
     assert.equal(projectBoard(proj as Projection).active_plans.length, 0);
+  });
+});
+
+describe('selectInProgress — Live-activity split shared by MCP + journal paths (pln#560 completion)', () => {
+  const NOW = Date.parse('2026-07-19T12:00:00Z');
+  const WINDOW = 6 * 60 * 60 * 1000;
+  const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString();
+
+  it('claims: only status active survive; absent status defaults to active', () => {
+    const sel = selectInProgress(
+      [{ id: 'c1', status: 'active' }, { id: 'c2', status: 'released' }, { id: 'c3' }],
+      [], [], NOW, WINDOW,
+    );
+    assert.deepEqual(sel.active_claims.map((c) => c['id']), ['c1', 'c3']);
+  });
+
+  it('assignments: terminal statuses (incl. failed/timed_out) leave live; blocked stays live for the renderer to route', () => {
+    const sel = selectInProgress(
+      [],
+      [
+        { id: 'a1', status: 'active' },
+        { id: 'a2', status: 'blocked' },
+        { id: 'a3', status: 'failed', failed_at: iso(60_000) },
+        { id: 'a4', status: 'timed_out', timed_out_at: iso(60_000) },
+        { id: 'a5', status: 'completed', completed_at: iso(60_000) },
+      ],
+      [], NOW, WINDOW,
+    );
+    assert.deepEqual(sel.live_assignments.map((a) => a['id']), ['a1', 'a2']);
+    assert.deepEqual(sel.recently_terminal_assignments.map((a) => a['id']).sort(), ['a3', 'a4', 'a5']);
+  });
+
+  it('runs: pre-v1 terminal-ish states (interrupted/timed_out) are excluded from live', () => {
+    const sel = selectInProgress(
+      [], [],
+      [
+        { id: 'r1', status: 'running' },
+        { id: 'r2', status: 'interrupted' },
+        { id: 'r3', status: 'timed_out' },
+        { id: 'r4', status: 'waiting_input' },
+      ],
+      NOW, WINDOW,
+    );
+    assert.deepEqual(sel.live_runs.map((r) => r['id']), ['r1']);
+  });
+
+  it('recently-terminal: outside the window drops out; inside sorts newest first by updated_at', () => {
+    const sel = selectInProgress(
+      [],
+      [
+        { id: 'old', status: 'completed', completed_at: iso(WINDOW + 60_000) },
+        { id: 'older-update', status: 'failed', failed_at: iso(3 * 60_000), updated_at: iso(3 * 60_000) },
+        { id: 'newer-update', status: 'expired', expired_at: iso(30 * 60_000), updated_at: iso(60_000) },
+      ],
+      [], NOW, WINDOW,
+    );
+    assert.deepEqual(sel.recently_terminal_assignments.map((a) => a['id']), ['newer-update', 'older-update']);
+  });
+
+  it('recently-terminal: timestamp cascade falls back to updated_at/created_at; unparseable drops the row', () => {
+    const sel = selectInProgress(
+      [],
+      [
+        { id: 'fallback', status: 'cancelled', created_at: iso(60_000) },
+        { id: 'undated', status: 'cancelled' },
+        { id: 'garbage', status: 'cancelled', updated_at: 'not-a-date' },
+      ],
+      [], NOW, WINDOW,
+    );
+    assert.deepEqual(sel.recently_terminal_assignments.map((a) => a['id']), ['fallback']);
+  });
+});
+
+describe('filterPending — fetch-equivalent status filter for journal-served sections', () => {
+  it('keeps pending (explicit or defaulted), drops everything else', () => {
+    const out = filterPending([
+      { id: 'k1', status: 'pending' },
+      { id: 'k2' },
+      { id: 'd1', status: 'accepted' },
+      { id: 'd2', status: 'rejected' },
+    ]);
+    assert.deepEqual(out.map((c) => c['id']), ['k1', 'k2']);
+  });
+
+  it('drops in_progress actions — the MCP path fetches status:pending server-side, and the renderer admits in_progress (PR #97 review regression)', () => {
+    const out = filterPending([
+      { id: 'a1', status: 'pending' },
+      { id: 'a2', status: 'in_progress' },
+      { id: 'a3', status: 'resolved' },
+    ]);
+    assert.deepEqual(out.map((a) => a['id']), ['a1'],
+      'unfiltered projection actions would leak in_progress rows into ATTENTION/ACTIONS in journal mode only');
   });
 });
