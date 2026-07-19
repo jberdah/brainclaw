@@ -23,12 +23,13 @@ function makeWorkspace(): string {
 /** Open a review loop and put it in the state the reviewer turn runs in:
  * advanced to `findings` with the reviewer slot assigned (mirrors the real
  * bclaw_coordinate(intent='review', open_loop=true) flow). */
-function setupReviewAtFindings(cwd: string): LoopThread {
+function setupReviewAtFindings(cwd: string, mode: 'symmetric' | 'asymmetric' = 'symmetric'): LoopThread {
   const loop = openLoop(
     {
       kind: 'review',
       title: 'focus-4b review',
       created_by: 'agt_test',
+      mode,
       slots: [
         { role: 'author', agent: 'claude-code', agent_id: 'agt_author' },
         { role: 'reviewer', agent: 'codex', agent_id: 'agt_reviewer' },
@@ -156,6 +157,41 @@ describe('closeReviewLoopFromLaneResult (pln#628 Focus 4B)', () => {
     const r2 = closeReviewLoopFromLaneResult(asg, laneWith('approve', 'now good'), 'coordinator', cwd);
     assert.equal(r2!.action, 'closed');
     assert.equal(getLoop(loop.id, cwd)!.status, 'completed');
+  });
+
+  // Codex review P1 — the fix cycle is SYMMETRIC-only in v1. An asymmetric review
+  // loop (the default) must NOT re-dispatch the reviewer to self-fix; it defers to
+  // the PR1 behavior (advance to author_response, no keep_claim / next_turn).
+  it('asymmetric request_changes does NOT cycle — advances to author_response, no keep_claim/next_turn (deferred)', () => {
+    const loop = setupReviewAtFindings(cwd, 'asymmetric');
+    const res = closeReviewLoopFromLaneResult(reviewAssignment(loop.id), laneWith('request_changes', 'fix it'), 'coordinator', cwd);
+    assert.ok(res);
+    assert.equal(res!.action, 'advanced');
+    assert.equal(res!.keep_claim, undefined, 'asymmetric must NOT keep the claim (no re-dispatch)');
+    assert.equal(res!.next_turn, undefined, 'asymmetric emits no fix-cycle turn');
+    const after = getLoop(loop.id, cwd)!;
+    assert.equal(after.current_phase, 'author_response', 'advanced linearly to author_response (PR1 behavior)');
+    assert.equal(after.iteration_count, 0, 'no round bump in asymmetric mode');
+  });
+
+  // Codex review P0 — a re-harvest of an OLD lane after the cycle re-dispatched
+  // (reviewer slot now bound to a NEWER assignment) must return a `noop` whose
+  // loop_status is still OPEN. harvest reads that signal to SKIP the claim release
+  // — releasing would tear down the reused worktree and strand the live cycle.
+  it('idempotent re-harvest of a cycled lane returns noop with loop_status=open (no strand signal)', () => {
+    const loop = setupReviewAtFindings(cwd, 'symmetric');
+    const asg = reviewAssignment(loop.id);
+    const r1 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.equal(r1!.action, 'advanced');
+    assert.equal(r1!.keep_claim, true);
+    // Re-harvest the SAME (now stale) lane: the reviewer slot was completed and
+    // no live re-activation happened in this unit, so no active slot resolves.
+    const r2 = closeReviewLoopFromLaneResult(asg, laneWith('request_changes'), 'coordinator', cwd);
+    assert.ok(r2);
+    assert.equal(r2!.action, 'noop');
+    assert.equal(r2!.keep_claim, undefined, 'a noop carries no keep_claim…');
+    assert.equal(r2!.loop_status, 'open', '…so harvest must gate on loop_status=open to avoid releasing the reused claim');
+    assert.equal(getLoop(loop.id, cwd)!.iteration_count, 1, 'no double-advance on the re-harvest');
   });
 
   it('is idempotent — a second harvest pass on an already-closed loop is a no-op', () => {

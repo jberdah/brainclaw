@@ -233,13 +233,17 @@ export function closeReviewLoopFromLaneResult(
           // (no re-dispatch, no claim retention). Defer to `harvest --integrate`.
           return noop('request_changes deferred to --integrate (report path does not cycle)', loop.status);
         }
-        // Record the changes-requested verdict, then bump the round counter by
-        // advancing to the SAME phase (advance treats to_phase <= current as a
-        // backward iteration → iteration_count += 1). The post-advance
-        // stop_condition (max_iterations n=3) auto-closes the loop as `blocked`
-        // once the cap is hit; otherwise the loop stays open and we hand harvest
-        // a `next_turn` to re-dispatch into the SAME (kept) worktree so fixes
-        // accumulate on one branch.
+
+        // Codex review P1 — the autonomous fix cycle is SYMMETRIC-only in v1: it
+        // asks the SAME reviewer slot to modify AND re-review in the reused
+        // worktree, which is only sound when both roles are the same coding agent
+        // (mode='symmetric'). Review loops DEFAULT to asymmetric, where the
+        // reviewer must NOT self-fix. For asymmetric, fall back to the PR1
+        // behavior: record the verdict, advance linearly to `author_response`,
+        // and DO NOT keep the claim / emit a next_turn — the author-fix dispatch
+        // is a planned follow-up, so a human drives it. (No re-dispatch means no
+        // worktree reuse, so the claim is released by harvest as usual.)
+        const symmetric = loop.protocol?.review_mode === 'symmetric';
         complete_turn(
           {
             id: loopId, slot_id: slot.slot_id, actor,
@@ -247,6 +251,24 @@ export function closeReviewLoopFromLaneResult(
           },
           cwd,
         );
+        if (!symmetric) {
+          const advancedAsym = advance({ id: loopId, actor }, cwd);
+          return {
+            loop_id: loopId,
+            verdict,
+            action: advancedAsym.auto_closed ? 'closed' : 'advanced',
+            reason: advancedAsym.auto_closed
+              ? `request_changes → loop ${advancedAsym.loop.status}`
+              : `request_changes (asymmetric) → advanced to "${advancedAsym.loop.current_phase}"; author-fix dispatch is a follow-up (drive manually)`,
+            loop_status: advancedAsym.loop.status,
+          };
+        }
+        // Symmetric: bump the round counter by advancing to the SAME phase
+        // (advance treats to_phase <= current as a backward iteration →
+        // iteration_count += 1). The post-advance stop_condition (max_iterations
+        // n=3) auto-closes the loop as `blocked` once the cap is hit; otherwise
+        // the loop stays open and we hand harvest a `next_turn` to re-dispatch
+        // into the SAME (kept) worktree so fixes accumulate on one branch.
         const advanced = advance({ id: loopId, to_phase: loop.current_phase, actor }, cwd);
         if (advanced.auto_closed) {
           return {

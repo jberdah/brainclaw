@@ -614,13 +614,32 @@ export function integrateLaneResults(options: LaneIntegrateOptions = {}): LaneIn
           }
         }
 
-        if (loopClose?.keep_claim) {
-          // PR2 fix cycle: keep the claim + worktree alive so the SAME reviewer
-          // applies fixes and re-reviews in place (commits accumulate on one
-          // branch). The next_turn spawn (async) is awaited by runHarvestLane.
-          // The assignment for THIS turn is still completed above.
+        // PR2 claim-teardown gate. Skip the release when either:
+        //  (a) keep_claim — the symmetric fix cycle reuses the claim/worktree for
+        //      the re-dispatched turn (commits accumulate on one branch); or
+        //  (b) Codex review P0 — an idempotent re-harvest of an OLD lane whose
+        //      loop is still OPEN returns a `noop` (the reviewer slot is now bound
+        //      to a NEWER assignment under an active cycle). Releasing here would
+        //      tear down the reused claim/worktree out from under the live turn
+        //      and strand the fix cycle. The loop machinery owns the lifecycle
+        //      while it is open; only a terminal close (approve/blocked, action
+        //      'closed') or an asymmetric hand-off ('advanced' without keep_claim)
+        //      releases here. A `noop` on a TERMINAL loop still releases (safe —
+        //      the closing pass already released, so this is a no-op).
+        const loopStillOpen =
+          loopClose?.loop_status !== undefined &&
+          !['completed', 'cancelled', 'blocked'].includes(loopClose.loop_status);
+        const keepClaimAlive =
+          loopClose?.keep_claim === true || (loopClose?.action === 'noop' && loopStillOpen);
+        if (keepClaimAlive) {
+          // The next_turn spawn (async) is awaited by runHarvestLane. The
+          // assignment for THIS turn is still completed above.
           entry.claim_released = false;
-          reasons.push('claim kept alive for review fix-cycle re-dispatch (PR2)');
+          reasons.push(
+            loopClose?.keep_claim
+              ? 'claim kept alive for review fix-cycle re-dispatch (PR2)'
+              : 'claim left intact — idempotent re-harvest on an active review loop (no strand)',
+          );
         } else {
           // trp#928 — use the cascade helper (was releaseClaimWithCascade — same
           // logic for the last-claim rule but the cascade wrapper LOGS per-claim,
