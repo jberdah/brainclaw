@@ -225,6 +225,16 @@ the projection rule).
 > private/machine runtime_notes (never journaled, visibility boundary) and
 > cross-project config, neither derivable from the shared journal.
 >
+> Two parity notes: (a) sections whose MCP fetch pre-filtered `status:
+> 'pending'` server-side (actions, candidates) apply the equivalent pure
+> filter on the projection, because renderers admit broader statuses; (b)
+> journal-served sections are **legacy-inclusive** — the genesis backfill
+> journals `provenance.kind='legacy'` records that the MCP default read
+> filter excludes, and the projection trim drops the nested `provenance`
+> object, so parity with the MCP default is not reconstructable client-side.
+> Accepted deliberately: the operator tree already passes `includeLegacy:
+> true` wherever it fetches explicitly.
+>
 > The historical (pre-pln#568) description below is kept for context.
 
 The journal classifies records into five classes (§2). In phase 1 / `dual`

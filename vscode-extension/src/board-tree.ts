@@ -379,6 +379,16 @@ const JOURNAL_DRIVEN_SECTIONS: ReadonlySet<string> = new Set([
 // stay best-effort MCP reads through the observer-flagged client.
 // SYSTEM stays MCP either way: it mixes private/machine runtime_notes (never
 // journaled — visibility boundary, dec_8705fb8e) and cross_project config.
+//
+// ACCEPTED DIVERGENCE — legacy visibility: the genesis backfill journals
+// EVERY registry entity, including provenance.kind='legacy' records that the
+// bclaw_find default filter excludes from the MCP flat sections. Journal-served
+// sections are therefore legacy-INCLUSIVE. This is intentional, not drift: the
+// operator-facing tree already opts into legacy wherever it fetches explicitly
+// (IN_PROGRESS claims/assignments/runs and BACKLOG traps pass
+// includeLegacy:true — "operators still need to see those"), and provenance is
+// a nested object the projection trim drops, so a client-side legacy filter
+// could not be reconstructed anyway (codex review, PR #97).
 const REGISTRY_JOURNAL_SECTIONS: ReadonlySet<string> = new Set([
   SECTION.ATTENTION, SECTION.IN_PROGRESS, SECTION.SPRINTS, SECTION.SPRINT,
   SECTION.CLAIMS, SECTION.ASSIGNMENTS, SECTION.RUNS, SECTION.ACTIONS, SECTION.CANDIDATES,
@@ -1976,7 +1986,11 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
 
     switch (sectionId) {
       case SECTION.ATTENTION: {
-        board.active_actions = projected.active_actions;
+        // filterPending on actions too: the MCP path fetches status:'pending'
+        // server-side, and the renderer (activeActions) admits in_progress —
+        // unfiltered projection rows would leak in_progress actions into the
+        // section in journal mode only (codex review finding, PR #97).
+        board.active_actions = filterPending(projected.active_actions);
         board.pending_candidates = filterPending(projected.pending_candidates);
         board.active_assignments = projected.active_assignments;
         board.active_runs = projected.active_runs;
@@ -2030,7 +2044,7 @@ export class BrainclawBoardProvider implements vscode.TreeDataProvider<Brainclaw
         return board;
       }
       case SECTION.ACTIONS: {
-        board.active_actions = projected.active_actions;
+        board.active_actions = filterPending(projected.active_actions);
         return board;
       }
       case SECTION.CANDIDATES: {

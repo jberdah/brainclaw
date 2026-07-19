@@ -221,4 +221,14 @@ describe('filterPending — fetch-equivalent status filter for journal-served se
     ]);
     assert.deepEqual(out.map((c) => c['id']), ['k1', 'k2']);
   });
+
+  it('drops in_progress actions — the MCP path fetches status:pending server-side, and the renderer admits in_progress (PR #97 review regression)', () => {
+    const out = filterPending([
+      { id: 'a1', status: 'pending' },
+      { id: 'a2', status: 'in_progress' },
+      { id: 'a3', status: 'resolved' },
+    ]);
+    assert.deepEqual(out.map((a) => a['id']), ['a1'],
+      'unfiltered projection actions would leak in_progress rows into ATTENTION/ACTIONS in journal mode only');
+  });
 });
