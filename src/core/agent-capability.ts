@@ -280,10 +280,15 @@ const PROFILES: Record<AgentName, AgentCapabilityProfile> = {
   // blocker.
   codex: {
     name: 'codex', category: 'code-agent', workflowModel: 'task-based',
-    hasMcp: true, hasHooks: false, hasAutoApprove: false, hasSkills: true, hasRules: true,
+    // hooks: Codex gained a native lifecycle hook surface (SessionStart /
+    // UserPromptSubmit / Stop / PreToolUse / … via .codex/hooks.json or [hooks]
+    // in config.toml; developers.openai.com/codex/hooks, verified 2026-07 —
+    // trp_fe75dafc). brainclaw writes .codex/hooks.json (ensureCodexHooks),
+    // giving Codex the same session-lifecycle wiring as Claude Code.
+    hasMcp: true, hasHooks: true, hasAutoApprove: false, hasSkills: true, hasRules: true,
     instructionFile: 'AGENTS.md', sharedInstructionFile: true, mcpConfigScope: 'machine', templateTier: 'A',
     role_capabilities: ['execute', 'review'],
-    runtime: { mcp_direct: true, hooks: false, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
+    runtime: { mcp_direct: true, hooks: true, canBeSpawnedCli: true, canSpawnOtherCli: false, inbox: true },
     max_concurrent_tasks: 5,
     // pln#475: prefer stdin_pipe to avoid Windows cmd.exe arg-parsing breaking
     // long prompts. codex.cmd resolves through cmd shell, where embedded
