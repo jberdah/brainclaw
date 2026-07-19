@@ -426,6 +426,7 @@ const ANTIGRAVITY_MCP_RELATIVE_PATH = '.gemini/antigravity/mcp_config.json';
 const ANTIGRAVITY_HOOKS_RELATIVE_PATH = '.gemini/antigravity/hooks.json';
 const CURSOR_HOOKS_RELATIVE_PATH = '.cursor/hooks.json';
 const COPILOT_HOOKS_RELATIVE_PATH = '.github/copilot/hooks.json';
+const CODEX_HOOKS_RELATIVE_PATH = '.codex/hooks.json';
 const OPENCLAW_MCP_RELATIVE_PATH = '.openclaw/mcp.json';
 const VSCODE_EXTENSIONS_RELATIVE_PATH = '.vscode/extensions.json';
 const UNIVERSAL_SKILL_RELATIVE_PATH = '.agents/skills/brainclaw/SKILL.md';
@@ -2384,6 +2385,58 @@ export function ensureAntigravityHooks(homeDir: string | undefined): AutoConfigW
 }
 
 /**
+ * Writes `.codex/hooks.json` — Codex CLI's native lifecycle hooks config
+ * (project scope). Codex gained a full hook surface (developers.openai.com/codex/hooks,
+ * verified 2026-07 — trp_fe75dafc); this wires brainclaw's session lifecycle to it,
+ * mirroring the Claude Code / Antigravity hook writers.
+ *
+ * Events (PascalCase, per the Codex schema): `SessionStart` loads shared context,
+ * `UserPromptSubmit` surfaces the context diff, `Stop` runs session-end cleanup.
+ * File shape: `{ "hooks": { "<Event>": [ { "matcher": "", "hooks": [ { "type": "command", "command": "…" } ] } ] } }`
+ * — the top-level `hooks` wrapper + per-entry `hooks` array (`matcher: ""` = match all).
+ *
+ * brainclaw OWNS these three event arrays (overwrite, not merge) — the same
+ * contract as the Cursor / Antigravity `hooks.json` writers. This is
+ * unconditionally idempotent regardless of how the CLI path resolves, with no
+ * cross-upgrade pile-up. It deliberately does NOT use command-recognition to
+ * preserve user entries within these events: recognizing brainclaw's own hook
+ * path-independently requires matching bare CLI subcommands, which over-matches
+ * legitimate user hooks that merely pass `session-start`/etc. as an argument
+ * (Codex review of #94, round 2). Other events the user defines are untouched
+ * (only these three keys are set).
+ */
+export function ensureCodexHooks(cwd: string): AutoConfigWriteResult {
+  const filePath = path.join(cwd, CODEX_HOOKS_RELATIVE_PATH);
+  const existing = readJsonObject(filePath);
+  if (existing === undefined) {
+    return skippedAutoConfigResult('rule', 'Codex session hooks', filePath, CODEX_HOOKS_RELATIVE_PATH);
+  }
+  const hooks = isJsonObject(existing.hooks) ? { ...existing.hooks } : {};
+
+  const sessionStartCmd = buildHookCommand(['session-start', '--include-context']);
+  const contextDiffCmd = buildHookCommand(['context-diff']);
+  const sessionEndCmd = buildHookCommand(['session-end', '--auto-release', '--reflect', '--reflect-handoff', '--dispatch-review']);
+
+  hooks.SessionStart = [buildCommandHookEntry(sessionStartCmd)];
+  hooks.UserPromptSubmit = [buildCommandHookEntry(contextDiffCmd)];
+  hooks.Stop = [buildCommandHookEntry(sessionEndCmd)];
+
+  const { created, updated } = writeJsonFileIfChanged(filePath, {
+    ...existing,
+    hooks,
+  });
+
+  return {
+    kind: 'rule',
+    label: 'Codex session hooks',
+    created,
+    updated,
+    filePath,
+    relativePath: CODEX_HOOKS_RELATIVE_PATH,
+  };
+}
+
+/**
  * Writes `.github/copilot/hooks.json` — GitHub Copilot's native hooks config.
  * Events: sessionStart, userPromptSubmitted, sessionEnd (camelCase).
  * Format per code.visualstudio.com/docs/copilot/customization/hooks:
@@ -2596,7 +2649,7 @@ export const AGENT_WIRING_REGISTRY: Record<string, AgentWriterDescriptor> = {
       writeProtocolSkills,
     ],
     userWriters: [(ctx) => ensureCodexMcpConfig(ctx.homeDir, ctx.env)],
-    hookWriters: [],
+    hookWriters: [(ctx) => ensureCodexHooks(ctx.cwd)],
   },
   continue: {
     workspaceWriters: [(ctx) => ensureContinueMcpConfig(ctx.cwd)],

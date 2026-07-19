@@ -97,7 +97,7 @@ describe('agent-capability', () => {
         ['cursor', { hooks: true, skills: true }],
         ['windsurf', { hooks: false, skills: false }],
         ['cline', { hooks: false, skills: false }],
-        ['codex', { hooks: false, skills: true }],
+        ['codex', { hooks: true, skills: true }], // Codex gained a native hook surface (trp_fe75dafc)
         ['github-copilot', { hooks: true, skills: true }],
       ]);
 

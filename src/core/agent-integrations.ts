@@ -71,6 +71,7 @@ const DEFAULT_SURFACES: Record<AgentIntegrationName, AgentIntegrationSurface[]> 
     'codex': [
       { kind: 'instructions', location: 'workspace', path: 'AGENTS.md' },
       { kind: 'mcp',          location: 'machine',   path: '.codex/config.toml' },
+      { kind: 'hook',         location: 'workspace', path: '.codex/hooks.json' },
       { kind: 'skill',        location: 'workspace', path: '.agents/skills/brainclaw/SKILL.md' },
     ],
     'opencode': [

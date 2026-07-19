@@ -1,13 +1,13 @@
 # Codex Integration
 
-brainclaw integrates with OpenAI's Codex CLI through MCP tools and shared instruction files. Codex has MCP access, universal skills support, and headless CLI spawn capability, but no native lifecycle hook surface.
+brainclaw integrates with OpenAI's Codex CLI through MCP tools, shared instruction files, and native lifecycle hooks. Codex has MCP access, universal skills support, headless CLI spawn capability, and a native lifecycle hook surface (added upstream in 2026 — [developers.openai.com/codex/hooks](https://developers.openai.com/codex/hooks)).
 
 ## Auto-setup
 
 Codex setup is split across machine and project scope:
 
 - `brainclaw setup-machine --agents codex --yes` writes the machine-level MCP config at `~/.codex/config.toml`
-- `brainclaw init` creates or refreshes the current project's Brainclaw state and writes `AGENTS.md`
+- `brainclaw init` creates or refreshes the current project's Brainclaw state, writes `AGENTS.md`, and writes project-level lifecycle hooks to `.codex/hooks.json` (git-ignored)
 
 If the project already has `.brainclaw/`, rerunning `brainclaw init` is safe and refreshes the managed Brainclaw/Codex files for the current machine.
 
@@ -61,7 +61,7 @@ Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started
 |-------|-------|
 | Tier | A |
 | MCP | yes |
-| Hooks | no |
+| Hooks | yes (`.codex/hooks.json`, project scope) |
 | Auto-approve | manual (per-tool approval) |
 | Skills | yes |
 | CLI spawnable | yes |
@@ -69,6 +69,22 @@ Since pln#476 (1.0.13+), spawned Codex workers are marked `delivered_and_started
 | Workflow model | task-based (one-shot exec, not interactive) |
 | MCP config scope | machine |
 | Prompt delivery | `stdin_pipe` (preferred), `inline_arg` (fallback) |
+
+## Lifecycle hooks
+
+`brainclaw init` writes project-level hooks to `.codex/hooks.json` (git-ignored, machine-specific command paths). Codex reads hooks from `hooks.json` or an inline `[hooks]` table at user (`~/.codex/`) and project (`<repo>/.codex/`) scope ([Codex hooks docs](https://developers.openai.com/codex/hooks)). brainclaw wires three events:
+
+| Event | brainclaw command | Purpose |
+|-------|-------------------|---------|
+| `SessionStart` | `brainclaw session-start --include-context` | Load shared context (constraints, decisions, traps, plans, handoffs) when a session begins |
+| `UserPromptSubmit` | `brainclaw context-diff` | Surface what changed since the last turn |
+| `Stop` | `brainclaw session-end --auto-release --reflect --reflect-handoff --dispatch-review` | Release claims, reflect, and dispatch review at turn end |
+
+The file shape is `{ "hooks": { "<Event>": [ { "matcher": "", "hooks": [ { "type": "command", "command": "…" } ] } ] } }` (`matcher: ""` = match all occurrences). brainclaw **owns** these three event arrays: reruns overwrite them (idempotent, no cross-upgrade pile-up) — the same contract as the Cursor / Antigravity hook writers. A user's own hook placed on one of these three events is replaced on the next `init`; hooks on any **other** event are left untouched.
+
+**Scope — interactive sessions, not headless dispatch.** These hooks serve an *interactive* Codex session. Non-managed command hooks require a one-time trust in Codex (`/hooks` — inspect and trust) before they run, so a fresh `.codex/hooks.json` is inert until the user trusts it. Headless dispatched workers (`codex exec`, used by `bclaw_dispatch` / `bclaw_coordinate`) do **not** rely on these hooks at all — they receive their context in the dispatch brief and report via `LANE-RESULT.json`; an untrusted project hook is simply skipped there, which is harmless. (A "managed" hook path via `requirements.toml`/MDM could bypass the trust step for fleets — a possible future enhancement.)
+
+**Per-event output contract.** `SessionStart` and `UserPromptSubmit` emit their stdout as **model-visible context** — that is exactly the point (inject shared brainclaw state / the context diff). `Stop`, by contrast, expects a **JSON** response from Codex to shape turn-end behavior; brainclaw's `session-end` runs mainly for its side effects (release claims, reflect, dispatch review) and does not emit that JSON, so it does not gate the turn. Emitting a conformant per-event JSON response (notably for `Stop`) is a planned follow-up.
 
 ## Caveats
 

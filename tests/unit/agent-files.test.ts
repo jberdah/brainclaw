@@ -35,6 +35,7 @@ import {
   ensureAntigravityHooks,
   ensureCursorHooks,
   ensureCopilotHooks,
+  ensureCodexHooks,
   ensureCodexMcpConfig,
   ensureUniversalBrainclawSkill,
   patchAllMcpConfigs,
@@ -1050,6 +1051,69 @@ describe('core/agent-files — auto-config writers', () => {
     }
   });
 
+  it('ensureCodexHooks writes .codex/hooks.json with the Codex hook schema + idempotence (trp_fe75dafc)', () => {
+    const dir = tmpDir();
+    try {
+      const first = ensureCodexHooks(dir);
+      assert.equal(first.created, true);
+      assert.equal(first.relativePath, '.codex/hooks.json');
+
+      const filePath = path.join(dir, '.codex', 'hooks.json');
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        hooks?: Record<string, Array<{ hooks?: Array<{ type?: string; command?: string }> }>>;
+      };
+      // Codex schema: top-level `hooks` wrapper; each event is an array of
+      // { hooks: [{ type:'command', command }] } entries (matcher omitted).
+      const ss = content.hooks?.SessionStart?.[0]?.hooks?.[0];
+      const ups = content.hooks?.UserPromptSubmit?.[0]?.hooks?.[0];
+      const stop = content.hooks?.Stop?.[0]?.hooks?.[0];
+      assert.equal(ss?.type, 'command', 'SessionStart entry is a command hook');
+      assert.ok(ss?.command?.includes('session-start'), 'SessionStart runs session-start');
+      assert.ok(ups?.command?.includes('context-diff'), 'UserPromptSubmit runs context-diff');
+      assert.ok(stop?.command?.includes('session-end'), 'Stop runs session-end');
+      assert.ok(ss?.command?.includes('cli.js'), 'resolved CLI path present');
+
+      const second = ensureCodexHooks(dir);
+      assert.equal(second.created, false);
+      assert.equal(second.updated, false, 'rerun is idempotent — no churn');
+      // A single canonical brainclaw hook per event (no pile-up across upgrades).
+      const reread = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+        hooks?: Record<string, unknown[]>;
+      };
+      assert.equal(reread.hooks?.SessionStart?.length, 1, 'exactly one SessionStart entry after rerun');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensureCodexHooks owns its 3 events (overwrite) and leaves other user events untouched (Codex review #94)', () => {
+    const dir = tmpDir();
+    try {
+      // Pre-seed a user hook on an UNRELATED event (PreToolUse) + a stale entry on
+      // a brainclaw-owned event (SessionStart). Overwrite (not bare-subcommand
+      // recognition, which would over-match user hooks — round-2 P1) owns the 3.
+      fs.mkdirSync(path.join(dir, '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.codex', 'hooks.json'), JSON.stringify({
+        hooks: {
+          PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: 'my-guard.py' }] }],
+          SessionStart: [{ matcher: '', hooks: [{ type: 'command', command: 'stale-old-thing' }] }],
+        },
+      }));
+      ensureCodexHooks(dir);
+      const content = JSON.parse(fs.readFileSync(path.join(dir, '.codex', 'hooks.json'), 'utf-8')) as {
+        hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
+      };
+      // Unrelated user event preserved untouched.
+      assert.equal(content.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command, 'my-guard.py', 'unrelated user event preserved');
+      // Brainclaw-owned event overwritten to exactly one canonical entry.
+      assert.equal(content.hooks?.SessionStart?.length, 1, 'SessionStart owned by brainclaw (single entry)');
+      assert.ok(content.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes('session-start'), 'SessionStart is the brainclaw hook');
+      assert.ok(!content.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes('stale-old-thing'), 'stale entry replaced');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('ensureAntigravityHooks writes hooks.json with PascalCase events + idempotence', () => {
     const homeDir = tmpDir();
     try {
@@ -1491,25 +1555,27 @@ describe('ensureUniversalBrainclawSkill', () => {
     }
   });
 
-  it('writeDetectedAgentAutoConfig codex without homeDir returns 1 result (universal skill)', () => {
+  it('writeDetectedAgentAutoConfig codex without homeDir returns universal skill + protocol skills + hooks', () => {
     const dir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('codex', dir, {});
-      assert.equal(results.length, 4); // universal skill + 3 protocol-skills (pln#519)
+      assert.equal(results.length, 5); // universal skill + 3 protocol-skills (pln#519) + .codex/hooks.json (trp_fe75dafc)
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
+      assert.ok(results.some((r) => r.relativePath === '.codex/hooks.json'), 'codex now writes lifecycle hooks');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('writeDetectedAgentAutoConfig codex with homeDir returns 2 results including MCP config', () => {
+  it('writeDetectedAgentAutoConfig codex with homeDir returns MCP config + skills + hooks', () => {
     const dir = tmpDir();
     const homeDir = tmpDir();
     try {
       const results = writeDetectedAgentAutoConfig('codex', dir, { HOME: homeDir });
-      assert.equal(results.length, 5); // 2 + 3 protocol-skills (pln#519)
+      assert.equal(results.length, 6); // MCP + universal skill + 3 protocol-skills (pln#519) + hooks (trp_fe75dafc)
       assert.ok(results.some((r) => r.relativePath === '.agents/skills/brainclaw/SKILL.md'));
       assert.ok(results.some((r) => r.filePath.includes('.codex') && r.filePath.includes('config.toml')));
+      assert.ok(results.some((r) => r.relativePath === '.codex/hooks.json'), 'codex now writes lifecycle hooks');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(homeDir, { recursive: true, force: true });
