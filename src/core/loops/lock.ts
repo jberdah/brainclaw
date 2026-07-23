@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { memoryDir } from '../io.js';
 import { nowISO } from '../ids.js';
-import { logger } from '../logger.js';
 import { recoverPendingIntents } from './commit-intent.js';
 
 /**
@@ -403,17 +402,13 @@ export function withLoopLock<R>(options: WithLoopLockOptions<R>): R {
     // journal+thread BEFORE we read the version / run the work, so a mutation
     // never starts from a half-applied state and currentVersion() sees the
     // caught-up thread. Not in getLoop: the loop lock is not re-entrant and
-    // verbs call getLoop while already holding it. Best-effort: a recovery
-    // failure defers (getLoop still reconstructs a consistent view; the next
-    // lock entry retries) rather than wedging every loop operation.
+    // verbs call getLoop while already holding it. FAILS CLOSED (PR #102 review
+    // HIGH): a genuine recovery error (torn/unreadable journal, I/O) propagates
+    // and aborts the mutation rather than proceeding against corrupt state;
+    // quarantined conflicts/corruption are handled inside recoverPendingIntents
+    // and do not throw.
     if (options.scope.kind === 'loop') {
-      try {
-        recoverPendingIntents(options.scope.loopId, options.cwd);
-      } catch (err) {
-        logger.debug(
-          `withLoopLock: deferred pending-intent recovery for ${options.scope.loopId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      recoverPendingIntents(options.scope.loopId, options.cwd);
     }
 
     // Idempotency short-circuit (inside lock).

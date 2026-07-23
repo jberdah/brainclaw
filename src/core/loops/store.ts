@@ -280,7 +280,20 @@ export function listLoopEvents(id: string, cwd?: string): LoopEvent[] {
   const filePath = eventsPath(id, cwd);
   if (!fs.existsSync(filePath)) return [];
   const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-  return lines.map((line) => LoopEventSchema.parse(JSON.parse(line)));
+  const events: LoopEvent[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      events.push(LoopEventSchema.parse(JSON.parse(lines[i])));
+    } catch (err) {
+      // pln#630 PR1b — a non-empty unparseable FINAL line is an uncommitted
+      // torn-append fragment (durably repaired at the next lock-entry recovery,
+      // commit-intent.ts). Tolerate it on read so seq allocation / reads never
+      // wedge on a torn tail. An EARLIER unparseable line is real corruption.
+      if (i === lines.length - 1) break;
+      throw err;
+    }
+  }
+  return events;
 }
 
 export interface CloseLoopInput {

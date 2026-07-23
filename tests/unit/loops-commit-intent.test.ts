@@ -223,3 +223,62 @@ describe('commit-intent — consistent reads + GC', () => {
     assert.ok(removed >= 1, 'the .applied marker was GC-d');
   });
 });
+
+// Hardening from the PR #102 symmetric review (torn append, malformed intent,
+// divergent projection identity).
+describe('commit-intent — crash-safety hardening (review round 1 fixes)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('a torn trailing journal fragment is repaired, then the intent applies cleanly', () => {
+    const loop = seedLoop(cwd);
+    const jp = path.join(cwd, '.brainclaw', 'loops', 'events', `${loop.id}.jsonl`);
+    // Simulate a power loss mid-append: a non-empty, unparseable trailing line
+    // with no newline (the exact torn-append the review flagged as unrecoverable).
+    fs.appendFileSync(jp, '{"event_id":"torn","seq":2,"kind":"turn_completed"');
+
+    const intent = writeIntent(completeTurnIntentInput(loop), cwd);
+    applyIntent(intent, cwd); // must repair the torn tail, then append seq 2,3.
+
+    const events = listLoopEvents(loop.id, cwd);
+    assert.deepEqual(events.map((e) => e.seq), [1, 2, 3], 'torn fragment dropped, plan applied contiguously');
+    assert.equal(events[2].kind, 'turn_completed');
+    assert.equal(getLoop(loop.id, cwd)?.version, 2);
+    assert.equal(hasPendingIntent(loop.id, cwd), false);
+  });
+
+  it('listLoopEvents tolerates a torn trailing fragment (seq allocation never wedges)', () => {
+    const loop = seedLoop(cwd);
+    const jp = path.join(cwd, '.brainclaw', 'loops', 'events', `${loop.id}.jsonl`);
+    fs.appendFileSync(jp, '{"event_id":"torn","seq":2,"partial');
+    const events = listLoopEvents(loop.id, cwd);
+    assert.deepEqual(events.map((e) => e.seq), [1], 'torn tail dropped on read, no throw');
+  });
+
+  it('a malformed intent file is quarantined to .corrupt (visible), not silently skipped', () => {
+    const loop = seedLoop(cwd);
+    const dir = path.join(cwd, '.brainclaw', 'loops', 'commits', loop.id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'deadbeef.intent.json'), '{ this is not valid json');
+
+    const res = recoverPendingIntents(loop.id, cwd);
+    assert.equal(res.corrupt, 1, 'malformed intent counted as corrupt');
+    assert.equal(res.applied, 0);
+    assert.equal(hasPendingIntent(loop.id, cwd), false, 'malformed intent moved out of the pending set');
+    assert.ok(fs.existsSync(path.join(dir, 'deadbeef.corrupt.json')), 'quarantined to .corrupt');
+  });
+
+  it('a divergent on-disk projection at the same version is a CONFLICT, not a silent skip', () => {
+    const loop = seedLoop(cwd);
+    const intent = writeIntent(completeTurnIntentInput(loop), cwd);
+    // A foreign writer advances the thread to version 2 with a DIFFERENT
+    // mutation_id (divergent projection) before the intent applies.
+    const tp = path.join(cwd, '.brainclaw', 'loops', 'threads', `${loop.id}.json`);
+    const divergent = { ...JSON.parse(fs.readFileSync(tp, 'utf8')), version: 2, mutation_id: 'ffffffffffffffffffffffffffffffff' };
+    fs.writeFileSync(tp, JSON.stringify(divergent, null, 2));
+
+    assert.throws(() => applyIntent(intent, cwd), (e: unknown) => e instanceof IntentConflictError);
+    assert.equal(hasPendingIntent(loop.id, cwd), false, 'intent quarantined to .conflict');
+  });
+});
