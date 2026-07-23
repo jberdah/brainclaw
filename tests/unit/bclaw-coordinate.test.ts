@@ -1135,6 +1135,46 @@ describe('bclaw_coordinate — side effects', () => {
       assert.ok(!response.warnings.some((w) => w.includes('NOT spawned as processes')));
       assert.ok(!response.warnings.some((w) => w.includes("autoExecute has no effect on intent='ideate'")));
     });
+
+    // pln#629 — regression: the critic SLOT must carry assignment_id + claim_id.
+    // Before the fix, turn() fired BEFORE the assignment existed, so the slot's
+    // assignment_id stayed undefined; bclaw_loop get's reconcile skipped the slot
+    // (`if (!assignmentId) continue`) and dispatch_status(lop_) resolved nothing,
+    // leaving ideate loops permanently un-reconciled (trp_dfe0b941 / trp_2187b340).
+    it('binds the critic slot to its assignment + claim so the loop can be reconciled (pln#629)', async () => {
+      const response = await coordinate(workspace, {
+        intent: 'ideate',
+        task: 'Bind check — does the critic slot carry its assignment?',
+        targetAgents: ['codex'],
+        agent: 'claude-code',
+        autoExecute: true,
+      });
+      assert.equal(response.status, 'ok');
+      const result = response.result as Record<string, unknown>;
+      const loopId = result.loop_id as string;
+      const asgnId = response.artifacts.find((a) => a.type === 'assignment')?.id;
+      const claimId = response.artifacts.find((a) => a.type === 'claim')?.id;
+      assert.ok(asgnId, 'an assignment was created for the critic');
+      assert.ok(claimId, 'a claim was created for the critic');
+
+      const loopsModule = await import('../../src/core/loops/index.js');
+      const loop = loopsModule.getLoop(loopId, workspace.dir);
+      const critic = loop?.slots.find((s) => s.role === 'critic');
+      assert.ok(critic, 'critic slot exists');
+      assert.equal(critic.status, 'assigned', 'critic slot flipped to assigned');
+      assert.equal(critic.assignment_id, asgnId, 'critic slot bound to its assignment (pln#629)');
+      assert.equal(critic.claim_id, claimId, 'critic slot bound to its claim (pln#629)');
+
+      // The turn_assigned event also carries the assignment id (audit trail).
+      const events = loopsModule.listLoopEvents(loopId, workspace.dir);
+      const turnAssign = events.find((e) => e.kind === 'turn_assigned');
+      assert.ok(turnAssign, 'a turn_assigned event exists');
+      assert.equal(
+        (turnAssign as { assignment_id?: string }).assignment_id,
+        asgnId,
+        'turn_assigned event records the assignment id',
+      );
+    });
   });
 });
 

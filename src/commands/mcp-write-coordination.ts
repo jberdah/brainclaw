@@ -1735,16 +1735,6 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
             memoryProvider: provider,
           });
 
-          turn(
-            {
-              id: loopId,
-              slot_id: slot.slot_id,
-              actor: creatorActor,
-              input: briefResult.text,
-            },
-            dispatchCwd,
-          );
-
           // pln#626 Phase 2 (Option B) — spawn the critic as a worktree-isolated
           // worker, mirroring the intent=assign / review chain. Each critic gets
           // its OWN claim + worktree (scope is unique per slot) so parallel
@@ -1796,6 +1786,27 @@ export async function handleBclawCoordinate(args: Record<string, unknown>, ctx: 
                 `ideate assignment creation failed for slot ${slot.slot_id}: ${asgErr instanceof Error ? asgErr.message : String(asgErr)}`,
               );
             }
+
+            // pln#629 — bind the slot to its claim/assignment NOW that both
+            // exist (mirrors the review path, pln#628 BLOCKING 2). The turn()
+            // used to fire BEFORE the assignment was created, leaving
+            // slot.assignment_id undefined: bclaw_loop get's reconcile then
+            // skipped the critic slot (loops-handlers.ts `if (!assignmentId)
+            // continue`) and dispatch_status(lop_) resolved no assignment, so
+            // ideate loops could never be reconciled (trp_dfe0b941 /
+            // trp_2187b340 / trp_1de94516). Runs even if assignment creation
+            // failed (undefined id → legacy agent-match fallback, as review).
+            turn(
+              {
+                id: loopId,
+                slot_id: slot.slot_id,
+                actor: creatorActor,
+                input: briefResult.text,
+                assignment_id: criticAssignmentId,
+                claim_id: claimResult.claimId,
+              },
+              dispatchCwd,
+            );
 
             // pln#626 Phase 2 — the critique-only contract must reach the
             // DELIVERED brief, not just the claim record: buildCoordinateBrief
