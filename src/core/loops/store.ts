@@ -10,6 +10,7 @@ import { logCascadeReleaseResult, releaseClaimsCascade } from '../claims.js';
 import { gcWorktreeIfHarvested } from '../worktree.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
+import { reconstructConsistentThread } from './commit-intent.js';
 import {
   DEFAULT_PROTOCOLS,
   LoopArtifactSchema,
@@ -145,7 +146,15 @@ export function appendEvent(
 ): void {
   const parsed = LoopEventSchema.parse(event);
   ensureLoopsDir(cwd);
-  fs.appendFileSync(eventsPath(loopId, cwd), `${JSON.stringify(parsed)}\n`);
+  // pln#630 PR1b — fsync the journal append so a materialized projection can
+  // never be durable ahead of the event that explains it (trp_8b17c2d0).
+  const fd = fs.openSync(eventsPath(loopId, cwd), 'a');
+  try {
+    fs.writeSync(fd, `${JSON.stringify(parsed)}\n`);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 
   // pln#513 step 4 — best-effort OS notification on input_requested events.
   // Prefer the in-memory snapshot from the caller (carries the freshly-
@@ -235,9 +244,14 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
 
 export function getLoop(id: string, cwd?: string): LoopThread | undefined {
   const filePath = threadPath(id, cwd);
-  if (!fs.existsSync(filePath)) return undefined;
-  const raw = fs.readFileSync(filePath, 'utf8');
-  return LoopThreadSchema.parse(JSON.parse(raw));
+  const onDisk = fs.existsSync(filePath)
+    ? LoopThreadSchema.parse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+    : undefined;
+  // pln#630 PR1b — if a durable-but-not-yet-applied commit intent is ahead of
+  // the on-disk thread, return the reconstructed consistent view. The mutation
+  // is durable in the intent; persistence catches up at the next lock-entry
+  // recovery (never a write on this read path — cf. trp_fdf3e590 / dec#137).
+  return reconstructConsistentThread(id, onDisk, cwd);
 }
 
 export function listLoops(

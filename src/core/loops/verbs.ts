@@ -11,6 +11,7 @@ import {
   listLoopEvents,
   writeThreadFile,
 } from './store.js';
+import { commitViaIntent } from './commit-intent.js';
 import {
   LoopArtifactSchema,
   PAUSE_REASONS,
@@ -702,8 +703,16 @@ export function complete_turn(input: CompleteTurnInput, cwd?: string): LoopThrea
     failure_reason: input.failure_reason,
   });
 
-  for (const event of events) appendEvent(current.id, event, cwd);
-  writeThreadFile(next, cwd);
+  // pln#630 PR1b (dec#137) — stage the completion as ONE durable WAL intent,
+  // then apply it (journal fsync -> thread projection -> .applied marker).
+  // Crash-atomic + idempotent: a crash mid-write re-converges at the next
+  // lock-entry recovery. Replaces the former two-step appendEvent+writeThreadFile
+  // crash window that could lose the verdict or expose a projection ahead of the
+  // journal (codex r4). The events already carry their frozen seqs + event_ids.
+  commitViaIntent(
+    { loop_id: current.id, base_version: current.version, events, thread_snapshot: next },
+    cwd,
+  );
   return next;
 }
 

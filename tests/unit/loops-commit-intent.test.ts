@@ -195,15 +195,24 @@ describe('commit-intent — consistent reads + GC', () => {
   beforeEach(() => { cwd = makeWorkspace(); });
   afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
 
-  it('reconstructConsistentThread returns the pending intent snapshot when ahead of on-disk', () => {
+  it('getLoop reconstructs the pending intent snapshot when the on-disk thread is behind', () => {
     const loop = seedLoop(cwd);
     // Stage but do not apply (crash after_intent).
     assert.throws(() => commitViaIntent(completeTurnIntentInput(loop), cwd, 'after_intent'), /simulated crash/);
-    const onDisk = getLoop(loop.id, cwd);
-    assert.equal(onDisk?.version, 1, 'on-disk thread still at version 1 (not applied)');
-    const view = reconstructConsistentThread(loop.id, onDisk, cwd);
-    assert.equal(view?.version, 2, 'consistent read reflects the durable-in-intent mutation');
+
+    // The raw thread FILE is still at version 1 — the intent was staged (durable)
+    // but not yet applied to the projection.
+    const rawPath = path.join(cwd, '.brainclaw', 'loops', 'threads', `${loop.id}.json`);
+    assert.equal(JSON.parse(fs.readFileSync(rawPath, 'utf8')).version, 1, 'raw on-disk thread not yet applied');
+
+    // getLoop now returns the reconstructed consistent view (PR1b wiring): the
+    // mutation is durable in the intent, so the read reflects version 2.
+    const view = getLoop(loop.id, cwd);
+    assert.equal(view?.version, 2, 'getLoop reflects the durable-in-intent mutation');
     assert.equal(view?.slots[0].status, 'done');
+
+    // Direct unit-level check of the reconstruction primitive too.
+    assert.equal(reconstructConsistentThread(loop.id, undefined, cwd)?.version, 2);
   });
 
   it('gcCommitMarkers removes applied markers older than the cutoff', () => {
