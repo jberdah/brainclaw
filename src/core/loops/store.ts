@@ -10,6 +10,7 @@ import { logCascadeReleaseResult, releaseClaimsCascade } from '../claims.js';
 import { gcWorktreeIfHarvested } from '../worktree.js';
 import { writeProjectMdSafe } from './hooks/bootstrap-write.js';
 import { notifyOperatorOnInputRequested } from './hooks/notify-operator.js';
+import { reconstructConsistentThread } from './commit-intent.js';
 import {
   DEFAULT_PROTOCOLS,
   LoopArtifactSchema,
@@ -145,7 +146,19 @@ export function appendEvent(
 ): void {
   const parsed = LoopEventSchema.parse(event);
   ensureLoopsDir(cwd);
-  fs.appendFileSync(eventsPath(loopId, cwd), `${JSON.stringify(parsed)}\n`);
+  // pln#630 PR1b — fsync the journal append so a materialized projection can
+  // never be durable ahead of the event that explains it (trp_8b17c2d0).
+  const fd = fs.openSync(eventsPath(loopId, cwd), 'a');
+  try {
+    // Loop the write to completion so a short/partial write never leaves a torn
+    // final record for the next append to fuse with (PR #102 review round 2).
+    const buf = Buffer.from(`${JSON.stringify(parsed)}\n`, 'utf8');
+    let off = 0;
+    while (off < buf.length) off += fs.writeSync(fd, buf, off, buf.length - off);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 
   // pln#513 step 4 — best-effort OS notification on input_requested events.
   // Prefer the in-memory snapshot from the caller (carries the freshly-
@@ -235,9 +248,14 @@ export function openLoop(input: OpenLoopInput, cwd?: string): LoopThread {
 
 export function getLoop(id: string, cwd?: string): LoopThread | undefined {
   const filePath = threadPath(id, cwd);
-  if (!fs.existsSync(filePath)) return undefined;
-  const raw = fs.readFileSync(filePath, 'utf8');
-  return LoopThreadSchema.parse(JSON.parse(raw));
+  const onDisk = fs.existsSync(filePath)
+    ? LoopThreadSchema.parse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+    : undefined;
+  // pln#630 PR1b — if a durable-but-not-yet-applied commit intent is ahead of
+  // the on-disk thread, return the reconstructed consistent view. The mutation
+  // is durable in the intent; persistence catches up at the next lock-entry
+  // recovery (never a write on this read path — cf. trp_fdf3e590 / dec#137).
+  return reconstructConsistentThread(id, onDisk, cwd);
 }
 
 export function listLoops(
@@ -266,7 +284,20 @@ export function listLoopEvents(id: string, cwd?: string): LoopEvent[] {
   const filePath = eventsPath(id, cwd);
   if (!fs.existsSync(filePath)) return [];
   const lines = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
-  return lines.map((line) => LoopEventSchema.parse(JSON.parse(line)));
+  const events: LoopEvent[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      events.push(LoopEventSchema.parse(JSON.parse(lines[i])));
+    } catch (err) {
+      // pln#630 PR1b — a non-empty unparseable FINAL line is an uncommitted
+      // torn-append fragment (durably repaired at the next lock-entry recovery,
+      // commit-intent.ts). Tolerate it on read so seq allocation / reads never
+      // wedge on a torn tail. An EARLIER unparseable line is real corruption.
+      if (i === lines.length - 1) break;
+      throw err;
+    }
+  }
+  return events;
 }
 
 export interface CloseLoopInput {

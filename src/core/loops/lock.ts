@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { memoryDir } from '../io.js';
 import { nowISO } from '../ids.js';
+import { recoverPendingIntents } from './commit-intent.js';
 
 /**
  * Per-loop exclusive lock + idempotency + fencing helpers.
@@ -396,6 +397,20 @@ export function withLoopLock<R>(options: WithLoopLockOptions<R>): R {
   });
 
   try {
+    // pln#630 PR1b (dec#137) — recovery-before-mutate at the loop-lock entry
+    // boundary. Any durable-but-unapplied commit intent is replayed to the
+    // journal+thread BEFORE we read the version / run the work, so a mutation
+    // never starts from a half-applied state and currentVersion() sees the
+    // caught-up thread. Not in getLoop: the loop lock is not re-entrant and
+    // verbs call getLoop while already holding it. FAILS CLOSED (PR #102 review
+    // HIGH): a genuine recovery error (torn/unreadable journal, I/O) propagates
+    // and aborts the mutation rather than proceeding against corrupt state;
+    // quarantined conflicts/corruption are handled inside recoverPendingIntents
+    // and do not throw.
+    if (options.scope.kind === 'loop') {
+      recoverPendingIntents(options.scope.loopId, options.cwd);
+    }
+
     // Idempotency short-circuit (inside lock).
     if (options.clientRequestId && options.requestPayload !== undefined) {
       const loopIdForKey =
