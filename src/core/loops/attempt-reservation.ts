@@ -56,6 +56,22 @@ export const TurnReservationSchema = z.object({
   created_at: z.string().min(1),
   decided_at: z.string().optional(),
   abort_reason: z.string().optional(),
+  // pln#630 PR2a (dec#138) — the LAUNCH-GRANT fence. The decidable, atomic
+  // gate between "a committed attempt may spawn" and "a worker crossed into
+  // exec". The pre-exec supervisor CONSUMES the grant (armed→crossed) before
+  // invoking the worker; advance/close/reroute REVOKES it (armed→revoked). The
+  // two are mutually exclusive CAS transitions on ONE record, so an old token
+  // can never spawn after supersession, and a crossed grant is never re-spawned.
+  launch: z.object({
+    status: z.enum(['armed', 'crossed', 'revoked']),
+    token: z.string().min(1),
+    epoch: z.number().int().nonnegative(),
+    lease_deadline: z.string().min(1),
+    armed_at: z.string().min(1),
+    crossed_at: z.string().optional(),
+    revoked_at: z.string().optional(),
+    revoke_reason: z.string().optional(),
+  }).optional(),
 });
 
 export type TurnReservation = z.infer<typeof TurnReservationSchema>;
@@ -92,6 +108,26 @@ export class ReservationStateError extends Error {
   ) {
     super(message);
     this.name = 'ReservationStateError';
+  }
+}
+
+/** Raised when a launch-grant CAS (arm/consume/revoke) is refused. */
+export class LaunchFenceError extends Error {
+  constructor(
+    public readonly turn_id: string,
+    public readonly code:
+      | 'not_committed'
+      | 'already_armed'
+      | 'not_armed'
+      | 'token_mismatch'
+      | 'epoch_mismatch'
+      | 'lease_expired'
+      | 'revoked'
+      | 'crossed_not_revocable',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'LaunchFenceError';
   }
 }
 
@@ -319,4 +355,111 @@ export function listReservations(filter: { decision?: ReservationDecision } = {}
     }
   }
   return out.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+/* ============================ launch-grant fence (PR2a, dec#138) ========== */
+
+export interface ArmLaunchInput {
+  token: string;
+  epoch: number;
+  lease_deadline: string;
+}
+
+/**
+ * Arm the launch grant on a COMMITTED reservation. The pre-exec supervisor
+ * later CONSUMES it (armed→crossed) immediately before invoking the worker;
+ * advance/close/reroute (or the expiry sweep) REVOKE it (armed→revoked).
+ * Re-arming is allowed only after a prior grant was revoked, and only with a
+ * strictly higher epoch (a fresh attempt generation).
+ */
+export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, agentId = 'system'): TurnReservation {
+  return withReservationLock(turnId, agentId, () => {
+    const record = readReservation(turnId, cwd);
+    if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `armLaunch: unknown turn_id ${turnId}`);
+    if (record.decision !== 'committed') {
+      throw new LaunchFenceError(turnId, 'not_committed', `armLaunch: turn_id ${turnId} is ${record.decision}, not committed`);
+    }
+    if (record.launch && record.launch.status !== 'revoked') {
+      throw new LaunchFenceError(turnId, 'already_armed', `armLaunch: turn_id ${turnId} already has a ${record.launch.status} grant (epoch ${record.launch.epoch})`);
+    }
+    if (record.launch && input.epoch <= record.launch.epoch) {
+      throw new LaunchFenceError(turnId, 'epoch_mismatch', `armLaunch: re-arm epoch ${input.epoch} must exceed prior ${record.launch.epoch}`);
+    }
+    const next: TurnReservation = {
+      ...record,
+      launch: { status: 'armed', token: input.token, epoch: input.epoch, lease_deadline: input.lease_deadline, armed_at: nowISO() },
+    };
+    writeReservation(next, cwd);
+    return next;
+  }, cwd);
+}
+
+/**
+ * CONSUME the grant (armed→crossed) — the atomic fence the pre-exec supervisor
+ * runs immediately before invoking the worker. Idempotent when already crossed
+ * by the same token+epoch (a supervisor retry). Refused if revoked, expired, or
+ * the token/epoch do not match — the supervisor MUST NOT spawn on refusal.
+ */
+export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): TurnReservation {
+  return withReservationLock(turnId, agentId, () => {
+    const record = readReservation(turnId, cwd);
+    if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
+    const g = record.launch;
+    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
+    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
+    if (g.status === 'crossed') return record; // idempotent supervisor retry
+    if (g.status === 'revoked') throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
+    if (Date.parse(nowISO()) > Date.parse(g.lease_deadline)) {
+      throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
+    }
+    const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: nowISO() } };
+    writeReservation(next, cwd);
+    return next;
+  }, cwd);
+}
+
+/**
+ * REVOKE the grant (armed→revoked) — prevents a still-armed token from ever
+ * crossing. Idempotent when already revoked (same epoch). Refused once CROSSED:
+ * a crossed grant means the worker launched, so the caller must treat the
+ * attempt as launch_attempted_unknown and never re-spawn.
+ */
+export function revokeLaunchGrant(turnId: string, epoch: number, reason: string, cwd?: string, agentId = 'system'): TurnReservation {
+  return withReservationLock(turnId, agentId, () => {
+    const record = readReservation(turnId, cwd);
+    if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `revokeLaunchGrant: unknown turn_id ${turnId}`);
+    const g = record.launch;
+    if (!g) throw new LaunchFenceError(turnId, 'not_armed', `revokeLaunchGrant: turn_id ${turnId} has no launch grant`);
+    if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `revokeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
+    if (g.status === 'revoked') return record; // idempotent
+    if (g.status === 'crossed') throw new LaunchFenceError(turnId, 'crossed_not_revocable', `revokeLaunchGrant: grant for ${turnId} already crossed — worker launched, cannot revoke`);
+    const next: TurnReservation = { ...record, launch: { ...g, status: 'revoked', revoked_at: nowISO(), revoke_reason: reason } };
+    writeReservation(next, cwd);
+    return next;
+  }, cwd);
+}
+
+export function launchGrant(turnId: string, cwd?: string): TurnReservation['launch'] | undefined {
+  return readReservation(turnId, cwd)?.launch;
+}
+
+/**
+ * Revoke every armed grant whose lease has expired (reserved_never_launched).
+ * The single non-GET sweep owner (dec#138). Skips crossed/revoked grants.
+ * Returns the turn_ids revoked.
+ */
+export function sweepExpiredLaunchGrants(cwd?: string, agentId = 'system'): string[] {
+  const now = Date.parse(nowISO());
+  const revoked: string[] = [];
+  for (const r of listReservations({}, cwd)) {
+    const g = r.launch;
+    if (!g || g.status !== 'armed') continue;
+    if (Date.parse(g.lease_deadline) >= now) continue;
+    try {
+      revokeLaunchGrant(r.turn_id, g.epoch, 'reserved_never_launched', cwd, agentId);
+      revoked.push(r.turn_id);
+    } catch { /* raced to crossed/revoked — skip */ }
+  }
+  return revoked;
 }
