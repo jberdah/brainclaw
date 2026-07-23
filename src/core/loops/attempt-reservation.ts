@@ -119,6 +119,7 @@ export class LaunchFenceError extends Error {
       | 'not_committed'
       | 'already_armed'
       | 'not_armed'
+      | 'lease_invalid'
       | 'token_mismatch'
       | 'epoch_mismatch'
       | 'lease_expired'
@@ -187,7 +188,7 @@ function writeReservation(record: TurnReservation, cwd?: string): void {
  * primitive (stale-reaping, O_EXCL, fencing) so the decision CAS is atomic
  * across processes — two racing writers cannot both mutate the decision.
  */
-function withReservationLock<R>(turnId: string, agentId: string, fn: () => R, cwd?: string): R {
+function withReservationLock<R>(turnId: string, agentId: string, fn: (fence: () => void) => R, cwd?: string): R {
   ensureDirs(cwd);
   const lock = acquireLock({
     lockPath: reservationLockPath(turnId, cwd),
@@ -196,7 +197,12 @@ function withReservationLock<R>(turnId: string, agentId: string, fn: () => R, cw
     maxMutationDurationMs: 30_000,
   });
   try {
-    return fn();
+    // PR2a review (BLOCKING): the callback MUST invoke `fence()` immediately
+    // before any durable write. If this lock was reaped (holder suspended past
+    // the hard deadline) and re-acquired by another writer, fenceCheck throws
+    // LockLostError so a stale holder can never overwrite the other terminal
+    // transition — the consume-XOR-revoke fence stays durable across recovery.
+    return fn(lock.fenceCheck);
   } finally {
     lock.release();
   }
@@ -217,7 +223,7 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
   return withReservationLock(
     input.turn_id,
     agentId,
-    () => {
+    (fence) => {
       const existing = readReservation(input.turn_id, cwd);
       if (existing) {
         throw new ReservationStateError(
@@ -246,6 +252,7 @@ export function reserve(input: ReserveInput, cwd?: string): TurnReservation {
         decision: 'prepared',
         created_at: nowISO(),
       };
+      fence();
       writeReservation(record, cwd);
       return record;
     },
@@ -263,7 +270,7 @@ export function commitReservation(turnId: string, cwd?: string, agentId = 'syste
   return withReservationLock(
     turnId,
     agentId,
-    () => {
+    (fence) => {
       const record = readReservation(turnId, cwd);
       if (!record) {
         throw new ReservationStateError(turnId, 'reservation_not_found', `commitReservation: unknown turn_id ${turnId}`);
@@ -277,6 +284,7 @@ export function commitReservation(turnId: string, cwd?: string, agentId = 'syste
         );
       }
       const next: TurnReservation = { ...record, decision: 'committed', decided_at: nowISO() };
+      fence();
       writeReservation(next, cwd);
       return next;
     },
@@ -294,7 +302,7 @@ export function abortReservation(turnId: string, reason: string, cwd?: string, a
   return withReservationLock(
     turnId,
     agentId,
-    () => {
+    (fence) => {
       const record = readReservation(turnId, cwd);
       if (!record) {
         throw new ReservationStateError(turnId, 'reservation_not_found', `abortReservation: unknown turn_id ${turnId}`);
@@ -308,6 +316,7 @@ export function abortReservation(turnId: string, reason: string, cwd?: string, a
         );
       }
       const next: TurnReservation = { ...record, decision: 'aborted', decided_at: nowISO(), abort_reason: reason };
+      fence();
       writeReservation(next, cwd);
       return next;
     },
@@ -373,7 +382,7 @@ export interface ArmLaunchInput {
  * strictly higher epoch (a fresh attempt generation).
  */
 export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `armLaunch: unknown turn_id ${turnId}`);
     if (record.decision !== 'committed') {
@@ -385,10 +394,17 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
     if (record.launch && input.epoch <= record.launch.epoch) {
       throw new LaunchFenceError(turnId, 'epoch_mismatch', `armLaunch: re-arm epoch ${input.epoch} must exceed prior ${record.launch.epoch}`);
     }
+    // PR2a review (BLOCKING): reject a non-parseable lease at arm time — an
+    // invalid string makes Date.parse NaN and `now > NaN` false, so the grant
+    // would never expire and a matching supervisor could cross it unbounded.
+    if (!Number.isFinite(Date.parse(input.lease_deadline))) {
+      throw new LaunchFenceError(turnId, 'lease_invalid', `armLaunch: lease_deadline "${input.lease_deadline}" is not a parseable timestamp`);
+    }
     const next: TurnReservation = {
       ...record,
       launch: { status: 'armed', token: input.token, epoch: input.epoch, lease_deadline: input.lease_deadline, armed_at: nowISO() },
     };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
@@ -401,19 +417,24 @@ export function armLaunch(turnId: string, input: ArmLaunchInput, cwd?: string, a
  * the token/epoch do not match — the supervisor MUST NOT spawn on refusal.
  */
 export function consumeLaunchGrant(turnId: string, token: string, epoch: number, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `consumeLaunchGrant: unknown turn_id ${turnId}`);
     const g = record.launch;
     if (!g) throw new LaunchFenceError(turnId, 'not_armed', `consumeLaunchGrant: turn_id ${turnId} has no launch grant`);
-    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+    // Epoch checked BEFORE token so a stale generation reports epoch_mismatch
+    // (not token_mismatch) — callers can reliably classify a stale attempt.
     if (g.epoch !== epoch) throw new LaunchFenceError(turnId, 'epoch_mismatch', `consumeLaunchGrant: epoch ${epoch} != grant epoch ${g.epoch}`);
-    if (g.status === 'crossed') return record; // idempotent supervisor retry
+    if (g.token !== token) throw new LaunchFenceError(turnId, 'token_mismatch', `consumeLaunchGrant: token mismatch for ${turnId}`);
+    if (g.status === 'crossed') return record; // idempotent supervisor retry (before expiry, by design)
     if (g.status === 'revoked') throw new LaunchFenceError(turnId, 'revoked', `consumeLaunchGrant: grant for ${turnId} was revoked — MUST NOT spawn`);
-    if (Date.parse(nowISO()) > Date.parse(g.lease_deadline)) {
+    // Expiry is inclusive (now >= deadline) — the SAME rule the sweep uses, so
+    // the exact boundary instant is consistently expired in both paths.
+    if (Date.parse(nowISO()) >= Date.parse(g.lease_deadline)) {
       throw new LaunchFenceError(turnId, 'lease_expired', `consumeLaunchGrant: grant for ${turnId} expired at ${g.lease_deadline}`);
     }
     const next: TurnReservation = { ...record, launch: { ...g, status: 'crossed', crossed_at: nowISO() } };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
@@ -426,7 +447,7 @@ export function consumeLaunchGrant(turnId: string, token: string, epoch: number,
  * attempt as launch_attempted_unknown and never re-spawn.
  */
 export function revokeLaunchGrant(turnId: string, epoch: number, reason: string, cwd?: string, agentId = 'system'): TurnReservation {
-  return withReservationLock(turnId, agentId, () => {
+  return withReservationLock(turnId, agentId, (fence) => {
     const record = readReservation(turnId, cwd);
     if (!record) throw new ReservationStateError(turnId, 'reservation_not_found', `revokeLaunchGrant: unknown turn_id ${turnId}`);
     const g = record.launch;
@@ -435,6 +456,7 @@ export function revokeLaunchGrant(turnId: string, epoch: number, reason: string,
     if (g.status === 'revoked') return record; // idempotent
     if (g.status === 'crossed') throw new LaunchFenceError(turnId, 'crossed_not_revocable', `revokeLaunchGrant: grant for ${turnId} already crossed — worker launched, cannot revoke`);
     const next: TurnReservation = { ...record, launch: { ...g, status: 'revoked', revoked_at: nowISO(), revoke_reason: reason } };
+    fence();
     writeReservation(next, cwd);
     return next;
   }, cwd);
@@ -455,7 +477,8 @@ export function sweepExpiredLaunchGrants(cwd?: string, agentId = 'system'): stri
   for (const r of listReservations({}, cwd)) {
     const g = r.launch;
     if (!g || g.status !== 'armed') continue;
-    if (Date.parse(g.lease_deadline) >= now) continue;
+    // Expired ⟺ now >= deadline (inclusive), matching consumeLaunchGrant.
+    if (Date.parse(g.lease_deadline) > now) continue;
     try {
       revokeLaunchGrant(r.turn_id, g.epoch, 'reserved_never_launched', cwd, agentId);
       revoked.push(r.turn_id);

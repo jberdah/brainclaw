@@ -186,3 +186,28 @@ describe('launch-grant fence — expiry sweep (reserved_never_launched)', () => 
       (e: unknown) => e instanceof LaunchFenceError && e.code === 'revoked');
   });
 });
+
+// Fixes from the PR #103 symmetric review.
+describe('launch-grant fence — review fixes (lease validation + epoch-before-token)', () => {
+  let cwd: string;
+  beforeEach(() => { cwd = makeWorkspace(); });
+  afterEach(() => { fs.rmSync(cwd, { recursive: true, force: true }); });
+
+  it('arm rejects a non-parseable lease_deadline (an unbounded armed grant would defeat the expiry gate)', () => {
+    const t = committed(cwd);
+    assert.throws(() => armLaunch(t, { token: 'x', epoch: 1, lease_deadline: 'not-a-date' }, cwd),
+      (e: unknown) => e instanceof LaunchFenceError && e.code === 'lease_invalid');
+    assert.equal(launchGrant(t, cwd), undefined, 'no grant persisted for an invalid lease');
+  });
+
+  it('a stale-epoch consume after re-arm reports epoch_mismatch (not token_mismatch)', () => {
+    const t = committed(cwd);
+    armLaunch(t, { token: 'tokN', epoch: 1, lease_deadline: future() }, cwd);
+    revokeLaunchGrant(t, 1, 'retry', cwd);
+    armLaunch(t, { token: 'tokN1', epoch: 2, lease_deadline: future() }, cwd);
+    // A stale supervisor from epoch 1 (old token + old epoch) must classify as epoch_mismatch.
+    assert.throws(() => consumeLaunchGrant(t, 'tokN', 1, cwd),
+      (e: unknown) => e instanceof LaunchFenceError && e.code === 'epoch_mismatch');
+    assert.equal(launchGrant(t, cwd)?.status, 'armed', 'the epoch-2 grant is untouched by the stale consume');
+  });
+});
